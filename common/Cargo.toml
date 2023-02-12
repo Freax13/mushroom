@@ -1,0 +1,10 @@
+[workspace]
+members = ["constants", "input", "loader", "snp-types"]
+
+[workspace.dependencies]
+constants = { path = "constants" }
+input = { path = "input" }
+snp-types = { path = "snp-types" }
+
+[patch.crates-io]
+bytemuck = { git = "https://github.com/Freax13/bytemuck.git", rev = "e63ffe8d10129a70a28fcad2bf656782bec8d4bb" }

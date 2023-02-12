@@ -1,0 +1,9 @@
+[package]
+name = "constants"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "bae6119533f19cd5c3557d5a302524f1d72456c5" }

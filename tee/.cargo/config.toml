@@ -1,0 +1,11 @@
+[target."x86_64-unknown-none"]
+rustflags = [
+    "-C",
+    "relocation-model=static",
+    "-C",
+    "code-model=medium",
+    "--cfg",
+    "polyval_force_soft",
+    "--cfg",
+    "aes_force_soft",
+]

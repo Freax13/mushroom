@@ -1,0 +1,4 @@
+{
+    "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix",
+    // "rust-analyzer.checkOnSave.allTargets": false
+}

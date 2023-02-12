@@ -1,0 +1,26 @@
+cargo-features = ["per-package-target"]
+
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+default-target = "x86_64-unknown-none"
+
+[dependencies]
+arrayvec = { version = "0.7.2", default-features = false }
+bitflags = "1.3.2"
+bit_field = "0.10.1"
+bytemuck = { version = "1.13.0", features = ["derive"] }
+constants = { workspace = true }
+goblin = { version = "0.6.0", default-features = false, features = ["elf64", "elf32", "endian_fd"] }
+input = { workspace = true }
+log = { version = "0.4.17", features = ["release_max_level_off"], default-features = false }
+raw-cpuid = "10.6.0"
+serial-log = { workspace = true }
+snp-types = { workspace = true }
+spin = { version = "0.9.4" }
+volatile = { git = "https://github.com/Freax13/volatile", rev = "d7c0373", features = ["unstable"] }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "bae6119533f19cd5c3557d5a302524f1d72456c5" }
+
+# Enable the force-soft feature of sha2
+sha2 = { version = "*", features = ["force-soft"], default-features = false }

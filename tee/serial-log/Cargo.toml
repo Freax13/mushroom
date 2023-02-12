@@ -1,0 +1,9 @@
+[package]
+name = "serial-log"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+constants = { workspace = true }
+log = { version = "0.4.17", default-features = false }
+x86_64 = "0.14.10"

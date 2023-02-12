@@ -1,0 +1,20 @@
+cargo-features = ["per-package-target"]
+
+[package]
+name = "supervisor"
+version = "0.1.0"
+edition = "2021"
+default-target = "x86_64-unknown-none"
+
+[dependencies]
+aes-gcm = { version = "0.10.1", features = ["aes", "heapless"], default-features = false }
+bit_field = "0.10.1"
+bytemuck = "1.13.0"
+constants = { workspace = true }
+input = { workspace = true, features = ["force-soft"] }
+log = { version = "0.4.17", features = ["release_max_level_off"], default-features = false }
+serial-log = { workspace = true }
+sha2 = { version = "0.10.6", default-features = false }
+snp-types = { workspace = true }
+volatile = { git = "https://github.com/Freax13/volatile", rev = "d7c0373", features = ["unstable"] }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "bae6119533f19cd5c3557d5a302524f1d72456c5" }
