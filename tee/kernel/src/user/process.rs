@@ -9,15 +9,17 @@ use crate::{
     },
 };
 
-use self::memory::MemoryManager;
+use self::{fd::FileDescriptorTable, memory::MemoryManager};
 
 mod elf;
+pub mod fd;
 mod memory;
 mod syscall;
 pub mod thread;
 
 pub struct Process {
     memory_manager: Mutex<MemoryManager>,
+    fdtable: FileDescriptorTable,
 }
 
 impl Process {
@@ -31,10 +33,15 @@ impl Process {
 
         let process = Arc::new(Process {
             memory_manager: Mutex::new(MemoryManager::new()),
+            fdtable: FileDescriptorTable::new(),
         });
         process.load_elf(elf_file)?;
 
         Ok(())
+    }
+
+    pub fn fdtable(&self) -> &FileDescriptorTable {
+        &self.fdtable
     }
 }
 

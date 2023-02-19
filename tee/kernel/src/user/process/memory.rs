@@ -1,4 +1,4 @@
-use core::{arch::asm, cmp};
+use core::{arch::asm, cmp, iter::Step};
 
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -168,6 +168,23 @@ impl Process {
         }
 
         Ok(())
+    }
+
+    pub fn read_cstring(&self, mut addr: VirtAddr, max_length: usize) -> Result<Vec<u8>> {
+        let mut ret = Vec::new();
+        loop {
+            let mut buf = 0;
+            self.read(addr, core::array::from_mut(&mut buf));
+            if buf == 0 {
+                break;
+            }
+            if ret.len() == max_length {
+                return Err(Error::NameTooLong);
+            }
+            addr = Step::forward(addr, 1);
+            ret.push(buf);
+        }
+        Ok(ret)
     }
 
     pub fn write(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
@@ -482,7 +499,7 @@ impl Mapping {
                         }
                     }
                 }
-                Backing::Zero => {
+                Backing::Zero | Backing::Stack => {
                     // FIXME: We could map a specific zero frame.
                     let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
                     unsafe {
@@ -502,7 +519,6 @@ impl Mapping {
                         map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                     }
                 }
-                _ => todo!(),
             }
         }
 
