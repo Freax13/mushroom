@@ -306,8 +306,7 @@ impl Mapping {
                 let backing_bytes = &bytes[offset..][..0x1000];
                 let backing_addr = VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
                 let backing_page = Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
-                let (backing_frame, _) =
-                    page_to_frame(backing_page, PageTableFlags::GLOBAL).unwrap();
+                let (backing_frame, _) = page_to_frame(backing_page).unwrap();
 
                 let mut flags = PageTableFlags::USER | PageTableFlags::EXECUTABLE;
                 flags |= PageTableFlags::COW;
@@ -327,7 +326,7 @@ impl Mapping {
 
         self.make_readable(page)?;
 
-        let (_, flags) = page_to_frame(page, PageTableFlags::USER).ok_or(Error::Fault)?;
+        let (_, flags) = page_to_frame(page).ok_or(Error::Fault)?;
 
         if !flags.contains(PageTableFlags::COW) {
             return Ok(ptr);
@@ -346,7 +345,7 @@ impl Mapping {
         let new_flags = flags & !PageTableFlags::COW;
 
         unsafe {
-            unmap_page(page, PageTableFlags::USER);
+            unmap_page(page);
             // FIXME: We should do the remap atomically.
             map_page(page, frame, new_flags, &mut &DUMB_FRAME_ALLOCATOR);
         }
@@ -364,7 +363,7 @@ impl Mapping {
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
 
-        if let Some((_, flags)) = page_to_frame(page, PageTableFlags::USER) {
+        if let Some((_, flags)) = page_to_frame(page) {
             if !flags.contains(PageTableFlags::WRITABLE) {
                 // Check if we have to copy the page.
                 if flags.contains(PageTableFlags::COW) {
@@ -439,7 +438,7 @@ impl Mapping {
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
 
-        if page_to_frame(page, PageTableFlags::USER).is_some() {
+        if page_to_frame(page).is_some() {
             // FIXME: Double check that the page is writable.
         } else {
             match &self.backing {
@@ -456,8 +455,7 @@ impl Mapping {
                                 VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
                             let backing_page =
                                 Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
-                            let (backing_frame, _) =
-                                page_to_frame(backing_page, PageTableFlags::GLOBAL).unwrap();
+                            let (backing_frame, _) = page_to_frame(backing_page).unwrap();
 
                             let mut flags = PageTableFlags::USER;
                             if self.permissions.contains(MemoryPermissions::EXECUTE) {

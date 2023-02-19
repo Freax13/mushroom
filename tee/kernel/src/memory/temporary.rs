@@ -70,7 +70,7 @@ impl TemporaryMapping {
 impl Drop for TemporaryMapping {
     fn drop(&mut self) {
         unsafe {
-            unmap_page(*self.page, PageTableFlags::GLOBAL);
+            unmap_page(*self.page);
         }
     }
 }

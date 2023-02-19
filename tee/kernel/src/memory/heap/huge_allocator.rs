@@ -80,7 +80,7 @@ where
         let mut allocator = self.allocator.lock();
 
         for page in (base..).take(pages) {
-            let frame = unsafe { unmap_page(page, PageTableFlags::GLOBAL) };
+            let frame = unsafe { unmap_page(page) };
             unsafe {
                 allocator.deallocate_frame(frame);
             }

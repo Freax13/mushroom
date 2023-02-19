@@ -57,21 +57,21 @@ pub unsafe fn map_page(
     Ok(())
 }
 
-pub unsafe fn unmap_page(page: Page, flags: PageTableFlags) -> PhysFrame {
+pub unsafe fn unmap_page(page: Page) -> PhysFrame {
     trace!("unmapping page {page:?}");
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire_existing(flags).unwrap();
+    let level3_guard = level4_entry.acquire_existing().unwrap();
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire_existing(flags).unwrap();
+    let level2_guard = level3_entry.acquire_existing().unwrap();
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire_existing(flags).unwrap();
+    let level1_guard = level2_entry.acquire_existing().unwrap();
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -82,15 +82,15 @@ pub unsafe fn add_flags(page: Page, flags: PageTableFlags) -> Result<()> {
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire_existing(flags).unwrap();
+    let level3_guard = level4_entry.acquire_existing().unwrap();
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire_existing(flags).unwrap();
+    let level2_guard = level3_entry.acquire_existing().unwrap();
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire_existing(flags).unwrap();
+    let level1_guard = level2_entry.acquire_existing().unwrap();
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -104,14 +104,14 @@ pub unsafe fn add_flags(page: Page, flags: PageTableFlags) -> Result<()> {
 /// # Panics
 ///
 /// The page has to be mapped.
-pub fn page_to_frame(page: Page, flags: PageTableFlags) -> Option<(PhysFrame, PageTableFlags)> {
+pub fn page_to_frame(page: Page) -> Option<(PhysFrame, PageTableFlags)> {
     let pml4 = ActivePageTable::get();
     let pml4e = &pml4[page.p4_index()];
-    let pdp = pml4e.acquire_existing(flags)?;
+    let pdp = pml4e.acquire_existing()?;
     let pdpe = &pdp[page.p3_index()];
-    let pd = pdpe.acquire_existing(flags)?;
+    let pd = pdpe.acquire_existing()?;
     let pde = &pd[page.p2_index()];
-    let pt = pde.acquire_existing(flags)?;
+    let pt = pde.acquire_existing()?;
     let pte = &pt[page.p1_index()];
     pte.frame()
 }
@@ -237,17 +237,14 @@ impl ActivePageTableEntry<Level4> {
     ) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
         let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
         let reserved_allocation = storage.allocate(allocator)?;
-        self.acquire_reference_count(Some(reserved_allocation), flags)
+        self.acquire_reference_count(reserved_allocation, flags)
             .unwrap();
 
         Ok(ActivePageTableEntryGuard { entry: self })
     }
 
-    pub fn acquire_existing(
-        &self,
-        flags: PageTableFlags,
-    ) -> Option<ActivePageTableEntryGuard<'_, Level4>> {
-        self.acquire_reference_count(None, flags)?;
+    pub fn acquire_existing(&self) -> Option<ActivePageTableEntryGuard<'_, Level4>> {
+        self.increase_reference_count().ok()?;
         Some(ActivePageTableEntryGuard { entry: self })
     }
 }
@@ -264,22 +261,19 @@ where
         let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
         let reserved_allocation = storage.allocate(allocator)?;
         let initialized = self
-            .acquire_reference_count(Some(reserved_allocation), flags)
+            .acquire_reference_count(reserved_allocation, flags)
             .unwrap();
 
         if initialized {
             let parent_entry = self.parent_table_entry();
-            parent_entry.acquire_reference_count(None, flags);
+            parent_entry.increase_reference_count().unwrap();
         }
 
         Ok(ActivePageTableEntryGuard { entry: self })
     }
 
-    pub fn acquire_existing(
-        &self,
-        flags: PageTableFlags,
-    ) -> Option<ActivePageTableEntryGuard<'_, L>> {
-        self.acquire_reference_count(None, flags)?;
+    pub fn acquire_existing(&self) -> Option<ActivePageTableEntryGuard<'_, L>> {
+        self.increase_reference_count().ok()?;
         Some(ActivePageTableEntryGuard { entry: self })
     }
 }
@@ -294,7 +288,7 @@ where
     /// Returns true if the entry was just initialized.
     fn acquire_reference_count(
         &self,
-        reserved_allocation: Option<ReservedFrameAllocation>,
+        reserved_allocation: ReservedFrameAllocation,
         flags: PageTableFlags,
     ) -> Option<bool> {
         let user = flags.contains(PageTableFlags::USER);
@@ -305,8 +299,8 @@ where
             // Check if the entry was already initialized.
             if current_entry.get_bit(PRESENT_BIT) {
                 // Sanity check.
-                // assert_eq!(user, current_entry.get_bit(USER_BIT));
-                // assert_eq!(global, current_entry.get_bit(GLOBAL_BIT));
+                assert_eq!(user, current_entry.get_bit(USER_BIT));
+                assert_eq!(global, current_entry.get_bit(GLOBAL_BIT));
 
                 // Increase the reference count.
                 let current_reference_count = current_entry.get_bits(REFERENCE_COUNT_BITS);
@@ -334,11 +328,6 @@ where
                 return Some(false);
             } else {
                 // Start initializing the entry.
-
-                // Check if we even can initialize the entry.
-                if reserved_allocation.is_none() {
-                    return None;
-                }
 
                 // Check if another core is already initializing the entry.
                 if current_entry.get_bit(INITIALIZING_BIT) {
@@ -369,7 +358,7 @@ where
                 }
 
                 // Actually initialize the entry.
-                let frame = reserved_allocation.unwrap().take();
+                let frame = reserved_allocation.take();
                 let mut new_entry = frame.start_address().as_u64();
                 new_entry.set_bit(PRESENT_BIT, true);
                 new_entry.set_bit(WRITE_BIT, true);
@@ -394,6 +383,43 @@ where
                 // We're done.
                 return Some(true);
             }
+        }
+    }
+
+    /// Increases the reference count. Returns `Ok(())` if there reference count
+    /// was increased, returns `Err(())` if the page table didn't exist.
+    fn increase_reference_count(&self) -> Result<(), ()> {
+        let mut current_entry = self.entry.load(Ordering::SeqCst);
+        loop {
+            // Verify that the entry was already initialized.
+            if !current_entry.get_bit(PRESENT_BIT) {
+                return Err(());
+            }
+
+            // Increase the reference count.
+            let current_reference_count = current_entry.get_bits(REFERENCE_COUNT_BITS);
+            let new_reference_count = current_reference_count + 1;
+            let mut new_entry = current_entry;
+            new_entry.set_bits(REFERENCE_COUNT_BITS, new_reference_count);
+            let res = self.entry.compare_exchange(
+                current_entry,
+                new_entry,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            match res {
+                Ok(_) => {
+                    // We successfully updated the reference count.
+                }
+                Err(entry) => {
+                    // Some other core modified the entry. Retry.
+                    current_entry = entry;
+                    continue;
+                }
+            }
+
+            // We're done.
+            return Ok(());
         }
     }
 
@@ -534,7 +560,8 @@ impl ActivePageTableEntry<Level1> {
         res.expect("the page was already mapped");
 
         self.parent_table_entry()
-            .acquire_reference_count(None, flags);
+            .increase_reference_count()
+            .unwrap();
     }
 
     /// # Panics
