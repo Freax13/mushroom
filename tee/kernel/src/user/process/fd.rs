@@ -57,7 +57,7 @@ impl FileDescriptorTable {
 }
 
 pub trait FileDescriptor: Send + Sync + 'static {
-    fn write(&self, buf: &[u8]) -> Result<u64> {
+    fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::Inval)
     }

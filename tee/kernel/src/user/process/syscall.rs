@@ -176,7 +176,10 @@ impl Syscall3 for SysWrite {
         let chunk = &mut chunk[..len];
         thread.process().read(buf, chunk)?;
 
-        fd.write(chunk)
+        let len = fd.write(chunk)?;
+
+        let len = u64::try_from(len).unwrap();
+        Ok(len)
     }
 }
 
