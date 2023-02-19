@@ -58,7 +58,7 @@ pub unsafe fn map_page(
     Ok(())
 }
 
-pub unsafe fn unmap_page(page: Page) -> PhysFrame {
+pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
     trace!("unmapping page {page:?}");
 
     let level4 = ActivePageTable::get();
@@ -551,24 +551,15 @@ impl ActivePageTableEntry<Level1> {
     /// # Panics
     ///
     /// Panics if the page isn't mapped.
-    ///
-    /// # Safety
-    ///
-    /// `frame` must not already be mapped.
-    pub unsafe fn unmap(&self) -> PhysFrame {
+    pub unsafe fn unmap(&self) -> PresentPageTableEntry {
         let old_entry = self.entry.swap(0, Ordering::SeqCst);
-        let present = old_entry.get_bit(PRESENT_BIT);
-        let global = old_entry.get_bit(GLOBAL_BIT);
-        let frame = PhysFrame::containing_address(PhysAddr::new_truncate(old_entry));
-
-        assert!(present);
-
-        self.flush(global);
+        let old_entry = PresentPageTableEntry::try_from(old_entry).unwrap();
+        self.flush(old_entry.global());
 
         // FIXME: Free up the frame.
         let _maybe_frame = unsafe { self.parent_table_entry().release_reference_count() };
 
-        frame
+        old_entry
     }
 
     /// Panics if the page isn't mapped.
@@ -791,6 +782,18 @@ impl PresentPageTableEntry {
     }
 }
 
+impl TryFrom<u64> for PresentPageTableEntry {
+    type Error = PageNotPresentError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        if value.get_bit(PRESENT_BIT) {
+            Ok(Self(NonZeroU64::new(value).unwrap()))
+        } else {
+            Err(PageNotPresentError(()))
+        }
+    }
+}
+
 impl fmt::Debug for PresentPageTableEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PresentPageTableEntry")
@@ -799,3 +802,6 @@ impl fmt::Debug for PresentPageTableEntry {
             .finish()
     }
 }
+
+#[derive(Debug)]
+pub struct PageNotPresentError(());

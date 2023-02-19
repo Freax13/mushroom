@@ -77,7 +77,8 @@ where
         let mut allocator = self.allocator.lock();
 
         for page in (base..).take(pages) {
-            let frame = unsafe { unmap_page(page) };
+            let entry = unsafe { unmap_page(page) };
+            let frame = entry.frame();
             unsafe {
                 allocator.deallocate_frame(frame);
             }
