@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use constants::MAX_APS_COUNT;
 use x86_64::{
     registers::segmentation::{Segment64, GS},
-    structures::{gdt::GlobalDescriptorTable, tss::TaskStateSegment},
+    structures::{gdt::GlobalDescriptorTable, paging::Page, tss::TaskStateSegment},
     VirtAddr,
 };
 
@@ -34,6 +34,7 @@ pub struct PerCpu {
     pub kernel_registers: Cell<KernelRegisters>,
     pub userspace_registers: Cell<UserspaceRegisters>,
     pub reserved_frame_storage: RefCell<ReservedFrameStorage>,
+    pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
     pub current_process: Cell<Option<Arc<Process>>>,
@@ -47,6 +48,7 @@ impl PerCpu {
             kernel_registers: Cell::new(KernelRegisters::ZERO),
             userspace_registers: Cell::new(UserspaceRegisters::ZERO),
             reserved_frame_storage: RefCell::new(ReservedFrameStorage::new()),
+            temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
             current_process: Cell::new(None),

@@ -21,6 +21,7 @@ use crate::{
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{add_flags, map_page, page_to_frame, unmap_page, PageTableFlags},
+        temporary::{copy_into_frame, zero_frame},
     },
 };
 
@@ -337,26 +338,23 @@ impl Mapping {
             return Ok(ptr);
         }
 
-        let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
-        let new_flags = flags & !PageTableFlags::COW;
-
         let mut content = [0; 0x1000];
         without_smap(|| unsafe {
             core::intrinsics::volatile_copy_nonoverlapping_memory(&mut content, ptr, 1);
         });
 
+        let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+        unsafe {
+            copy_into_frame(frame, &content);
+        }
+
+        let new_flags = flags & !PageTableFlags::COW;
+
         unsafe {
             unmap_page(page, PageTableFlags::USER);
-            // FIXME: We should copy the content before mapping the frame into userspace.
             // FIXME: We should do the remap atomically.
             map_page(page, frame, new_flags, &mut &DUMB_FRAME_ALLOCATOR);
         }
-
-        without_smap(|| {
-            without_write_protect(|| unsafe {
-                core::intrinsics::volatile_copy_nonoverlapping_memory(ptr, &content, 1);
-            })
-        });
 
         Ok(ptr)
     }
@@ -393,32 +391,35 @@ impl Mapping {
                             )
                             .unwrap();
                             let backing_bytes = &bytes[offset..][..0x1000];
+                            let backing_bytes: &[u8; 0x1000] = backing_bytes.try_into().unwrap();
 
                             let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
 
+                            // Fill the frame.
+                            unsafe {
+                                // SAFETY: We just allocated the frame, so we can do whatever.
+                                copy_into_frame(frame, backing_bytes);
+                            }
+
+                            // Map the page.
                             let mut flags = PageTableFlags::USER | PageTableFlags::WRITABLE;
                             if self.permissions.contains(MemoryPermissions::EXECUTE) {
                                 flags |= PageTableFlags::EXECUTABLE;
                             }
-
                             unsafe {
                                 map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
                             }
-
-                            // FIXME: We shouldn't expose the unwritten page to userspace.
-                            without_smap(|| unsafe {
-                                core::intrinsics::volatile_copy_nonoverlapping_memory(
-                                    ptr,
-                                    backing_bytes.as_ptr().cast(),
-                                    1,
-                                );
-                            });
                         }
                         FileSnapshot::Owned(_) => todo!(),
                     }
                 }
                 Backing::Zero | Backing::Stack => {
                     let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+
+                    unsafe {
+                        // SAFETY: We just allocated the frame, so we can do whatever.
+                        zero_frame(frame);
+                    }
 
                     let mut flags = PageTableFlags::USER | PageTableFlags::WRITABLE;
                     if self.permissions.contains(MemoryPermissions::EXECUTE) {
@@ -427,11 +428,6 @@ impl Mapping {
                     unsafe {
                         map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
                     }
-
-                    // FIXME: We shouldn't expose the unzeroed page to userspace.
-                    without_smap(|| unsafe {
-                        core::intrinsics::volatile_set_memory(ptr, 0, 1);
-                    });
                 }
             }
         }
@@ -484,6 +480,10 @@ impl Mapping {
                 Backing::Zero => {
                     // FIXME: We could map a specific zero frame.
                     let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+                    unsafe {
+                        // SAFETY: We just allocated the frame, so we can do whatever.
+                        zero_frame(frame);
+                    }
 
                     let mut flags = PageTableFlags::USER;
                     if self.permissions.contains(MemoryPermissions::WRITE) {
@@ -495,13 +495,6 @@ impl Mapping {
                     unsafe {
                         map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
                     }
-
-                    // FIXME: We shouldn't expose the unzeroed page to userspace.
-                    without_smap(|| {
-                        without_write_protect(|| unsafe {
-                            core::intrinsics::volatile_set_memory(ptr, 0, 1);
-                        })
-                    });
                 }
                 _ => todo!(),
             }
