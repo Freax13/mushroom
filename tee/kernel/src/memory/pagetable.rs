@@ -25,6 +25,8 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
+const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(511);
+
 pub unsafe fn map_page(
     page: Page,
     frame: PhysFrame,
@@ -176,17 +178,17 @@ struct ActivePageTable<L> {
 
 impl ActivePageTable<Level4> {
     fn get() -> &'static Self {
-        // FIXME: Add a constant for the recursive index.
-        let recursive_index = 511;
-        let mut addr = 0;
-        addr.set_bits(12..=20, recursive_index);
-        addr.set_bits(21..=29, recursive_index);
-        addr.set_bits(30..=38, recursive_index);
-        addr.set_bits(39..=47, recursive_index);
-        let addr = VirtAddr::new_truncate(addr);
+        let ptr = Page::from_page_table_indices(
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+        )
+        .start_address()
+        .as_ptr();
         unsafe {
             // SAFETY: We never construct a mutable reference.
-            &*addr.as_ptr()
+            &*ptr
         }
     }
 }
@@ -216,11 +218,8 @@ where
     L: HasParentLevel,
 {
     pub fn parent_table_entry(&self) -> &ActivePageTableEntry<L::Prev> {
-        // FIXME: Add a constant for the recursive index.
-        let recursive_index = 511;
-
         let addr = VirtAddr::from_ptr(self);
-        let p4_index = PageTableIndex::new(recursive_index);
+        let p4_index = RECURSIVE_INDEX;
         let p3_index = addr.p4_index();
         let p2_index = addr.p3_index();
         let p1_index = addr.p2_index();
