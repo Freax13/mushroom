@@ -136,6 +136,7 @@ impl Thread {
 const SYSCALL_HANDLERS: SyscallHandlers = {
     let mut handlers = SyscallHandlers::new();
 
+    handlers.register(SysRead);
     handlers.register(SysWrite);
     handlers.register(SysOpen);
     handlers.register(SysClose);
@@ -153,6 +154,38 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 
     handlers
 };
+
+struct SysRead;
+
+impl Syscall3 for SysRead {
+    const NO: usize = 0;
+    const NAME: &'static str = "read";
+
+    type Arg0 = Fd;
+    type Arg1 = Pointer;
+    type Arg2 = u64;
+
+    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> Result<u64> {
+        let fd = thread.process().fdtable().get(fd)?;
+
+        let buf = buf.get();
+        let count = usize::try_from(count).unwrap();
+
+        let mut chunk = [0u8; 128];
+        let max_chunk_len = chunk.len();
+        let len = cmp::min(max_chunk_len, count);
+        let chunk = &mut chunk[..len];
+
+        let len = fd.read(chunk)?;
+        let chunk = &mut chunk[..len];
+
+        thread.process().write(buf, chunk)?;
+
+        let len = u64::try_from(len).unwrap();
+
+        Ok(len)
+    }
+}
 
 struct SysWrite;
 
