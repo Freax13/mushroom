@@ -335,6 +335,7 @@ impl Mapping {
                     map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                 }
             }
+            FileSnapshot::Dynamic(_) => todo!(),
         }
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
@@ -432,6 +433,7 @@ impl Mapping {
                                 map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
+                        FileSnapshot::Dynamic(_) => todo!(),
                     }
                 }
                 Backing::Zero | Backing::Stack => {
@@ -497,6 +499,7 @@ impl Mapping {
                                 map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
+                        FileSnapshot::Dynamic(_) => todo!(),
                     }
                 }
                 Backing::Zero | Backing::Stack => {

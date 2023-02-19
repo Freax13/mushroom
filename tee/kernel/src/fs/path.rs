@@ -2,7 +2,7 @@ use core::fmt::{self, Display};
 
 use alloc::{borrow::ToOwned, vec::Vec};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FileName(Vec<u8>);
 
 impl FileName {

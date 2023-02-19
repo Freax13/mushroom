@@ -10,7 +10,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_node, Node, ROOT_NODE},
+        node::{create_file, lookup_node, Node, WriteonlyFile, ROOT_NODE},
         Path,
     },
     user::process::memory::MemoryPermissions,
@@ -224,28 +224,39 @@ impl Syscall3 for SysOpen {
 
     type Arg0 = Pointer;
     type Arg1 = OpenFlags;
-    type Arg2 = u64;
+    type Arg2 = FileMode;
 
-    fn execute(thread: &mut Thread, filename: Pointer, flags: OpenFlags, mode: u64) -> Result<u64> {
-        if mode != 0 {
-            todo!();
-        }
-
+    fn execute(
+        thread: &mut Thread,
+        filename: Pointer,
+        flags: OpenFlags,
+        _mode: FileMode,
+    ) -> Result<u64> {
         let filename = thread.process().read_cstring(filename.get(), 4096)?;
         let filename = Path::new(&filename);
 
-        let node = lookup_node(Node::Directory(ROOT_NODE.clone()), &filename)?;
-
-        let file = match node {
-            Node::File(file) => file,
-            Node::Directory(_) => return Err(Error::IsDir),
-        };
-
         if flags.contains(OpenFlags::WRONLY) {
-            todo!()
+            if flags.contains(OpenFlags::CREAT) {
+                let dynamic_file =
+                    create_file(Node::Directory(ROOT_NODE.clone()), &filename, false)?;
+                let fd = thread
+                    .process()
+                    .fdtable()
+                    .insert(WriteonlyFile::new(dynamic_file));
+                Ok(fd.get() as u64)
+            } else {
+                todo!()
+            }
         } else if flags.contains(OpenFlags::RDWR) {
             todo!()
         } else {
+            let node = lookup_node(Node::Directory(ROOT_NODE.clone()), &filename)?;
+
+            let file = match node {
+                Node::File(file) => file,
+                Node::Directory(_) => return Err(Error::IsDir),
+            };
+
             let snapshot = file.read_snapshot()?;
             let fd = thread
                 .process()
@@ -600,7 +611,23 @@ bitflags! {
     pub struct OpenFlags {
         const WRONLY = 1 << 0;
         const RDWR = 1 << 1;
+        const CREAT = 1 << 6;
+        const EXCL = 1 << 9;
         const SYNC = 1 << 19;
+    }
+}
+
+bitflags! {
+    pub struct FileMode {
+        const EXECUTE = 1 << 0;
+        const WRITE = 1 << 1;
+        const READ = 1 << 2;
+        const GROUP_EXECUTE = 1 << 3;
+        const GROUP_WRITE = 1 << 4;
+        const GROUP_READ = 1 << 5;
+        const OWNER_EXECUTE = 1 << 6;
+        const OWNER_WRITE = 1 << 7;
+        const OWNER_READ = 1 << 8;
     }
 }
 

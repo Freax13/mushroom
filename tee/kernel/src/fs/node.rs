@@ -3,10 +3,14 @@ use core::ops::Deref;
 use alloc::{
     collections::{btree_map::Entry, BTreeMap},
     sync::Arc,
+    vec::Vec,
 };
 use spin::{Lazy, Mutex};
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    user::process::fd::FileDescriptor,
+};
 
 use super::{path::FileName, Path, PathSegment};
 
@@ -26,6 +30,7 @@ pub trait File: Send + Sync {
 #[derive(Clone)]
 pub enum FileSnapshot {
     Static(&'static [u8]),
+    Dynamic(Arc<Vec<u8>>),
 }
 
 impl Deref for FileSnapshot {
@@ -34,6 +39,7 @@ impl Deref for FileSnapshot {
     fn deref(&self) -> &Self::Target {
         match self {
             FileSnapshot::Static(bytes) => bytes,
+            FileSnapshot::Dynamic(bytes) => bytes,
         }
     }
 }
@@ -62,6 +68,41 @@ pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
                 PathSegment::FileName(file_name) => dir.get_node(file_name),
             }
         })
+}
+
+pub fn create_file(start_node: Node, path: &Path, executable: bool) -> Result<Arc<DynamicFile>> {
+    let mut start_node = match start_node {
+        Node::File(_) => return Err(Error::NotDir),
+        Node::Directory(dir) => dir,
+    };
+    if path.is_absolute() {
+        start_node = ROOT_NODE.clone();
+    }
+
+    let (last, segments) = path.segments().split_last().unwrap();
+    let dir = segments
+        .iter()
+        .try_fold(start_node, |dir, segment| match segment {
+            PathSegment::Empty | PathSegment::Dot => Ok(dir),
+            PathSegment::DotDot => todo!(),
+            PathSegment::FileName(file_name) => {
+                let dir = dir.get_node(file_name)?;
+                match dir {
+                    Node::File(_) => Err(Error::NotDir),
+                    Node::Directory(dir) => Ok(dir),
+                }
+            }
+        })?;
+
+    let file_name = match last {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(file_name) => file_name,
+    };
+    let dynamic_file = Arc::new(DynamicFile::new(executable));
+    dir.create(file_name.clone(), dynamic_file.clone(), false);
+    Ok(dynamic_file)
 }
 
 pub struct TmpFsDirectory {
@@ -151,5 +192,49 @@ impl File for StaticFile {
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
         Ok(FileSnapshot::Static(self.content))
+    }
+}
+
+pub struct DynamicFile {
+    content: Mutex<Arc<Vec<u8>>>,
+    executable: bool,
+}
+
+impl DynamicFile {
+    pub fn new(executable: bool) -> Self {
+        Self {
+            content: Mutex::new(Arc::new(Vec::new())),
+            executable,
+        }
+    }
+}
+
+impl File for DynamicFile {
+    fn is_executable(&self) -> bool {
+        self.executable
+    }
+
+    fn read_snapshot(&self) -> Result<FileSnapshot> {
+        let content = self.content.lock().clone();
+        Ok(FileSnapshot::Dynamic(content))
+    }
+}
+
+pub struct WriteonlyFile {
+    file: Arc<DynamicFile>,
+}
+
+impl WriteonlyFile {
+    pub fn new(file: Arc<DynamicFile>) -> Self {
+        Self { file }
+    }
+}
+
+impl FileDescriptor for WriteonlyFile {
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.file.content.lock();
+        let content = Arc::make_mut(&mut guard);
+        content.extend_from_slice(buf);
+        Ok(buf.len())
     }
 }
