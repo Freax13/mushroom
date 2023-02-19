@@ -1,10 +1,9 @@
 use alloc::sync::Arc;
-use bytemuck::{bytes_of_mut, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use goblin::{
     elf::Elf,
     elf64::{header::ET_DYN, program_header::PT_LOAD},
 };
-use log::debug;
 use x86_64::VirtAddr;
 
 use super::{memory::MemoryPermissions, Process};

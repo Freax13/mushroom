@@ -1,6 +1,6 @@
 use core::{
     arch::asm,
-    ops::{BitAnd, BitAndAssign, BitOrAssign, Not},
+    ops::{BitAndAssign, BitOrAssign, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -10,7 +10,6 @@ use alloc::{
 };
 use bitflags::bitflags;
 use bytemuck::{offset_of, Pod, Zeroable};
-use log::debug;
 use spin::Mutex;
 use x86_64::{
     registers::{

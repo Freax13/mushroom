@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_void, CStr},
+    ffi::c_void,
     mem::size_of,
     num::NonZeroUsize,
     os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use bytemuck::{bytes_of, CheckedBitPattern, Pod};
+use bytemuck::{CheckedBitPattern, Pod};
 use nix::{
     fcntl::{fallocate, FallocateFlags},
     sys::{

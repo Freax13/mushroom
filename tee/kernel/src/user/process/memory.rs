@@ -1,4 +1,4 @@
-use core::{arch::asm, cmp, panic::PanicInfo};
+use core::{arch::asm, cmp};
 
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -125,10 +125,6 @@ impl Process {
         guard.mappings.push(mapping);
 
         Ok(())
-    }
-
-    pub fn load(&self) {
-        // FIXME: Load the page table.
     }
 
     pub fn read(&self, addr: VirtAddr, bytes: &mut [u8]) -> Result<()> {
@@ -320,7 +316,6 @@ impl Mapping {
                     map_page(page, backing_frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
                 }
             }
-            FileSnapshot::Owned(_) => todo!(),
         }
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
@@ -410,7 +405,6 @@ impl Mapping {
                                 map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
-                        FileSnapshot::Owned(_) => todo!(),
                     }
                 }
                 Backing::Zero | Backing::Stack => {
@@ -474,7 +468,6 @@ impl Mapping {
                                 map_page(page, backing_frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
-                        FileSnapshot::Owned(_) => todo!(),
                     }
                 }
                 Backing::Zero => {

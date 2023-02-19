@@ -136,12 +136,12 @@ extern "sysv64" fn handle_vmm_communication_exception(frame: &mut StackFrame) {
         rdx,
         rcx,
         rax,
-        exception_code,
+        exception_code: _,
         rip,
-        cs,
-        rflags,
+        cs: _,
+        rflags: _,
         rsp,
-        ss,
+        ss: _,
     } = &frame;
 
     error!("Registers:");

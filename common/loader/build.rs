@@ -69,7 +69,7 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
     }
 }
 
-fn build_kernel(root_dir: &Path, out_dir: &Path, profile: Profile) {
+fn build_kernel(root_dir: &Path, out_dir: &Path, _profile: Profile) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut cmd = Command::new(cargo);
     cmd.current_dir(root_dir.join("tee"));

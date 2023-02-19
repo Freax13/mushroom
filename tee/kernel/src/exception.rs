@@ -1,10 +1,6 @@
 //! This module is responsible for handling CPU exceptions.
 
-use core::{
-    alloc::Layout,
-    arch::asm,
-    ptr::{null_mut, NonNull},
-};
+use core::{alloc::Layout, arch::asm, ptr::null_mut};
 
 use alloc::alloc::alloc;
 use log::{debug, error, trace};
@@ -17,7 +13,7 @@ use x86_64::{
         segmentation::{Segment, CS, DS, ES, GS, SS},
     },
     structures::{
-        gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector},
+        gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable},
         idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
         paging::Page,
         tss::TaskStateSegment,

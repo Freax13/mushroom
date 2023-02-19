@@ -1,7 +1,6 @@
 use core::ops::Deref;
 
 use alloc::{
-    borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     sync::Arc,
 };
@@ -27,7 +26,6 @@ pub trait File: Send + Sync {
 #[derive(Clone)]
 pub enum FileSnapshot {
     Static(&'static [u8]),
-    Owned(Arc<[u8]>),
 }
 
 impl Deref for FileSnapshot {
@@ -36,7 +34,6 @@ impl Deref for FileSnapshot {
     fn deref(&self) -> &Self::Target {
         match self {
             FileSnapshot::Static(bytes) => bytes,
-            FileSnapshot::Owned(bytes) => bytes,
         }
     }
 }

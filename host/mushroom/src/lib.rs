@@ -1,16 +1,13 @@
 #![feature(saturating_int_impl, slice_ptr_len, pointer_byte_offsets)]
+// FIXME: Remove this once https://github.com/rust-lang/rust-clippy/pull/10321 lands on nightly.
+#![allow(clippy::extra_unused_type_parameters)]
 
 use std::{
-    cmp,
     collections::{hash_map::Entry, HashMap},
-    f32::consts::E,
-    ffi::CStr,
-    iter::{from_fn, once},
     mem::size_of,
-    num::{NonZeroU8, NonZeroUsize, Saturating},
-    os::fd::{AsFd, AsRawFd, OwnedFd},
+    num::Saturating,
     ptr::NonNull,
-    sync::{atomic::AtomicBool, Arc, Barrier, Mutex},
+    sync::Arc,
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -384,10 +381,6 @@ impl VmContext {
                     }
                 }
                 KvmExit::Interrupted => {}
-                KvmExit::SystemEvent(_) => {
-                    std::thread::sleep_ms(100000);
-                    return Ok(());
-                }
                 exit => {
                     panic!("unexpected exit: {exit:?}");
                 }
@@ -452,7 +445,7 @@ impl VmContext {
                     Ok(())
                 }
 
-                dbg!(debug_page_table(&self.vm));
+                let _ = dbg!(debug_page_table(&self.vm));
             }
 
             if DEBUG {
@@ -542,7 +535,7 @@ impl VmContext {
                             Ok(())
                         }
 
-                        dbg!(debug_page_table(id, &vm, vmsa.rip));
+                        let _ = dbg!(debug_page_table(id, &vm, vmsa.rip));
 
                         panic!("unexpected exit {exit:?}");
                     }
@@ -560,17 +553,6 @@ fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot
             (slot.gpa()..slot.gpa() + num_frames).contains(&gpa)
         })
         .context("failed to find slot which contains ghcb")
-}
-
-fn hexdump(base: u64, bytes: &[u8]) {
-    for (row, chunk) in bytes.chunks(0x10).enumerate() {
-        let addr = base + (row * chunk.len()) as u64;
-        eprint!("{addr:016x}: ");
-        for b in chunk.iter() {
-            eprint!("{b:02x} ");
-        }
-        eprintln!();
-    }
 }
 
 /// The volatile equivalent of `bytemuck::bytes_of`.

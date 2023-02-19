@@ -17,7 +17,7 @@ use core::{
 
 use bit_field::BitField;
 use bitflags::bitflags;
-use log::{debug, trace};
+use log::trace;
 use spin::Lazy;
 use x86_64::{
     instructions::tlb::Invlpgb,
@@ -500,12 +500,6 @@ impl<L> ActivePageTableEntry<L> {
         let addr = addr << 9;
         let addr = VirtAddr::new_truncate(addr);
         Page::from_start_address(addr).unwrap()
-    }
-}
-
-impl ActivePageTableEntry<Level2> {
-    pub fn entry(&self) -> u64 {
-        self.entry.load(Ordering::SeqCst)
     }
 }
 

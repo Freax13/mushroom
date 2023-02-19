@@ -68,7 +68,7 @@ where
 {
     const NO: usize = <T as Syscall0>::NO;
 
-    fn execute(thread: &mut Thread, arg0: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, _arg0: u64) -> Result<u64> {
         <T as Syscall0>::execute(thread)
     }
 }
@@ -79,7 +79,7 @@ where
 {
     const NO: usize = <T as Syscall1>::NO;
 
-    fn execute(thread: &mut Thread, arg0: u64, arg1: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, arg0: u64, _arg1: u64) -> Result<u64> {
         <T as Syscall1>::execute(thread, arg0)
     }
 }
@@ -90,7 +90,7 @@ where
 {
     const NO: usize = <T as Syscall2>::NO;
 
-    fn execute(thread: &mut Thread, arg0: u64, arg1: u64, arg2: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, arg0: u64, arg1: u64, _arg2: u64) -> Result<u64> {
         <T as Syscall2>::execute(thread, arg0, arg1)
     }
 }
@@ -101,7 +101,7 @@ where
 {
     const NO: usize = <T as Syscall3>::NO;
 
-    fn execute(thread: &mut Thread, arg0: u64, arg1: u64, arg2: u64, arg3: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, arg0: u64, arg1: u64, arg2: u64, _arg3: u64) -> Result<u64> {
         <T as Syscall3>::execute(thread, arg0, arg1, arg2)
     }
 }
@@ -118,7 +118,7 @@ where
         arg1: u64,
         arg2: u64,
         arg3: u64,
-        arg4: u64,
+        _arg4: u64,
     ) -> Result<u64> {
         <T as Syscall4>::execute(thread, arg0, arg1, arg2, arg3)
     }
@@ -137,7 +137,7 @@ where
         arg2: u64,
         arg3: u64,
         arg4: u64,
-        arg5: u64,
+        _arg5: u64,
     ) -> Result<u64> {
         <T as Syscall5>::execute(thread, arg0, arg1, arg2, arg3, arg4)
     }

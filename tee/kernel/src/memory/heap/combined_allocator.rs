@@ -3,11 +3,7 @@ use core::{
     ptr::{null_mut, NonNull},
 };
 
-use super::{
-    fallback_allocator::{FallbackAllocator, LimitedAllocator},
-    fixed_size_allocator::FixedSizeAllocator,
-    HUGE_ALLOCATOR,
-};
+use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSizeAllocator};
 
 type CombinedAllocator<A: Allocator> = FallbackAllocator<
     FallbackAllocator<

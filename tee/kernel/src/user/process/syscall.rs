@@ -1,4 +1,4 @@
-use core::{cmp, mem::size_of};
+use core::cmp;
 
 use bitflags::bitflags;
 use bytemuck::{bytes_of, bytes_of_mut, Pod, Zeroable};
@@ -67,7 +67,7 @@ struct SysWrite;
 impl Syscall3 for SysWrite {
     const NO: usize = 1;
 
-    fn execute(thread: &mut Thread, fd: u64, buf: u64, count: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, _fd: u64, buf: u64, count: u64) -> Result<u64> {
         let buf = VirtAddr::new(buf);
         let count = usize::try_from(count).unwrap();
 
@@ -176,7 +176,7 @@ struct SysMprotect;
 impl Syscall3 for SysMprotect {
     const NO: usize = 10;
 
-    fn execute(thread: &mut Thread, start: u64, len: u64, prot: u64) -> Result<u64> {
+    fn execute(_thread: &mut Thread, start: u64, len: u64, prot: u64) -> Result<u64> {
         let prot = ProtFlags::from_bits(prot).ok_or(Error::Inval)?;
         warn!("FIXME: implement mprotect({start:#x}, {len:#x}, {prot:?})");
         Ok(0)
@@ -188,14 +188,12 @@ struct SysBrk;
 impl Syscall1 for SysBrk {
     const NO: usize = 12;
 
-    fn execute(thread: &mut Thread, brk: u64) -> Result<u64> {
+    fn execute(_thread: &mut Thread, brk: u64) -> Result<u64> {
         if brk == 0 || brk == 0x1000 {
             return Ok(0);
         }
 
         return Err(Error::NoMem);
-
-        todo!("{brk:#x}")
     }
 }
 
@@ -209,7 +207,7 @@ impl Syscall4 for SysRtSigaction {
         signum: u64,
         act: u64,
         oldact: u64,
-        sigsetsize: u64,
+        _sigsetsize: u64,
     ) -> Result<u64> {
         let signum = usize::try_from(signum).unwrap();
 
@@ -340,7 +338,7 @@ struct SysExitGroup;
 impl Syscall1 for SysExitGroup {
     const NO: usize = 231;
 
-    fn execute(thread: &mut Thread, error_code: u64) -> Result<u64> {
+    fn execute(_thread: &mut Thread, error_code: u64) -> Result<u64> {
         todo!("exit: {error_code}")
     }
 }

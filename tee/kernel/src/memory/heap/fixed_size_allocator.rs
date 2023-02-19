@@ -2,8 +2,7 @@ use core::{
     alloc::{AllocError, Allocator, Layout},
     cell::Cell,
     mem::{align_of, size_of},
-    ptr::{addr_of_mut, null_mut, NonNull},
-    sync::atomic::AtomicPtr,
+    ptr::{addr_of_mut, NonNull},
 };
 
 use spin::Mutex;

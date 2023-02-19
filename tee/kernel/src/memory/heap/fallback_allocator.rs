@@ -3,17 +3,6 @@ use core::{
     ptr::NonNull,
 };
 
-use super::fixed_size_allocator::FixedSizeAllocator;
-
-pub struct CombinedAllocator<A> {
-    small8: FixedSizeAllocator<A, 8>,
-    small16: FixedSizeAllocator<A, 16>,
-    small24: FixedSizeAllocator<A, 24>,
-    small32: FixedSizeAllocator<A, 32>,
-    small48: FixedSizeAllocator<A, 48>,
-    small64: FixedSizeAllocator<A, 64>,
-}
-
 pub struct FallbackAllocator<T, U> {
     first_choice: T,
     fallback: U,

@@ -1,6 +1,4 @@
-use core::sync::atomic::{AtomicU32, Ordering};
-
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::sync::Arc;
 use spin::mutex::Mutex;
 
 use crate::{

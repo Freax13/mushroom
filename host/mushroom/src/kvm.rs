@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{
     array::from_fn,
     fs::OpenOptions,

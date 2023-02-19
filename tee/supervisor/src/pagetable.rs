@@ -157,25 +157,6 @@ impl<L> PageTableEntry<L> {
     pub fn present(&self) -> bool {
         self.value.load(Ordering::SeqCst).get_bit(0)
     }
-
-    pub fn encrypted(&self) -> bool {
-        self.value.load(Ordering::SeqCst).get_bit(c_bit_location())
-    }
-
-    /// # Safety
-    ///
-    /// Changing the encrypted bit is inherently unsafe.
-    pub unsafe fn set_encrypted(&self, encrypted: bool) {
-        if encrypted {
-            self.value.fetch_or(1 << c_bit_location(), Ordering::SeqCst);
-        } else {
-            self.value
-                .fetch_and(!(1 << c_bit_location()), Ordering::SeqCst);
-        }
-
-        // FIXME: We should only flush specific pages.
-        x86_64::instructions::tlb::flush_all();
-    }
 }
 
 impl<L> PageTableEntry<L>
@@ -381,26 +362,4 @@ impl TemporaryMapping<Size2MiB> {
             );
         }
     }
-}
-
-/// # Safety
-///
-/// FIXME: This is super racy.
-pub unsafe fn create_temporary_mappinga(addr: PhysFrame<Size2MiB>) -> Page<Size2MiB> {
-    let page = Page::<Size2MiB>::from_start_address(VirtAddr::new(0xffff800003800000)).unwrap();
-
-    let pml4 = PageTable::get();
-    let pml4e = &pml4[page.p4_index()];
-    let pdp = pml4e.table().unwrap_unchecked();
-    let pdpe = &pdp[page.p3_index()];
-    let pd = match pdpe.content().unwrap_unchecked() {
-        PageTableEntryContent::Frame(_) => core::hint::unreachable_unchecked(),
-        PageTableEntryContent::PageTable(pd) => pd,
-    };
-    let pde = &pd[page.p2_index()];
-    pde.create_temporary_mapping(addr);
-
-    x86_64::instructions::tlb::flush_all();
-
-    page
 }

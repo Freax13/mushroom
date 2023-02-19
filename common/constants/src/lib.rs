@@ -27,9 +27,6 @@ pub const MEMORY_PORT: u16 = 0x1337;
 pub const KICK_AP_PORT: u16 = 0x7331;
 pub const MEMORY_MSR: u32 = 0x4000_0000;
 
-#[cfg(debug_assertions)]
-const DEBUG_BUFFER_SIZE: u16 = 0x1000;
-
 macro_rules! address {
     ($(#[$meta:meta])* const $ident:ident = $start:literal;) => {
         $(#[$meta])*
