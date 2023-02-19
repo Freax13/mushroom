@@ -9,8 +9,10 @@ use crate::{
 
 use core::{
     arch::global_asm,
+    fmt,
     iter::Step,
     marker::{PhantomData, PhantomPinned},
+    num::NonZeroU64,
     ops::{Deref, Index, Range},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -29,29 +31,28 @@ const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(511);
 
 pub unsafe fn map_page(
     page: Page,
-    frame: PhysFrame,
-    flags: PageTableFlags,
+    entry: PresentPageTableEntry,
     allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<()> {
-    trace!("mapping page {page:?}->{frame:?} flags={flags:?}");
+    trace!("mapping page {page:?}->{entry:?}");
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire(flags, allocator)?;
+    let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire(flags, allocator)?;
+    let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire(flags, allocator)?;
+    let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
     unsafe {
-        level1_entry.map(frame, flags);
+        level1_entry.map(entry);
     }
 
     Ok(())
@@ -104,7 +105,7 @@ pub unsafe fn add_flags(page: Page, flags: PageTableFlags) -> Result<()> {
 /// # Panics
 ///
 /// The page has to be mapped.
-pub fn page_to_frame(page: Page) -> Option<(PhysFrame, PageTableFlags)> {
+pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     let pml4 = ActivePageTable::get();
     let pml4e = &pml4[page.p4_index()];
     let pdp = pml4e.acquire_existing()?;
@@ -113,7 +114,7 @@ pub fn page_to_frame(page: Page) -> Option<(PhysFrame, PageTableFlags)> {
     let pde = &pd[page.p2_index()];
     let pt = pde.acquire_existing()?;
     let pte = &pt[page.p1_index()];
-    pte.frame()
+    pte.entry()
 }
 
 struct Level4;
@@ -536,27 +537,10 @@ impl ActivePageTableEntry<Level1> {
     /// # Safety
     ///
     /// `frame` must not already be mapped.
-    pub unsafe fn map(&self, frame: PhysFrame, flags: PageTableFlags) {
-        let mut new_entry = frame.start_address().as_u64();
-        new_entry.set_bit(PRESENT_BIT, true);
-        let writable = flags.contains(PageTableFlags::WRITABLE);
-        new_entry.set_bit(WRITE_BIT, writable);
-        new_entry.set_bit(USER_BIT, flags.contains(PageTableFlags::USER));
-        new_entry.set_bit(GLOBAL_BIT, flags.contains(PageTableFlags::GLOBAL));
-        new_entry.set_bit(
-            DISABLE_EXECUTE_BIT,
-            !flags.contains(PageTableFlags::EXECUTABLE),
-        );
-        let cow = flags.contains(PageTableFlags::COW);
-        new_entry.set_bit(COW_BIT, cow);
-
-        if cow {
-            assert!(!writable);
-        }
-
+    pub unsafe fn map(&self, entry: PresentPageTableEntry) {
         let res = self
             .entry
-            .compare_exchange(0, new_entry, Ordering::SeqCst, Ordering::SeqCst);
+            .compare_exchange(0, entry.0.get(), Ordering::SeqCst, Ordering::SeqCst);
         res.expect("the page was already mapped");
 
         self.parent_table_entry()
@@ -618,23 +602,13 @@ impl ActivePageTableEntry<Level1> {
         self.flush(global);
     }
 
-    pub fn frame(&self) -> Option<(PhysFrame<Size4KiB>, PageTableFlags)> {
+    pub fn entry(&self) -> Option<PresentPageTableEntry> {
         let entry = self.entry.load(Ordering::SeqCst);
         if !entry.get_bit(PRESENT_BIT) {
             return None;
         }
-
-        let frame = PhysFrame::containing_address(PhysAddr::new_truncate(entry));
-        let mut flags = PageTableFlags::empty();
-        flags.set(PageTableFlags::WRITABLE, entry.get_bit(WRITE_BIT));
-        flags.set(
-            PageTableFlags::EXECUTABLE,
-            !entry.get_bit(DISABLE_EXECUTE_BIT),
-        );
-        flags.set(PageTableFlags::USER, entry.get_bit(USER_BIT));
-        flags.set(PageTableFlags::GLOBAL, entry.get_bit(GLOBAL_BIT));
-        flags.set(PageTableFlags::COW, entry.get_bit(COW_BIT));
-        Some((frame, flags))
+        let entry = NonZeroU64::new(entry).unwrap();
+        Some(PresentPageTableEntry(entry))
     }
 }
 
@@ -751,5 +725,77 @@ bitflags! {
         const USER = 1 << 2;
         const GLOBAL = 1 << 3;
         const COW = 1 << 4;
+    }
+}
+
+/// A page table entry that's present.
+#[derive(Clone, Copy)]
+pub struct PresentPageTableEntry(NonZeroU64);
+
+impl PresentPageTableEntry {
+    pub fn new(frame: PhysFrame, flags: PageTableFlags) -> Self {
+        let mut entry = frame.start_address().as_u64();
+
+        entry.set_bit(PRESENT_BIT, true);
+        let writable = flags.contains(PageTableFlags::WRITABLE);
+        entry.set_bit(WRITE_BIT, writable);
+        entry.set_bit(USER_BIT, flags.contains(PageTableFlags::USER));
+        let global = flags.contains(PageTableFlags::GLOBAL);
+        entry.set_bit(GLOBAL_BIT, global);
+        entry.set_bit(
+            DISABLE_EXECUTE_BIT,
+            !flags.contains(PageTableFlags::EXECUTABLE),
+        );
+        let cow = flags.contains(PageTableFlags::COW);
+        entry.set_bit(COW_BIT, cow);
+
+        if cow {
+            assert!(!writable);
+        }
+
+        Self(NonZeroU64::new(entry).unwrap())
+    }
+
+    pub fn frame(&self) -> PhysFrame {
+        PhysFrame::containing_address(PhysAddr::new_truncate(self.0.get()))
+    }
+
+    pub fn flags(&self) -> PageTableFlags {
+        let mut flags = PageTableFlags::empty();
+        flags.set(PageTableFlags::WRITABLE, self.writable());
+        flags.set(PageTableFlags::USER, self.user());
+        flags.set(PageTableFlags::GLOBAL, self.global());
+        flags.set(PageTableFlags::EXECUTABLE, self.executable());
+        flags.set(PageTableFlags::COW, self.cow());
+        flags
+    }
+
+    pub fn writable(&self) -> bool {
+        self.0.get().get_bit(WRITE_BIT)
+    }
+
+    pub fn user(&self) -> bool {
+        self.0.get().get_bit(USER_BIT)
+    }
+
+    pub fn global(&self) -> bool {
+        self.0.get().get_bit(GLOBAL_BIT)
+    }
+
+    pub fn executable(&self) -> bool {
+        !self.0.get().get_bit(DISABLE_EXECUTE_BIT)
+    }
+
+    pub fn cow(&self) -> bool {
+        self.0.get().get_bit(COW_BIT)
+    }
+}
+
+impl fmt::Debug for PresentPageTableEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PresentPageTableEntry")
+            .field("frame", &self.frame())
+            .field("flags", &self.flags())
+            .finish()
     }
 }

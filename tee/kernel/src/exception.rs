@@ -21,7 +21,7 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::{memory::pagetable::page_to_frame, per_cpu::PerCpu};
+use crate::{memory::pagetable::entry_for_page, per_cpu::PerCpu};
 
 /// Initialize exception handling.
 ///
@@ -136,8 +136,8 @@ extern "x86-interrupt" fn page_fault_handler(
         process.handle_page_fault(cr2, error_code);
     } else {
         if let Ok(cr2) = VirtAddr::try_new(cr2) {
-            if let Some((frame, flags)) = page_to_frame(Page::containing_address(cr2)) {
-                error!("page is mapped to {frame:?} with flags {flags:?}");
+            if let Some(entry) = entry_for_page(Page::containing_address(cr2)) {
+                error!("page is mapped to {entry:?}");
             } else {
                 error!("page is not mapped");
             }

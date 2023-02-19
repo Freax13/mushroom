@@ -5,7 +5,10 @@ use spin::{Lazy, Mutex};
 use x86_64::structures::paging::{page::PageRangeInclusive, Page, PhysFrame, Size4KiB};
 
 use crate::{
-    memory::{frame::DUMB_FRAME_ALLOCATOR, pagetable::map_page},
+    memory::{
+        frame::DUMB_FRAME_ALLOCATOR,
+        pagetable::{map_page, PresentPageTableEntry},
+    },
     per_cpu::PerCpu,
 };
 
@@ -49,14 +52,10 @@ impl TemporaryMapping {
             .get_or_init(|| RefCell::new(PAGES.lock().next().unwrap()));
 
         let page = per_cpu.borrow_mut();
-
+        let entry =
+            PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE | PageTableFlags::GLOBAL);
         unsafe {
-            map_page(
-                *page,
-                frame,
-                PageTableFlags::WRITABLE | PageTableFlags::GLOBAL,
-                &mut (&DUMB_FRAME_ALLOCATOR),
-            );
+            map_page(*page, entry, &mut (&DUMB_FRAME_ALLOCATOR));
         }
 
         Self { page }

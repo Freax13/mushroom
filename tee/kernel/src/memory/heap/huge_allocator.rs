@@ -11,7 +11,7 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::memory::pagetable::{map_page, unmap_page, PageTableFlags};
+use crate::memory::pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry};
 
 pub struct HugeAllocator<A> {
     allocator: Mutex<A>,
@@ -56,14 +56,11 @@ where
         let mut allocator = self.allocator.lock();
         for page in (base..).take(pages) {
             let frame = allocator.allocate_frame().unwrap();
-            let res = unsafe {
-                map_page(
-                    page,
-                    frame,
-                    PageTableFlags::WRITABLE | PageTableFlags::GLOBAL,
-                    &mut *allocator,
-                )
-            };
+            let entry = PresentPageTableEntry::new(
+                frame,
+                PageTableFlags::WRITABLE | PageTableFlags::GLOBAL,
+            );
+            let res = unsafe { map_page(page, entry, &mut *allocator) };
             res.unwrap();
         }
         drop(allocator);

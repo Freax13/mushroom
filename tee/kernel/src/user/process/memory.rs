@@ -20,7 +20,9 @@ use crate::{
     fs::node::FileSnapshot,
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
-        pagetable::{add_flags, map_page, page_to_frame, unmap_page, PageTableFlags},
+        pagetable::{
+            add_flags, entry_for_page, map_page, unmap_page, PageTableFlags, PresentPageTableEntry,
+        },
         temporary::{copy_into_frame, zero_frame},
     },
 };
@@ -306,13 +308,14 @@ impl Mapping {
                 let backing_bytes = &bytes[offset..][..0x1000];
                 let backing_addr = VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
                 let backing_page = Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
-                let (backing_frame, _) = page_to_frame(backing_page).unwrap();
+                let backing_entry = entry_for_page(backing_page).unwrap();
 
-                let mut flags = PageTableFlags::USER | PageTableFlags::EXECUTABLE;
-                flags |= PageTableFlags::COW;
-
+                let new_entry = PresentPageTableEntry::new(
+                    backing_entry.frame(),
+                    PageTableFlags::USER | PageTableFlags::EXECUTABLE | PageTableFlags::COW,
+                );
                 unsafe {
-                    map_page(page, backing_frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
+                    map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                 }
             }
         }
@@ -326,9 +329,8 @@ impl Mapping {
 
         self.make_readable(page)?;
 
-        let (_, flags) = page_to_frame(page).ok_or(Error::Fault)?;
-
-        if !flags.contains(PageTableFlags::COW) {
+        let current_entry = entry_for_page(page).ok_or(Error::Fault)?;
+        if !current_entry.cow() {
             return Ok(ptr);
         }
 
@@ -342,12 +344,12 @@ impl Mapping {
             copy_into_frame(frame, &content);
         }
 
-        let new_flags = flags & !PageTableFlags::COW;
-
+        let new_entry =
+            PresentPageTableEntry::new(frame, current_entry.flags() & !PageTableFlags::COW);
         unsafe {
             unmap_page(page);
             // FIXME: We should do the remap atomically.
-            map_page(page, frame, new_flags, &mut &DUMB_FRAME_ALLOCATOR);
+            map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
         }
 
         Ok(ptr)
@@ -363,10 +365,10 @@ impl Mapping {
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
 
-        if let Some((_, flags)) = page_to_frame(page) {
-            if !flags.contains(PageTableFlags::WRITABLE) {
+        if let Some(entry) = entry_for_page(page) {
+            if !entry.writable() {
                 // Check if we have to copy the page.
-                if flags.contains(PageTableFlags::COW) {
+                if entry.cow() {
                     self.remove_cow(page)?;
                 }
 
@@ -400,8 +402,9 @@ impl Mapping {
                             if self.permissions.contains(MemoryPermissions::EXECUTE) {
                                 flags |= PageTableFlags::EXECUTABLE;
                             }
+                            let new_entry = PresentPageTableEntry::new(frame, flags);
                             unsafe {
-                                map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
+                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
                     }
@@ -418,8 +421,9 @@ impl Mapping {
                     if self.permissions.contains(MemoryPermissions::EXECUTE) {
                         flags |= PageTableFlags::EXECUTABLE;
                     }
+                    let new_entry = PresentPageTableEntry::new(frame, flags);
                     unsafe {
-                        map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
+                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                     }
                 }
             }
@@ -438,8 +442,8 @@ impl Mapping {
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
 
-        if page_to_frame(page).is_some() {
-            // FIXME: Double check that the page is writable.
+        if entry_for_page(page).is_some() {
+            // If the page exists, it's readable.
         } else {
             match &self.backing {
                 Backing::File(file_backing) => {
@@ -455,15 +459,17 @@ impl Mapping {
                                 VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
                             let backing_page =
                                 Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
-                            let (backing_frame, _) = page_to_frame(backing_page).unwrap();
+                            let backing_entry = entry_for_page(backing_page).unwrap();
 
                             let mut flags = PageTableFlags::USER;
                             if self.permissions.contains(MemoryPermissions::EXECUTE) {
                                 flags |= PageTableFlags::EXECUTABLE;
                             }
                             flags |= PageTableFlags::COW;
+                            let new_entry =
+                                PresentPageTableEntry::new(backing_entry.frame(), flags);
                             unsafe {
-                                map_page(page, backing_frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
+                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
                     }
@@ -483,8 +489,9 @@ impl Mapping {
                     if self.permissions.contains(MemoryPermissions::EXECUTE) {
                         flags |= PageTableFlags::EXECUTABLE;
                     }
+                    let new_entry = PresentPageTableEntry::new(frame, flags);
                     unsafe {
-                        map_page(page, frame, flags, &mut &DUMB_FRAME_ALLOCATOR);
+                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                     }
                 }
                 _ => todo!(),

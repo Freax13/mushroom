@@ -8,7 +8,7 @@ use crate::{
     fs::node::StaticFile,
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
-        pagetable::{map_page, PageTableFlags},
+        pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
     },
 };
 
@@ -63,13 +63,9 @@ fn load_static_file(
     let header_page = pages.next().unwrap();
     let header_frame = frames.next().unwrap();
 
+    let header_entry = PresentPageTableEntry::new(header_frame, PageTableFlags::GLOBAL);
     unsafe {
-        map_page(
-            header_page,
-            header_frame,
-            PageTableFlags::GLOBAL,
-            &mut &DUMB_FRAME_ALLOCATOR,
-        );
+        map_page(header_page, header_entry, &mut &DUMB_FRAME_ALLOCATOR);
     }
 
     let len = unsafe {
@@ -84,13 +80,9 @@ fn load_static_file(
         let input_page = pages.next().unwrap();
         let input_frame = frames.next().unwrap();
 
+        let input_entry = PresentPageTableEntry::new(input_frame, PageTableFlags::GLOBAL);
         unsafe {
-            map_page(
-                input_page,
-                input_frame,
-                PageTableFlags::GLOBAL,
-                &mut &DUMB_FRAME_ALLOCATOR,
-            );
+            map_page(input_page, input_entry, &mut &DUMB_FRAME_ALLOCATOR);
         }
     }
 
