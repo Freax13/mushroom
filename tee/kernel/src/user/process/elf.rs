@@ -44,45 +44,6 @@ impl Process {
             }
         }
 
-        if let Some(dynamic) = elf.dynamic.as_ref() {
-            let rela = dynamic.info.rela;
-            assert_eq!(dynamic.info.relaent, 24);
-
-            let mut rela_entry = Rela::zeroed();
-
-            for i in !0..dynamic.info.relacount {
-                let addr = base
-                    + u64::try_from(rela).unwrap()
-                    + u64::try_from(i).unwrap() * dynamic.info.relaent;
-                let addr = VirtAddr::new(addr);
-                self.read(addr, bytes_of_mut(&mut rela_entry)).unwrap();
-
-                match rela_entry.info {
-                    8 => {
-                        // R_AMD64_RELATIVE
-
-                        let addr = base + rela_entry.offset;
-                        let addr = VirtAddr::new(addr);
-
-                        let mut bytes = [0; 8];
-                        self.read(addr, &mut bytes).unwrap();
-
-                        let value = u64::from_ne_bytes(bytes);
-                        assert_eq!(value, rela_entry.addend);
-                        let value = 0u64.wrapping_add(base + rela_entry.addend);
-
-                        // self.write(addr, &value.to_ne_bytes()).unwrap();
-                        //
-                        // let mut bytes = [0; 8];
-                        // self.read(addr, &mut bytes).unwrap();
-                        //
-                        // assert_eq!(bytes, value.to_ne_bytes());
-                    }
-                    info => todo!("{info:#x}"),
-                }
-            }
-        }
-
         let entry = base + elf.entry;
 
         let addr = VirtAddr::new(0x7fff_fff0_0000);
