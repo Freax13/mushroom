@@ -58,6 +58,40 @@ pub unsafe fn map_page(
     Ok(())
 }
 
+/// Atomically switch out a page table entry for another.
+///
+/// # Panics
+///
+/// Panics if the page isn't mapped.
+///
+/// # Safety
+///
+/// It has to be safe that stale TLB entries exist for a brief time.
+pub unsafe fn remap_page(
+    page: Page,
+    old_entry: PresentPageTableEntry,
+    new_entry: PresentPageTableEntry,
+) -> Result<(), PresentPageTableEntry> {
+    trace!("remapping page {page:?}");
+
+    let level4 = ActivePageTable::get();
+    let level4_entry = &level4[page.p4_index()];
+
+    let level3_guard = level4_entry.acquire_existing().unwrap();
+    let level3 = &*level3_guard;
+    let level3_entry = &level3[page.p3_index()];
+
+    let level2_guard = level3_entry.acquire_existing().unwrap();
+    let level2 = &*level2_guard;
+    let level2_entry = &level2[page.p2_index()];
+
+    let level1_guard = level2_entry.acquire_existing().unwrap();
+    let level1 = &*level1_guard;
+    let level1_entry = &level1[page.p1_index()];
+
+    unsafe { level1_entry.remap(old_entry, new_entry) }
+}
+
 pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
     trace!("unmapping page {page:?}");
 
@@ -546,6 +580,35 @@ impl ActivePageTableEntry<Level1> {
         self.parent_table_entry()
             .increase_reference_count()
             .unwrap();
+    }
+
+    /// Atomically switch out a page table entry for another.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the page isn't mapped.
+    ///
+    /// # Safety
+    ///
+    /// It has to be safe that stale TLB entries exist for a brief time.
+    pub unsafe fn remap(
+        &self,
+        old_entry: PresentPageTableEntry,
+        new_entry: PresentPageTableEntry,
+    ) -> Result<(), PresentPageTableEntry> {
+        let _ = self
+            .entry
+            .compare_exchange(
+                old_entry.0.get(),
+                new_entry.0.get(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .map_err(|entry| PresentPageTableEntry::try_from(entry).unwrap())?;
+
+        self.flush(old_entry.global());
+
+        Ok(())
     }
 
     /// # Panics

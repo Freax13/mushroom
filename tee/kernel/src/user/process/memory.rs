@@ -10,7 +10,7 @@ use x86_64::{
     },
     structures::{
         idt::PageFaultErrorCode,
-        paging::{FrameAllocator, Page, Size4KiB},
+        paging::{FrameAllocator, FrameDeallocator, Page, Size4KiB},
     },
     VirtAddr,
 };
@@ -21,7 +21,7 @@ use crate::{
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{
-            add_flags, entry_for_page, map_page, unmap_page, PageTableFlags, PresentPageTableEntry,
+            add_flags, entry_for_page, map_page, remap_page, PageTableFlags, PresentPageTableEntry,
         },
         temporary::{copy_into_frame, zero_frame},
     },
@@ -329,30 +329,38 @@ impl Mapping {
 
         self.make_readable(page)?;
 
-        let current_entry = entry_for_page(page).ok_or(Error::Fault)?;
-        if !current_entry.cow() {
-            return Ok(ptr);
+        let mut current_entry = entry_for_page(page).ok_or(Error::Fault)?;
+        loop {
+            if !current_entry.cow() {
+                return Ok(ptr);
+            }
+
+            if current_entry.writable() {
+                todo!();
+            }
+            let mut content = [0; 0x1000];
+            without_smap(|| unsafe {
+                core::intrinsics::volatile_copy_nonoverlapping_memory(&mut content, ptr, 1);
+            });
+
+            let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+            unsafe {
+                copy_into_frame(frame, &content);
+            }
+
+            let new_entry =
+                PresentPageTableEntry::new(frame, current_entry.flags() & !PageTableFlags::COW);
+
+            match unsafe { remap_page(page, current_entry, new_entry) } {
+                Ok(_) => return Ok(ptr),
+                Err(new_entry) => {
+                    current_entry = new_entry;
+                    unsafe {
+                        (&DUMB_FRAME_ALLOCATOR).deallocate_frame(frame);
+                    }
+                }
+            }
         }
-
-        let mut content = [0; 0x1000];
-        without_smap(|| unsafe {
-            core::intrinsics::volatile_copy_nonoverlapping_memory(&mut content, ptr, 1);
-        });
-
-        let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
-        unsafe {
-            copy_into_frame(frame, &content);
-        }
-
-        let new_entry =
-            PresentPageTableEntry::new(frame, current_entry.flags() & !PageTableFlags::COW);
-        unsafe {
-            unmap_page(page);
-            // FIXME: We should do the remap atomically.
-            map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
-        }
-
-        Ok(ptr)
     }
 
     fn make_writable(&self, page: Page) -> Result<*mut [u8; 4096]> {
