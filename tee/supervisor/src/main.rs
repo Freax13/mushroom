@@ -16,7 +16,7 @@ use log::{debug, info, LevelFilter};
 use serial_log::SerialLogger;
 use x86_64::instructions::hlt;
 
-use crate::{doorbell::DOORBELL, ghcb::eoi};
+use crate::{doorbell::DOORBELL, ghcb::eoi, vcpu::Vcpu};
 
 mod cpuid;
 mod doorbell;
@@ -43,7 +43,7 @@ fn main() {
     {
         info!("booting first AP");
         let mut first_vcpu = vcpu::VCPUS[0].borrow_mut();
-        first_vcpu.boot(FIRST_AP);
+        first_vcpu.start(FIRST_AP);
     }
 
     loop {
@@ -60,7 +60,9 @@ fn main() {
         let idx = usize::from(vector - FIRST_AP);
         {
             let mut vcpu = vcpu::VCPUS[idx].borrow_mut();
-            vcpu.handle_vc();
+            if let Vcpu::Initialized(initialized) = &mut *vcpu {
+                initialized.handle_vc();
+            }
         }
 
         if DOORBELL.requires_eoi() {

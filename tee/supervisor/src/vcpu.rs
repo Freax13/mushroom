@@ -40,13 +40,34 @@ const MAX_VCPUS: usize = 1;
 pub static VCPUS: FakeSync<[RefCell<Vcpu>; MAX_VCPUS]> =
     FakeSync::new([const { RefCell::new(Vcpu::new()) }; MAX_VCPUS]);
 
-pub struct Vcpu {
-    apic_id: Option<u8>,
-    vmsa: AlignedVmsa,
+#[allow(clippy::large_enum_variant)]
+pub enum Vcpu {
+    Uninitialized,
+    Initialized(Initialized),
 }
 
 impl Vcpu {
     pub const fn new() -> Self {
+        Self::Uninitialized
+    }
+
+    pub fn start(&mut self, apic_id: u8) {
+        assert!(matches!(self, Vcpu::Uninitialized));
+
+        *self = Self::Initialized(Initialized::new(apic_id));
+
+        let Self::Initialized(initialized) = self else { unreachable!(); };
+        initialized.boot();
+    }
+}
+
+pub struct Initialized {
+    apic_id: u8,
+    vmsa: AlignedVmsa,
+}
+
+impl Initialized {
+    pub fn new(apic_id: u8) -> Self {
         let data_segment = Segment {
             selector: 0x10,
             attrib: 0xc93,
@@ -240,17 +261,16 @@ impl Vcpu {
             _padding: Reserved::ZERO,
         };
 
-        Self {
-            apic_id: None,
+        Initialized {
+            apic_id,
             vmsa: AlignedVmsa::new(vmsa),
         }
     }
 
-    pub fn boot(&mut self, apic_id: u8) {
-        let prev = self.apic_id.replace(apic_id);
-        assert_eq!(prev, None);
-
-        self.set_runnable(true);
+    pub fn boot(&mut self) {
+        unsafe {
+            self.set_runnable(true);
+        }
 
         let vmsa_addr = ref_to_pa(&self.vmsa.vmsa).unwrap();
         let mut vmsa_addr = vmsa_addr.as_u64();
@@ -258,14 +278,16 @@ impl Vcpu {
         let vmsa_addr = PhysAddr::new(vmsa_addr);
         let vmsa = PhysFrame::from_start_address(vmsa_addr).unwrap();
 
-        create_ap(u32::from(apic_id), vmsa, SEV_FEATURES);
+        create_ap(u32::from(self.apic_id), vmsa, SEV_FEATURES);
     }
 
     pub fn handle_vc(&mut self) {
         // Set the VMSA as unrunnable. This will make sure that the host
         // doesn't try run the vCPU while we're handling the VC.
         // This will also fail if the vCPU is currently running.
-        self.set_runnable(false);
+        unsafe {
+            self.set_runnable(false);
+        }
 
         let vmsa = self.vmsa.vmsa.get_mut();
         // Replace the exit code to prevent the host to tell us to handle the
@@ -288,12 +310,14 @@ impl Vcpu {
         }
 
         // We're done handling the event. Mark the VMSA as runnable again.
-        self.set_runnable(true);
+        unsafe {
+            self.set_runnable(true);
+        }
 
         self.kick();
     }
 
-    fn set_runnable(&mut self, runnable: bool) {
+    unsafe fn set_runnable(&mut self, runnable: bool) {
         let addr = VirtAddr::from_ptr(&self.vmsa.vmsa);
         let page = Page::<Size4KiB>::from_start_address(addr).unwrap();
 
@@ -303,7 +327,7 @@ impl Vcpu {
     }
 
     pub fn kick(&mut self) {
-        let apic_id = self.apic_id.unwrap();
+        let apic_id = self.apic_id;
         unsafe {
             PortWriteOnly::<u32>::new(KICK_AP_PORT).write(u32::from(apic_id));
         }
