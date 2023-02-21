@@ -129,8 +129,8 @@ impl VmHandle {
             args: [arg0, 0, 0, 0],
             _pad: [0; 64],
         };
-        ioctl_write_ptr!(kvm_set_user_memory_region, KVMIO, 0xa3, KvmEnableCap);
-        let res = unsafe { kvm_set_user_memory_region(self.fd.as_raw_fd(), &enable_cap) };
+        ioctl_write_ptr!(kvm_enable_cap, KVMIO, 0xa3, KvmEnableCap);
+        let res = unsafe { kvm_enable_cap(self.fd.as_raw_fd(), &enable_cap) };
         res.context("failed to enable capability")?;
         Ok(())
     }
