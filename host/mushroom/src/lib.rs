@@ -38,7 +38,7 @@ use x86_64::{
 };
 
 use crate::{
-    kvm::{KvmCap, KvmExit, KvmExitUnknown, KvmMemoryAttributes, SevHandle, VmHandle},
+    kvm::{KvmExit, KvmExitUnknown, KvmMemoryAttributes, SevHandle, VmHandle},
     slot::Slot,
 };
 
@@ -78,11 +78,9 @@ impl VmContext {
         // Enable CPUID
         piafb.ecx.set_bit(21, true);
 
-        let vm = kvm_handle.create_vm()?;
+        let vm = kvm_handle.create_vm(true)?;
         let vm = Arc::new(vm);
 
-        vm.enable_capability(KvmCap::UNMAPPED_PRIVATE_MEM, 0)
-            .context("failed to enable UPM")?;
         vm.create_irqchip()?;
 
         vm.sev_snp_init()?;

@@ -63,11 +63,11 @@ impl KvmHandle {
         Ok(Self { fd })
     }
 
-    pub fn create_vm(&self) -> Result<VmHandle> {
+    pub fn create_vm(&self, protected: bool) -> Result<VmHandle> {
         debug!("creating vm");
 
         ioctl_write_int_bad!(kvm_create_vm, request_code_none!(KVMIO, 0x01));
-        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), 0) };
+        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), i32::from(protected)) };
         let raw_fd = res.context("failed to create vm")?;
         let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
@@ -178,7 +178,7 @@ impl VmHandle {
     ) -> Result<()> {
         debug!("mapping private memory");
 
-        let region = KvmUserspaceMemoryRegionExt {
+        let region = KvmUserspaceMemoryRegion2 {
             region: KvmUserspaceMemoryRegion {
                 slot: u32::from(slot),
                 flags: KvmUserspaceMemoryRegionFlags::KVM_MEM_PRIVATE,
@@ -193,17 +193,12 @@ impl VmHandle {
         };
 
         ioctl_write_ptr!(
-            kvm_set_user_memory_region,
+            kvm_set_user_memory_region2,
             KVMIO,
-            0x46,
-            KvmUserspaceMemoryRegion
+            0x49,
+            KvmUserspaceMemoryRegion2
         );
-        let res = unsafe {
-            kvm_set_user_memory_region(
-                self.fd.as_raw_fd(),
-                &region as *const KvmUserspaceMemoryRegionExt as *const KvmUserspaceMemoryRegion,
-            )
-        };
+        let res = unsafe { kvm_set_user_memory_region2(self.fd.as_raw_fd(), &region) };
         res.context("failed to map private memory")?;
 
         Ok(())
@@ -1370,7 +1365,7 @@ bitflags! {
 }
 
 #[repr(C)]
-pub struct KvmUserspaceMemoryRegionExt<'a> {
+pub struct KvmUserspaceMemoryRegion2<'a> {
     region: KvmUserspaceMemoryRegion,
     restricted_offset: u64,
     restricted_fd: Option<BorrowedFd<'a>>,
