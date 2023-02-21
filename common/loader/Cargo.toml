@@ -8,7 +8,7 @@ constants = { workspace = true }
 bit_field = "0.10.1"
 bytemuck = { version = "1.13.0", features = ["min_const_generics"] }
 goblin = "0.6.0"
-input = { workspace = true }
+io = { workspace = true }
 itertools = { version = "0.10.5", default-features = false }
 # kernel = { path = "../kernel", target = "x86_64-unknown-none", artifact = "bin" }
 snp-types = { workspace = true }

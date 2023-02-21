@@ -1,9 +1,9 @@
 [workspace]
-members = ["constants", "input", "loader", "snp-types"]
+members = ["constants", "io", "loader", "snp-types"]
 
 [workspace.dependencies]
 constants = { path = "constants" }
-input = { path = "input" }
+io = { path = "io" }
 snp-types = { path = "snp-types" }
 
 [patch.crates-io]

@@ -251,7 +251,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "input"
+name = "io"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
@@ -268,7 +268,7 @@ dependencies = [
  "bytemuck",
  "constants",
  "goblin",
- "input",
+ "io",
  "log",
  "raw-cpuid",
  "serial-log",
@@ -461,7 +461,7 @@ dependencies = [
  "bit_field",
  "bytemuck",
  "constants",
- "input",
+ "io",
  "log",
  "serial-log",
  "sha2",

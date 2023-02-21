@@ -5,7 +5,7 @@ members = ["hello-world", "init", "kernel", "serial-log", "supervisor"]
 
 [workspace.dependencies]
 constants = { path = "../common/constants" }
-input = { path = "../common/input" }
+io = { path = "../common/io" }
 serial-log = { path = "serial-log" }
 snp-types = { path = "../common/snp-types" }
 

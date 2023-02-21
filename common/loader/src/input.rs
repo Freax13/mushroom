@@ -2,7 +2,7 @@ use std::{iter::once, mem::size_of};
 
 use bytemuck::bytes_of;
 use constants::physical_address::INPUT;
-use input::Header;
+use io::input::Header;
 use snp_types::VmplPermissions;
 
 use crate::{LoadCommand, LoadCommandPayload};
