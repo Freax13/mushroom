@@ -115,7 +115,7 @@ impl Syscall3 for SysRead {
         let len = fd.read(chunk)?;
         let chunk = &mut chunk[..len];
 
-        thread.virtual_memory().lock().write(buf, chunk)?;
+        thread.virtual_memory().write(buf, chunk)?;
 
         let len = u64::try_from(len).unwrap();
 
@@ -143,7 +143,7 @@ impl Syscall3 for SysWrite {
         let max_chunk_len = chunk.len();
         let len = cmp::min(max_chunk_len, count);
         let chunk = &mut chunk[..len];
-        thread.virtual_memory().lock().read(buf, chunk)?;
+        thread.virtual_memory().read(buf, chunk)?;
 
         let len = fd.write(chunk)?;
 
@@ -168,10 +168,7 @@ impl Syscall3 for SysOpen {
         flags: OpenFlags,
         _mode: FileMode,
     ) -> SyscallResult {
-        let filename = thread
-            .virtual_memory()
-            .lock()
-            .read_cstring(filename.get(), 4096)?;
+        let filename = thread.virtual_memory().read_cstring(filename.get(), 4096)?;
         let filename = Path::new(filename.as_bytes());
 
         if flags.contains(OpenFlags::WRONLY) {
@@ -229,7 +226,6 @@ impl Syscall3 for SysPoll {
             let mut pollfd = Pollfd::zeroed();
             thread
                 .virtual_memory()
-                .lock()
                 .read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
         }
 
@@ -273,17 +269,14 @@ impl Syscall6 for SysMmap {
                 assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
                 assert_eq!(addr.get().as_u64(), 0);
-                let addr = thread.virtual_memory().lock().allocate_stack(None, len)?;
+                let addr = thread.virtual_memory().allocate_stack(None, len)?;
 
                 Ok(addr.as_u64())
             } else if flags.contains(MmapFlags::ANONYMOUS) {
                 assert_eq!(addr.get().as_u64(), 0);
 
                 let permissions = MemoryPermissions::from(prot);
-                let addr = thread
-                    .virtual_memory()
-                    .lock()
-                    .mmap_zero(None, len, permissions)?;
+                let addr = thread.virtual_memory().mmap_zero(None, len, permissions)?;
 
                 Ok(addr.as_u64())
             } else {
@@ -306,10 +299,7 @@ impl Syscall3 for SysMprotect {
     type Arg2 = ProtFlags;
 
     fn execute(thread: &mut Thread, start: Pointer, len: u64, prot: ProtFlags) -> SyscallResult {
-        thread
-            .virtual_memory()
-            .lock()
-            .mprotect(start.get(), len, prot)?;
+        thread.virtual_memory().mprotect(start.get(), len, prot)?;
         Ok(0)
     }
 }
@@ -358,15 +348,12 @@ impl Syscall4 for SysRtSigaction {
             let sigaction = thread.sigaction.get(signum).ok_or(Error::Inval)?;
             thread
                 .virtual_memory()
-                .lock()
                 .write(oldact.get(), bytes_of(sigaction))?;
         }
         if !act.is_null() {
-            let memory_manager = thread.virtual_memory().clone();
+            let virtual_memory = thread.virtual_memory().clone();
             let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::Inval)?;
-            memory_manager
-                .lock()
-                .read(act.get(), bytes_of_mut(sigaction))?;
+            virtual_memory.read(act.get(), bytes_of_mut(sigaction))?;
         }
 
         Ok(0)
@@ -387,7 +374,6 @@ impl Syscall3 for SysRtSigprocmask {
         if !oldset.is_null() {
             thread
                 .virtual_memory()
-                .lock()
                 .write(oldset.get(), bytes_of(&thread.sigmask))?;
         }
 
@@ -395,7 +381,6 @@ impl Syscall3 for SysRtSigprocmask {
             let mut set_value = Sigset::zeroed();
             thread
                 .virtual_memory()
-                .lock()
                 .read(set.get(), bytes_of_mut(&mut set_value))?;
 
             let how = RtSigprocmaskHow::parse(how)?;
@@ -487,14 +472,12 @@ impl Syscall5 for SysClone {
         if flags.contains(CloneFlags::PARENT_SETTID) {
             thread
                 .virtual_memory()
-                .lock()
                 .write(parent_tid.get(), &tid.to_ne_bytes())?;
         }
 
         if flags.contains(CloneFlags::CHILD_SETTID) {
             new_thread
                 .virtual_memory()
-                .lock()
                 .write(child_tid.get(), &tid.to_ne_bytes())?;
         }
 
@@ -517,7 +500,6 @@ impl Syscall1 for SysExit {
             let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
             thread
                 .virtual_memory()
-                .lock()
                 .write(clear_child_tid, &0u32.to_ne_bytes());
         }
 
@@ -564,7 +546,6 @@ impl Syscall2 for SysSigaltstack {
             });
             thread
                 .virtual_memory()
-                .lock()
                 .write(old_ss.get(), bytes_of(&old_ss_value));
         }
 
@@ -572,7 +553,6 @@ impl Syscall2 for SysSigaltstack {
             let mut ss_value = Stack::zeroed();
             thread
                 .virtual_memory()
-                .lock()
                 .read(ss.get(), bytes_of_mut(&mut ss_value))?;
 
             let allowed_flags = StackFlags::AUTODISARM;
@@ -633,7 +613,6 @@ impl Syscall6 for SysFutex {
                 let mut compare_value = 0;
                 thread
                     .virtual_memory()
-                    .lock()
                     .read(uaddr.get(), bytes_of_mut(&mut compare_value))?;
                 if compare_value != val {
                     return Err(Error::Again);

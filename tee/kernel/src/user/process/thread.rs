@@ -28,7 +28,7 @@ pub static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
 pub struct Thread {
     process: Arc<Process>,
-    virtual_memory: Arc<Mutex<VirtualMemory>>,
+    virtual_memory: Arc<VirtualMemory>,
     fdtable: Arc<FileDescriptorTable>,
 
     pub registers: UserspaceRegisters,
@@ -44,7 +44,7 @@ pub struct Thread {
 impl Thread {
     pub fn new(
         process: Arc<Process>,
-        virtual_memory: Arc<Mutex<VirtualMemory>>,
+        virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
         stack: u64,
         entry: u64,
@@ -87,7 +87,7 @@ impl Thread {
     pub fn clone(
         &self,
         new_process: Option<Arc<Process>>,
-        new_virtual_memory: Option<Arc<Mutex<VirtualMemory>>>,
+        new_virtual_memory: Option<Arc<VirtualMemory>>,
         new_fdtable: Option<Arc<FileDescriptorTable>>,
         stack: VirtAddr,
         new_clear_child_tid: Option<VirtAddr>,
@@ -125,7 +125,7 @@ impl Thread {
         &self.process
     }
 
-    pub fn virtual_memory(&self) -> &Arc<Mutex<VirtualMemory>> {
+    pub fn virtual_memory(&self) -> &Arc<VirtualMemory> {
         &self.virtual_memory
     }
 

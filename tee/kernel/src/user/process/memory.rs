@@ -3,6 +3,7 @@ use core::{arch::asm, cmp, iter::Step};
 use alloc::{ffi::CString, vec::Vec};
 use bitflags::bitflags;
 use log::debug;
+use spin::Mutex;
 use x86_64::{
     align_down,
     instructions::random::RdRand,
@@ -33,43 +34,21 @@ use crate::{
 use super::syscall::args::ProtFlags;
 
 pub struct VirtualMemory {
-    mappings: Vec<Mapping>,
+    state: Mutex<VirtualMemoryState>,
 }
 
 impl VirtualMemory {
     pub fn new() -> Self {
         Self {
-            mappings: Vec::new(),
+            state: Mutex::new(VirtualMemoryState::new()),
         }
     }
 
-    fn find_free_address(&self, size: u64) -> VirtAddr {
-        let rdrand = RdRand::new().unwrap();
-        const MAX_ATTEMPTS: usize = 64;
-        (0..MAX_ATTEMPTS)
-            .find_map(|_| {
-                let candidate = rdrand.get_u64()?;
-                let candidate = candidate & 0x7fff_ffff_ffff;
-                let candidate = align_down(candidate, 0x1000);
+    pub fn mprotect(&self, addr: VirtAddr, len: u64, prot: ProtFlags) -> Result<()> {
+        let mut state = self.state.lock();
 
-                let candidate = VirtAddr::new(candidate);
-
-                if self
-                    .mappings
-                    .iter()
-                    .any(|m| m.contains_range(candidate, size))
-                {
-                    return None;
-                }
-
-                Some(candidate)
-            })
-            .unwrap()
-    }
-
-    pub fn mprotect(&mut self, addr: VirtAddr, len: u64, prot: ProtFlags) -> Result<()> {
         while len > 0 {
-            let mapping = self
+            let mapping = state
                 .mappings
                 .iter_mut()
                 .find(|m| m.contains(addr))
@@ -97,7 +76,7 @@ impl VirtualMemory {
                     }
                 }
 
-                self.mappings.push(new_mapping);
+                state.mappings.push(new_mapping);
 
                 continue;
             }
@@ -129,7 +108,7 @@ impl VirtualMemory {
             }
 
             if let Some(new_mapping) = new_mapping {
-                self.mappings.push(new_mapping);
+                state.mappings.push(new_mapping);
             }
 
             break;
@@ -138,7 +117,7 @@ impl VirtualMemory {
         Ok(())
     }
 
-    pub fn allocate_stack(&mut self, addr: Option<VirtAddr>, len: u64) -> Result<VirtAddr> {
+    pub fn allocate_stack(&self, addr: Option<VirtAddr>, len: u64) -> Result<VirtAddr> {
         let addr = self.add_mapping(
             addr,
             len,
@@ -149,7 +128,7 @@ impl VirtualMemory {
     }
 
     pub fn mmap_into(
-        &mut self,
+        &self,
         addr: Option<VirtAddr>,
         len: u64,
         offset: u64,
@@ -165,7 +144,7 @@ impl VirtualMemory {
     }
 
     pub fn mmap_zero(
-        &mut self,
+        &self,
         addr: Option<VirtAddr>,
         len: u64,
         permissions: MemoryPermissions,
@@ -174,13 +153,15 @@ impl VirtualMemory {
     }
 
     fn add_mapping(
-        &mut self,
+        &self,
         addr: Option<VirtAddr>,
         len: u64,
         permissions: MemoryPermissions,
         backing: Backing,
     ) -> Result<VirtAddr> {
-        let addr = addr.unwrap_or_else(|| self.find_free_address(len));
+        let mut state = self.state.lock();
+
+        let addr = addr.unwrap_or_else(|| state.find_free_address(len));
 
         debug!(
             "adding mapping {:?}-{:?} {:?}",
@@ -196,7 +177,7 @@ impl VirtualMemory {
             backing,
         };
 
-        for m in self.mappings.iter() {
+        for m in state.mappings.iter() {
             if let Some(overlapping_page) = m.page_overlaps(&mapping)? {
                 match (&m.backing, &mapping.backing) {
                     (Backing::File(_), Backing::File(_)) => todo!(),
@@ -229,7 +210,7 @@ impl VirtualMemory {
 
         let addr = mapping.addr;
 
-        self.mappings.push(mapping);
+        state.mappings.push(mapping);
 
         Ok(addr)
     }
@@ -238,6 +219,8 @@ impl VirtualMemory {
         if bytes.is_empty() {
             return Ok(());
         }
+
+        let state = self.state.lock();
 
         let start = addr;
         let end_inclusive = addr + (bytes.len() - 1);
@@ -249,7 +232,7 @@ impl VirtualMemory {
             let copy_start = cmp::max(page.start_address(), start);
             let copy_end_inclusive = cmp::min(page.start_address() + 0xfffu64, end_inclusive);
 
-            let mapping = self
+            let mapping = state
                 .mappings
                 .iter()
                 .find(|mapping| mapping.contains(copy_start))
@@ -297,6 +280,8 @@ impl VirtualMemory {
             return Ok(());
         }
 
+        let state = self.state.lock();
+
         let start = addr;
         let end_inclusive = addr + (bytes.len() - 1);
 
@@ -307,7 +292,7 @@ impl VirtualMemory {
             let copy_start = cmp::max(page.start_address(), start);
             let copy_end_inclusive = cmp::min(page.start_address() + 0xfffu64, end_inclusive);
 
-            let mapping = self
+            let mapping = state
                 .mappings
                 .iter()
                 .find(|mapping| mapping.contains(copy_start))
@@ -336,7 +321,9 @@ impl VirtualMemory {
 
         debug!(target: "kernel::exception", "{addr:?} {error_code:?}");
 
-        let mapping = self
+        let state = self.state.lock();
+
+        let mapping = state
             .mappings
             .iter()
             .find(|mapping| mapping.contains(addr))
@@ -360,6 +347,42 @@ impl VirtualMemory {
             }
             error_code => todo!("{addr:#018x} {error_code:?}"),
         }
+    }
+}
+
+struct VirtualMemoryState {
+    mappings: Vec<Mapping>,
+}
+
+impl VirtualMemoryState {
+    pub fn new() -> Self {
+        Self {
+            mappings: Vec::new(),
+        }
+    }
+
+    fn find_free_address(&self, size: u64) -> VirtAddr {
+        let rdrand = RdRand::new().unwrap();
+        const MAX_ATTEMPTS: usize = 64;
+        (0..MAX_ATTEMPTS)
+            .find_map(|_| {
+                let candidate = rdrand.get_u64()?;
+                let candidate = candidate & 0x7fff_ffff_ffff;
+                let candidate = align_down(candidate, 0x1000);
+
+                let candidate = VirtAddr::new(candidate);
+
+                if self
+                    .mappings
+                    .iter()
+                    .any(|m| m.contains_range(candidate, size))
+                {
+                    return None;
+                }
+
+                Some(candidate)
+            })
+            .unwrap()
     }
 }
 

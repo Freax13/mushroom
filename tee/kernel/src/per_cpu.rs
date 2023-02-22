@@ -7,7 +7,6 @@ use core::{
 
 use alloc::sync::Arc;
 use constants::MAX_APS_COUNT;
-use spin::Mutex;
 use x86_64::{
     registers::segmentation::{Segment64, GS},
     structures::{gdt::GlobalDescriptorTable, paging::Page, tss::TaskStateSegment},
@@ -38,7 +37,7 @@ pub struct PerCpu {
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
-    pub current_virtual_memory: Cell<Option<Arc<Mutex<VirtualMemory>>>>,
+    pub current_virtual_memory: Cell<Option<Arc<VirtualMemory>>>,
 }
 
 impl PerCpu {

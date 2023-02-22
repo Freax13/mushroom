@@ -45,7 +45,7 @@ impl Process {
         // Load the elf.
         let entry = virtual_memory.load_elf(elf_file, stack)?;
 
-        let virtual_memory = Arc::new(Mutex::new(virtual_memory));
+        let virtual_memory = Arc::new(virtual_memory);
 
         let fdtable = Arc::new(FileDescriptorTable::new());
 
