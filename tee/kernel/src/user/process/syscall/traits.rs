@@ -29,6 +29,20 @@ impl FromResidual<Result<Infallible, Error>> for SyscallResult {
     }
 }
 
+impl SyscallArg for u32 {
+    fn parse(value: u64) -> Result<Self> {
+        u32::try_from(value).map_err(|_| Error::Inval)
+    }
+
+    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
+        if let Ok(value) = u32::try_from(value).map_err(|_| Error::Inval) {
+            write!(f, "{value}")
+        } else {
+            write!(f, "{value} (out of bounds)")
+        }
+    }
+}
+
 pub trait Syscall0 {
     const NO: usize;
     const NAME: &'static str;
@@ -380,7 +394,7 @@ where
     }
 }
 
-const MAX_SYSCALL_HANDLER: usize = 232;
+const MAX_SYSCALL_HANDLER: usize = 294;
 
 #[derive(Clone, Copy)]
 struct SyscallHandler {

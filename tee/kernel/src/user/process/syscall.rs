@@ -3,7 +3,9 @@ use core::{
     fmt::{self},
 };
 
+use alloc::collections::btree_map::Entry;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
+use x86_64::VirtAddr;
 
 use crate::{
     error::Error,
@@ -16,18 +18,18 @@ use crate::{
 
 use self::{
     args::{
-        ArchPrctlCode, FcntlCmd, Fd, FileMode, MmapFlags, OpenFlags, Pointer, Pollfd, ProtFlags,
-        RtSigprocmaskHow, SyscallArg,
+        ArchPrctlCode, CloneFlags, FcntlCmd, Fd, FileMode, FutexOp, FutexOpWithFlags, MmapFlags,
+        OpenFlags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SyscallArg,
     },
     traits::{
-        Syscall1, Syscall2, Syscall3, Syscall4, Syscall6, SyscallHandlers, SyscallResult,
+        Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers, SyscallResult,
         SyscallResult::*,
     },
 };
 
 use super::{
     fd::file::ReadonlyFile,
-    thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters},
+    thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, RUNNABLE_THREADS, THREADS},
 };
 
 pub mod args;
@@ -77,9 +79,12 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysClone);
+    handlers.register(SysExit);
     handlers.register(SysFcntl);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
+    handlers.register(SysFutex);
     handlers.register(SysSetTidAddress);
     handlers.register(SysExitGroup);
 
@@ -419,6 +424,108 @@ impl Syscall3 for SysRtSigprocmask {
     }
 }
 
+struct SysClone;
+
+impl Syscall5 for SysClone {
+    const NO: usize = 56;
+    const NAME: &'static str = "clone";
+
+    type Arg0 = CloneFlags;
+    type Arg1 = Pointer;
+    type Arg2 = Pointer;
+    type Arg3 = Pointer;
+    type Arg4 = u64;
+
+    fn execute(
+        thread: &mut Thread,
+        flags: CloneFlags,
+        stack: Pointer,
+        parent_tid: Pointer,
+        child_tid: Pointer,
+        tls: u64,
+    ) -> SyscallResult {
+        let new_process = if flags.contains(CloneFlags::THREAD) {
+            None
+        } else {
+            todo!()
+        };
+
+        let new_virtual_memory = if flags.contains(CloneFlags::VM) {
+            None
+        } else {
+            todo!()
+        };
+
+        let new_fdtable = if flags.contains(CloneFlags::FILES) {
+            None
+        } else {
+            todo!()
+        };
+
+        let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
+            Some(child_tid.get())
+        } else {
+            None
+        };
+
+        let new_tls = if flags.contains(CloneFlags::SETTLS) {
+            Some(tls)
+        } else {
+            None
+        };
+
+        let new_thread = thread.clone(
+            new_process,
+            new_virtual_memory,
+            new_fdtable,
+            stack.get(),
+            new_clear_child_tid,
+            new_tls,
+        );
+        let tid = new_thread.tid;
+
+        if flags.contains(CloneFlags::PARENT_SETTID) {
+            thread
+                .virtual_memory()
+                .lock()
+                .write(parent_tid.get(), &tid.to_ne_bytes())?;
+        }
+
+        if flags.contains(CloneFlags::CHILD_SETTID) {
+            new_thread
+                .virtual_memory()
+                .lock()
+                .write(child_tid.get(), &tid.to_ne_bytes())?;
+        }
+
+        new_thread.spawn();
+
+        Ok(u64::from(tid))
+    }
+}
+
+struct SysExit;
+
+impl Syscall1 for SysExit {
+    const NO: usize = 60;
+    const NAME: &'static str = "exit";
+
+    type Arg0 = u64;
+
+    fn execute(thread: &mut Thread, _status: Self::Arg0) -> SyscallResult {
+        if thread.clear_child_tid != 0 {
+            let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
+            thread
+                .virtual_memory()
+                .lock()
+                .write(clear_child_tid, &0u32.to_ne_bytes());
+        }
+
+        THREADS.lock().remove(&thread.tid);
+        Yield
+    }
+}
+
 struct SysFcntl;
 
 impl Syscall3 for SysFcntl {
@@ -495,6 +602,85 @@ impl Syscall2 for SysArchPrctl {
                 thread.registers.fs_base = addr.get().as_u64();
                 Ok(0)
             }
+        }
+    }
+}
+
+struct SysFutex;
+
+impl Syscall6 for SysFutex {
+    const NO: usize = 202;
+    const NAME: &'static str = "futex";
+
+    type Arg0 = Pointer;
+    type Arg1 = FutexOpWithFlags;
+    type Arg2 = u32;
+    type Arg3 = u64;
+    type Arg4 = Pointer;
+    type Arg5 = u64;
+
+    fn execute(
+        thread: &mut Thread,
+        uaddr: Pointer,
+        op: FutexOpWithFlags,
+        val: u32,
+        _utime: u64,
+        _uaddr2: Pointer,
+        _val3: u64,
+    ) -> SyscallResult {
+        match op.op {
+            FutexOp::Wait => {
+                let mut compare_value = 0;
+                thread
+                    .virtual_memory()
+                    .lock()
+                    .read(uaddr.get(), bytes_of_mut(&mut compare_value))?;
+                if compare_value != val {
+                    return Err(Error::Again);
+                }
+
+                thread
+                    .process()
+                    .waits
+                    .lock()
+                    .entry(uaddr.get())
+                    .or_default()
+                    .push_back(thread.tid);
+
+                Yield
+            }
+            FutexOp::Wake => {
+                let mut no = 0;
+
+                if let Entry::Occupied(mut entry) = thread.process().waits.lock().entry(uaddr.get())
+                {
+                    let threads = entry.get_mut();
+                    for _ in 0..val {
+                        let Some(thread) = threads.pop_front() else { break; };
+                        THREADS.lock()[&thread].lock().registers.rax = 0;
+                        RUNNABLE_THREADS.lock().push_back(thread);
+                        no += 1;
+                    }
+
+                    if threads.is_empty() {
+                        entry.remove();
+                    }
+                }
+
+                Ok(no)
+            }
+            FutexOp::Fd => Err(Error::NoSys),
+            FutexOp::REQUEUE => Err(Error::NoSys),
+            FutexOp::CmpRequeue => Err(Error::NoSys),
+            FutexOp::WakeOp => Err(Error::NoSys),
+            FutexOp::LockPi => Err(Error::NoSys),
+            FutexOp::UnlockPi => Err(Error::NoSys),
+            FutexOp::TrylockPi => Err(Error::NoSys),
+            FutexOp::WaitBitset => Err(Error::NoSys),
+            FutexOp::WakeBitset => Err(Error::NoSys),
+            FutexOp::WaitRequeuePi => Err(Error::NoSys),
+            FutexOp::CmpRequeuePi => Err(Error::NoSys),
+            FutexOp::LockPi2 => Err(Error::NoSys),
         }
     }
 }

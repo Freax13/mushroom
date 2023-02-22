@@ -1,5 +1,9 @@
-use alloc::sync::Arc;
+use alloc::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 use spin::mutex::Mutex;
+use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
@@ -17,7 +21,9 @@ pub mod memory;
 mod syscall;
 pub mod thread;
 
-pub struct Process {}
+pub struct Process {
+    waits: Mutex<BTreeMap<VirtAddr, VecDeque<u32>>>,
+}
 
 impl Process {
     pub fn create(path: &Path) -> Result<()> {
@@ -28,7 +34,9 @@ impl Process {
         }
         let elf_file = file.read_snapshot()?;
 
-        let process = Arc::new(Process {});
+        let process = Arc::new(Process {
+            waits: Mutex::new(BTreeMap::new()),
+        });
 
         let mut virtual_memory = VirtualMemory::new();
         // Create stack.

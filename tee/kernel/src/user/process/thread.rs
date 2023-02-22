@@ -23,11 +23,11 @@ use crate::per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET
 
 use super::{fd::FileDescriptorTable, memory::VirtualMemory, Process};
 
-static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
-static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+pub static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
+pub static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
 pub struct Thread {
-    _process: Arc<Process>,
+    process: Arc<Process>,
     virtual_memory: Arc<Mutex<VirtualMemory>>,
     fdtable: Arc<FileDescriptorTable>,
 
@@ -38,7 +38,6 @@ pub struct Thread {
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
-    pub set_child_tid: u64,
     pub clear_child_tid: u64,
 }
 
@@ -73,7 +72,7 @@ impl Thread {
             fs_base: 0,
         };
         Self {
-            _process: process,
+            process,
             virtual_memory,
             fdtable,
             registers,
@@ -81,16 +80,56 @@ impl Thread {
             sigmask: Sigset(0),
             sigaction: [Sigaction::DEFAULT; 64],
             sigaltstack: None,
-            set_child_tid: 0,
             clear_child_tid: 0,
         }
+    }
+
+    pub fn clone(
+        &self,
+        new_process: Option<Arc<Process>>,
+        new_virtual_memory: Option<Arc<Mutex<VirtualMemory>>>,
+        new_fdtable: Option<Arc<FileDescriptorTable>>,
+        stack: VirtAddr,
+        new_clear_child_tid: Option<VirtAddr>,
+        new_tls: Option<u64>,
+    ) -> Self {
+        let process = new_process.unwrap_or_else(|| self.process.clone());
+        let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
+        let fdtable = new_fdtable.unwrap_or_else(|| self.fdtable.clone());
+
+        let mut thread = Self::new(process, virtual_memory, fdtable, 0, 0);
+
+        if let Some(clear_child_tid) = new_clear_child_tid {
+            thread.clear_child_tid = clear_child_tid.as_u64();
+        }
+
+        // Copy all registers.
+        thread.registers = self.registers;
+
+        // Set the return value to 0 for the new thread.
+        thread.registers.rax = 0;
+
+        // Switch to a new stack if one is provided.
+        if !stack.is_null() {
+            thread.registers.rsp = stack.as_u64();
+        }
+
+        if let Some(tls) = new_tls {
+            thread.registers.fs_base = tls;
+        }
+
+        thread
+    }
+
+    pub fn process(&self) -> &Arc<Process> {
+        &self.process
     }
 
     pub fn virtual_memory(&self) -> &Arc<Mutex<VirtualMemory>> {
         &self.virtual_memory
     }
 
-    pub fn fdtable(&self) -> &FileDescriptorTable {
+    pub fn fdtable(&self) -> &Arc<FileDescriptorTable> {
         &self.fdtable
     }
 

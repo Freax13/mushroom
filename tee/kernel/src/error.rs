@@ -2,6 +2,7 @@
 pub enum Error {
     NoEnt = 2,
     BadF = 9,
+    Again = 11,
     NoMem = 12,
     Acces = 13,
     Fault = 14,

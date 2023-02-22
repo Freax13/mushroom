@@ -252,3 +252,85 @@ enum_arg! {
         SetMask = 2,
     }
 }
+
+bitflags! {
+    pub struct CloneFlags {
+        const CSIGNAL = 0x000000ff;
+        const VM = 0x00000100;
+        const FS = 0x00000200;
+        const FILES = 0x00000400;
+        const SIGHAND = 0x00000800;
+        const PIDFD = 0x00001000;
+        const PTRACE = 0x00002000;
+        const VFORK = 0x00004000;
+        const PARENT = 0x00008000;
+        const THREAD = 0x00010000;
+        const NEWNS = 0x00020000;
+        const SYSVSEM = 0x00040000;
+        const SETTLS = 0x00080000;
+        const PARENT_SETTID = 0x00100000;
+        const CHILD_CLEARTID = 0x00200000;
+        const DETACHED = 0x00400000;
+        const UNTRACED = 0x00800000;
+        const CHILD_SETTID = 0x01000000;
+        const NEWCGROUP = 0x02000000;
+        const NEWUTS = 0x04000000;
+        const NEWIPC = 0x08000000;
+        const NEWUSER = 0x10000000;
+        const NEWPID = 0x20000000;
+        const NEWNET = 0x40000000;
+        const IO = 0x80000000;
+    }
+}
+
+enum_arg! {
+    pub enum FutexOp {
+        Wait = 0,
+        Wake = 1,
+        Fd = 2,
+        REQUEUE = 3,
+        CmpRequeue = 4,
+        WakeOp = 5,
+        LockPi = 6,
+        UnlockPi = 7,
+        TrylockPi = 8,
+        WaitBitset = 9,
+        WakeBitset = 10,
+        WaitRequeuePi = 11,
+        CmpRequeuePi = 12,
+        LockPi2 = 13,
+    }
+}
+
+bitflags! {
+    pub struct FutexFlags {
+        const PRIVATE_FLAG = 1 << 7;
+        const CLOCK_REALTIME = 1 << 8;
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct FutexOpWithFlags {
+    pub op: FutexOp,
+    pub flags: FutexFlags,
+}
+
+impl Display for FutexOpWithFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} | {}", self.op, self.flags)
+    }
+}
+
+impl SyscallArg for FutexOpWithFlags {
+    fn parse(value: u64) -> Result<Self> {
+        let op = FutexOp::parse(value & 0x7f)?;
+        let flags = FutexFlags::parse(value & !0x7f)?;
+        Ok(Self { op, flags })
+    }
+
+    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
+        FutexOp::display(f, value & 0x7f);
+        write!(f, " | ")?;
+        FutexFlags::display(f, value & !0x7f)
+    }
+}
