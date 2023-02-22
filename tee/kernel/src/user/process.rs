@@ -1,6 +1,5 @@
 use alloc::sync::Arc;
 use spin::mutex::Mutex;
-use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
@@ -32,12 +31,11 @@ impl Process {
         let process = Arc::new(Process {});
 
         let mut virtual_memory = VirtualMemory::new();
-        // Load the elf.
-        let entry = virtual_memory.load_elf(elf_file)?;
         // Create stack.
-        let addr = VirtAddr::new(0x7fff_fff0_0000);
         let len = 0x1_0000;
-        let stack = virtual_memory.allocate_stack(addr, len)?;
+        let stack = virtual_memory.allocate_stack(None, len)?;
+        // Load the elf.
+        let entry = virtual_memory.load_elf(elf_file, stack)?;
 
         let virtual_memory = Arc::new(Mutex::new(virtual_memory));
 

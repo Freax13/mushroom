@@ -9,7 +9,7 @@ use super::memory::{MemoryPermissions, VirtualMemory};
 use crate::{error::Result, fs::node::FileSnapshot};
 
 impl VirtualMemory {
-    pub fn load_elf(&mut self, elf_bytes: FileSnapshot) -> Result<u64> {
+    pub fn load_elf(&mut self, elf_bytes: FileSnapshot, stack: VirtAddr) -> Result<u64> {
         let elf = Elf::parse(&elf_bytes).unwrap();
 
         assert!(elf.is_64);
@@ -34,19 +34,16 @@ impl VirtualMemory {
                 permissions |= MemoryPermissions::READ;
             }
 
-            self.mmap_into(addr, len, offset, elf_bytes.clone(), permissions)?;
+            self.mmap_into(Some(addr), len, offset, elf_bytes.clone(), permissions)?;
 
             let zero_len = ph.p_memsz - ph.p_filesz;
             if zero_len != 0 {
-                self.mmap_zero(addr + ph.p_filesz, zero_len, permissions)?;
+                self.mmap_zero(Some(addr + ph.p_filesz), zero_len, permissions)?;
             }
         }
 
-        let addr = VirtAddr::new(0x7fff_fff0_0000);
-        let len = 0x1_0000;
-        let stack = self.allocate_stack(addr, len)?;
         self.mmap_zero(
-            stack,
+            Some(stack),
             0x1000,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
         );

@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 use bitflags::bitflags;
 use log::debug;
 use x86_64::{
+    align_down,
+    instructions::random::RdRand,
     registers::{
         control::{Cr0, Cr0Flags},
         rflags::{self, RFlags},
@@ -38,54 +40,87 @@ impl VirtualMemory {
         }
     }
 
-    pub fn allocate_stack(&mut self, addr: VirtAddr, len: u64) -> Result<VirtAddr> {
-        self.add_mapping(Mapping {
+    fn find_free_address(&self, size: u64) -> VirtAddr {
+        let rdrand = RdRand::new().unwrap();
+        const MAX_ATTEMPTS: usize = 64;
+        (0..MAX_ATTEMPTS)
+            .find_map(|_| {
+                let candidate = rdrand.get_u64()?;
+                let candidate = candidate & 0x7fff_ffff_ffff;
+                let candidate = align_down(candidate, 0x1000);
+
+                let candidate = VirtAddr::new(candidate);
+
+                if self
+                    .mappings
+                    .iter()
+                    .any(|m| m.contains_range(candidate, size))
+                {
+                    return None;
+                }
+
+                Some(candidate)
+            })
+            .unwrap()
+    }
+
+    pub fn allocate_stack(&mut self, addr: Option<VirtAddr>, len: u64) -> Result<VirtAddr> {
+        let addr = self.add_mapping(
             addr,
             len,
-            permissions: MemoryPermissions::READ | MemoryPermissions::WRITE,
-            backing: Backing::Stack,
-        });
-
+            MemoryPermissions::READ | MemoryPermissions::WRITE,
+            Backing::Stack,
+        )?;
         Ok(addr + len)
     }
 
     pub fn mmap_into(
         &mut self,
-        addr: VirtAddr,
+        addr: Option<VirtAddr>,
         len: u64,
         offset: u64,
         bytes: FileSnapshot,
         permissions: MemoryPermissions,
-    ) -> Result<()> {
-        self.add_mapping(Mapping {
+    ) -> Result<VirtAddr> {
+        self.add_mapping(
             addr,
             len,
             permissions,
-            backing: Backing::File(FileBacking { offset, bytes }),
-        })
+            Backing::File(FileBacking { offset, bytes }),
+        )
     }
 
     pub fn mmap_zero(
         &mut self,
-        addr: VirtAddr,
+        addr: Option<VirtAddr>,
         len: u64,
         permissions: MemoryPermissions,
-    ) -> Result<()> {
-        self.add_mapping(Mapping {
+    ) -> Result<VirtAddr> {
+        self.add_mapping(addr, len, permissions, Backing::Zero)
+    }
+
+    fn add_mapping(
+        &mut self,
+        addr: Option<VirtAddr>,
+        len: u64,
+        permissions: MemoryPermissions,
+        backing: Backing,
+    ) -> Result<VirtAddr> {
+        let addr = addr.unwrap_or_else(|| self.find_free_address(len));
+
+        debug!(
+            "adding mapping {:?}-{:?} {:?}",
+            addr,
+            addr + len,
+            permissions
+        );
+
+        let mapping = Mapping {
             addr,
             len,
             permissions,
-            backing: Backing::Zero,
-        })
-    }
-
-    pub fn add_mapping(&mut self, mapping: Mapping) -> Result<()> {
-        debug!(
-            "adding mapping {:?}-{:?} {:?}",
-            mapping.addr,
-            mapping.end(),
-            mapping.permissions
-        );
+            backing,
+        };
 
         for m in self.mappings.iter() {
             if let Some(overlapping_page) = m.page_overlaps(&mapping)? {
@@ -118,9 +153,11 @@ impl VirtualMemory {
             }
         }
 
+        let addr = mapping.addr;
+
         self.mappings.push(mapping);
 
-        Ok(())
+        Ok(addr)
     }
 
     pub fn read(&self, addr: VirtAddr, bytes: &mut [u8]) -> Result<()> {
@@ -265,6 +302,16 @@ impl Mapping {
 
     pub fn contains(&self, addr: VirtAddr) -> bool {
         (self.addr..self.addr + self.len).contains(&addr)
+    }
+
+    pub fn contains_range(&self, addr: VirtAddr, size: u64) -> bool {
+        let Some(sizem1) = size.checked_sub(1) else { return false; };
+        let end = addr + sizem1;
+
+        self.contains(addr)
+            || self.contains(end)
+            || (addr..=end).contains(&self.addr)
+            || (addr..=end).contains(&(self.end() - 1u64))
     }
 
     /// Check if the two mappings are mapped to the same page.

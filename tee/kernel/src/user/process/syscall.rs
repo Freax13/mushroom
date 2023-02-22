@@ -5,7 +5,6 @@ use core::{
 
 use bytemuck::{bytes_of, bytes_of_mut, Pod, Zeroable};
 use log::warn;
-use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
@@ -336,27 +335,22 @@ impl Syscall6 for SysMmap {
                 assert!(flags.contains(MmapFlags::ANONYMOUS));
                 assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
-                warn!("FIXME: generate stack address dynamically");
                 assert_eq!(addr.get().as_u64(), 0);
-                let addr = VirtAddr::new(0x7fff_ffd0_0000);
-                thread.virtual_memory().lock().allocate_stack(addr, len);
-                let stack = addr + len;
+                let addr = thread.virtual_memory().lock().allocate_stack(None, len)?;
 
-                Ok(stack.as_u64())
+                Ok(addr.as_u64())
             } else if flags.contains(MmapFlags::ANONYMOUS) {
-                warn!("FIXME: generate anonymous mapping address dynamically");
                 assert_eq!(addr.get().as_u64(), 0);
-                let addr = VirtAddr::new(0x7fff_ffe0_0000);
 
                 let mut permissions = MemoryPermissions::empty();
                 permissions.set(MemoryPermissions::READ, prot.contains(ProtFlags::READ));
                 permissions.set(MemoryPermissions::WRITE, prot.contains(ProtFlags::WRITE));
                 permissions.set(MemoryPermissions::EXECUTE, prot.contains(ProtFlags::EXEC));
 
-                thread
+                let addr = thread
                     .virtual_memory()
                     .lock()
-                    .mmap_zero(addr, len, permissions);
+                    .mmap_zero(None, len, permissions)?;
 
                 Ok(addr.as_u64())
             } else {
