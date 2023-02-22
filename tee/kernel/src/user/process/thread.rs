@@ -21,14 +21,15 @@ use x86_64::{
 
 use crate::per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET};
 
-use super::{memory::VirtualMemory, Process};
+use super::{fd::FileDescriptorTable, memory::VirtualMemory, Process};
 
 static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
 static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
 pub struct Thread {
-    process: Arc<Process>,
+    _process: Arc<Process>,
     virtual_memory: Arc<Mutex<VirtualMemory>>,
+    fdtable: Arc<FileDescriptorTable>,
 
     pub registers: UserspaceRegisters,
 
@@ -45,6 +46,7 @@ impl Thread {
     pub fn new(
         process: Arc<Process>,
         virtual_memory: Arc<Mutex<VirtualMemory>>,
+        fdtable: Arc<FileDescriptorTable>,
         stack: u64,
         entry: u64,
     ) -> Self {
@@ -71,8 +73,9 @@ impl Thread {
             fs_base: 0,
         };
         Self {
-            process,
+            _process: process,
             virtual_memory,
+            fdtable,
             registers,
             tid,
             sigmask: Sigset(0),
@@ -83,12 +86,12 @@ impl Thread {
         }
     }
 
-    pub fn process(&self) -> &Arc<Process> {
-        &self.process
-    }
-
     pub fn virtual_memory(&self) -> &Arc<Mutex<VirtualMemory>> {
         &self.virtual_memory
+    }
+
+    pub fn fdtable(&self) -> &FileDescriptorTable {
+        &self.fdtable
     }
 
     pub fn spawn(self) {

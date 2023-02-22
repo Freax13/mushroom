@@ -18,9 +18,7 @@ pub mod memory;
 mod syscall;
 pub mod thread;
 
-pub struct Process {
-    fdtable: FileDescriptorTable,
-}
+pub struct Process {}
 
 impl Process {
     pub fn create(path: &Path) -> Result<()> {
@@ -30,6 +28,8 @@ impl Process {
             return Err(Error::Acces);
         }
         let elf_file = file.read_snapshot()?;
+
+        let process = Arc::new(Process {});
 
         let mut virtual_memory = VirtualMemory::new();
         // Load the elf.
@@ -41,18 +41,12 @@ impl Process {
 
         let virtual_memory = Arc::new(Mutex::new(virtual_memory));
 
-        let process = Arc::new(Process {
-            fdtable: FileDescriptorTable::new(),
-        });
+        let fdtable = Arc::new(FileDescriptorTable::new());
 
-        let thread = Thread::new(process, virtual_memory, stack.as_u64(), entry);
+        let thread = Thread::new(process, virtual_memory, fdtable, stack.as_u64(), entry);
         thread.spawn();
 
         Ok(())
-    }
-
-    pub fn fdtable(&self) -> &FileDescriptorTable {
-        &self.fdtable
     }
 }
 

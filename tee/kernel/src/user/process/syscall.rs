@@ -166,7 +166,7 @@ impl Syscall3 for SysRead {
     type Arg2 = u64;
 
     fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> Result<u64> {
-        let fd = thread.process().fdtable().get(fd)?;
+        let fd = thread.fdtable().get(fd)?;
 
         let buf = buf.get();
         let count = usize::try_from(count).unwrap();
@@ -198,7 +198,7 @@ impl Syscall3 for SysWrite {
     type Arg2 = u64;
 
     fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> Result<u64> {
-        let fd = thread.process().fdtable().get(fd)?;
+        let fd = thread.fdtable().get(fd)?;
 
         let buf = buf.get();
         let count = usize::try_from(count).unwrap();
@@ -242,10 +242,7 @@ impl Syscall3 for SysOpen {
             if flags.contains(OpenFlags::CREAT) {
                 let dynamic_file =
                     create_file(Node::Directory(ROOT_NODE.clone()), &filename, false)?;
-                let fd = thread
-                    .process()
-                    .fdtable()
-                    .insert(WriteonlyFile::new(dynamic_file));
+                let fd = thread.fdtable().insert(WriteonlyFile::new(dynamic_file));
                 Ok(fd.get() as u64)
             } else {
                 todo!()
@@ -261,10 +258,7 @@ impl Syscall3 for SysOpen {
             };
 
             let snapshot = file.read_snapshot()?;
-            let fd = thread
-                .process()
-                .fdtable()
-                .insert(ReadonlyFile::new(snapshot));
+            let fd = thread.fdtable().insert(ReadonlyFile::new(snapshot));
             Ok(fd.get() as u64)
         }
     }
@@ -279,7 +273,7 @@ impl Syscall1 for SysClose {
     type Arg0 = Fd;
 
     fn execute(thread: &mut Thread, fd: Fd) -> Result<u64> {
-        thread.process().fdtable().close(fd)?;
+        thread.fdtable().close(fd)?;
         Ok(0)
     }
 }
