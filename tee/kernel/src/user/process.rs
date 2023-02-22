@@ -28,6 +28,7 @@ mod syscall;
 pub mod thread;
 
 pub struct Process {
+    pid: u32,
     waits: Mutex<BTreeMap<VirtAddr, VecDeque<u32>>>,
 }
 
@@ -46,7 +47,7 @@ impl Process {
         }
         let elf_file = file.read_snapshot()?;
 
-        let process = Arc::new(Process::new());
+        let process = Arc::new(Process::new(tid));
 
         let virtual_memory = VirtualMemory::new();
         // Create stack.
@@ -68,8 +69,9 @@ impl Process {
         Ok(())
     }
 
-    fn new() -> Self {
+    fn new(first_tid: u32) -> Self {
         Self {
+            pid: first_tid,
             waits: Mutex::new(BTreeMap::new()),
         }
     }

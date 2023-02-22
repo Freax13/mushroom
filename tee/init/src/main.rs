@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 
 fn main() -> Result<()> {
+    let pid = std::process::id();
+    println!("Hi, my pid is {pid}!");
+
     if std::env::args().count() == 1 {
         println!("Hello from process 1");
 

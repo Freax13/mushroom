@@ -23,8 +23,8 @@ use self::{
         WaitOptions,
     },
     traits::{
-        Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers, SyscallResult,
-        SyscallResult::*,
+        Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
+        SyscallResult, SyscallResult::*,
     },
 };
 
@@ -92,6 +92,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysGetpid);
     handlers.register(SysClone);
     handlers.register(SysExecve);
     handlers.register(SysExit);
@@ -476,6 +477,18 @@ impl Syscall3 for SysRtSigprocmask {
     }
 }
 
+struct SysGetpid;
+
+impl Syscall0 for SysGetpid {
+    const NO: usize = 39;
+    const NAME: &'static str = "getpid";
+
+    fn execute(thread: &mut Thread, _vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
+        let pid = thread.process().pid;
+        Ok(u64::from(pid))
+    }
+}
+
 struct SysClone;
 
 impl Syscall5 for SysClone {
@@ -500,7 +513,7 @@ impl Syscall5 for SysClone {
         let new_process = if flags.contains(CloneFlags::THREAD) {
             None
         } else {
-            Some(Arc::new(Process::new()))
+            Some(Arc::new(Process::new(thread.tid)))
         };
 
         let new_virtual_memory = if flags.contains(CloneFlags::VM) {
