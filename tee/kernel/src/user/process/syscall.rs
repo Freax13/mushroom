@@ -172,7 +172,7 @@ impl Syscall3 for SysOpen {
             .virtual_memory()
             .lock()
             .read_cstring(filename.get(), 4096)?;
-        let filename = Path::new(&filename);
+        let filename = Path::new(filename.as_bytes());
 
         if flags.contains(OpenFlags::WRONLY) {
             if flags.contains(OpenFlags::CREAT) {

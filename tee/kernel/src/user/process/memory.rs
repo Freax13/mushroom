@@ -1,6 +1,6 @@
 use core::{arch::asm, cmp, iter::Step};
 
-use alloc::vec::Vec;
+use alloc::{ffi::CString, vec::Vec};
 use bitflags::bitflags;
 use log::debug;
 use x86_64::{
@@ -274,7 +274,7 @@ impl VirtualMemory {
         Ok(())
     }
 
-    pub fn read_cstring(&self, mut addr: VirtAddr, max_length: usize) -> Result<Vec<u8>> {
+    pub fn read_cstring(&self, mut addr: VirtAddr, max_length: usize) -> Result<CString> {
         let mut ret = Vec::new();
         loop {
             let mut buf = 0;
@@ -288,6 +288,7 @@ impl VirtualMemory {
             addr = Step::forward(addr, 1);
             ret.push(buf);
         }
+        let ret = CString::new(ret).unwrap();
         Ok(ret)
     }
 
