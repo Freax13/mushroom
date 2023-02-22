@@ -21,11 +21,41 @@ use crate::{
     FakeSync,
 };
 
+/// A macro to get the physical address of a static variable.
+#[macro_export]
+macro_rules! pa_of {
+    ($static:ident) => {{
+        // Make sure that $static is indeed a static variable.
+        // Make sure that it's a reference.
+        const fn to_pointer<T>(r: &T) -> *const ::core::ffi::c_void {
+            r as *const T as *const ::core::ffi::c_void
+        }
+        // Make sure that it's a static.
+        static REFERENCE: $crate::FakeSync<*const ::core::ffi::c_void> =
+            $crate::FakeSync::new(to_pointer(&$static));
+
+        // Lookup the value once and cache it.
+        static PA: $crate::FakeSync<::core::cell::LazyCell<::x86_64::PhysAddr>> =
+            $crate::FakeSync::new(::core::cell::LazyCell::new(|| unsafe {
+                $crate::pagetable::ptr_to_pa(*REFERENCE).unwrap()
+            }));
+
+        **PA
+    }};
+}
+
 pub fn ref_to_pa<T>(value: &T) -> Result<PhysAddr, TranslationError>
 where
     T: ?Sized,
 {
-    let size = core::mem::size_of_val(value);
+    unsafe { ptr_to_pa(value) }
+}
+
+pub unsafe fn ptr_to_pa<T>(value: *const T) -> Result<PhysAddr, TranslationError>
+where
+    T: ?Sized,
+{
+    let size = core::mem::size_of_val_raw(value);
     let sizem1 = size.checked_sub(1).ok_or(TranslationError::ZeroSized)?;
 
     let start_addr = VirtAddr::from_ptr(value as *const T as *const u8);

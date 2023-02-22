@@ -24,9 +24,9 @@ use snp_types::{
     vmsa::SevFeatures,
 };
 use volatile::{map_field, map_field_mut, VolatilePtr};
-use x86_64::{structures::paging::PhysFrame, PhysAddr};
+use x86_64::structures::paging::PhysFrame;
 
-use crate::{pagetable::ref_to_pa, FakeSync};
+use crate::{pa_of, FakeSync};
 
 #[no_mangle]
 #[link_section = ".secrets"]
@@ -49,7 +49,7 @@ pub fn with_ghcb<R>(f: impl FnOnce(&mut VolatilePtr<'static, Ghcb>) -> R) -> Res
             static GHCB_STORAGE: FakeSync<UnsafeCell<Ghcb>> =
                 FakeSync::new(UnsafeCell::new(Ghcb::ZERO));
 
-            let address = ref_to_pa(&GHCB_STORAGE).unwrap();
+            let address = pa_of!(GHCB_STORAGE);
             let address = PhysFrame::from_start_address(address).unwrap();
 
             register_ghcb(address);
@@ -243,22 +243,20 @@ pub fn do_guest_request(request: Message) -> Message {
     #[link_section = ".shared"]
     static RSP: FakeSync<UnsafeCell<[u8; 0x1000]>> = FakeSync::new(UnsafeCell::new([0; 0x1000]));
 
-    static REQ_PA: FakeSync<LazyCell<PhysAddr>> =
-        FakeSync::new(LazyCell::new(|| ref_to_pa(&REQ).unwrap()));
-    static RSP_PA: FakeSync<LazyCell<PhysAddr>> =
-        FakeSync::new(LazyCell::new(|| ref_to_pa(&RSP).unwrap()));
-
     unsafe {
         core::intrinsics::volatile_copy_nonoverlapping_memory(REQ.get().cast(), &request, 1);
     }
+
+    let req_pa = pa_of!(REQ);
+    let rsp_pa = pa_of!(RSP);
 
     let sw_exit_info2 = with_ghcb(|ghcb| {
         ghcb.write(Ghcb::ZERO);
         map_field_mut!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
         ghcb_write!(ghcb.sw_exit_code = 0x8000_0011);
-        ghcb_write!(ghcb.sw_exit_info1 = REQ_PA.as_u64());
-        ghcb_write!(ghcb.sw_exit_info2 = RSP_PA.as_u64());
+        ghcb_write!(ghcb.sw_exit_info1 = req_pa.as_u64());
+        ghcb_write!(ghcb.sw_exit_info2 = rsp_pa.as_u64());
 
         vmgexit();
 

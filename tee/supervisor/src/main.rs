@@ -5,6 +5,7 @@
     asm_const,
     core_intrinsics,
     inline_const,
+    layout_for_ptr,
     naked_functions,
     lazy_cell
 )]

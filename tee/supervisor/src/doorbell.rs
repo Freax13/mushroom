@@ -7,13 +7,13 @@ use core::{
 use bit_field::BitField;
 use x86_64::structures::paging::PhysFrame;
 
-use crate::{ghcb::set_doorbell, pagetable::ref_to_pa};
+use crate::{ghcb::set_doorbell, pa_of};
 
 #[link_section = ".shared"]
 pub static DOORBELL: Doorbell = Doorbell::new();
 
 pub fn init() {
-    let addr = ref_to_pa(&DOORBELL).unwrap();
+    let addr = pa_of!(DOORBELL);
     let frame = PhysFrame::from_start_address(addr).unwrap();
 
     set_doorbell(frame).expect("failed to set doorbell");
