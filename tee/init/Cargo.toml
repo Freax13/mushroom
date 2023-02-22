@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.69"
+nix = "0.26.2"

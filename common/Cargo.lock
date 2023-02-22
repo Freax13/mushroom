@@ -111,7 +111,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "input"
+name = "io"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
@@ -141,7 +141,7 @@ dependencies = [
  "bytemuck",
  "constants",
  "goblin",
- "input",
+ "io",
  "itertools",
  "raw-cpuid",
  "snp-types",

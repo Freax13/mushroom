@@ -1,8 +1,17 @@
 use anyhow::{Context, Result};
+use nix::unistd::gettid;
 
 fn main() -> Result<()> {
     let pid = std::process::id();
-    println!("Hi, my pid is {pid}!");
+    let tid = gettid();
+    println!("Hi, my pid is {pid}, my tid is {tid:?}!");
+
+    let _ = std::thread::spawn(|| {
+        let pid = std::process::id();
+        let tid = gettid();
+        println!("Hi, my pid is {pid}, my tid is {tid:?}!");
+    })
+    .join();
 
     if std::env::args().count() == 1 {
         println!("Hello from process 1");

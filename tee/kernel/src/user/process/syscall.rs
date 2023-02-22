@@ -100,6 +100,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFcntl);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
+    handlers.register(SysGettid);
     handlers.register(SysFutex);
     handlers.register(SysSetTidAddress);
     handlers.register(SysExitGroup);
@@ -762,6 +763,18 @@ impl Syscall2 for SysArchPrctl {
                 Ok(0)
             }
         }
+    }
+}
+
+struct SysGettid;
+
+impl Syscall0 for SysGettid {
+    const NO: usize = 186;
+    const NAME: &'static str = "gettid";
+
+    fn execute(thread: &mut Thread, _vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
+        let tid = thread.tid;
+        Ok(u64::from(tid))
     }
 }
 
