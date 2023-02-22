@@ -1,4 +1,3 @@
-use alloc::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use goblin::{
     elf::Elf,
@@ -6,11 +5,11 @@ use goblin::{
 };
 use x86_64::VirtAddr;
 
-use super::{memory::MemoryPermissions, Process};
-use crate::{error::Result, fs::node::FileSnapshot, user::process::thread::Thread};
+use super::memory::{MemoryManager, MemoryPermissions};
+use crate::{error::Result, fs::node::FileSnapshot};
 
-impl Process {
-    pub fn load_elf(self: &Arc<Self>, elf_bytes: FileSnapshot) -> Result<()> {
+impl MemoryManager {
+    pub fn load_elf(&mut self, elf_bytes: FileSnapshot) -> Result<u64> {
         let elf = Elf::parse(&elf_bytes).unwrap();
 
         assert!(elf.is_64);
@@ -42,8 +41,6 @@ impl Process {
                 self.mmap_zero(addr + ph.p_filesz, zero_len, permissions)?;
             }
         }
-
-        let entry = base + elf.entry;
 
         let addr = VirtAddr::new(0x7fff_fff0_0000);
         let len = 0x1_0000;
@@ -82,10 +79,7 @@ impl Process {
         self.write(stack + 0x800u64, b"/bin/init\0").unwrap();
         self.write(stack + 0xc00u64, b"RUST_BACKTRACE=0\0").unwrap();
 
-        let thread = Thread::new(self.clone(), entry, stack);
-        thread.spawn();
-
-        Ok(())
+        Ok(base + elf.entry)
     }
 }
 

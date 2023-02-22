@@ -1,5 +1,6 @@
 use alloc::sync::Arc;
 use spin::mutex::Mutex;
+use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
@@ -9,16 +10,15 @@ use crate::{
     },
 };
 
-use self::{fd::FileDescriptorTable, memory::MemoryManager};
+use self::{fd::FileDescriptorTable, memory::MemoryManager, thread::Thread};
 
 mod elf;
 pub mod fd;
-mod memory;
+pub mod memory;
 mod syscall;
 pub mod thread;
 
 pub struct Process {
-    memory_manager: Mutex<MemoryManager>,
     fdtable: FileDescriptorTable,
 }
 
@@ -31,11 +31,22 @@ impl Process {
         }
         let elf_file = file.read_snapshot()?;
 
+        let mut memory_manager = MemoryManager::new();
+        // Load the elf.
+        let entry = memory_manager.load_elf(elf_file)?;
+        // Create stack.
+        let addr = VirtAddr::new(0x7fff_fff0_0000);
+        let len = 0x1_0000;
+        let stack = memory_manager.allocate_stack(addr, len)?;
+
+        let memory_manager = Arc::new(Mutex::new(memory_manager));
+
         let process = Arc::new(Process {
-            memory_manager: Mutex::new(MemoryManager::new()),
             fdtable: FileDescriptorTable::new(),
         });
-        process.load_elf(elf_file)?;
+
+        let thread = Thread::new(process, memory_manager, stack.as_u64(), entry);
+        thread.spawn();
 
         Ok(())
     }

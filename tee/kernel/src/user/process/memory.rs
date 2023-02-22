@@ -27,8 +27,6 @@ use crate::{
     },
 };
 
-use super::Process;
-
 pub struct MemoryManager {
     mappings: Vec<Mapping>,
 }
@@ -39,22 +37,20 @@ impl MemoryManager {
             mappings: Vec::new(),
         }
     }
-}
 
-impl Process {
-    pub fn allocate_stack(&self, addr: VirtAddr, len: u64) -> Result<VirtAddr> {
+    pub fn allocate_stack(&mut self, addr: VirtAddr, len: u64) -> Result<VirtAddr> {
         self.add_mapping(Mapping {
             addr,
             len,
             permissions: MemoryPermissions::READ | MemoryPermissions::WRITE,
             backing: Backing::Stack,
-        })?;
+        });
 
         Ok(addr + len)
     }
 
     pub fn mmap_into(
-        &self,
+        &mut self,
         addr: VirtAddr,
         len: u64,
         offset: u64,
@@ -70,7 +66,7 @@ impl Process {
     }
 
     pub fn mmap_zero(
-        &self,
+        &mut self,
         addr: VirtAddr,
         len: u64,
         permissions: MemoryPermissions,
@@ -83,7 +79,7 @@ impl Process {
         })
     }
 
-    pub fn add_mapping(&self, mapping: Mapping) -> Result<()> {
+    pub fn add_mapping(&mut self, mapping: Mapping) -> Result<()> {
         debug!(
             "adding mapping {:?}-{:?} {:?}",
             mapping.addr,
@@ -91,9 +87,7 @@ impl Process {
             mapping.permissions
         );
 
-        let mut guard = self.memory_manager.lock();
-
-        for m in guard.mappings.iter() {
+        for m in self.mappings.iter() {
             if let Some(overlapping_page) = m.page_overlaps(&mapping)? {
                 match (&m.backing, &mapping.backing) {
                     (Backing::File(_), Backing::File(_)) => todo!(),
@@ -124,7 +118,7 @@ impl Process {
             }
         }
 
-        guard.mappings.push(mapping);
+        self.mappings.push(mapping);
 
         Ok(())
     }
@@ -140,12 +134,11 @@ impl Process {
         let start_page = Page::<Size4KiB>::containing_address(start);
         let end_inclusive_page = Page::<Size4KiB>::containing_address(end_inclusive);
 
-        let guard = self.memory_manager.lock();
         for page in Page::range_inclusive(start_page, end_inclusive_page) {
             let copy_start = cmp::max(page.start_address(), start);
             let copy_end_inclusive = cmp::min(page.start_address() + 0xfffu64, end_inclusive);
 
-            let mapping = guard
+            let mapping = self
                 .mappings
                 .iter()
                 .find(|mapping| mapping.contains(copy_start))
@@ -198,12 +191,11 @@ impl Process {
         let start_page = Page::<Size4KiB>::containing_address(start);
         let end_inclusive_page = Page::<Size4KiB>::containing_address(end_inclusive);
 
-        let guard = self.memory_manager.lock();
         for page in Page::range_inclusive(start_page, end_inclusive_page) {
             let copy_start = cmp::max(page.start_address(), start);
             let copy_end_inclusive = cmp::min(page.start_address() + 0xfffu64, end_inclusive);
 
-            let mapping = guard
+            let mapping = self
                 .mappings
                 .iter()
                 .find(|mapping| mapping.contains(copy_start))
@@ -232,8 +224,7 @@ impl Process {
 
         debug!(target: "kernel::exception", "{addr:?} {error_code:?}");
 
-        let guard = self.memory_manager.lock();
-        let mapping = guard
+        let mapping = self
             .mappings
             .iter()
             .find(|mapping| mapping.contains(addr))

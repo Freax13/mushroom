@@ -179,7 +179,7 @@ impl Syscall3 for SysRead {
         let len = fd.read(chunk)?;
         let chunk = &mut chunk[..len];
 
-        thread.process().write(buf, chunk)?;
+        thread.memory_manager().lock().write(buf, chunk)?;
 
         let len = u64::try_from(len).unwrap();
 
@@ -207,7 +207,7 @@ impl Syscall3 for SysWrite {
         let max_chunk_len = chunk.len();
         let len = cmp::min(max_chunk_len, count);
         let chunk = &mut chunk[..len];
-        thread.process().read(buf, chunk)?;
+        thread.memory_manager().lock().read(buf, chunk)?;
 
         let len = fd.write(chunk)?;
 
@@ -232,7 +232,10 @@ impl Syscall3 for SysOpen {
         flags: OpenFlags,
         _mode: FileMode,
     ) -> Result<u64> {
-        let filename = thread.process().read_cstring(filename.get(), 4096)?;
+        let filename = thread
+            .memory_manager()
+            .lock()
+            .read_cstring(filename.get(), 4096)?;
         let filename = Path::new(&filename);
 
         if flags.contains(OpenFlags::WRONLY) {
@@ -292,10 +295,12 @@ impl Syscall3 for SysPoll {
     type Arg2 = u64;
 
     fn execute(thread: &mut Thread, fds: Pointer, nfds: u64, timeout: u64) -> Result<u64> {
-        let process = thread.process();
         for i in 0..nfds {
             let mut pollfd = Pollfd::zeroed();
-            process.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
+            thread
+                .memory_manager()
+                .lock()
+                .read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
         }
 
         if timeout != 0 {
@@ -340,7 +345,7 @@ impl Syscall6 for SysMmap {
                 warn!("FIXME: generate stack address dynamically");
                 assert_eq!(addr.get().as_u64(), 0);
                 let addr = VirtAddr::new(0x7fff_ffd0_0000);
-                thread.process().allocate_stack(addr, len);
+                thread.memory_manager().lock().allocate_stack(addr, len);
                 let stack = addr + len;
 
                 Ok(stack.as_u64())
@@ -354,7 +359,10 @@ impl Syscall6 for SysMmap {
                 permissions.set(MemoryPermissions::WRITE, prot.contains(ProtFlags::WRITE));
                 permissions.set(MemoryPermissions::EXECUTE, prot.contains(ProtFlags::EXEC));
 
-                thread.process().mmap_zero(addr, len, permissions);
+                thread
+                    .memory_manager()
+                    .lock()
+                    .mmap_zero(addr, len, permissions);
 
                 Ok(addr.as_u64())
             } else {
@@ -422,15 +430,19 @@ impl Syscall4 for SysRtSigaction {
         // FIXME: SIGKILL and SIGSTOP are special
         // FIXME: sigsetsize
 
-        let process = thread.process().clone();
-
         if !oldact.is_null() {
             let sigaction = thread.sigaction.get(signum).ok_or(Error::Inval)?;
-            process.write(oldact.get(), bytes_of(sigaction))?;
+            thread
+                .memory_manager()
+                .lock()
+                .write(oldact.get(), bytes_of(sigaction))?;
         }
         if !act.is_null() {
+            let memory_manager = thread.memory_manager().clone();
             let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::Inval)?;
-            process.read(act.get(), bytes_of_mut(sigaction))?;
+            memory_manager
+                .lock()
+                .read(act.get(), bytes_of_mut(sigaction))?;
         }
 
         Ok(0)
@@ -448,15 +460,19 @@ impl Syscall3 for SysRtSigprocmask {
     type Arg2 = Pointer;
 
     fn execute(thread: &mut Thread, how: u64, set: Pointer, oldset: Pointer) -> Result<u64> {
-        let process = thread.process().clone();
-
         if !oldset.is_null() {
-            process.write(oldset.get(), bytes_of(&thread.sigmask))?;
+            thread
+                .memory_manager()
+                .lock()
+                .write(oldset.get(), bytes_of(&thread.sigmask))?;
         }
 
         if !set.is_null() {
             let mut set_value = Sigset::zeroed();
-            process.read(set.get(), bytes_of_mut(&mut set_value))?;
+            thread
+                .memory_manager()
+                .lock()
+                .read(set.get(), bytes_of_mut(&mut set_value))?;
 
             let how = RtSigprocmaskHow::parse(how)?;
             match how {
@@ -528,20 +544,24 @@ impl Syscall2 for SysSigaltstack {
     type Arg1 = Pointer;
 
     fn execute(thread: &mut Thread, ss: Pointer, old_ss: Pointer) -> Result<u64> {
-        let process = thread.process().clone();
-
         if !old_ss.is_null() {
             let old_ss_value = thread.sigaltstack.unwrap_or_else(|| {
                 let mut stack = Stack::zeroed();
                 stack.flags |= StackFlags::DISABLE;
                 stack
             });
-            process.write(old_ss.get(), bytes_of(&old_ss_value));
+            thread
+                .memory_manager()
+                .lock()
+                .write(old_ss.get(), bytes_of(&old_ss_value));
         }
 
         if !ss.is_null() {
             let mut ss_value = Stack::zeroed();
-            process.read(ss.get(), bytes_of_mut(&mut ss_value))?;
+            thread
+                .memory_manager()
+                .lock()
+                .read(ss.get(), bytes_of_mut(&mut ss_value))?;
 
             let allowed_flags = StackFlags::AUTODISARM;
             if !allowed_flags.contains(ss_value.flags) {

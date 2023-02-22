@@ -7,6 +7,7 @@ use core::{
 
 use alloc::sync::Arc;
 use constants::MAX_APS_COUNT;
+use spin::Mutex;
 use x86_64::{
     registers::segmentation::{Segment64, GS},
     structures::{gdt::GlobalDescriptorTable, paging::Page, tss::TaskStateSegment},
@@ -16,8 +17,8 @@ use x86_64::{
 use crate::{
     memory::pagetable::ReservedFrameStorage,
     user::process::{
+        memory::MemoryManager,
         thread::{KernelRegisters, UserspaceRegisters},
-        Process,
     },
 };
 
@@ -37,7 +38,7 @@ pub struct PerCpu {
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
-    pub current_process: Cell<Option<Arc<Process>>>,
+    pub current_process: Cell<Option<Arc<Mutex<MemoryManager>>>>,
 }
 
 impl PerCpu {

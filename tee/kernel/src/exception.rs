@@ -127,13 +127,15 @@ extern "x86-interrupt" fn page_fault_handler(
 
     if error_code.contains(PageFaultErrorCode::USER_MODE) {
         let per_cpu = PerCpu::get();
-        let current_process = per_cpu.current_process.take();
-        per_cpu.current_process.set(current_process.clone());
+        let current_memory_manager = per_cpu.current_process.take();
+        per_cpu.current_process.set(current_memory_manager.clone());
 
         debug!("rip={:?}", frame.instruction_pointer);
 
-        let process = current_process.unwrap();
-        process.handle_page_fault(cr2, error_code);
+        let current_memory_manager = current_memory_manager.unwrap();
+        current_memory_manager
+            .lock()
+            .handle_page_fault(cr2, error_code);
     } else {
         if let Ok(cr2) = VirtAddr::try_new(cr2) {
             if let Some(entry) = entry_for_page(Page::containing_address(cr2)) {

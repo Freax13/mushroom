@@ -21,13 +21,15 @@ use x86_64::{
 
 use crate::per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET};
 
-use super::Process;
+use super::{memory::MemoryManager, Process};
 
 static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
 static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
 pub struct Thread {
     process: Arc<Process>,
+    memory_manager: Arc<Mutex<MemoryManager>>,
+
     pub registers: UserspaceRegisters,
 
     pub tid: u32,
@@ -40,7 +42,12 @@ pub struct Thread {
 }
 
 impl Thread {
-    pub fn new(process: Arc<Process>, entry: u64, stack: VirtAddr) -> Self {
+    pub fn new(
+        process: Arc<Process>,
+        memory_manager: Arc<Mutex<MemoryManager>>,
+        stack: u64,
+        entry: u64,
+    ) -> Self {
         static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
         let tid = PID_COUNTER.fetch_add(1, Ordering::SeqCst);
 
@@ -50,7 +57,7 @@ impl Thread {
             rdx: 0x3000,
             rsi: 0x4000,
             rdi: 0x5000,
-            rsp: stack.as_u64(),
+            rsp: stack,
             rbp: 0x6000,
             r8: 0x7000,
             r9: 0x8000,
@@ -65,6 +72,7 @@ impl Thread {
         };
         Self {
             process,
+            memory_manager,
             registers,
             tid,
             sigmask: Sigset(0),
@@ -77,6 +85,10 @@ impl Thread {
 
     pub fn process(&self) -> &Arc<Process> {
         &self.process
+    }
+
+    pub fn memory_manager(&self) -> &Arc<Mutex<MemoryManager>> {
+        &self.memory_manager
     }
 
     pub fn spawn(self) {
@@ -135,7 +147,9 @@ impl Thread {
 
         let per_cpu = PerCpu::get();
         per_cpu.userspace_registers.set(self.registers);
-        per_cpu.current_process.set(Some(self.process.clone()));
+        per_cpu
+            .current_process
+            .set(Some(self.memory_manager.clone()));
 
         unsafe {
             FS::write_base(VirtAddr::new(self.registers.fs_base));
