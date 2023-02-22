@@ -179,7 +179,7 @@ impl Syscall3 for SysRead {
         let len = fd.read(chunk)?;
         let chunk = &mut chunk[..len];
 
-        thread.memory_manager().lock().write(buf, chunk)?;
+        thread.virtual_memory().lock().write(buf, chunk)?;
 
         let len = u64::try_from(len).unwrap();
 
@@ -207,7 +207,7 @@ impl Syscall3 for SysWrite {
         let max_chunk_len = chunk.len();
         let len = cmp::min(max_chunk_len, count);
         let chunk = &mut chunk[..len];
-        thread.memory_manager().lock().read(buf, chunk)?;
+        thread.virtual_memory().lock().read(buf, chunk)?;
 
         let len = fd.write(chunk)?;
 
@@ -233,7 +233,7 @@ impl Syscall3 for SysOpen {
         _mode: FileMode,
     ) -> Result<u64> {
         let filename = thread
-            .memory_manager()
+            .virtual_memory()
             .lock()
             .read_cstring(filename.get(), 4096)?;
         let filename = Path::new(&filename);
@@ -298,7 +298,7 @@ impl Syscall3 for SysPoll {
         for i in 0..nfds {
             let mut pollfd = Pollfd::zeroed();
             thread
-                .memory_manager()
+                .virtual_memory()
                 .lock()
                 .read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
         }
@@ -345,7 +345,7 @@ impl Syscall6 for SysMmap {
                 warn!("FIXME: generate stack address dynamically");
                 assert_eq!(addr.get().as_u64(), 0);
                 let addr = VirtAddr::new(0x7fff_ffd0_0000);
-                thread.memory_manager().lock().allocate_stack(addr, len);
+                thread.virtual_memory().lock().allocate_stack(addr, len);
                 let stack = addr + len;
 
                 Ok(stack.as_u64())
@@ -360,7 +360,7 @@ impl Syscall6 for SysMmap {
                 permissions.set(MemoryPermissions::EXECUTE, prot.contains(ProtFlags::EXEC));
 
                 thread
-                    .memory_manager()
+                    .virtual_memory()
                     .lock()
                     .mmap_zero(addr, len, permissions);
 
@@ -433,12 +433,12 @@ impl Syscall4 for SysRtSigaction {
         if !oldact.is_null() {
             let sigaction = thread.sigaction.get(signum).ok_or(Error::Inval)?;
             thread
-                .memory_manager()
+                .virtual_memory()
                 .lock()
                 .write(oldact.get(), bytes_of(sigaction))?;
         }
         if !act.is_null() {
-            let memory_manager = thread.memory_manager().clone();
+            let memory_manager = thread.virtual_memory().clone();
             let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::Inval)?;
             memory_manager
                 .lock()
@@ -462,7 +462,7 @@ impl Syscall3 for SysRtSigprocmask {
     fn execute(thread: &mut Thread, how: u64, set: Pointer, oldset: Pointer) -> Result<u64> {
         if !oldset.is_null() {
             thread
-                .memory_manager()
+                .virtual_memory()
                 .lock()
                 .write(oldset.get(), bytes_of(&thread.sigmask))?;
         }
@@ -470,7 +470,7 @@ impl Syscall3 for SysRtSigprocmask {
         if !set.is_null() {
             let mut set_value = Sigset::zeroed();
             thread
-                .memory_manager()
+                .virtual_memory()
                 .lock()
                 .read(set.get(), bytes_of_mut(&mut set_value))?;
 
@@ -551,7 +551,7 @@ impl Syscall2 for SysSigaltstack {
                 stack
             });
             thread
-                .memory_manager()
+                .virtual_memory()
                 .lock()
                 .write(old_ss.get(), bytes_of(&old_ss_value));
         }
@@ -559,7 +559,7 @@ impl Syscall2 for SysSigaltstack {
         if !ss.is_null() {
             let mut ss_value = Stack::zeroed();
             thread
-                .memory_manager()
+                .virtual_memory()
                 .lock()
                 .read(ss.get(), bytes_of_mut(&mut ss_value))?;
 

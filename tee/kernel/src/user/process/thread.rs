@@ -21,14 +21,14 @@ use x86_64::{
 
 use crate::per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET};
 
-use super::{memory::MemoryManager, Process};
+use super::{memory::VirtualMemory, Process};
 
 static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
 static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
 pub struct Thread {
     process: Arc<Process>,
-    memory_manager: Arc<Mutex<MemoryManager>>,
+    virtual_memory: Arc<Mutex<VirtualMemory>>,
 
     pub registers: UserspaceRegisters,
 
@@ -44,7 +44,7 @@ pub struct Thread {
 impl Thread {
     pub fn new(
         process: Arc<Process>,
-        memory_manager: Arc<Mutex<MemoryManager>>,
+        virtual_memory: Arc<Mutex<VirtualMemory>>,
         stack: u64,
         entry: u64,
     ) -> Self {
@@ -72,7 +72,7 @@ impl Thread {
         };
         Self {
             process,
-            memory_manager,
+            virtual_memory,
             registers,
             tid,
             sigmask: Sigset(0),
@@ -87,8 +87,8 @@ impl Thread {
         &self.process
     }
 
-    pub fn memory_manager(&self) -> &Arc<Mutex<MemoryManager>> {
-        &self.memory_manager
+    pub fn virtual_memory(&self) -> &Arc<Mutex<VirtualMemory>> {
+        &self.virtual_memory
     }
 
     pub fn spawn(self) {
@@ -148,8 +148,8 @@ impl Thread {
         let per_cpu = PerCpu::get();
         per_cpu.userspace_registers.set(self.registers);
         per_cpu
-            .current_process
-            .set(Some(self.memory_manager.clone()));
+            .current_virtual_memory
+            .set(Some(self.virtual_memory.clone()));
 
         unsafe {
             FS::write_base(VirtAddr::new(self.registers.fs_base));

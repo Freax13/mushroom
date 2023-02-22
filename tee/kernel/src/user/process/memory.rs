@@ -27,11 +27,11 @@ use crate::{
     },
 };
 
-pub struct MemoryManager {
+pub struct VirtualMemory {
     mappings: Vec<Mapping>,
 }
 
-impl MemoryManager {
+impl VirtualMemory {
     pub fn new() -> Self {
         Self {
             mappings: Vec::new(),

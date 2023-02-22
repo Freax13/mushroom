@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-use self::{fd::FileDescriptorTable, memory::MemoryManager, thread::Thread};
+use self::{fd::FileDescriptorTable, memory::VirtualMemory, thread::Thread};
 
 mod elf;
 pub mod fd;
@@ -31,21 +31,21 @@ impl Process {
         }
         let elf_file = file.read_snapshot()?;
 
-        let mut memory_manager = MemoryManager::new();
+        let mut virtual_memory = VirtualMemory::new();
         // Load the elf.
-        let entry = memory_manager.load_elf(elf_file)?;
+        let entry = virtual_memory.load_elf(elf_file)?;
         // Create stack.
         let addr = VirtAddr::new(0x7fff_fff0_0000);
         let len = 0x1_0000;
-        let stack = memory_manager.allocate_stack(addr, len)?;
+        let stack = virtual_memory.allocate_stack(addr, len)?;
 
-        let memory_manager = Arc::new(Mutex::new(memory_manager));
+        let virtual_memory = Arc::new(Mutex::new(virtual_memory));
 
         let process = Arc::new(Process {
             fdtable: FileDescriptorTable::new(),
         });
 
-        let thread = Thread::new(process, memory_manager, stack.as_u64(), entry);
+        let thread = Thread::new(process, virtual_memory, stack.as_u64(), entry);
         thread.spawn();
 
         Ok(())

@@ -17,7 +17,7 @@ use x86_64::{
 use crate::{
     memory::pagetable::ReservedFrameStorage,
     user::process::{
-        memory::MemoryManager,
+        memory::VirtualMemory,
         thread::{KernelRegisters, UserspaceRegisters},
     },
 };
@@ -38,7 +38,7 @@ pub struct PerCpu {
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
-    pub current_process: Cell<Option<Arc<Mutex<MemoryManager>>>>,
+    pub current_virtual_memory: Cell<Option<Arc<Mutex<VirtualMemory>>>>,
 }
 
 impl PerCpu {
@@ -52,7 +52,7 @@ impl PerCpu {
             temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
-            current_process: Cell::new(None),
+            current_virtual_memory: Cell::new(None),
         }
     }
 
