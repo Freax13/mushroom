@@ -17,7 +17,8 @@
     once_cell,
     pointer_byte_offsets,
     ptr_sub_ptr,
-    step_trait
+    step_trait,
+    try_trait_v2
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
 

@@ -1,4 +1,8 @@
-use core::fmt::{self, Display};
+use core::{
+    convert::Infallible,
+    fmt::{self, Display},
+    ops::FromResidual,
+};
 
 use log::{trace, warn};
 
@@ -9,11 +13,27 @@ use crate::{
 
 use super::args::{Ignored, SyscallArg};
 
+#[derive(Debug)]
+pub enum SyscallResult {
+    Ok(u64),
+    Err(Error),
+    Yield,
+}
+
+impl FromResidual<Result<Infallible, Error>> for SyscallResult {
+    fn from_residual(residual: Result<Infallible, Error>) -> Self {
+        match residual {
+            Ok(value) => match value {},
+            Err(err) => Self::Err(err),
+        }
+    }
+}
+
 pub trait Syscall0 {
     const NO: usize;
     const NAME: &'static str;
 
-    fn execute(thread: &mut Thread) -> Result<u64>;
+    fn execute(thread: &mut Thread) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write) -> fmt::Result {
         write!(f, "{}()", Self::NAME)
@@ -26,7 +46,7 @@ pub trait Syscall1 {
 
     type Arg0: SyscallArg;
 
-    fn execute(thread: &mut Thread, arg0: Self::Arg0) -> Result<u64>;
+    fn execute(thread: &mut Thread, arg0: Self::Arg0) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64) -> fmt::Result {
         write!(f, "{}(", Self::NAME)?;
@@ -42,7 +62,7 @@ pub trait Syscall2 {
     type Arg0: SyscallArg;
     type Arg1: SyscallArg;
 
-    fn execute(thread: &mut Thread, arg0: Self::Arg0, arg1: Self::Arg1) -> Result<u64>;
+    fn execute(thread: &mut Thread, arg0: Self::Arg0, arg1: Self::Arg1) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64) -> fmt::Result {
         write!(f, "{}(", Self::NAME)?;
@@ -66,7 +86,7 @@ pub trait Syscall3 {
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
-    ) -> Result<u64>;
+    ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64) -> fmt::Result {
         write!(f, "{}(", Self::NAME)?;
@@ -94,7 +114,7 @@ pub trait Syscall4 {
         arg1: Self::Arg1,
         arg2: Self::Arg2,
         arg3: Self::Arg3,
-    ) -> Result<u64>;
+    ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64, arg3: u64) -> fmt::Result {
         write!(f, "{}(", Self::NAME)?;
@@ -126,7 +146,7 @@ pub trait Syscall5 {
         arg2: Self::Arg2,
         arg3: Self::Arg3,
         arg4: Self::Arg4,
-    ) -> Result<u64>;
+    ) -> SyscallResult;
 
     fn display(
         f: &mut dyn fmt::Write,
@@ -169,7 +189,7 @@ pub trait Syscall6 {
         arg3: Self::Arg3,
         arg4: Self::Arg4,
         arg5: Self::Arg5,
-    ) -> Result<u64>;
+    ) -> SyscallResult;
 
     fn display(
         f: &mut dyn fmt::Write,
@@ -205,7 +225,7 @@ where
 
     type Arg0 = Ignored;
 
-    fn execute(thread: &mut Thread, _arg0: Self::Arg0) -> Result<u64> {
+    fn execute(thread: &mut Thread, _arg0: Self::Arg0) -> SyscallResult {
         <T as Syscall0>::execute(thread)
     }
 
@@ -224,7 +244,7 @@ where
     type Arg0 = <T as Syscall1>::Arg0;
     type Arg1 = Ignored;
 
-    fn execute(thread: &mut Thread, arg0: Self::Arg0, _arg1: Self::Arg1) -> Result<u64> {
+    fn execute(thread: &mut Thread, arg0: Self::Arg0, _arg1: Self::Arg1) -> SyscallResult {
         <T as Syscall1>::execute(thread, arg0)
     }
 
@@ -249,7 +269,7 @@ where
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         _arg2: Self::Arg2,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         <T as Syscall2>::execute(thread, arg0, arg1)
     }
 
@@ -276,7 +296,7 @@ where
         arg1: Self::Arg1,
         arg2: Self::Arg2,
         _arg3: Self::Arg3,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         <T as Syscall3>::execute(thread, arg0, arg1, arg2)
     }
 
@@ -305,7 +325,7 @@ where
         arg2: Self::Arg2,
         arg3: Self::Arg3,
         _arg4: Self::Arg4,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         <T as Syscall4>::execute(thread, arg0, arg1, arg2, arg3)
     }
 
@@ -343,7 +363,7 @@ where
         arg3: Self::Arg3,
         arg4: Self::Arg4,
         _arg5: Self::Arg5,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         <T as Syscall5>::execute(thread, arg0, arg1, arg2, arg3, arg4)
     }
 
@@ -372,7 +392,7 @@ struct SyscallHandler {
         arg3: u64,
         arg4: u64,
         arg5: u64,
-    ) -> Result<u64>,
+    ) -> SyscallResult,
     display: fn(
         f: &mut dyn fmt::Write,
         arg0: u64,
@@ -439,7 +459,7 @@ impl SyscallHandlers {
         arg3: u64,
         arg4: u64,
         arg5: u64,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         let syscall_no = usize::try_from(syscall_no).unwrap();
         let handler = self
             .handlers

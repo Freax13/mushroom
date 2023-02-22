@@ -6,7 +6,7 @@ use core::{
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 
 use crate::{
-    error::{Error, Result},
+    error::Error,
     fs::{
         node::{create_file, lookup_node, Node, WriteonlyFile, ROOT_NODE},
         Path,
@@ -19,7 +19,10 @@ use self::{
         ArchPrctlCode, FcntlCmd, Fd, FileMode, MmapFlags, OpenFlags, Pointer, Pollfd, ProtFlags,
         RtSigprocmaskHow, SyscallArg,
     },
-    traits::{Syscall1, Syscall2, Syscall3, Syscall4, Syscall6, SyscallHandlers},
+    traits::{
+        Syscall1, Syscall2, Syscall3, Syscall4, Syscall6, SyscallHandlers, SyscallResult,
+        SyscallResult::*,
+    },
 };
 
 use super::{
@@ -31,7 +34,7 @@ pub mod args;
 mod traits;
 
 impl Thread {
-    pub fn execute_syscall(&mut self) {
+    pub fn execute_syscall(&mut self) -> bool {
         let UserspaceRegisters {
             rax: syscall_no,
             rdi: arg0,
@@ -45,15 +48,19 @@ impl Thread {
 
         let result = SYSCALL_HANDLERS.execute(self, syscall_no, arg0, arg1, arg2, arg3, arg4, arg5);
 
-        let rax = match result {
+        match result {
             Ok(result) => {
                 let is_error = (-4095..=-1).contains(&(result as i64));
                 assert!(!is_error);
-                result
+                self.registers.rax = result;
+                true
             }
-            Err(err) => (-(err as i64)) as u64,
-        };
-        self.registers.rax = rax;
+            Err(err) => {
+                self.registers.rax = (-(err as i64)) as u64;
+                true
+            }
+            Yield => false,
+        }
     }
 }
 
@@ -89,7 +96,7 @@ impl Syscall3 for SysRead {
     type Arg1 = Pointer;
     type Arg2 = u64;
 
-    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> SyscallResult {
         let fd = thread.fdtable().get(fd)?;
 
         let buf = buf.get();
@@ -121,7 +128,7 @@ impl Syscall3 for SysWrite {
     type Arg1 = Pointer;
     type Arg2 = u64;
 
-    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> SyscallResult {
         let fd = thread.fdtable().get(fd)?;
 
         let buf = buf.get();
@@ -155,7 +162,7 @@ impl Syscall3 for SysOpen {
         filename: Pointer,
         flags: OpenFlags,
         _mode: FileMode,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         let filename = thread
             .virtual_memory()
             .lock()
@@ -196,7 +203,7 @@ impl Syscall1 for SysClose {
 
     type Arg0 = Fd;
 
-    fn execute(thread: &mut Thread, fd: Fd) -> Result<u64> {
+    fn execute(thread: &mut Thread, fd: Fd) -> SyscallResult {
         thread.fdtable().close(fd)?;
         Ok(0)
     }
@@ -212,7 +219,7 @@ impl Syscall3 for SysPoll {
     type Arg1 = u64;
     type Arg2 = u64;
 
-    fn execute(thread: &mut Thread, fds: Pointer, nfds: u64, timeout: u64) -> Result<u64> {
+    fn execute(thread: &mut Thread, fds: Pointer, nfds: u64, timeout: u64) -> SyscallResult {
         for i in 0..nfds {
             let mut pollfd = Pollfd::zeroed();
             thread
@@ -250,7 +257,7 @@ impl Syscall6 for SysMmap {
         flags: MmapFlags,
         fd: u64,
         off: u64,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         if flags.contains(MmapFlags::SHARED_VALIDATE) {
             todo!("{addr} {len} {prot:?} {flags:?} {fd} {off}");
         } else if flags.contains(MmapFlags::SHARED) {
@@ -293,7 +300,7 @@ impl Syscall3 for SysMprotect {
     type Arg1 = u64;
     type Arg2 = ProtFlags;
 
-    fn execute(thread: &mut Thread, start: Pointer, len: u64, prot: ProtFlags) -> Result<u64> {
+    fn execute(thread: &mut Thread, start: Pointer, len: u64, prot: ProtFlags) -> SyscallResult {
         thread
             .virtual_memory()
             .lock()
@@ -310,7 +317,7 @@ impl Syscall1 for SysBrk {
 
     type Arg0 = u64;
 
-    fn execute(_thread: &mut Thread, brk: u64) -> Result<u64> {
+    fn execute(_thread: &mut Thread, brk: u64) -> SyscallResult {
         if brk == 0 || brk == 0x1000 {
             return Ok(0);
         }
@@ -336,7 +343,7 @@ impl Syscall4 for SysRtSigaction {
         act: Pointer,
         oldact: Pointer,
         _sigsetsize: u64,
-    ) -> Result<u64> {
+    ) -> SyscallResult {
         let signum = usize::try_from(signum).unwrap();
 
         // FIXME: SIGKILL and SIGSTOP are special
@@ -371,7 +378,7 @@ impl Syscall3 for SysRtSigprocmask {
     type Arg1 = Pointer;
     type Arg2 = Pointer;
 
-    fn execute(thread: &mut Thread, how: u64, set: Pointer, oldset: Pointer) -> Result<u64> {
+    fn execute(thread: &mut Thread, how: u64, set: Pointer, oldset: Pointer) -> SyscallResult {
         if !oldset.is_null() {
             thread
                 .virtual_memory()
@@ -422,7 +429,7 @@ impl Syscall3 for SysFcntl {
     type Arg1 = FcntlCmd;
     type Arg2 = u64;
 
-    fn execute(_thread: &mut Thread, _fd: Fd, cmd: FcntlCmd, _arg: u64) -> Result<u64> {
+    fn execute(_thread: &mut Thread, _fd: Fd, cmd: FcntlCmd, _arg: u64) -> SyscallResult {
         match cmd {
             FcntlCmd::SetFd => {
                 // FIXME: implement this
@@ -441,7 +448,7 @@ impl Syscall2 for SysSigaltstack {
     type Arg0 = Pointer;
     type Arg1 = Pointer;
 
-    fn execute(thread: &mut Thread, ss: Pointer, old_ss: Pointer) -> Result<u64> {
+    fn execute(thread: &mut Thread, ss: Pointer, old_ss: Pointer) -> SyscallResult {
         if !old_ss.is_null() {
             let old_ss_value = thread.sigaltstack.unwrap_or_else(|| {
                 let mut stack = Stack::zeroed();
@@ -482,7 +489,7 @@ impl Syscall2 for SysArchPrctl {
     type Arg0 = ArchPrctlCode;
     type Arg1 = Pointer;
 
-    fn execute(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer) -> Result<u64> {
+    fn execute(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer) -> SyscallResult {
         match code {
             ArchPrctlCode::SetFs => {
                 thread.registers.fs_base = addr.get().as_u64();
@@ -500,7 +507,7 @@ impl Syscall1 for SysSetTidAddress {
 
     type Arg0 = Pointer;
 
-    fn execute(thread: &mut Thread, tidptr: Pointer) -> Result<u64> {
+    fn execute(thread: &mut Thread, tidptr: Pointer) -> SyscallResult {
         thread.clear_child_tid = tidptr.get().as_u64();
         Ok(u64::from(thread.tid))
     }
@@ -514,7 +521,7 @@ impl Syscall1 for SysExitGroup {
 
     type Arg0 = u64;
 
-    fn execute(_thread: &mut Thread, error_code: u64) -> Result<u64> {
+    fn execute(_thread: &mut Thread, error_code: u64) -> SyscallResult {
         todo!("exit: {error_code}")
     }
 }

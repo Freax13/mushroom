@@ -105,7 +105,9 @@ impl Thread {
         loop {
             self.run_userspace();
 
-            self.execute_syscall();
+            if !self.execute_syscall() {
+                break;
+            }
         }
     }
 
