@@ -113,7 +113,7 @@ pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
     unsafe { level1_entry.unmap() }
 }
 
-pub unsafe fn add_flags(page: Page, flags: PageTableFlags) -> Result<()> {
+pub unsafe fn add_flags(page: Page, flags: PageTableFlags) {
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
@@ -132,8 +132,6 @@ pub unsafe fn add_flags(page: Page, flags: PageTableFlags) -> Result<()> {
     unsafe {
         level1_entry.add_flags(flags);
     }
-
-    Ok(())
 }
 
 /// # Panics
@@ -625,11 +623,6 @@ impl ActivePageTableEntry<Level1> {
         old_entry
     }
 
-    /// Panics if the page isn't mapped.
-    ///
-    /// # Safety
-    ///
-    /// `frame` must not already be mapped.
     pub unsafe fn add_flags(&self, flags: PageTableFlags) {
         let mut add_mask = 0;
         let mut remove_mask = 0;
