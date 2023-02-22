@@ -13,7 +13,11 @@ use crate::{
     },
 };
 
-use self::{fd::FileDescriptorTable, memory::VirtualMemory, thread::Thread};
+use self::{
+    fd::FileDescriptorTable,
+    memory::{VirtualMemory, VirtualMemoryActivator},
+    thread::Thread,
+};
 
 mod elf;
 pub mod fd;
@@ -26,7 +30,7 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn create(path: &Path) -> Result<()> {
+    pub fn create(path: &Path, vm_activator: &mut VirtualMemoryActivator) -> Result<()> {
         let node = lookup_node(Node::Directory(ROOT_NODE.clone()), path)?;
         let Node::File(file) = node else { return Err(Error::IsDir) };
         if !file.is_executable() {
@@ -38,12 +42,13 @@ impl Process {
             waits: Mutex::new(BTreeMap::new()),
         });
 
-        let mut virtual_memory = VirtualMemory::new();
+        let virtual_memory = VirtualMemory::new();
         // Create stack.
         let len = 0x1_0000;
-        let stack = virtual_memory.allocate_stack(None, len)? + len;
+        let stack =
+            vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(None, len))? + len;
         // Load the elf.
-        let entry = virtual_memory.load_elf(elf_file, stack)?;
+        let entry = vm_activator.activate(&virtual_memory, |vm| vm.load_elf(elf_file, stack))?;
 
         let virtual_memory = Arc::new(virtual_memory);
 
@@ -56,7 +61,7 @@ impl Process {
     }
 }
 
-pub fn start_init_process() {
+pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
     let path = Path::new(b"/bin/init");
-    Process::create(&path).expect("failed to create init process");
+    Process::create(&path, vm_activator).expect("failed to create init process");
 }

@@ -28,7 +28,7 @@ use exception::switch_stack;
 use log::info;
 use serial_log::SerialLogger;
 
-use crate::per_cpu::PerCpu;
+use crate::{per_cpu::PerCpu, user::process::memory::VirtualMemoryActivator};
 
 mod error;
 mod exception;
@@ -67,6 +67,8 @@ extern "C" fn init() -> ! {
 
     fs::init().expect("failed to load input files");
 
-    user::process::start_init_process();
-    user::run()
+    let mut vm_activator = unsafe { VirtualMemoryActivator::new() };
+
+    user::process::start_init_process(&mut vm_activator);
+    user::run(&mut vm_activator)
 }

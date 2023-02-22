@@ -21,7 +21,11 @@ use x86_64::{
 
 use crate::per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET};
 
-use super::{fd::FileDescriptorTable, memory::VirtualMemory, Process};
+use super::{
+    fd::FileDescriptorTable,
+    memory::{VirtualMemory, VirtualMemoryActivator},
+    Process,
+};
 
 pub static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
 pub static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
@@ -140,17 +144,17 @@ impl Thread {
         RUNNABLE_THREADS.lock().push_back(tid);
     }
 
-    fn run(&mut self) {
+    fn run(&mut self, vm_activator: &mut VirtualMemoryActivator) {
         loop {
-            self.run_userspace();
+            self.run_userspace(vm_activator);
 
-            if !self.execute_syscall() {
+            if !self.execute_syscall(vm_activator) {
                 break;
             }
         }
     }
 
-    fn run_userspace(&mut self) {
+    fn run_userspace(&mut self, vm_activator: &mut VirtualMemoryActivator) {
         let actual_kernel_registers_offset = offset_of!(PerCpu::new(), PerCpu, kernel_registers);
         assert_eq!(
             actual_kernel_registers_offset, KERNEL_REGISTERS_OFFSET,
@@ -205,136 +209,138 @@ impl Thread {
             Cr4::write(cr4);
         }
 
-        unsafe {
-            asm!(
-                // Set LSTAR
-                "lea rax, [rip+66f]",
-                "mov rdx, rax",
-                "shr rdx, 32",
-                "mov ecx, 0xC0000082",
-                "wrmsr",
-                // Save the kernel registers.
-                "mov gs:[{K_RAX_OFFSET}], rax",
-                "mov gs:[{K_RBX_OFFSET}], rbx",
-                "mov gs:[{K_RCX_OFFSET}], rcx",
-                "mov gs:[{K_RDX_OFFSET}], rdx",
-                "mov gs:[{K_RSI_OFFSET}], rsi",
-                "mov gs:[{K_RDI_OFFSET}], rdi",
-                "mov gs:[{K_RSP_OFFSET}], rsp",
-                "mov gs:[{K_RBP_OFFSET}], rbp",
-                "mov gs:[{K_R8_OFFSET}], r8",
-                "mov gs:[{K_R9_OFFSET}], r9",
-                "mov gs:[{K_R10_OFFSET}], r10",
-                "mov gs:[{K_R11_OFFSET}], r11",
-                "mov gs:[{K_R12_OFFSET}], r12",
-                "mov gs:[{K_R13_OFFSET}], r13",
-                "mov gs:[{K_R14_OFFSET}], r14",
-                "mov gs:[{K_R15_OFFSET}], r15",
-                // Save RFLAGS.
-                "pushfq",
-                "pop rax",
-                "mov gs:[{K_RFLAGS_OFFSET}], rax",
-                // Restore userspace registers.
-                "mov rax, gs:[{U_RAX_OFFSET}]",
-                "mov rbx, gs:[{U_RBX_OFFSET}]",
-                "mov rdx, gs:[{U_RDX_OFFSET}]",
-                "mov rsi, gs:[{U_RSI_OFFSET}]",
-                "mov rdi, gs:[{U_RDI_OFFSET}]",
-                "mov rsp, gs:[{U_RSP_OFFSET}]",
-                "mov rbp, gs:[{U_RBP_OFFSET}]",
-                "mov r8, gs:[{U_R8_OFFSET}]",
-                "mov r9, gs:[{U_R9_OFFSET}]",
-                "mov r10, gs:[{U_R10_OFFSET}]",
-                "mov r12, gs:[{U_R12_OFFSET}]",
-                "mov r13, gs:[{U_R13_OFFSET}]",
-                "mov r14, gs:[{U_R14_OFFSET}]",
-                "mov r15, gs:[{U_R15_OFFSET}]",
-                "mov rcx, gs:[{U_RIP_OFFSET}]",
-                "mov r11, gs:[{U_RFLAGS_OFFSET}]",
-                // Swap in userspace GS.
-                "swapgs",
-                // Enter usermdoe
-                "sysretq",
-                "66:",
-                // Swap in kernel GS.
-                "swapgs",
-                // Save userspace registers.
-                "mov gs:[{U_RAX_OFFSET}], rax",
-                "mov gs:[{U_RBX_OFFSET}], rbx",
-                "mov gs:[{U_RDX_OFFSET}], rdx",
-                "mov gs:[{U_RSI_OFFSET}], rsi",
-                "mov gs:[{U_RDI_OFFSET}], rdi",
-                "mov gs:[{U_RSP_OFFSET}], rsp",
-                "mov gs:[{U_RBP_OFFSET}], rbp",
-                "mov gs:[{U_R8_OFFSET}], r8",
-                "mov gs:[{U_R9_OFFSET}], r9",
-                "mov gs:[{U_R10_OFFSET}], r10",
-                "mov gs:[{U_R12_OFFSET}], r12",
-                "mov gs:[{U_R13_OFFSET}], r13",
-                "mov gs:[{U_R14_OFFSET}], r14",
-                "mov gs:[{U_R15_OFFSET}], r15",
-                "mov gs:[{U_RIP_OFFSET}], rcx",
-                "mov gs:[{U_RFLAGS_OFFSET}], r11",
-                // Restore the kernel registers.
-                "mov rax, gs:[{K_RAX_OFFSET}]",
-                "mov rbx, gs:[{K_RBX_OFFSET}]",
-                "mov rcx, gs:[{K_RCX_OFFSET}]",
-                "mov rdx, gs:[{K_RDX_OFFSET}]",
-                "mov rsi, gs:[{K_RSI_OFFSET}]",
-                "mov rdi, gs:[{K_RDI_OFFSET}]",
-                "mov rsp, gs:[{K_RSP_OFFSET}]",
-                "mov rbp, gs:[{K_RBP_OFFSET}]",
-                "mov r8, gs:[{K_R8_OFFSET}]",
-                "mov r9, gs:[{K_R9_OFFSET}]",
-                "mov r10, gs:[{K_R10_OFFSET}]",
-                "mov r11, gs:[{K_R11_OFFSET}]",
-                "mov r12, gs:[{K_R12_OFFSET}]",
-                "mov r13, gs:[{K_R13_OFFSET}]",
-                "mov r14, gs:[{K_R14_OFFSET}]",
-                "mov r15, gs:[{K_R15_OFFSET}]",
-                // Save RFLAGS.
-                "mov rax, gs:[{K_RFLAGS_OFFSET}]",
-                "push rax",
-                "popfq",
-                K_RAX_OFFSET = const kernel_reg_offset!(rax),
-                K_RBX_OFFSET = const kernel_reg_offset!(rbx),
-                K_RCX_OFFSET = const kernel_reg_offset!(rcx),
-                K_RDX_OFFSET = const kernel_reg_offset!(rdx),
-                K_RSI_OFFSET = const kernel_reg_offset!(rsi),
-                K_RDI_OFFSET = const kernel_reg_offset!(rdi),
-                K_RSP_OFFSET = const kernel_reg_offset!(rsp),
-                K_RBP_OFFSET = const kernel_reg_offset!(rbp),
-                K_R8_OFFSET = const kernel_reg_offset!(r8),
-                K_R9_OFFSET = const kernel_reg_offset!(r9),
-                K_R10_OFFSET = const kernel_reg_offset!(r10),
-                K_R11_OFFSET = const kernel_reg_offset!(r11),
-                K_R12_OFFSET = const kernel_reg_offset!(r12),
-                K_R13_OFFSET = const kernel_reg_offset!(r13),
-                K_R14_OFFSET = const kernel_reg_offset!(r14),
-                K_R15_OFFSET = const kernel_reg_offset!(r15),
-                K_RFLAGS_OFFSET = const kernel_reg_offset!(rflags),
-                U_RAX_OFFSET = const userspace_reg_offset!(rax),
-                U_RBX_OFFSET = const userspace_reg_offset!(rbx),
-                U_RDX_OFFSET = const userspace_reg_offset!(rdx),
-                U_RSI_OFFSET = const userspace_reg_offset!(rsi),
-                U_RDI_OFFSET = const userspace_reg_offset!(rdi),
-                U_RSP_OFFSET = const userspace_reg_offset!(rsp),
-                U_RBP_OFFSET = const userspace_reg_offset!(rbp),
-                U_R8_OFFSET = const userspace_reg_offset!(r8),
-                U_R9_OFFSET = const userspace_reg_offset!(r9),
-                U_R10_OFFSET = const userspace_reg_offset!(r10),
-                U_R12_OFFSET = const userspace_reg_offset!(r12),
-                U_R13_OFFSET = const userspace_reg_offset!(r13),
-                U_R14_OFFSET = const userspace_reg_offset!(r14),
-                U_R15_OFFSET = const userspace_reg_offset!(r15),
-                U_RIP_OFFSET = const userspace_reg_offset!(rip),
-                U_RFLAGS_OFFSET = const userspace_reg_offset!(rflags),
-                out("rax") _,
-                out("rdx") _,
-                out("rcx") _,
-                options(preserves_flags)
-            );
-        }
+        vm_activator.activate(&self.virtual_memory, |_| {
+            unsafe {
+                asm!(
+                    // Set LSTAR
+                    "lea rax, [rip+66f]",
+                    "mov rdx, rax",
+                    "shr rdx, 32",
+                    "mov ecx, 0xC0000082",
+                    "wrmsr",
+                    // Save the kernel registers.
+                    "mov gs:[{K_RAX_OFFSET}], rax",
+                    "mov gs:[{K_RBX_OFFSET}], rbx",
+                    "mov gs:[{K_RCX_OFFSET}], rcx",
+                    "mov gs:[{K_RDX_OFFSET}], rdx",
+                    "mov gs:[{K_RSI_OFFSET}], rsi",
+                    "mov gs:[{K_RDI_OFFSET}], rdi",
+                    "mov gs:[{K_RSP_OFFSET}], rsp",
+                    "mov gs:[{K_RBP_OFFSET}], rbp",
+                    "mov gs:[{K_R8_OFFSET}], r8",
+                    "mov gs:[{K_R9_OFFSET}], r9",
+                    "mov gs:[{K_R10_OFFSET}], r10",
+                    "mov gs:[{K_R11_OFFSET}], r11",
+                    "mov gs:[{K_R12_OFFSET}], r12",
+                    "mov gs:[{K_R13_OFFSET}], r13",
+                    "mov gs:[{K_R14_OFFSET}], r14",
+                    "mov gs:[{K_R15_OFFSET}], r15",
+                    // Save RFLAGS.
+                    "pushfq",
+                    "pop rax",
+                    "mov gs:[{K_RFLAGS_OFFSET}], rax",
+                    // Restore userspace registers.
+                    "mov rax, gs:[{U_RAX_OFFSET}]",
+                    "mov rbx, gs:[{U_RBX_OFFSET}]",
+                    "mov rdx, gs:[{U_RDX_OFFSET}]",
+                    "mov rsi, gs:[{U_RSI_OFFSET}]",
+                    "mov rdi, gs:[{U_RDI_OFFSET}]",
+                    "mov rsp, gs:[{U_RSP_OFFSET}]",
+                    "mov rbp, gs:[{U_RBP_OFFSET}]",
+                    "mov r8, gs:[{U_R8_OFFSET}]",
+                    "mov r9, gs:[{U_R9_OFFSET}]",
+                    "mov r10, gs:[{U_R10_OFFSET}]",
+                    "mov r12, gs:[{U_R12_OFFSET}]",
+                    "mov r13, gs:[{U_R13_OFFSET}]",
+                    "mov r14, gs:[{U_R14_OFFSET}]",
+                    "mov r15, gs:[{U_R15_OFFSET}]",
+                    "mov rcx, gs:[{U_RIP_OFFSET}]",
+                    "mov r11, gs:[{U_RFLAGS_OFFSET}]",
+                    // Swap in userspace GS.
+                    "swapgs",
+                    // Enter usermdoe
+                    "sysretq",
+                    "66:",
+                    // Swap in kernel GS.
+                    "swapgs",
+                    // Save userspace registers.
+                    "mov gs:[{U_RAX_OFFSET}], rax",
+                    "mov gs:[{U_RBX_OFFSET}], rbx",
+                    "mov gs:[{U_RDX_OFFSET}], rdx",
+                    "mov gs:[{U_RSI_OFFSET}], rsi",
+                    "mov gs:[{U_RDI_OFFSET}], rdi",
+                    "mov gs:[{U_RSP_OFFSET}], rsp",
+                    "mov gs:[{U_RBP_OFFSET}], rbp",
+                    "mov gs:[{U_R8_OFFSET}], r8",
+                    "mov gs:[{U_R9_OFFSET}], r9",
+                    "mov gs:[{U_R10_OFFSET}], r10",
+                    "mov gs:[{U_R12_OFFSET}], r12",
+                    "mov gs:[{U_R13_OFFSET}], r13",
+                    "mov gs:[{U_R14_OFFSET}], r14",
+                    "mov gs:[{U_R15_OFFSET}], r15",
+                    "mov gs:[{U_RIP_OFFSET}], rcx",
+                    "mov gs:[{U_RFLAGS_OFFSET}], r11",
+                    // Restore the kernel registers.
+                    "mov rax, gs:[{K_RAX_OFFSET}]",
+                    "mov rbx, gs:[{K_RBX_OFFSET}]",
+                    "mov rcx, gs:[{K_RCX_OFFSET}]",
+                    "mov rdx, gs:[{K_RDX_OFFSET}]",
+                    "mov rsi, gs:[{K_RSI_OFFSET}]",
+                    "mov rdi, gs:[{K_RDI_OFFSET}]",
+                    "mov rsp, gs:[{K_RSP_OFFSET}]",
+                    "mov rbp, gs:[{K_RBP_OFFSET}]",
+                    "mov r8, gs:[{K_R8_OFFSET}]",
+                    "mov r9, gs:[{K_R9_OFFSET}]",
+                    "mov r10, gs:[{K_R10_OFFSET}]",
+                    "mov r11, gs:[{K_R11_OFFSET}]",
+                    "mov r12, gs:[{K_R12_OFFSET}]",
+                    "mov r13, gs:[{K_R13_OFFSET}]",
+                    "mov r14, gs:[{K_R14_OFFSET}]",
+                    "mov r15, gs:[{K_R15_OFFSET}]",
+                    // Save RFLAGS.
+                    "mov rax, gs:[{K_RFLAGS_OFFSET}]",
+                    "push rax",
+                    "popfq",
+                    K_RAX_OFFSET = const kernel_reg_offset!(rax),
+                    K_RBX_OFFSET = const kernel_reg_offset!(rbx),
+                    K_RCX_OFFSET = const kernel_reg_offset!(rcx),
+                    K_RDX_OFFSET = const kernel_reg_offset!(rdx),
+                    K_RSI_OFFSET = const kernel_reg_offset!(rsi),
+                    K_RDI_OFFSET = const kernel_reg_offset!(rdi),
+                    K_RSP_OFFSET = const kernel_reg_offset!(rsp),
+                    K_RBP_OFFSET = const kernel_reg_offset!(rbp),
+                    K_R8_OFFSET = const kernel_reg_offset!(r8),
+                    K_R9_OFFSET = const kernel_reg_offset!(r9),
+                    K_R10_OFFSET = const kernel_reg_offset!(r10),
+                    K_R11_OFFSET = const kernel_reg_offset!(r11),
+                    K_R12_OFFSET = const kernel_reg_offset!(r12),
+                    K_R13_OFFSET = const kernel_reg_offset!(r13),
+                    K_R14_OFFSET = const kernel_reg_offset!(r14),
+                    K_R15_OFFSET = const kernel_reg_offset!(r15),
+                    K_RFLAGS_OFFSET = const kernel_reg_offset!(rflags),
+                    U_RAX_OFFSET = const userspace_reg_offset!(rax),
+                    U_RBX_OFFSET = const userspace_reg_offset!(rbx),
+                    U_RDX_OFFSET = const userspace_reg_offset!(rdx),
+                    U_RSI_OFFSET = const userspace_reg_offset!(rsi),
+                    U_RDI_OFFSET = const userspace_reg_offset!(rdi),
+                    U_RSP_OFFSET = const userspace_reg_offset!(rsp),
+                    U_RBP_OFFSET = const userspace_reg_offset!(rbp),
+                    U_R8_OFFSET = const userspace_reg_offset!(r8),
+                    U_R9_OFFSET = const userspace_reg_offset!(r9),
+                    U_R10_OFFSET = const userspace_reg_offset!(r10),
+                    U_R12_OFFSET = const userspace_reg_offset!(r12),
+                    U_R13_OFFSET = const userspace_reg_offset!(r13),
+                    U_R14_OFFSET = const userspace_reg_offset!(r14),
+                    U_R15_OFFSET = const userspace_reg_offset!(r15),
+                    U_RIP_OFFSET = const userspace_reg_offset!(rip),
+                    U_RFLAGS_OFFSET = const userspace_reg_offset!(rflags),
+                    out("rax") _,
+                    out("rdx") _,
+                    out("rcx") _,
+                    options(preserves_flags)
+                );
+            }
+        });
 
         self.registers = per_cpu.userspace_registers.get();
     }
@@ -426,14 +432,14 @@ impl UserspaceRegisters {
     };
 }
 
-pub fn run_thread() {
+pub fn run_thread(vm_activator: &mut VirtualMemoryActivator) {
     let pid = RUNNABLE_THREADS.lock().pop_front();
     let pid = pid.unwrap();
 
     let thread = THREADS.lock().get(&pid).cloned().unwrap();
 
     let mut guard = thread.lock();
-    guard.run();
+    guard.run(vm_activator);
 }
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]

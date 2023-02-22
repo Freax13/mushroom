@@ -23,18 +23,66 @@ use log::trace;
 use spin::Lazy;
 use x86_64::{
     instructions::tlb::Invlpgb,
+    registers::control::Cr3,
     structures::paging::{FrameAllocator, Page, PageTableIndex, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
 };
 
+use super::{frame::DUMB_FRAME_ALLOCATOR, temporary::copy_into_frame};
+
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(511);
+
+const INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
+    let pml4 = ActivePageTable::get();
+    for pml4e in pml4.entries[256..].iter() {
+        let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
+        let reserved_allocation = storage
+            .allocate(&mut &DUMB_FRAME_ALLOCATOR)
+            .expect("failed to allocate memory for kernel pml4e");
+        pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
+    }
+});
+
+pub fn allocate_pml4() -> Option<PhysFrame> {
+    // Make sure that all pml4 kernel entries are initialized.
+    Lazy::force(&INIT_KERNEL_PML4ES);
+
+    // Allocate a frame for the new pml4.
+    let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame()?;
+
+    // Copy the kernel entries into a temporary buffer.
+    let pml4 = ActivePageTable::get();
+    let mut entries = [0u64; 512];
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            pml4.entries[256..].as_ptr().cast(),
+            entries[256..].as_mut_ptr(),
+            256,
+        );
+    }
+    // Fix the recursive entry.
+    entries[usize::from(RECURSIVE_INDEX)] =
+        PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE)
+            .0
+            .get();
+
+    // Copy the buffer into the pml4.
+    unsafe {
+        copy_into_frame(frame, bytemuck::cast_mut(&mut entries));
+    }
+
+    Some(frame)
+}
 
 pub unsafe fn map_page(
     page: Page,
     entry: PresentPageTableEntry,
     allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<()> {
-    trace!("mapping page {page:?}->{entry:?}");
+    trace!(
+        "mapping page {page:?}->{entry:?} pml4={:?}",
+        Cr3::read_pcid().0
+    );
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];

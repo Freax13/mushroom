@@ -5,10 +5,10 @@ use goblin::{
 };
 use x86_64::VirtAddr;
 
-use super::memory::{MemoryPermissions, VirtualMemory};
+use super::memory::{ActiveVirtualMemory, MemoryPermissions};
 use crate::{error::Result, fs::node::FileSnapshot};
 
-impl VirtualMemory {
+impl ActiveVirtualMemory<'_, '_> {
     pub fn load_elf(&mut self, elf_bytes: FileSnapshot, stack: VirtAddr) -> Result<u64> {
         let elf = Elf::parse(&elf_bytes).unwrap();
 

@@ -8,7 +8,7 @@ use log::{trace, warn};
 
 use crate::{
     error::{Error, Result},
-    user::process::thread::Thread,
+    user::process::{memory::VirtualMemoryActivator, thread::Thread},
 };
 
 use super::args::{Ignored, SyscallArg};
@@ -47,7 +47,7 @@ pub trait Syscall0 {
     const NO: usize;
     const NAME: &'static str;
 
-    fn execute(thread: &mut Thread) -> SyscallResult;
+    fn execute(thread: &mut Thread, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write) -> fmt::Result {
         write!(f, "{}()", Self::NAME)
@@ -60,7 +60,11 @@ pub trait Syscall1 {
 
     type Arg0: SyscallArg;
 
-    fn execute(thread: &mut Thread, arg0: Self::Arg0) -> SyscallResult;
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        arg0: Self::Arg0,
+    ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64) -> fmt::Result {
         write!(f, "{}(", Self::NAME)?;
@@ -76,7 +80,12 @@ pub trait Syscall2 {
     type Arg0: SyscallArg;
     type Arg1: SyscallArg;
 
-    fn execute(thread: &mut Thread, arg0: Self::Arg0, arg1: Self::Arg1) -> SyscallResult;
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        arg0: Self::Arg0,
+        arg1: Self::Arg1,
+    ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64) -> fmt::Result {
         write!(f, "{}(", Self::NAME)?;
@@ -97,6 +106,7 @@ pub trait Syscall3 {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
@@ -124,6 +134,7 @@ pub trait Syscall4 {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
@@ -155,6 +166,7 @@ pub trait Syscall5 {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
@@ -197,6 +209,7 @@ pub trait Syscall6 {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
@@ -239,8 +252,12 @@ where
 
     type Arg0 = Ignored;
 
-    fn execute(thread: &mut Thread, _arg0: Self::Arg0) -> SyscallResult {
-        <T as Syscall0>::execute(thread)
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        _arg0: Self::Arg0,
+    ) -> SyscallResult {
+        <T as Syscall0>::execute(thread, vm_activator)
     }
 
     fn display(f: &mut dyn fmt::Write, _arg0: u64) -> fmt::Result {
@@ -258,8 +275,13 @@ where
     type Arg0 = <T as Syscall1>::Arg0;
     type Arg1 = Ignored;
 
-    fn execute(thread: &mut Thread, arg0: Self::Arg0, _arg1: Self::Arg1) -> SyscallResult {
-        <T as Syscall1>::execute(thread, arg0)
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        arg0: Self::Arg0,
+        _arg1: Self::Arg1,
+    ) -> SyscallResult {
+        <T as Syscall1>::execute(thread, vm_activator, arg0)
     }
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, _arg1: u64) -> fmt::Result {
@@ -280,11 +302,12 @@ where
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         _arg2: Self::Arg2,
     ) -> SyscallResult {
-        <T as Syscall2>::execute(thread, arg0, arg1)
+        <T as Syscall2>::execute(thread, vm_activator, arg0, arg1)
     }
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, _arg2: u64) -> fmt::Result {
@@ -306,12 +329,13 @@ where
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
         _arg3: Self::Arg3,
     ) -> SyscallResult {
-        <T as Syscall3>::execute(thread, arg0, arg1, arg2)
+        <T as Syscall3>::execute(thread, vm_activator, arg0, arg1, arg2)
     }
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64, _arg3: u64) -> fmt::Result {
@@ -334,13 +358,14 @@ where
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
         arg3: Self::Arg3,
         _arg4: Self::Arg4,
     ) -> SyscallResult {
-        <T as Syscall4>::execute(thread, arg0, arg1, arg2, arg3)
+        <T as Syscall4>::execute(thread, vm_activator, arg0, arg1, arg2, arg3)
     }
 
     fn display(
@@ -371,6 +396,7 @@ where
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
         arg2: Self::Arg2,
@@ -378,7 +404,7 @@ where
         arg4: Self::Arg4,
         _arg5: Self::Arg5,
     ) -> SyscallResult {
-        <T as Syscall5>::execute(thread, arg0, arg1, arg2, arg3, arg4)
+        <T as Syscall5>::execute(thread, vm_activator, arg0, arg1, arg2, arg3, arg4)
     }
 
     fn display(
@@ -400,6 +426,7 @@ const MAX_SYSCALL_HANDLER: usize = 294;
 struct SyscallHandler {
     exeute: fn(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         arg0: u64,
         arg1: u64,
         arg2: u64,
@@ -425,6 +452,7 @@ impl SyscallHandler {
     {
         Self {
             exeute: |thread: &mut Thread,
+                     vm_activator: &mut VirtualMemoryActivator,
                      arg0: u64,
                      arg1: u64,
                      arg2: u64,
@@ -437,7 +465,7 @@ impl SyscallHandler {
                 let arg3 = SyscallArg::parse(arg3)?;
                 let arg4 = SyscallArg::parse(arg4)?;
                 let arg5 = SyscallArg::parse(arg5)?;
-                T::execute(thread, arg0, arg1, arg2, arg3, arg4, arg5)
+                T::execute(thread, vm_activator, arg0, arg1, arg2, arg3, arg4, arg5)
             },
             display: T::display,
         }
@@ -466,6 +494,7 @@ impl SyscallHandlers {
     pub fn execute(
         &self,
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         syscall_no: u64,
         arg0: u64,
         arg1: u64,
@@ -485,7 +514,7 @@ impl SyscallHandlers {
                 Error::NoSys
             })?;
 
-        let res = (handler.exeute)(thread, arg0, arg1, arg2, arg3, arg4, arg5);
+        let res = (handler.exeute)(thread, vm_activator, arg0, arg1, arg2, arg3, arg4, arg5);
 
         let formatted_syscall = FormattedSyscall {
             handler,

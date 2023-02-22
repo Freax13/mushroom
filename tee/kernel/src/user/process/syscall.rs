@@ -29,6 +29,7 @@ use self::{
 
 use super::{
     fd::file::ReadonlyFile,
+    memory::VirtualMemoryActivator,
     thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, RUNNABLE_THREADS, THREADS},
 };
 
@@ -36,7 +37,7 @@ pub mod args;
 mod traits;
 
 impl Thread {
-    pub fn execute_syscall(&mut self) -> bool {
+    pub fn execute_syscall(&mut self, vm_activator: &mut VirtualMemoryActivator) -> bool {
         let UserspaceRegisters {
             rax: syscall_no,
             rdi: arg0,
@@ -48,7 +49,17 @@ impl Thread {
             ..
         } = self.registers;
 
-        let result = SYSCALL_HANDLERS.execute(self, syscall_no, arg0, arg1, arg2, arg3, arg4, arg5);
+        let result = SYSCALL_HANDLERS.execute(
+            self,
+            vm_activator,
+            syscall_no,
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+        );
 
         match result {
             Ok(result) => {
@@ -101,7 +112,13 @@ impl Syscall3 for SysRead {
     type Arg1 = Pointer;
     type Arg2 = u64;
 
-    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        fd: Fd,
+        buf: Pointer,
+        count: u64,
+    ) -> SyscallResult {
         let fd = thread.fdtable().get(fd)?;
 
         let buf = buf.get();
@@ -115,7 +132,7 @@ impl Syscall3 for SysRead {
         let len = fd.read(chunk)?;
         let chunk = &mut chunk[..len];
 
-        thread.virtual_memory().write(buf, chunk)?;
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, &chunk))?;
 
         let len = u64::try_from(len).unwrap();
 
@@ -133,7 +150,13 @@ impl Syscall3 for SysWrite {
     type Arg1 = Pointer;
     type Arg2 = u64;
 
-    fn execute(thread: &mut Thread, fd: Fd, buf: Pointer, count: u64) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        fd: Fd,
+        buf: Pointer,
+        count: u64,
+    ) -> SyscallResult {
         let fd = thread.fdtable().get(fd)?;
 
         let buf = buf.get();
@@ -143,7 +166,7 @@ impl Syscall3 for SysWrite {
         let max_chunk_len = chunk.len();
         let len = cmp::min(max_chunk_len, count);
         let chunk = &mut chunk[..len];
-        thread.virtual_memory().read(buf, chunk)?;
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.read(buf, chunk))?;
 
         let len = fd.write(chunk)?;
 
@@ -164,11 +187,14 @@ impl Syscall3 for SysOpen {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         filename: Pointer,
         flags: OpenFlags,
         _mode: FileMode,
     ) -> SyscallResult {
-        let filename = thread.virtual_memory().read_cstring(filename.get(), 4096)?;
+        let filename = vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm.read_cstring(filename.get(), 4096)
+        })?;
         let filename = Path::new(filename.as_bytes());
 
         if flags.contains(OpenFlags::WRONLY) {
@@ -205,7 +231,11 @@ impl Syscall1 for SysClose {
 
     type Arg0 = Fd;
 
-    fn execute(thread: &mut Thread, fd: Fd) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        fd: Fd,
+    ) -> SyscallResult {
         thread.fdtable().close(fd)?;
         Ok(0)
     }
@@ -221,13 +251,20 @@ impl Syscall3 for SysPoll {
     type Arg1 = u64;
     type Arg2 = u64;
 
-    fn execute(thread: &mut Thread, fds: Pointer, nfds: u64, timeout: u64) -> SyscallResult {
-        for i in 0..nfds {
-            let mut pollfd = Pollfd::zeroed();
-            thread
-                .virtual_memory()
-                .read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
-        }
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        fds: Pointer,
+        nfds: u64,
+        timeout: u64,
+    ) -> SyscallResult {
+        vm_activator.activate(thread.virtual_memory(), |vm| {
+            for i in 0..nfds {
+                let mut pollfd = Pollfd::zeroed();
+                vm.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
+            }
+            Result::Ok(())
+        })?;
 
         if timeout != 0 {
             todo!()
@@ -252,6 +289,7 @@ impl Syscall6 for SysMmap {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         addr: Pointer,
         len: u64,
         prot: ProtFlags,
@@ -269,14 +307,17 @@ impl Syscall6 for SysMmap {
                 assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
                 assert_eq!(addr.get().as_u64(), 0);
-                let addr = thread.virtual_memory().allocate_stack(None, len)?;
+                let addr = vm_activator
+                    .activate(thread.virtual_memory(), |vm| vm.allocate_stack(None, len))?;
 
                 Ok(addr.as_u64())
             } else if flags.contains(MmapFlags::ANONYMOUS) {
                 assert_eq!(addr.get().as_u64(), 0);
 
                 let permissions = MemoryPermissions::from(prot);
-                let addr = thread.virtual_memory().mmap_zero(None, len, permissions)?;
+                let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
+                    vm.mmap_zero(None, len, permissions)
+                })?;
 
                 Ok(addr.as_u64())
             } else {
@@ -298,8 +339,16 @@ impl Syscall3 for SysMprotect {
     type Arg1 = u64;
     type Arg2 = ProtFlags;
 
-    fn execute(thread: &mut Thread, start: Pointer, len: u64, prot: ProtFlags) -> SyscallResult {
-        thread.virtual_memory().mprotect(start.get(), len, prot)?;
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        start: Pointer,
+        len: u64,
+        prot: ProtFlags,
+    ) -> SyscallResult {
+        vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm.mprotect(start.get(), len, prot)
+        })?;
         Ok(0)
     }
 }
@@ -312,7 +361,11 @@ impl Syscall1 for SysBrk {
 
     type Arg0 = u64;
 
-    fn execute(_thread: &mut Thread, brk: u64) -> SyscallResult {
+    fn execute(
+        _thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        brk: u64,
+    ) -> SyscallResult {
         if brk == 0 || brk == 0x1000 {
             return Ok(0);
         }
@@ -334,6 +387,7 @@ impl Syscall4 for SysRtSigaction {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         signum: u64,
         act: Pointer,
         oldact: Pointer,
@@ -346,14 +400,16 @@ impl Syscall4 for SysRtSigaction {
 
         if !oldact.is_null() {
             let sigaction = thread.sigaction.get(signum).ok_or(Error::Inval)?;
-            thread
-                .virtual_memory()
-                .write(oldact.get(), bytes_of(sigaction))?;
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.write(oldact.get(), bytes_of(sigaction))
+            })?;
         }
         if !act.is_null() {
             let virtual_memory = thread.virtual_memory().clone();
             let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::Inval)?;
-            virtual_memory.read(act.get(), bytes_of_mut(sigaction))?;
+            vm_activator.activate(&virtual_memory, |vm| {
+                vm.read(act.get(), bytes_of_mut(sigaction))
+            })?;
         }
 
         Ok(0)
@@ -370,18 +426,24 @@ impl Syscall3 for SysRtSigprocmask {
     type Arg1 = Pointer;
     type Arg2 = Pointer;
 
-    fn execute(thread: &mut Thread, how: u64, set: Pointer, oldset: Pointer) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        how: u64,
+        set: Pointer,
+        oldset: Pointer,
+    ) -> SyscallResult {
         if !oldset.is_null() {
-            thread
-                .virtual_memory()
-                .write(oldset.get(), bytes_of(&thread.sigmask))?;
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.write(oldset.get(), bytes_of(&thread.sigmask))
+            })?;
         }
 
         if !set.is_null() {
             let mut set_value = Sigset::zeroed();
-            thread
-                .virtual_memory()
-                .read(set.get(), bytes_of_mut(&mut set_value))?;
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.read(set.get(), bytes_of_mut(&mut set_value))
+            })?;
 
             let how = RtSigprocmaskHow::parse(how)?;
             match how {
@@ -423,6 +485,7 @@ impl Syscall5 for SysClone {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         flags: CloneFlags,
         stack: Pointer,
         parent_tid: Pointer,
@@ -470,15 +533,15 @@ impl Syscall5 for SysClone {
         let tid = new_thread.tid;
 
         if flags.contains(CloneFlags::PARENT_SETTID) {
-            thread
-                .virtual_memory()
-                .write(parent_tid.get(), &tid.to_ne_bytes())?;
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.write(parent_tid.get(), &tid.to_ne_bytes())
+            })?;
         }
 
         if flags.contains(CloneFlags::CHILD_SETTID) {
-            new_thread
-                .virtual_memory()
-                .write(child_tid.get(), &tid.to_ne_bytes())?;
+            vm_activator.activate(new_thread.virtual_memory(), |vm| {
+                vm.write(child_tid.get(), &tid.to_ne_bytes())
+            })?;
         }
 
         new_thread.spawn();
@@ -495,12 +558,16 @@ impl Syscall1 for SysExit {
 
     type Arg0 = u64;
 
-    fn execute(thread: &mut Thread, _status: Self::Arg0) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        _status: Self::Arg0,
+    ) -> SyscallResult {
         if thread.clear_child_tid != 0 {
             let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
-            thread
-                .virtual_memory()
-                .write(clear_child_tid, &0u32.to_ne_bytes());
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.write(clear_child_tid, &0u32.to_ne_bytes())
+            })?;
         }
 
         THREADS.lock().remove(&thread.tid);
@@ -518,7 +585,13 @@ impl Syscall3 for SysFcntl {
     type Arg1 = FcntlCmd;
     type Arg2 = u64;
 
-    fn execute(_thread: &mut Thread, _fd: Fd, cmd: FcntlCmd, _arg: u64) -> SyscallResult {
+    fn execute(
+        _thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        _fd: Fd,
+        cmd: FcntlCmd,
+        _arg: u64,
+    ) -> SyscallResult {
         match cmd {
             FcntlCmd::SetFd => {
                 // FIXME: implement this
@@ -537,23 +610,29 @@ impl Syscall2 for SysSigaltstack {
     type Arg0 = Pointer;
     type Arg1 = Pointer;
 
-    fn execute(thread: &mut Thread, ss: Pointer, old_ss: Pointer) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        ss: Pointer,
+        old_ss: Pointer,
+    ) -> SyscallResult {
         if !old_ss.is_null() {
             let old_ss_value = thread.sigaltstack.unwrap_or_else(|| {
                 let mut stack = Stack::zeroed();
                 stack.flags |= StackFlags::DISABLE;
                 stack
             });
-            thread
-                .virtual_memory()
-                .write(old_ss.get(), bytes_of(&old_ss_value));
+
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.write(old_ss.get(), bytes_of(&old_ss_value))
+            })?;
         }
 
         if !ss.is_null() {
             let mut ss_value = Stack::zeroed();
-            thread
-                .virtual_memory()
-                .read(ss.get(), bytes_of_mut(&mut ss_value))?;
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.read(ss.get(), bytes_of_mut(&mut ss_value))
+            })?;
 
             let allowed_flags = StackFlags::AUTODISARM;
             if !allowed_flags.contains(ss_value.flags) {
@@ -576,7 +655,12 @@ impl Syscall2 for SysArchPrctl {
     type Arg0 = ArchPrctlCode;
     type Arg1 = Pointer;
 
-    fn execute(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        code: ArchPrctlCode,
+        addr: Pointer,
+    ) -> SyscallResult {
         match code {
             ArchPrctlCode::SetFs => {
                 thread.registers.fs_base = addr.get().as_u64();
@@ -601,6 +685,7 @@ impl Syscall6 for SysFutex {
 
     fn execute(
         thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
         uaddr: Pointer,
         op: FutexOpWithFlags,
         val: u32,
@@ -611,9 +696,9 @@ impl Syscall6 for SysFutex {
         match op.op {
             FutexOp::Wait => {
                 let mut compare_value = 0;
-                thread
-                    .virtual_memory()
-                    .read(uaddr.get(), bytes_of_mut(&mut compare_value))?;
+                vm_activator.activate(thread.virtual_memory(), |vm| {
+                    vm.read(uaddr.get(), bytes_of_mut(&mut compare_value))
+                })?;
                 if compare_value != val {
                     return Err(Error::Again);
                 }
@@ -672,7 +757,11 @@ impl Syscall1 for SysSetTidAddress {
 
     type Arg0 = Pointer;
 
-    fn execute(thread: &mut Thread, tidptr: Pointer) -> SyscallResult {
+    fn execute(
+        thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        tidptr: Pointer,
+    ) -> SyscallResult {
         thread.clear_child_tid = tidptr.get().as_u64();
         Ok(u64::from(thread.tid))
     }
@@ -686,7 +775,11 @@ impl Syscall1 for SysExitGroup {
 
     type Arg0 = u64;
 
-    fn execute(_thread: &mut Thread, error_code: u64) -> SyscallResult {
+    fn execute(
+        _thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        error_code: u64,
+    ) -> SyscallResult {
         todo!("exit: {error_code}")
     }
 }
