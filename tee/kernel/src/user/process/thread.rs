@@ -30,6 +30,11 @@ use super::{
 pub static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
 pub static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
+pub fn new_tid() -> u32 {
+    static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
+    PID_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 pub struct Thread {
     process: Arc<Process>,
     virtual_memory: Arc<VirtualMemory>,
@@ -47,15 +52,13 @@ pub struct Thread {
 
 impl Thread {
     pub fn new(
+        tid: u32,
         process: Arc<Process>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
         stack: u64,
         entry: u64,
     ) -> Self {
-        static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
-        let tid = PID_COUNTER.fetch_add(1, Ordering::SeqCst);
-
         let registers = UserspaceRegisters {
             rax: 0x1000,
             rbx: 0x2000,
@@ -101,7 +104,7 @@ impl Thread {
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
         let fdtable = new_fdtable.unwrap_or_else(|| self.fdtable.clone());
 
-        let mut thread = Self::new(process, virtual_memory, fdtable, 0, 0);
+        let mut thread = Self::new(new_tid(), process, virtual_memory, fdtable, 0, 0);
 
         if let Some(clear_child_tid) = new_clear_child_tid {
             thread.clear_child_tid = clear_child_tid.as_u64();

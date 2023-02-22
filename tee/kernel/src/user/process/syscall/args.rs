@@ -334,3 +334,18 @@ impl SyscallArg for FutexOpWithFlags {
         FutexFlags::display(f, value & !0x7f)
     }
 }
+
+bitflags! {
+    pub struct Pipe2Flags {
+        const DIRECT = 1 << 14;
+        const CLOEXEC = 1 << 19;
+    }
+}
+
+bitflags! {
+    pub struct WaitOptions {
+        const NOHANG = 1 << 0;
+        const UNTRACED = 1 << 1;
+        const CONTINUED = 1 << 3;
+    }
+}

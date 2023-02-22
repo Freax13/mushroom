@@ -531,8 +531,6 @@ impl Mapping {
     ///
     /// The mapping must be in the active page table.
     unsafe fn make_executable(&self, page: Page) -> Result<*const [u8; 4096]> {
-        assert!(self.contains(page.start_address()));
-
         if !self.permissions.contains(MemoryPermissions::EXECUTE) {
             // FIXME: Or ACCESS?
             return Err(Error::Fault);
@@ -623,8 +621,6 @@ impl Mapping {
     ///
     /// The mapping must be in the active page table.
     unsafe fn make_writable(&self, page: Page) -> Result<*mut [u8; 4096]> {
-        assert!(self.contains(page.start_address()));
-
         if !self.permissions.contains(MemoryPermissions::WRITE) {
             // FIXME: Or ACCESS?
             return Err(Error::Fault);
@@ -706,8 +702,6 @@ impl Mapping {
     ///
     /// The mapping must be in the active page table.
     unsafe fn make_readable(&self, page: Page) -> Result<*const [u8; 4096]> {
-        assert!(self.contains(page.start_address()));
-
         if !self.permissions.contains(MemoryPermissions::READ) {
             // FIXME: Or ACCESS?
             return Err(Error::Fault);

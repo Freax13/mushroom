@@ -3,7 +3,7 @@ use core::{
     fmt::{self},
 };
 
-use alloc::collections::btree_map::Entry;
+use alloc::{collections::btree_map::Entry, sync::Arc, vec::Vec};
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use x86_64::VirtAddr;
 
@@ -19,7 +19,8 @@ use crate::{
 use self::{
     args::{
         ArchPrctlCode, CloneFlags, FcntlCmd, Fd, FileMode, FutexOp, FutexOpWithFlags, MmapFlags,
-        OpenFlags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SyscallArg,
+        OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SyscallArg,
+        WaitOptions,
     },
     traits::{
         Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers, SyscallResult,
@@ -28,9 +29,10 @@ use self::{
 };
 
 use super::{
-    fd::file::ReadonlyFile,
+    fd::{file::ReadonlyFile, pipe, FileDescriptorTable},
     memory::VirtualMemoryActivator,
     thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, RUNNABLE_THREADS, THREADS},
+    Process,
 };
 
 pub mod args;
@@ -91,13 +93,16 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
     handlers.register(SysClone);
+    handlers.register(SysExecve);
     handlers.register(SysExit);
+    handlers.register(SysWait4);
     handlers.register(SysFcntl);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysFutex);
     handlers.register(SysSetTidAddress);
     handlers.register(SysExitGroup);
+    handlers.register(SysPipe2);
 
     handlers
 };
@@ -495,7 +500,7 @@ impl Syscall5 for SysClone {
         let new_process = if flags.contains(CloneFlags::THREAD) {
             None
         } else {
-            todo!()
+            Some(Arc::new(Process::new()))
         };
 
         let new_virtual_memory = if flags.contains(CloneFlags::VM) {
@@ -507,7 +512,7 @@ impl Syscall5 for SysClone {
         let new_fdtable = if flags.contains(CloneFlags::FILES) {
             None
         } else {
-            todo!()
+            Some(Arc::new(FileDescriptorTable::new()))
         };
 
         let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
@@ -550,6 +555,60 @@ impl Syscall5 for SysClone {
     }
 }
 
+struct SysExecve;
+
+impl Syscall3 for SysExecve {
+    const NO: usize = 59;
+    const NAME: &'static str = "execve";
+
+    type Arg0 = Pointer;
+    type Arg1 = Pointer;
+    type Arg2 = Pointer;
+
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        pathname: Pointer,
+        argv: Pointer,
+        envp: Pointer,
+    ) -> SyscallResult {
+        let (pathname, args, envs) = vm_activator.activate(thread.virtual_memory(), |vm| {
+            let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
+
+            let mut args = Vec::new();
+            for i in 0u64.. {
+                let argpp = argv.get() + i * 8;
+                let mut argp = 0u64;
+                vm.read(argpp, bytes_of_mut(&mut argp))?;
+                if argp == 0 {
+                    break;
+                }
+                let argp = VirtAddr::try_new(argp).map_err(|_| Error::Fault)?;
+                args.push(vm.read_cstring(argp, 0x1000)?);
+            }
+
+            let mut envs = Vec::new();
+            for i in 0u64.. {
+                let envpp = envp.get() + i * 8;
+                let mut envp = 0u64;
+                vm.read(envpp, bytes_of_mut(&mut envp))?;
+                if envp == 0 {
+                    break;
+                }
+                let envp = VirtAddr::try_new(envp).map_err(|_| Error::Fault)?;
+                envs.push(vm.read_cstring(envp, 0x1000)?);
+            }
+
+            Result::Ok((pathname, args, envs))
+        })?;
+
+        let path = Path::new(pathname.as_bytes());
+        Process::create(thread.tid, &path, &args, &envs, vm_activator)?;
+
+        Yield
+    }
+}
+
 struct SysExit;
 
 impl Syscall1 for SysExit {
@@ -571,6 +630,29 @@ impl Syscall1 for SysExit {
         }
 
         THREADS.lock().remove(&thread.tid);
+        Yield
+    }
+}
+
+struct SysWait4;
+
+impl Syscall4 for SysWait4 {
+    const NO: usize = 61;
+    const NAME: &'static str = "wait4";
+
+    type Arg0 = u64;
+    type Arg1 = Pointer;
+    type Arg2 = WaitOptions;
+    type Arg3 = Pointer;
+
+    fn execute(
+        _thread: &mut Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+        _pid: u64,
+        _wstatus: Pointer,
+        _options: WaitOptions,
+        _rusage: Pointer,
+    ) -> SyscallResult {
         Yield
     }
 }
@@ -781,5 +863,39 @@ impl Syscall1 for SysExitGroup {
         error_code: u64,
     ) -> SyscallResult {
         todo!("exit: {error_code}")
+    }
+}
+
+struct SysPipe2;
+
+impl Syscall2 for SysPipe2 {
+    const NO: usize = 293;
+    const NAME: &'static str = "pipe2";
+
+    type Arg0 = Pointer;
+    type Arg1 = Pipe2Flags;
+
+    fn execute(
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        pipefd: Pointer,
+        flags: Pipe2Flags,
+    ) -> SyscallResult {
+        if flags != Pipe2Flags::CLOEXEC {
+            todo!()
+        }
+
+        let (read_half, write_half) = pipe::new();
+
+        let fdtable = thread.fdtable();
+        let read_half = fdtable.insert(read_half);
+        let write_half = fdtable.insert(write_half);
+
+        let mut bytes = [0; 8];
+        bytes[0..4].copy_from_slice(&read_half.get().to_ne_bytes());
+        bytes[4..8].copy_from_slice(&write_half.get().to_ne_bytes());
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.write(pipefd.get(), &bytes))?;
+
+        Ok(0)
     }
 }

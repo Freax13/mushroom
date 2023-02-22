@@ -1,8 +1,16 @@
 use anyhow::{Context, Result};
 
 fn main() -> Result<()> {
-    for i in 0..5 {
-        let _ = std::thread::spawn(move || println!("Hi {}", i)).join();
+    if std::env::args().count() == 1 {
+        println!("Hello from process 1");
+
+        std::process::Command::new("/bin/init")
+            .arg("hello")
+            .status()?;
+    } else {
+        println!("Hello from process 2");
+
+        return Ok(());
     }
 
     let mut input = std::fs::File::open("/dev/input").context("failed to open input file")?;

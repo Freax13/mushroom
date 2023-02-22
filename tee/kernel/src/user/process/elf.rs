@@ -1,3 +1,5 @@
+use core::ffi::CStr;
+
 use bytemuck::{Pod, Zeroable};
 use goblin::{
     elf::Elf,
@@ -9,7 +11,13 @@ use super::memory::{ActiveVirtualMemory, MemoryPermissions};
 use crate::{error::Result, fs::node::FileSnapshot};
 
 impl ActiveVirtualMemory<'_, '_> {
-    pub fn load_elf(&mut self, elf_bytes: FileSnapshot, stack: VirtAddr) -> Result<u64> {
+    pub fn load_elf(
+        &mut self,
+        elf_bytes: FileSnapshot,
+        stack: VirtAddr,
+        argv: &[impl AsRef<CStr>],
+        envp: &[impl AsRef<CStr>],
+    ) -> Result<u64> {
         let elf = Elf::parse(&elf_bytes).unwrap();
 
         assert!(elf.is_64);
@@ -54,12 +62,26 @@ impl ActiveVirtualMemory<'_, '_> {
             addr += 8u64;
         };
 
-        write(1); // argc
-        write((stack + 0x800u64).as_u64()); // argv[0]
-        write(0); // argv[1]
+        let mut str_addr = stack + 0x800u64;
+        let mut write_str = |value: &CStr| {
+            let addr = str_addr;
+            self.write(str_addr, &value.to_bytes_with_nul())?;
+            str_addr += value.to_bytes_with_nul().len();
+            Ok(addr)
+        };
 
-        write((stack + 0xc00u64).as_u64()); // argv[0]
-        write(0); // envp[1]
+        write(u64::try_from(argv.len()).unwrap()); // argc
+        for arg in argv {
+            let arg = write_str(arg.as_ref())?;
+            write(arg.as_u64());
+        }
+        write(0);
+
+        for env in envp {
+            let env = write_str(env.as_ref())?;
+            write(env.as_u64());
+        }
+        write(0);
 
         write(3); // AT_PHDR
         write(base + elf.header.e_phoff);
@@ -72,9 +94,6 @@ impl ActiveVirtualMemory<'_, '_> {
         write(9); // AT_ENTRY
         write(0x5555_ABAA_5000);
         write(0); // AT_NULL
-
-        self.write(stack + 0x800u64, b"/bin/init\0").unwrap();
-        self.write(stack + 0xc00u64, b"RUST_BACKTRACE=0\0").unwrap();
 
         Ok(base + elf.entry)
     }

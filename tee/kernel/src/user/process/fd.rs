@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use super::syscall::args::Fd;
 
 pub mod file;
+pub mod pipe;
 mod std;
 
 pub struct FileDescriptorTable {
