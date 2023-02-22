@@ -23,11 +23,14 @@ use crate::{
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{
-            add_flags, entry_for_page, map_page, remap_page, PageTableFlags, PresentPageTableEntry,
+            add_flags, entry_for_page, map_page, remap_page, remove_flags, PageTableFlags,
+            PresentPageTableEntry,
         },
         temporary::{copy_into_frame, zero_frame},
     },
 };
+
+use super::syscall::ProtFlags;
 
 pub struct VirtualMemory {
     mappings: Vec<Mapping>,
@@ -64,6 +67,77 @@ impl VirtualMemory {
             .unwrap()
     }
 
+    pub fn mprotect(&mut self, addr: VirtAddr, len: u64, prot: ProtFlags) -> Result<()> {
+        while len > 0 {
+            let mapping = self
+                .mappings
+                .iter_mut()
+                .find(|m| m.contains(addr))
+                .ok_or(Error::Fault)?;
+
+            let start_offset = addr - mapping.addr;
+            if start_offset > 0 {
+                let mut new_mapping = mapping.split(start_offset);
+                let new_permissions = MemoryPermissions::from(prot);
+                let old_permissions =
+                    core::mem::replace(&mut new_mapping.permissions, new_permissions);
+
+                // Check if permissions have been removed.
+                let removed_permissions = !new_permissions & old_permissions;
+                let flags = PageTableFlags::from(removed_permissions);
+
+                let start = new_mapping.addr;
+                let end_inclusive = new_mapping.end() - 1u64;
+                let start_page = Page::containing_address(start);
+                let end_inclusive_page = Page::containing_address(end_inclusive);
+
+                for page in start_page..=end_inclusive_page {
+                    unsafe {
+                        remove_flags(page, flags);
+                    }
+                }
+
+                self.mappings.push(new_mapping);
+
+                continue;
+            }
+
+            assert_eq!(mapping.addr, addr);
+
+            let new_mapping = if mapping.len > len {
+                Some(mapping.split(len))
+            } else {
+                None
+            };
+
+            let new_permissions = MemoryPermissions::from(prot);
+            let old_permissions = core::mem::replace(&mut mapping.permissions, new_permissions);
+
+            // Check if permissions have been removed.
+            let removed_permissions = !new_permissions & old_permissions;
+            let flags = PageTableFlags::from(removed_permissions);
+
+            let start = mapping.addr;
+            let end_inclusive = mapping.end() - 1u64;
+            let start_page = Page::containing_address(start);
+            let end_inclusive_page = Page::containing_address(end_inclusive);
+
+            for page in start_page..=end_inclusive_page {
+                unsafe {
+                    remove_flags(page, flags);
+                }
+            }
+
+            if let Some(new_mapping) = new_mapping {
+                self.mappings.push(new_mapping);
+            }
+
+            break;
+        }
+
+        Ok(())
+    }
+
     pub fn allocate_stack(&mut self, addr: Option<VirtAddr>, len: u64) -> Result<VirtAddr> {
         let addr = self.add_mapping(
             addr,
@@ -71,7 +145,7 @@ impl VirtualMemory {
             MemoryPermissions::READ | MemoryPermissions::WRITE,
             Backing::Stack,
         )?;
-        Ok(addr + len)
+        Ok(addr)
     }
 
     pub fn mmap_into(
@@ -344,6 +418,21 @@ impl Mapping {
         }
     }
 
+    /// Split the mapping into two parts. `self` will contain `[..offset)` and
+    /// the returned mapping will contain `[offset..]`
+    pub fn split(&mut self, offset: u64) -> Self {
+        assert!(self.len > offset);
+        let new_backing = self.backing.split(offset);
+        let new_len = self.len - offset;
+        self.len = offset;
+        Self {
+            addr: self.addr + offset,
+            len: new_len,
+            permissions: self.permissions,
+            backing: new_backing,
+        }
+    }
+
     fn make_executable(&self, page: Page) -> Result<*const [u8; 4096]> {
         assert!(self.contains(page.start_address()));
 
@@ -575,15 +664,55 @@ bitflags! {
     }
 }
 
+impl From<ProtFlags> for MemoryPermissions {
+    fn from(value: ProtFlags) -> Self {
+        let mut perms = Self::empty();
+        perms.set(Self::EXECUTE, value.contains(ProtFlags::EXEC));
+        perms.set(Self::WRITE, value.contains(ProtFlags::WRITE));
+        perms.set(Self::READ, value.contains(ProtFlags::READ));
+        perms
+    }
+}
+
+impl From<MemoryPermissions> for PageTableFlags {
+    fn from(value: MemoryPermissions) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::EXECUTABLE, value.contains(MemoryPermissions::EXECUTE));
+        flags.set(Self::WRITABLE, value.contains(MemoryPermissions::WRITE));
+        flags
+    }
+}
+
 enum Backing {
     File(FileBacking),
     Zero,
     Stack,
 }
 
+impl Backing {
+    /// Split the backing into two parts. `self` will contain `[..offset)` and
+    /// the returned backing will contain `[offset..]`
+    pub fn split(&mut self, offset: u64) -> Self {
+        match self {
+            Backing::File(file) => Backing::File(file.split(offset)),
+            Backing::Zero => Backing::Zero,
+            Backing::Stack => Backing::Stack,
+        }
+    }
+}
+
 struct FileBacking {
     offset: u64,
     bytes: FileSnapshot,
+}
+
+impl FileBacking {
+    pub fn split(&mut self, offset: u64) -> Self {
+        Self {
+            offset: self.offset + offset,
+            bytes: self.bytes.clone(),
+        }
+    }
 }
 
 pub fn without_smap<F, R>(f: F) -> R

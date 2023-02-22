@@ -342,11 +342,7 @@ impl Syscall6 for SysMmap {
             } else if flags.contains(MmapFlags::ANONYMOUS) {
                 assert_eq!(addr.get().as_u64(), 0);
 
-                let mut permissions = MemoryPermissions::empty();
-                permissions.set(MemoryPermissions::READ, prot.contains(ProtFlags::READ));
-                permissions.set(MemoryPermissions::WRITE, prot.contains(ProtFlags::WRITE));
-                permissions.set(MemoryPermissions::EXECUTE, prot.contains(ProtFlags::EXEC));
-
+                let permissions = MemoryPermissions::from(prot);
                 let addr = thread
                     .virtual_memory()
                     .lock()
@@ -372,8 +368,11 @@ impl Syscall3 for SysMprotect {
     type Arg1 = u64;
     type Arg2 = ProtFlags;
 
-    fn execute(_thread: &mut Thread, start: Pointer, len: u64, prot: ProtFlags) -> Result<u64> {
-        warn!("FIXME: implement mprotect({start}, {len:#x}, {prot})");
+    fn execute(thread: &mut Thread, start: Pointer, len: u64, prot: ProtFlags) -> Result<u64> {
+        thread
+            .virtual_memory()
+            .lock()
+            .mprotect(start.get(), len, prot)?;
         Ok(0)
     }
 }

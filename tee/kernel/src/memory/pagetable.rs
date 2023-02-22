@@ -134,6 +134,27 @@ pub unsafe fn add_flags(page: Page, flags: PageTableFlags) {
     }
 }
 
+pub unsafe fn remove_flags(page: Page, flags: PageTableFlags) {
+    let level4 = ActivePageTable::get();
+    let level4_entry = &level4[page.p4_index()];
+
+    let Some(level3_guard) = level4_entry.acquire_existing() else { return; };
+    let level3 = &*level3_guard;
+    let level3_entry = &level3[page.p3_index()];
+
+    let Some(level2_guard) = level3_entry.acquire_existing() else { return; };
+    let level2 = &*level2_guard;
+    let level2_entry = &level2[page.p2_index()];
+
+    let Some(level1_guard) = level2_entry.acquire_existing() else { return; };
+    let level1 = &*level1_guard;
+    let level1_entry = &level1[page.p1_index()];
+
+    unsafe {
+        level1_entry.remove_flags(flags);
+    }
+}
+
 /// # Panics
 ///
 /// The page has to be mapped.
@@ -635,6 +656,32 @@ impl ActivePageTableEntry<Level1> {
         let cow = flags.contains(PageTableFlags::COW);
         add_mask.set_bit(COW_BIT, cow);
         remove_mask.set_bit(
+            DISABLE_EXECUTE_BIT,
+            flags.contains(PageTableFlags::EXECUTABLE),
+        );
+
+        if cow {
+            assert!(!writable);
+        }
+
+        self.entry.fetch_or(add_mask, Ordering::SeqCst);
+        self.entry.fetch_and(!remove_mask, Ordering::SeqCst);
+
+        self.flush(global);
+    }
+
+    pub unsafe fn remove_flags(&self, flags: PageTableFlags) {
+        let mut add_mask = 0;
+        let mut remove_mask = 0;
+
+        let writable = flags.contains(PageTableFlags::WRITABLE);
+        remove_mask.set_bit(WRITE_BIT, writable);
+        remove_mask.set_bit(USER_BIT, flags.contains(PageTableFlags::USER));
+        let global = flags.contains(PageTableFlags::GLOBAL);
+        remove_mask.set_bit(GLOBAL_BIT, global);
+        let cow = flags.contains(PageTableFlags::COW);
+        remove_mask.set_bit(COW_BIT, cow);
+        add_mask.set_bit(
             DISABLE_EXECUTE_BIT,
             flags.contains(PageTableFlags::EXECUTABLE),
         );

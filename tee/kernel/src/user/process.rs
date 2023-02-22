@@ -33,7 +33,7 @@ impl Process {
         let mut virtual_memory = VirtualMemory::new();
         // Create stack.
         let len = 0x1_0000;
-        let stack = virtual_memory.allocate_stack(None, len)?;
+        let stack = virtual_memory.allocate_stack(None, len)? + len;
         // Load the elf.
         let entry = virtual_memory.load_elf(elf_file, stack)?;
 
