@@ -5,7 +5,7 @@ use spin::Mutex;
 
 use crate::error::{Error, Result};
 
-use super::syscall::Fd;
+use super::syscall::args::Fd;
 
 pub mod file;
 mod std;

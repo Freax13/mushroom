@@ -30,7 +30,7 @@ use crate::{
     },
 };
 
-use super::syscall::ProtFlags;
+use super::syscall::args::ProtFlags;
 
 pub struct VirtualMemory {
     mappings: Vec<Mapping>,

@@ -1,76 +1,13 @@
 use core::fmt::{self, Display};
 
 use log::{trace, warn};
-use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
     user::process::thread::Thread,
 };
 
-pub trait SyscallArg: Display + Copy {
-    fn parse(value: u64) -> Result<Self>;
-
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result;
-}
-
-#[derive(Clone, Copy)]
-pub struct Ignored(());
-
-impl Display for Ignored {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ignored")
-    }
-}
-
-impl SyscallArg for Ignored {
-    fn parse(_value: u64) -> Result<Self> {
-        Ok(Self(()))
-    }
-
-    fn display(f: &mut dyn fmt::Write, _value: u64) -> fmt::Result {
-        write!(f, "ignored")
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Pointer(u64);
-
-impl Pointer {
-    pub fn is_null(&self) -> bool {
-        self.0 == 0
-    }
-
-    pub fn get(self) -> VirtAddr {
-        VirtAddr::new(self.0)
-    }
-}
-
-impl Display for Pointer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:#}", self.0)
-    }
-}
-
-impl SyscallArg for Pointer {
-    fn parse(value: u64) -> Result<Self> {
-        Ok(Self(value))
-    }
-
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        write!(f, "{value:#x}")
-    }
-}
-
-impl SyscallArg for u64 {
-    fn parse(value: u64) -> Result<Self> {
-        Ok(value)
-    }
-
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        write!(f, "{value}")
-    }
-}
+use super::args::{Ignored, SyscallArg};
 
 pub trait Syscall0 {
     const NO: usize;

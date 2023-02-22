@@ -1,10 +1,9 @@
 use core::{
     cmp,
-    fmt::{self, Display},
+    fmt::{self},
 };
 
-use bytemuck::{bytes_of, bytes_of_mut, Pod, Zeroable};
-use log::warn;
+use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 
 use crate::{
     error::{Error, Result},
@@ -15,8 +14,12 @@ use crate::{
     user::process::memory::MemoryPermissions,
 };
 
-use self::traits::{
-    Pointer, Syscall1, Syscall2, Syscall3, Syscall4, Syscall6, SyscallArg, SyscallHandlers,
+use self::{
+    args::{
+        ArchPrctlCode, FcntlCmd, Fd, FileMode, MmapFlags, OpenFlags, Pointer, Pollfd, ProtFlags,
+        RtSigprocmaskHow, SyscallArg,
+    },
+    traits::{Syscall1, Syscall2, Syscall3, Syscall4, Syscall6, SyscallHandlers},
 };
 
 use super::{
@@ -24,86 +27,8 @@ use super::{
     thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters},
 };
 
+pub mod args;
 mod traits;
-
-macro_rules! bitflags {
-    (pub struct $strukt:ident {
-        $(
-            const $constant:ident = $expr:expr;
-        )*
-    }) => {
-        bitflags::bitflags! {
-            pub struct $strukt: u64 {
-                $(
-                    const $constant = $expr;
-                )*
-            }
-        }
-
-        impl Display for $strukt {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{self:?}")
-            }
-        }
-
-        impl SyscallArg for $strukt {
-            fn parse(value: u64) -> Result<Self> {
-                Self::from_bits(value).ok_or(Error::Inval)
-            }
-
-            fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-                let valid_bits = Self::from_bits_truncate(value);
-                let invalid_bits = value & !Self::all().bits();
-
-                write!(f, "{valid_bits}")?;
-                if invalid_bits != 0 {
-                    write!(f, " | {invalid_bits}")?;
-                }
-                Ok(())
-            }
-        }
-    };
-}
-
-macro_rules! enum_arg {
-    (pub enum $enuhm:ident {
-        $(
-            $variant:ident = $expr:expr,
-        )*
-    }) => {
-        #[derive(Debug, Clone, Copy)]
-        pub enum $enuhm {
-            $(
-                $variant = $expr,
-            )*
-        }
-
-        impl Display for $enuhm {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{self:?}")
-            }
-        }
-
-
-        impl SyscallArg for $enuhm {
-            fn parse(value: u64) -> Result<Self> {
-                match value {
-                    $(
-                        value if value == Self::$variant as u64 => Ok(Self::$variant),
-                    )*
-                    _ => Err(Error::Inval),
-                }
-            }
-
-            fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-                match Self::parse(value) {
-                    Ok(value) => write!(f, "{value}"),
-                    Err(_) => write!(f, "{value}"),
-                }
-            }
-        }
-    };
-}
 
 impl Thread {
     pub fn execute_syscall(&mut self) {
@@ -487,14 +412,6 @@ impl Syscall3 for SysRtSigprocmask {
     }
 }
 
-enum_arg! {
-    pub enum RtSigprocmaskHow {
-        Block = 0,
-        Unblock = 1,
-        SetMask = 2,
-    }
-}
-
 struct SysFcntl;
 
 impl Syscall3 for SysFcntl {
@@ -512,12 +429,6 @@ impl Syscall3 for SysFcntl {
                 Ok(0)
             }
         }
-    }
-}
-
-enum_arg! {
-    pub enum FcntlCmd {
-        SetFd = 2,
     }
 }
 
@@ -581,12 +492,6 @@ impl Syscall2 for SysArchPrctl {
     }
 }
 
-enum_arg! {
-    pub enum ArchPrctlCode {
-        SetFs = 0x1002,
-    }
-}
-
 struct SysSetTidAddress;
 
 impl Syscall1 for SysSetTidAddress {
@@ -611,90 +516,5 @@ impl Syscall1 for SysExitGroup {
 
     fn execute(_thread: &mut Thread, error_code: u64) -> Result<u64> {
         todo!("exit: {error_code}")
-    }
-}
-
-bitflags! {
-    pub struct OpenFlags {
-        const WRONLY = 1 << 0;
-        const RDWR = 1 << 1;
-        const CREAT = 1 << 6;
-        const EXCL = 1 << 9;
-        const SYNC = 1 << 19;
-    }
-}
-
-bitflags! {
-    pub struct FileMode {
-        const EXECUTE = 1 << 0;
-        const WRITE = 1 << 1;
-        const READ = 1 << 2;
-        const GROUP_EXECUTE = 1 << 3;
-        const GROUP_WRITE = 1 << 4;
-        const GROUP_READ = 1 << 5;
-        const OWNER_EXECUTE = 1 << 6;
-        const OWNER_WRITE = 1 << 7;
-        const OWNER_READ = 1 << 8;
-    }
-}
-
-bitflags! {
-    pub struct ProtFlags {
-        const READ = 1 << 0;
-        const WRITE = 1 << 1;
-        const EXEC = 1 << 2;
-    }
-}
-
-bitflags! {
-    pub struct MmapFlags {
-        const SHARED = 1 << 0;
-        const PRIVATE = 1 << 1;
-        const SHARED_VALIDATE = 1 << 0 | 1 << 1;
-        const ANONYMOUS = 1 << 5;
-        const STACK = 1 << 17;
-    }
-}
-
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-struct Pollfd {
-    fd: i32,
-    events: u16,
-    revents: u16,
-}
-
-#[derive(Clone, Copy)]
-pub struct Fd(i32);
-
-impl Fd {
-    pub fn new(value: i32) -> Self {
-        Self(value)
-    }
-
-    pub fn get(self) -> i32 {
-        self.0
-    }
-}
-
-impl Display for Fd {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl SyscallArg for Fd {
-    fn parse(value: u64) -> Result<Self> {
-        match i32::try_from(value) {
-            Ok(fd) if fd >= 0 => Ok(Self(fd)),
-            _ => Err(Error::BadF),
-        }
-    }
-
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        match Self::parse(value) {
-            Ok(fd) => write!(f, "{fd}"),
-            Err(_) => write!(f, "{value} (invalid fd)"),
-        }
     }
 }
