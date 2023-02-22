@@ -238,3 +238,15 @@ impl FileDescriptor for WriteonlyFile {
         Ok(buf.len())
     }
 }
+
+pub struct NullFile;
+
+impl File for NullFile {
+    fn is_executable(&self) -> bool {
+        false
+    }
+
+    fn read_snapshot(&self) -> Result<FileSnapshot> {
+        Ok(FileSnapshot::Static(&[]))
+    }
+}

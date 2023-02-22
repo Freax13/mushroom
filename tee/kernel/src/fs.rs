@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use self::node::{Directory, ROOT_NODE};
+use self::node::{Directory, NullFile, ROOT_NODE};
 
 pub mod node;
 pub mod path;
@@ -20,27 +20,21 @@ pub mod path;
 pub use path::{FileName, Path, PathSegment};
 
 pub fn init() -> Result<()> {
-    load_init()?;
-    load_input()
-}
-
-fn load_init() -> Result<()> {
-    let dev = ROOT_NODE.mkdir(FileName::new(b"bin").unwrap(), false)?;
-    dev.create(
+    let bin = ROOT_NODE.mkdir(FileName::new(b"bin").unwrap(), false)?;
+    bin.create(
         FileName::new(b"init").unwrap(),
         Arc::new(StaticFile::new(&INIT, true)),
         true,
     )?;
-    Ok(())
-}
 
-fn load_input() -> Result<()> {
     let dev = ROOT_NODE.mkdir(FileName::new(b"dev").unwrap(), false)?;
     dev.create(
         FileName::new(b"input").unwrap(),
         Arc::new(StaticFile::new(&INPUT, false)),
         true,
     )?;
+    dev.create(FileName::new(b"null").unwrap(), Arc::new(NullFile), true)?;
+
     Ok(())
 }
 
