@@ -102,7 +102,7 @@ impl Thread {
     ) -> Self {
         let process = new_process.unwrap_or_else(|| self.process.clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
-        let fdtable = new_fdtable.unwrap_or_else(|| self.fdtable.clone());
+        let fdtable = new_fdtable.unwrap_or_else(|| Arc::new((*self.fdtable).clone()));
 
         let mut thread = Self::new(new_tid(), process, virtual_memory, fdtable, 0, 0);
 

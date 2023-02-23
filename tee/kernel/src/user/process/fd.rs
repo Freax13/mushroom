@@ -57,6 +57,21 @@ impl FileDescriptorTable {
     }
 }
 
+impl Clone for FileDescriptorTable {
+    fn clone(&self) -> Self {
+        // Copy the table.
+        let table = self.table.lock().clone();
+
+        // Read the counter. We intentionally do this after copying the table.
+        let fd_counter = self.fd_counter.load(Ordering::SeqCst);
+
+        Self {
+            fd_counter: AtomicI32::new(fd_counter),
+            table: Mutex::new(table),
+        }
+    }
+}
+
 pub trait FileDescriptor: Send + Sync + 'static {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
