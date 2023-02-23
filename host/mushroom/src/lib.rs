@@ -15,7 +15,9 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use bit_field::BitField;
 use bytemuck::NoUninit;
-use constants::{physical_address::DYNAMIC, FIRST_AP, KICK_AP_PORT, LOG_PORT, MEMORY_PORT};
+use constants::{
+    physical_address::DYNAMIC, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_PORT,
+};
 use kvm::{KvmHandle, Page, VcpuHandle};
 use snp_types::{
     ghcb::{
@@ -169,7 +171,7 @@ impl VmContext {
         );
 
         // Create a bunch of APs.
-        let aps = (0..1)
+        let aps = (0..MAX_APS_COUNT)
             .map(|i| {
                 let id = FIRST_AP + i;
                 let ap_thread = Self::run_ap(id, vm.clone());

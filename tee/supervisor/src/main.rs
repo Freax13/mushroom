@@ -63,6 +63,8 @@ fn main() {
             let mut vcpu = vcpu::VCPUS[idx].borrow_mut();
             if let Vcpu::Initialized(initialized) = &mut *vcpu {
                 initialized.handle_vc();
+            } else {
+                panic!("can't handle event for uninitialized vcpu");
             }
         }
 

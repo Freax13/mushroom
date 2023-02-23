@@ -4,8 +4,8 @@ use core::{
 };
 
 use bit_field::BitField;
-use constants::{EXIT_PORT, KICK_AP_PORT, LOG_PORT, MEMORY_MSR};
-use log::trace;
+use constants::{EXIT_PORT, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_MSR};
+use log::{debug, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
     vmsa::{Segment, SevFeatures, Vmsa},
@@ -36,9 +36,8 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
         | SevFeatures::RESTRICTED_INJECTION.bits(),
 );
 
-const MAX_VCPUS: usize = 1;
-pub static VCPUS: FakeSync<[RefCell<Vcpu>; MAX_VCPUS]> =
-    FakeSync::new([const { RefCell::new(Vcpu::new()) }; MAX_VCPUS]);
+pub static VCPUS: FakeSync<[RefCell<Vcpu>; MAX_APS_COUNT as usize]> =
+    FakeSync::new([const { RefCell::new(Vcpu::new()) }; MAX_APS_COUNT as usize]);
 
 #[allow(clippy::large_enum_variant)]
 pub enum Vcpu {
@@ -52,6 +51,8 @@ impl Vcpu {
     }
 
     pub fn start(&mut self, apic_id: u8) {
+        debug!("initializing vcpu {apic_id}");
+
         assert!(matches!(self, Vcpu::Uninitialized));
 
         *self = Self::Initialized(Initialized::new(apic_id));
@@ -63,6 +64,7 @@ impl Vcpu {
 
 pub struct Initialized {
     apic_id: u8,
+    log_buffer: LogBuffer,
     vmsa: AlignedVmsa,
 }
 
@@ -263,6 +265,7 @@ impl Initialized {
 
         Initialized {
             apic_id,
+            log_buffer: LogBuffer::new(),
             vmsa: AlignedVmsa::new(vmsa),
         }
     }
@@ -298,7 +301,7 @@ impl Initialized {
 
         match guest_exit_code {
             VMEXIT_CPUID => handle_cpuid(vmsa),
-            VMEXIT_IOIO => handle_ioio_prot(guest_exit_info1, vmsa.rax, vmsa),
+            VMEXIT_IOIO => handle_ioio_prot(guest_exit_info1, vmsa.rax, vmsa, &mut self.log_buffer),
             VMEXIT_MSR => handle_msr_prot(
                 guest_exit_info1,
                 vmsa.rax as u32,
@@ -331,6 +334,45 @@ impl Initialized {
         unsafe {
             PortWriteOnly::<u32>::new(KICK_AP_PORT).write(u32::from(apic_id));
         }
+    }
+}
+
+struct LogBuffer {
+    buffer: [u8; 256],
+    cursor: usize,
+}
+
+impl LogBuffer {
+    pub const fn new() -> Self {
+        Self {
+            buffer: [0; 256],
+            cursor: 0,
+        }
+    }
+
+    pub fn write(&mut self, c: char) {
+        // Encode the char.
+        let mut bytes = [0; 4];
+        let str = c.encode_utf8(&mut bytes);
+
+        // Write to the buffer.
+        self.buffer[self.cursor..][..str.len()].copy_from_slice(str.as_bytes());
+        self.cursor += str.len();
+
+        let remaining = self.buffer.len() - self.cursor;
+        if remaining < 4 || c == '\n' {
+            self.flush();
+        }
+    }
+
+    pub fn flush(&mut self) {
+        let str = unsafe { core::str::from_utf8_unchecked(&self.buffer[..self.cursor]) };
+        for c in str.chars() {
+            unsafe {
+                PortWriteOnly::new(LOG_PORT).write(u32::from(c));
+            }
+        }
+        self.cursor = 0;
     }
 }
 
@@ -368,7 +410,7 @@ fn handle_cpuid(vmsa: &mut Vmsa) {
     vmsa.rip = vmsa.guest_nrip;
 }
 
-fn handle_ioio_prot(guest_exit_info1: u64, rax: u64, vmsa: &mut Vmsa) {
+fn handle_ioio_prot(guest_exit_info1: u64, rax: u64, vmsa: &mut Vmsa, log_buffer: &mut LogBuffer) {
     let port = guest_exit_info1.get_bits(16..=31) as u16;
 
     match port {
@@ -382,9 +424,17 @@ fn handle_ioio_prot(guest_exit_info1: u64, rax: u64, vmsa: &mut Vmsa) {
             assert!(!guest_exit_info1.get_bit(2)); // We don't support string based access.
             assert!(!guest_exit_info1.get_bit(0)); // We only support writes.
 
-            // Execute the write.
-            unsafe {
-                PortWriteOnly::new(LOG_PORT).write(rax as u32);
+            let char = char::try_from(rax as u32).unwrap_or('?');
+            log_buffer.write(char);
+        }
+        KICK_AP_PORT => {
+            let apic_id = u8::try_from(rax).unwrap();
+
+            let mut vcpu = VCPUS[usize::from(apic_id)].borrow_mut();
+
+            match &mut *vcpu {
+                Vcpu::Uninitialized => vcpu.start(FIRST_AP + apic_id),
+                Vcpu::Initialized(initialized) => initialized.kick(),
             }
         }
         _ => unimplemented!("write to unexpected port: {port:#x}"),

@@ -14,7 +14,7 @@ use x86_64::{
 /// The alignment of the TLS segment.
 pub const TLS_ALIGN: usize = 8;
 
-pub const MAX_APS_COUNT: usize = 0x80;
+pub const MAX_APS_COUNT: u8 = 128;
 
 pub const PAGE_TABLE_WITH_RESET_VECTOR: u64 = 0;
 pub const PAGE_TABLE_WITHOUT_RESET_VECTOR: u64 = 0x1000;

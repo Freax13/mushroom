@@ -24,9 +24,11 @@
 
 extern crate alloc;
 
+use constants::{KICK_AP_PORT, MAX_APS_COUNT};
 use exception::switch_stack;
 use log::info;
 use serial_log::SerialLogger;
+use x86_64::instructions::port::PortWriteOnly;
 
 use crate::{per_cpu::PerCpu, user::process::memory::VirtualMemoryActivator};
 
@@ -65,10 +67,28 @@ extern "C" fn init() -> ! {
         exception::init();
     }
 
-    fs::init().expect("failed to load input files");
-
     let mut vm_activator = unsafe { VirtualMemoryActivator::new() };
 
-    user::process::start_init_process(&mut vm_activator);
+    // The first AP does some extract initialization work.
+    if PerCpu::get().idx == 0 {
+        fs::init().expect("failed to load input files");
+        user::process::start_init_process(&mut vm_activator);
+    }
+
+    launch_next_ap();
+
     user::run(&mut vm_activator)
+}
+
+fn launch_next_ap() {
+    let idx = PerCpu::get().idx;
+
+    // Check if there are more APs to start.
+    let next_idx = idx + 1;
+    if next_idx < usize::from(MAX_APS_COUNT) {
+        let next_idx = u32::try_from(next_idx).unwrap();
+        unsafe {
+            PortWriteOnly::new(KICK_AP_PORT).write(next_idx);
+        }
+    }
 }

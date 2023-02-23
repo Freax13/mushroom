@@ -22,7 +22,8 @@ use crate::{
 };
 
 static COUNT: AtomicUsize = AtomicUsize::new(0);
-static mut STORAGE: [PerCpu; MAX_APS_COUNT] = [const { PerCpu::new() }; MAX_APS_COUNT];
+static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
+    [const { PerCpu::new() }; MAX_APS_COUNT as usize];
 
 pub const KERNEL_REGISTERS_OFFSET: usize = 16;
 pub const USERSPACE_REGISTERS_OFFSET: usize = 152;
