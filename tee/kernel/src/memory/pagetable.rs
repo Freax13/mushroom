@@ -24,7 +24,9 @@ use spin::Lazy;
 use x86_64::{
     instructions::tlb::Invlpgb,
     registers::control::Cr3,
-    structures::paging::{FrameAllocator, Page, PageTableIndex, PhysFrame, Size4KiB},
+    structures::paging::{
+        FrameAllocator, FrameDeallocator, Page, PageTableIndex, PhysFrame, Size4KiB,
+    },
     PhysAddr, VirtAddr,
 };
 
@@ -331,6 +333,7 @@ where
         unsafe { &*addr.as_ptr() }
     }
 }
+
 impl ActivePageTableEntry<Level4> {
     pub fn acquire(
         &self,
@@ -754,9 +757,32 @@ impl ActivePageTableEntry<Level1> {
     }
 }
 
+trait ParentEntry {
+    unsafe fn release(&self);
+}
+
+impl ParentEntry for ActivePageTableEntry<Level4> {
+    unsafe fn release(&self) {
+        let frame = unsafe { self.release_reference_count() };
+        assert_eq!(frame, None);
+    }
+}
+
+impl<L> ParentEntry for ActivePageTableEntry<L>
+where
+    L: HasParentLevel + TableLevel,
+{
+    unsafe fn release(&self) {
+        let frame = unsafe { self.parent_table_entry().release_reference_count() };
+        assert_eq!(frame, None);
+    }
+}
+
+#[must_use]
 struct ActivePageTableEntryGuard<'a, L>
 where
     L: TableLevel,
+    ActivePageTableEntry<L>: ParentEntry,
 {
     entry: &'a ActivePageTableEntry<L>,
 }
@@ -764,6 +790,7 @@ where
 impl<'a, L> Deref for ActivePageTableEntryGuard<'a, L>
 where
     L: TableLevel,
+    ActivePageTableEntry<L>: ParentEntry,
 {
     type Target = ActivePageTable<L::Next>;
 
@@ -776,12 +803,27 @@ where
 impl<'a, L> Drop for ActivePageTableEntryGuard<'a, L>
 where
     L: TableLevel,
+    ActivePageTableEntry<L>: ParentEntry,
 {
     fn drop(&mut self) {
-        unsafe {
+        // Release reference count.
+        let frame = unsafe {
             // SAFETY: We're releasing the reference count acquired in
             // ActivePageTableEntry::acquire`.
-            self.entry.release_reference_count();
+            self.entry.release_reference_count()
+        };
+
+        // Check if the entry was freed.
+        if let Some(frame) = frame {
+            // Deallocate the backing frame for the entry.
+            unsafe {
+                (&DUMB_FRAME_ALLOCATOR).deallocate_frame(frame);
+            }
+
+            // Decrease the reference count on the parent entry.
+            unsafe {
+                self.entry.release();
+            }
         }
     }
 }
