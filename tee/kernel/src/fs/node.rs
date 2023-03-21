@@ -1,4 +1,4 @@
-use core::ops::Deref;
+use core::{cmp, iter::repeat, ops::Deref};
 
 use alloc::{
     borrow::Cow,
@@ -26,6 +26,8 @@ pub enum Node {
 
 pub trait File: Send + Sync {
     fn is_executable(&self) -> bool;
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
+    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
     fn read_snapshot(&self) -> Result<FileSnapshot>;
 }
 
@@ -201,6 +203,31 @@ impl TmpFsFile {
 impl File for TmpFsFile {
     fn is_executable(&self) -> bool {
         self.executable
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+        let guard = self.content.lock();
+        let slice = guard.get(offset..).ok_or(Error::Inval)?;
+        let len = cmp::min(slice.len(), buf.len());
+        buf[..len].copy_from_slice(&slice[..len]);
+        Ok(len)
+    }
+
+    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.content.lock();
+        let bytes = Arc::make_mut(&mut guard);
+        let bytes = bytes.to_mut();
+
+        // Grow the file to be able to hold at least `offset+buf.len()` bytes.
+        let new_min_len = offset + buf.len();
+        if let Some(diff) = new_min_len.checked_sub(bytes.len()) {
+            bytes.extend(repeat(0).take(diff));
+        }
+
+        // Copy the buffer into the file.
+        bytes[offset..][..buf.len()].copy_from_slice(buf);
+
+        Ok(buf.len())
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
