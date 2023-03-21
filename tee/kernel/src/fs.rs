@@ -5,14 +5,13 @@ use x86_64::structures::paging::{frame::PhysFrameRangeInclusive, page::PageRange
 
 use crate::{
     error::Result,
-    fs::node::StaticFile,
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
     },
 };
 
-use self::node::{Directory, NullFile, ROOT_NODE};
+use self::node::{Directory, NullFile, TmpFsFile, ROOT_NODE};
 
 pub mod node;
 pub mod path;
@@ -23,14 +22,14 @@ pub fn init() -> Result<()> {
     let bin = ROOT_NODE.mkdir(FileName::new(b"bin").unwrap(), false)?;
     bin.create(
         FileName::new(b"init").unwrap(),
-        Arc::new(StaticFile::new(&INIT, true)),
+        Arc::new(TmpFsFile::new(true, &INIT)),
         true,
     )?;
 
     let dev = ROOT_NODE.mkdir(FileName::new(b"dev").unwrap(), false)?;
     dev.create(
         FileName::new(b"input").unwrap(),
-        Arc::new(StaticFile::new(&INPUT, false)),
+        Arc::new(TmpFsFile::new(false, &INPUT)),
         true,
     )?;
     dev.create(FileName::new(b"null").unwrap(), Arc::new(NullFile), true)?;

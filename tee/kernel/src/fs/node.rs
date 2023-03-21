@@ -1,9 +1,9 @@
 use core::ops::Deref;
 
 use alloc::{
+    borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     sync::Arc,
-    vec::Vec,
 };
 use spin::{Lazy, Mutex};
 
@@ -28,19 +28,13 @@ pub trait File: Send + Sync {
 }
 
 #[derive(Clone)]
-pub enum FileSnapshot {
-    Static(&'static [u8]),
-    Dynamic(Arc<Vec<u8>>),
-}
+pub struct FileSnapshot(Arc<Cow<'static, [u8]>>);
 
 impl Deref for FileSnapshot {
-    type Target = [u8];
+    type Target = Cow<'static, [u8]>;
 
     fn deref(&self) -> &Self::Target {
-        match self {
-            FileSnapshot::Static(bytes) => bytes,
-            FileSnapshot::Dynamic(bytes) => bytes,
-        }
+        &self.0
     }
 }
 
@@ -70,7 +64,7 @@ pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
         })
 }
 
-pub fn create_file(start_node: Node, path: &Path, executable: bool) -> Result<Arc<DynamicFile>> {
+pub fn create_file(start_node: Node, path: &Path, executable: bool) -> Result<Arc<TmpFsFile>> {
     let mut start_node = match start_node {
         Node::File(_) => return Err(Error::NotDir),
         Node::Directory(dir) => dir,
@@ -100,7 +94,7 @@ pub fn create_file(start_node: Node, path: &Path, executable: bool) -> Result<Ar
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let dynamic_file = Arc::new(DynamicFile::new(executable));
+    let dynamic_file = Arc::new(TmpFsFile::new(executable, &[]));
     dir.create(file_name.clone(), dynamic_file.clone(), false);
     Ok(dynamic_file)
 }
@@ -171,61 +165,37 @@ impl Directory for TmpFsDirectory {
     }
 }
 
-pub struct StaticFile {
-    content: &'static [u8],
+pub struct TmpFsFile {
+    content: Mutex<Arc<Cow<'static, [u8]>>>,
     executable: bool,
 }
 
-impl StaticFile {
-    pub fn new(content: &'static [u8], executable: bool) -> Self {
+impl TmpFsFile {
+    pub fn new(executable: bool, content: &'static [u8]) -> Self {
         Self {
-            content,
+            content: Mutex::new(Arc::new(Cow::Borrowed(content))),
             executable,
         }
     }
 }
 
-impl File for StaticFile {
-    fn is_executable(&self) -> bool {
-        self.executable
-    }
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Ok(FileSnapshot::Static(self.content))
-    }
-}
-
-pub struct DynamicFile {
-    content: Mutex<Arc<Vec<u8>>>,
-    executable: bool,
-}
-
-impl DynamicFile {
-    pub fn new(executable: bool) -> Self {
-        Self {
-            content: Mutex::new(Arc::new(Vec::new())),
-            executable,
-        }
-    }
-}
-
-impl File for DynamicFile {
+impl File for TmpFsFile {
     fn is_executable(&self) -> bool {
         self.executable
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
         let content = self.content.lock().clone();
-        Ok(FileSnapshot::Dynamic(content))
+        Ok(FileSnapshot(content))
     }
 }
 
 pub struct WriteonlyFile {
-    file: Arc<DynamicFile>,
+    file: Arc<TmpFsFile>,
 }
 
 impl WriteonlyFile {
-    pub fn new(file: Arc<DynamicFile>) -> Self {
+    pub fn new(file: Arc<TmpFsFile>) -> Self {
         Self { file }
     }
 }
@@ -234,7 +204,7 @@ impl OpenFileDescription for WriteonlyFile {
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.file.content.lock();
         let content = Arc::make_mut(&mut guard);
-        content.extend_from_slice(buf);
+        content.to_mut().extend_from_slice(buf);
         Ok(buf.len())
     }
 }
@@ -247,6 +217,6 @@ impl File for NullFile {
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Ok(FileSnapshot::Static(&[]))
+        Ok(FileSnapshot(Arc::new(Cow::Borrowed(&[]))))
     }
 }

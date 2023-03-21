@@ -6,7 +6,7 @@ use core::{
     sync::atomic::{AtomicU16, Ordering},
 };
 
-use alloc::{ffi::CString, vec::Vec};
+use alloc::{borrow::Cow, ffi::CString, vec::Vec};
 use bitflags::bitflags;
 use log::debug;
 use spin::Mutex;
@@ -545,8 +545,8 @@ impl Mapping {
         } else {
             let Backing::File(file_backing) = &self.backing else { todo!(); };
 
-            match file_backing.bytes {
-                FileSnapshot::Static(bytes) => {
+            match *file_backing.bytes {
+                Cow::Borrowed(bytes) => {
                     // FIXME: Get rid of as_u64
                     let offset =
                         usize::try_from(file_backing.offset + (page.start_address() - self.addr))
@@ -565,7 +565,7 @@ impl Mapping {
                         map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                     }
                 }
-                FileSnapshot::Dynamic(_) => todo!(),
+                Cow::Owned(_) => todo!(),
             }
         }
 
@@ -644,8 +644,8 @@ impl Mapping {
         } else {
             match &self.backing {
                 Backing::File(file_backing) => {
-                    match file_backing.bytes {
-                        FileSnapshot::Static(bytes) => {
+                    match *file_backing.bytes {
+                        Cow::Borrowed(bytes) => {
                             // FIXME: Get rid of as_u64
                             let offset = usize::try_from(
                                 file_backing.offset + (page.start_address() - self.addr),
@@ -672,7 +672,7 @@ impl Mapping {
                                 map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
-                        FileSnapshot::Dynamic(_) => todo!(),
+                        Cow::Owned(_) => todo!(),
                     }
                 }
                 Backing::Zero | Backing::Stack => {
@@ -714,8 +714,8 @@ impl Mapping {
         } else {
             match &self.backing {
                 Backing::File(file_backing) => {
-                    match file_backing.bytes {
-                        FileSnapshot::Static(bytes) => {
+                    match *file_backing.bytes {
+                        Cow::Borrowed(bytes) => {
                             // FIXME: Get rid of as_u64
                             let offset = usize::try_from(
                                 file_backing.offset + (page.start_address() - self.addr),
@@ -739,7 +739,7 @@ impl Mapping {
                                 map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
                             }
                         }
-                        FileSnapshot::Dynamic(_) => todo!(),
+                        Cow::Owned(_) => todo!(),
                     }
                 }
                 Backing::Zero | Backing::Stack => {
