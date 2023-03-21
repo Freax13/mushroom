@@ -158,6 +158,11 @@ impl Thread {
 
     fn run(&mut self, vm_activator: &mut VirtualMemoryActivator) {
         loop {
+            if let Some(status) = self.process().exit_status() {
+                self.exit(vm_activator, status);
+                break;
+            }
+
             self.run_userspace(vm_activator);
 
             if !self.execute_syscall(vm_activator) {

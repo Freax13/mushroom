@@ -40,6 +40,7 @@ pub mod args;
 mod traits;
 
 impl Thread {
+    /// Returns true if the thread should continue to run.
     pub fn execute_syscall(&mut self, vm_activator: &mut VirtualMemoryActivator) -> bool {
         let UserspaceRegisters {
             rax: syscall_no,
@@ -77,6 +78,11 @@ impl Thread {
             }
             Yield => false,
         }
+    }
+
+    /// Execute the exit syscall.
+    pub fn exit(&mut self, vm_activator: &mut VirtualMemoryActivator, status: u8) {
+        <SysExit as Syscall1>::execute(self, vm_activator, u64::from(status));
     }
 }
 
@@ -883,11 +889,12 @@ impl Syscall1 for SysExitGroup {
     type Arg0 = u64;
 
     fn execute(
-        _thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        error_code: u64,
+        thread: &mut Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+        status: u64,
     ) -> SyscallResult {
-        todo!("exit: {error_code}")
+        let status = thread.process().exit(status as u8);
+        <SysExit as Syscall1>::execute(thread, vm_activator, u64::from(status))
     }
 }
 

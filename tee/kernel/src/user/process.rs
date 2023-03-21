@@ -1,6 +1,10 @@
-use core::ffi::CStr;
+use core::{
+    ffi::CStr,
+    sync::atomic::{AtomicU16, Ordering},
+};
 
 use alloc::sync::Arc;
+use bit_field::BitField;
 
 use crate::{
     error::{Error, Result},
@@ -27,6 +31,7 @@ pub mod thread;
 pub struct Process {
     pid: u32,
     futexes: Futexes,
+    exit_status: AtomicU16,
 }
 
 impl Process {
@@ -70,7 +75,37 @@ impl Process {
         Self {
             pid: first_tid,
             futexes: Futexes::new(),
+            exit_status: AtomicU16::new(0),
         }
+    }
+
+    /// Terminate all threads in the thread group.
+    ///
+    /// The returned exit status may not be the same as the requested
+    /// if another thread terminated the thread group at the same time.
+    pub fn exit(&self, exit_status: u8) -> u8 {
+        let mut encoded_exit_status = u16::from(exit_status);
+        encoded_exit_status.set_bit(15, true);
+
+        let res = self.exit_status.compare_exchange(
+            0,
+            encoded_exit_status,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+
+        match res {
+            Ok(_) => exit_status,
+            Err(exit_status) => {
+                assert!(exit_status.get_bit(15));
+                exit_status as u8
+            }
+        }
+    }
+
+    pub fn exit_status(&self) -> Option<u8> {
+        let exit_status = self.exit_status.load(Ordering::SeqCst);
+        exit_status.get_bit(15).then(|| exit_status as u8)
     }
 }
 
