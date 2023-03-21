@@ -14,6 +14,8 @@ use crate::{
 
 use super::{path::FileName, Path, PathSegment};
 
+pub mod special;
+
 pub static ROOT_NODE: Lazy<Arc<TmpFsDirectory>> = Lazy::new(|| Arc::new(TmpFsDirectory::new()));
 
 #[derive(Clone)]
@@ -206,17 +208,5 @@ impl OpenFileDescription for WriteonlyFile {
         let content = Arc::make_mut(&mut guard);
         content.to_mut().extend_from_slice(buf);
         Ok(buf.len())
-    }
-}
-
-pub struct NullFile;
-
-impl File for NullFile {
-    fn is_executable(&self) -> bool {
-        false
-    }
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Ok(FileSnapshot(Arc::new(Cow::Borrowed(&[]))))
     }
 }

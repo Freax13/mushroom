@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-use self::node::{Directory, NullFile, TmpFsFile, ROOT_NODE};
+use self::node::{special::NullFile, Directory, TmpFsFile, ROOT_NODE};
 
 pub mod node;
 pub mod path;
