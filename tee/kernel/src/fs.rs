@@ -1,4 +1,5 @@
-use alloc::sync::Arc;
+use core::any::Any;
+
 use constants::{physical_address, virtual_address};
 use spin::Lazy;
 use x86_64::structures::paging::{frame::PhysFrameRangeInclusive, page::PageRangeInclusive};
@@ -11,7 +12,7 @@ use crate::{
     },
 };
 
-use self::node::{special::NullFile, Directory, TmpFsFile, ROOT_NODE};
+use self::node::{special::NullFile, Directory, TmpFsDirectory, TmpFsFile, ROOT_NODE};
 
 pub mod node;
 pub mod path;
@@ -20,19 +21,18 @@ pub use path::{FileName, Path, PathSegment};
 
 pub fn init() -> Result<()> {
     let bin = ROOT_NODE.mkdir(FileName::new(b"bin").unwrap(), false)?;
-    bin.create(
-        FileName::new(b"init").unwrap(),
-        Arc::new(TmpFsFile::new(true, &INIT)),
-        true,
-    )?;
+    let bin =
+        <dyn Any>::downcast_ref::<TmpFsDirectory>(&*bin as &dyn Any).expect("/bin/ is not a tmpfs");
+    bin.mount(FileName::new(b"init").unwrap(), TmpFsFile::new(true, &INIT));
 
     let dev = ROOT_NODE.mkdir(FileName::new(b"dev").unwrap(), false)?;
-    dev.create(
+    let dev =
+        <dyn Any>::downcast_ref::<TmpFsDirectory>(&*dev as &dyn Any).expect("/dev/ is not a tmpfs");
+    dev.mount(
         FileName::new(b"input").unwrap(),
-        Arc::new(TmpFsFile::new(false, &INPUT)),
-        true,
-    )?;
-    dev.create(FileName::new(b"null").unwrap(), Arc::new(NullFile), true)?;
+        TmpFsFile::new(false, &INPUT),
+    );
+    dev.mount(FileName::new(b"null").unwrap(), NullFile);
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use core::{cmp, iter::repeat, ops::Deref};
+use core::{any::Any, cmp, iter::repeat, ops::Deref};
 
 use alloc::{
     borrow::Cow,
@@ -21,7 +21,7 @@ pub enum Node {
     Directory(Arc<dyn Directory>),
 }
 
-pub trait File: Send + Sync {
+pub trait File: Send + Sync + 'static {
     fn is_executable(&self) -> bool;
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
@@ -56,10 +56,10 @@ impl Deref for FileSnapshot {
     }
 }
 
-pub trait Directory: Send + Sync {
+pub trait Directory: Any + Send + Sync {
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
     fn mkdir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>>;
-    fn create(&self, file_name: FileName, file: Arc<dyn File>, create_new: bool) -> Result<()>;
+    fn create(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn File>>;
 }
 
 pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
@@ -82,7 +82,7 @@ pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
         })
 }
 
-pub fn create_file(start_node: Node, path: &Path, executable: bool) -> Result<Arc<TmpFsFile>> {
+pub fn create_file(start_node: Node, path: &Path) -> Result<Arc<dyn File>> {
     let mut start_node = match start_node {
         Node::File(_) => return Err(Error::NotDir),
         Node::Directory(dir) => dir,
@@ -112,9 +112,8 @@ pub fn create_file(start_node: Node, path: &Path, executable: bool) -> Result<Ar
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let dynamic_file = Arc::new(TmpFsFile::new(executable, &[]));
-    dir.create(file_name.clone(), dynamic_file.clone(), false);
-    Ok(dynamic_file)
+    let file = dir.create(file_name.clone(), false)?;
+    Ok(file)
 }
 
 pub struct TmpFsDirectory {
@@ -126,6 +125,12 @@ impl TmpFsDirectory {
         Self {
             items: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Mount a special file into the tmpfs directory.
+    pub fn mount(&self, path_segment: FileName, file: impl File) {
+        let mut guard = self.items.lock();
+        guard.insert(path_segment, Node::File(Arc::new(file)));
     }
 }
 
@@ -159,23 +164,21 @@ impl Directory for TmpFsDirectory {
         }
     }
 
-    fn create(&self, path_segment: FileName, file: Arc<dyn File>, create_new: bool) -> Result<()> {
+    fn create(&self, path_segment: FileName, create_new: bool) -> Result<Arc<dyn File>> {
         let mut guard = self.items.lock();
         let entry = guard.entry(path_segment);
         match entry {
             Entry::Vacant(entry) => {
-                entry.insert(Node::File(file));
-                Ok(())
+                let file = Arc::new(TmpFsFile::new(false, &[]));
+                entry.insert(Node::File(file.clone()));
+                Ok(file)
             }
             Entry::Occupied(mut entry) => {
                 if create_new {
                     return Err(Error::Exist);
                 }
                 match entry.get_mut() {
-                    Node::File(f) => {
-                        *f = file;
-                        Ok(())
-                    }
+                    Node::File(f) => Ok(f.clone()),
                     Node::Directory(_) => Err(Error::Exist),
                 }
             }

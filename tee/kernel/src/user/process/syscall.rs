@@ -216,11 +216,10 @@ impl Syscall3 for SysOpen {
 
         if flags.contains(OpenFlags::WRONLY) {
             if flags.contains(OpenFlags::CREAT) {
-                let dynamic_file =
-                    create_file(Node::Directory(ROOT_NODE.clone()), &filename, false)?;
+                let file = create_file(Node::Directory(ROOT_NODE.clone()), &filename)?;
                 let fd_num = thread
                     .fdtable()
-                    .insert(WriteonlyFileFileDescription::new(dynamic_file));
+                    .insert(WriteonlyFileFileDescription::new(file));
                 Ok(fd_num.get() as u64)
             } else {
                 todo!()
