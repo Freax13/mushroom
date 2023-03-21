@@ -1106,6 +1106,9 @@ impl KvmRun {
             )),
             7 => KvmExit::IrqWindowOpen,
             8 => KvmExit::Shutdown,
+            9 => KvmExit::FailEntry(pod_read_unaligned(
+                &self.exit_data[..size_of::<KvmExitFailEntry>()],
+            )),
             10 => KvmExit::Interrupted,
             17 => KvmExit::Internal(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitInternalError>()],
@@ -1219,6 +1222,7 @@ pub enum KvmExit {
     Mmio(KvmExitMmio),
     IrqWindowOpen,
     Shutdown,
+    FailEntry(KvmExitFailEntry),
     Interrupted,
     Internal(KvmExitInternalError),
     SystemEvent(KvmExitSystemEvent),
@@ -1262,6 +1266,13 @@ pub struct KvmExitMmio {
     pub data: [u8; 8],
     pub len: u32,
     pub is_write: u8,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable, Debug)]
+#[repr(C, packed)]
+pub struct KvmExitFailEntry {
+    pub hardware_entry_failure_reason: u64,
+    pub cpu: u32,
 }
 
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
