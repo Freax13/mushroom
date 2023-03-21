@@ -1,7 +1,7 @@
 use core::arch::asm;
 
 use log::error;
-use snp_types::intercept::{VMEXIT_IOIO, VMEXIT_UNVALIDATED};
+use snp_types::intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_UNVALIDATED};
 use x86_64::{
     registers::{
         control::{Cr2, Cr4, Cr4Flags},
@@ -105,7 +105,7 @@ pub(super) extern "x86-interrupt" fn vmm_communication_exception_handler(
 
 extern "sysv64" fn handle_vmm_communication_exception(frame: &mut StackFrame) {
     match frame.exception_code {
-        0x72 => cpuid(frame),
+        VMEXIT_CPUID => cpuid(frame),
         VMEXIT_IOIO => {
             ioio_prot(frame);
             return;
