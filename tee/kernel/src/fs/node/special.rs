@@ -1,5 +1,3 @@
-use alloc::{borrow::Cow, sync::Arc};
-
 use super::{File, FileSnapshot};
 use crate::error::Result;
 
@@ -11,6 +9,6 @@ impl File for NullFile {
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Ok(FileSnapshot(Arc::new(Cow::Borrowed(&[]))))
+        Ok(FileSnapshot::empty())
     }
 }

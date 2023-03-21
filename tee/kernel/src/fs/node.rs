@@ -32,6 +32,23 @@ pub trait File: Send + Sync {
 #[derive(Clone)]
 pub struct FileSnapshot(Arc<Cow<'static, [u8]>>);
 
+impl FileSnapshot {
+    pub fn empty() -> Self {
+        static EMPTY: Lazy<FileSnapshot> = Lazy::new(|| FileSnapshot(Arc::new(Cow::Borrowed(&[]))));
+        EMPTY.clone()
+    }
+}
+
+impl From<Arc<Cow<'static, [u8]>>> for FileSnapshot {
+    fn from(value: Arc<Cow<'static, [u8]>>) -> Self {
+        if value.is_empty() {
+            return Self::empty();
+        }
+
+        Self(value)
+    }
+}
+
 impl Deref for FileSnapshot {
     type Target = Cow<'static, [u8]>;
 
