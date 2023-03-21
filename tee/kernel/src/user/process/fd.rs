@@ -1,19 +1,42 @@
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::{
+    ops::Deref,
+    sync::atomic::{AtomicI32, Ordering},
+};
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use spin::Mutex;
 
 use crate::error::{Error, Result};
 
-use super::syscall::args::Fd;
+use super::syscall::args::FdNum;
 
 pub mod file;
 pub mod pipe;
 mod std;
 
+#[derive(Clone)]
+pub struct FileDescriptor(Arc<dyn OpenFileDescription>);
+
+impl<T> From<T> for FileDescriptor
+where
+    T: OpenFileDescription,
+{
+    fn from(value: T) -> Self {
+        FileDescriptor(Arc::new(value))
+    }
+}
+
+impl Deref for FileDescriptor {
+    type Target = dyn OpenFileDescription;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
 pub struct FileDescriptorTable {
     fd_counter: AtomicI32,
-    table: Mutex<BTreeMap<i32, Arc<dyn FileDescriptor>>>,
+    table: Mutex<BTreeMap<i32, FileDescriptor>>,
 }
 
 impl FileDescriptorTable {
@@ -33,17 +56,16 @@ impl FileDescriptorTable {
         this
     }
 
-    pub fn insert(&self, fd: impl FileDescriptor) -> Fd {
+    pub fn insert(&self, fd: impl Into<FileDescriptor>) -> FdNum {
         let fd_num = self.fd_counter.fetch_add(1, Ordering::SeqCst);
         assert!(fd_num >= 0);
 
-        let arc = Arc::new(fd);
-        self.table.lock().insert(fd_num, arc);
+        self.table.lock().insert(fd_num, fd.into());
 
-        Fd::new(fd_num)
+        FdNum::new(fd_num)
     }
 
-    pub fn get(&self, fd_num: Fd) -> Result<Arc<dyn FileDescriptor>> {
+    pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
         self.table
             .lock()
             .get(&fd_num.get())
@@ -51,7 +73,7 @@ impl FileDescriptorTable {
             .ok_or(Error::BadF)
     }
 
-    pub fn close(&self, fd_num: Fd) -> Result<()> {
+    pub fn close(&self, fd_num: FdNum) -> Result<()> {
         let fd = self.table.lock().remove(&fd_num.get()).ok_or(Error::BadF)?;
         fd.close()
     }
@@ -72,7 +94,7 @@ impl Clone for FileDescriptorTable {
     }
 }
 
-pub trait FileDescriptor: Send + Sync + 'static {
+pub trait OpenFileDescription: Send + Sync + 'static {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::Inval)

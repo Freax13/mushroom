@@ -5,7 +5,7 @@ use core::{
 
 use crate::{error::Result, fs::node::FileSnapshot};
 
-use super::FileDescriptor;
+use super::OpenFileDescription;
 
 pub struct ReadonlyFile {
     snapshot: FileSnapshot,
@@ -21,7 +21,7 @@ impl ReadonlyFile {
     }
 }
 
-impl FileDescriptor for ReadonlyFile {
+impl OpenFileDescription for ReadonlyFile {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let idx = self
             .cursor_idx

@@ -1,12 +1,12 @@
-use super::FileDescriptor;
+use super::OpenFileDescription;
 
 pub struct ReadHalf {}
 
-impl FileDescriptor for ReadHalf {}
+impl OpenFileDescription for ReadHalf {}
 
 pub struct WriteHalf {}
 
-impl FileDescriptor for WriteHalf {}
+impl OpenFileDescription for WriteHalf {}
 
 pub fn new() -> (ReadHalf, WriteHalf) {
     (ReadHalf {}, WriteHalf {})

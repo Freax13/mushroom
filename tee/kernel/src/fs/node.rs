@@ -9,7 +9,7 @@ use spin::{Lazy, Mutex};
 
 use crate::{
     error::{Error, Result},
-    user::process::fd::FileDescriptor,
+    user::process::fd::OpenFileDescription,
 };
 
 use super::{path::FileName, Path, PathSegment};
@@ -230,7 +230,7 @@ impl WriteonlyFile {
     }
 }
 
-impl FileDescriptor for WriteonlyFile {
+impl OpenFileDescription for WriteonlyFile {
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.file.content.lock();
         let content = Arc::make_mut(&mut guard);

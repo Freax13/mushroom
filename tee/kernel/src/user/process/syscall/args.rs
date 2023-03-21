@@ -199,9 +199,9 @@ pub struct Pollfd {
 }
 
 #[derive(Clone, Copy)]
-pub struct Fd(i32);
+pub struct FdNum(i32);
 
-impl Fd {
+impl FdNum {
     pub fn new(value: i32) -> Self {
         Self(value)
     }
@@ -211,13 +211,13 @@ impl Fd {
     }
 }
 
-impl Display for Fd {
+impl Display for FdNum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl SyscallArg for Fd {
+impl SyscallArg for FdNum {
     fn parse(value: u64) -> Result<Self> {
         match i32::try_from(value) {
             Ok(fd) if fd >= 0 => Ok(Self(fd)),

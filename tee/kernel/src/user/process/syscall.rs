@@ -19,7 +19,7 @@ use crate::{
 
 use self::{
     args::{
-        ArchPrctlCode, CloneFlags, FcntlCmd, Fd, FileMode, FutexOp, FutexOpWithFlags, MmapFlags,
+        ArchPrctlCode, CloneFlags, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags, MmapFlags,
         OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SyscallArg,
         WaitOptions,
     },
@@ -122,18 +122,18 @@ impl Syscall3 for SysRead {
     const NO: usize = 0;
     const NAME: &'static str = "read";
 
-    type Arg0 = Fd;
+    type Arg0 = FdNum;
     type Arg1 = Pointer;
     type Arg2 = u64;
 
     fn execute(
         thread: &mut Thread,
         vm_activator: &mut VirtualMemoryActivator,
-        fd: Fd,
+        fd_num: FdNum,
         buf: Pointer,
         count: u64,
     ) -> SyscallResult {
-        let fd = thread.fdtable().get(fd)?;
+        let fd = thread.fdtable().get(fd_num)?;
 
         let buf = buf.get();
         let count = usize::try_from(count).unwrap();
@@ -160,18 +160,18 @@ impl Syscall3 for SysWrite {
     const NO: usize = 1;
     const NAME: &'static str = "write";
 
-    type Arg0 = Fd;
+    type Arg0 = FdNum;
     type Arg1 = Pointer;
     type Arg2 = u64;
 
     fn execute(
         thread: &mut Thread,
         vm_activator: &mut VirtualMemoryActivator,
-        fd: Fd,
+        fd_num: FdNum,
         buf: Pointer,
         count: u64,
     ) -> SyscallResult {
-        let fd = thread.fdtable().get(fd)?;
+        let fd = thread.fdtable().get(fd_num)?;
 
         let buf = buf.get();
         let count = usize::try_from(count).unwrap();
@@ -215,8 +215,8 @@ impl Syscall3 for SysOpen {
             if flags.contains(OpenFlags::CREAT) {
                 let dynamic_file =
                     create_file(Node::Directory(ROOT_NODE.clone()), &filename, false)?;
-                let fd = thread.fdtable().insert(WriteonlyFile::new(dynamic_file));
-                Ok(fd.get() as u64)
+                let fd_num = thread.fdtable().insert(WriteonlyFile::new(dynamic_file));
+                Ok(fd_num.get() as u64)
             } else {
                 todo!()
             }
@@ -231,8 +231,8 @@ impl Syscall3 for SysOpen {
             };
 
             let snapshot = file.read_snapshot()?;
-            let fd = thread.fdtable().insert(ReadonlyFile::new(snapshot));
-            Ok(fd.get() as u64)
+            let fd_num = thread.fdtable().insert(ReadonlyFile::new(snapshot));
+            Ok(fd_num.get() as u64)
         }
     }
 }
@@ -243,14 +243,14 @@ impl Syscall1 for SysClose {
     const NO: usize = 3;
     const NAME: &'static str = "close";
 
-    type Arg0 = Fd;
+    type Arg0 = FdNum;
 
     fn execute(
         thread: &mut Thread,
         _vm_activator: &mut VirtualMemoryActivator,
-        fd: Fd,
+        fd_num: FdNum,
     ) -> SyscallResult {
-        thread.fdtable().close(fd)?;
+        thread.fdtable().close(fd_num)?;
         Ok(0)
     }
 }
@@ -686,14 +686,14 @@ impl Syscall3 for SysFcntl {
     const NO: usize = 72;
     const NAME: &'static str = "fcntl";
 
-    type Arg0 = Fd;
+    type Arg0 = FdNum;
     type Arg1 = FcntlCmd;
     type Arg2 = u64;
 
     fn execute(
         _thread: &mut Thread,
         _vm_activator: &mut VirtualMemoryActivator,
-        _fd: Fd,
+        _fd_num: FdNum,
         cmd: FcntlCmd,
         _arg: u64,
     ) -> SyscallResult {

@@ -1,15 +1,15 @@
 use log::debug;
 
-use super::FileDescriptor;
+use super::OpenFileDescription;
 use crate::error::Result;
 
 pub struct Stdin;
 
-impl FileDescriptor for Stdin {}
+impl OpenFileDescription for Stdin {}
 
 pub struct Stdout;
 
-impl FileDescriptor for Stdout {
+impl OpenFileDescription for Stdout {
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
         debug!("{chunk:02x?}");
@@ -19,7 +19,7 @@ impl FileDescriptor for Stdout {
 
 pub struct Stderr;
 
-impl FileDescriptor for Stderr {
+impl OpenFileDescription for Stderr {
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
         debug!("{chunk:02x?}");
