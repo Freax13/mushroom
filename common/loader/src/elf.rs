@@ -83,8 +83,6 @@ pub fn load(
 
                         if shared_page {
                             LoadCommandPayload::Shared(bytes)
-                        } else if bytes == [0; 4096] {
-                            LoadCommandPayload::Zero
                         } else {
                             LoadCommandPayload::Normal(bytes)
                         }
