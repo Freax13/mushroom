@@ -7,10 +7,7 @@ use alloc::{
 };
 use spin::{Lazy, Mutex};
 
-use crate::{
-    error::{Error, Result},
-    user::process::fd::OpenFileDescription,
-};
+use crate::error::{Error, Result};
 
 use super::{path::FileName, Path, PathSegment};
 
@@ -233,24 +230,5 @@ impl File for TmpFsFile {
     fn read_snapshot(&self) -> Result<FileSnapshot> {
         let content = self.content.lock().clone();
         Ok(FileSnapshot(content))
-    }
-}
-
-pub struct WriteonlyFile {
-    file: Arc<TmpFsFile>,
-}
-
-impl WriteonlyFile {
-    pub fn new(file: Arc<TmpFsFile>) -> Self {
-        Self { file }
-    }
-}
-
-impl OpenFileDescription for WriteonlyFile {
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.file.content.lock();
-        let content = Arc::make_mut(&mut guard);
-        content.to_mut().extend_from_slice(buf);
-        Ok(buf.len())
     }
 }

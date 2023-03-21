@@ -28,3 +28,27 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         Ok(len)
     }
 }
+
+/// A file description for files opened as write-only.
+pub struct WriteonlyFileFileDescription {
+    file: Arc<dyn File>,
+    cursor_idx: Mutex<usize>,
+}
+
+impl WriteonlyFileFileDescription {
+    pub fn new(file: Arc<dyn File>) -> Self {
+        Self {
+            file,
+            cursor_idx: Mutex::new(0),
+        }
+    }
+}
+
+impl OpenFileDescription for WriteonlyFileFileDescription {
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.write(*guard, buf)?;
+        *guard += len;
+        Ok(len)
+    }
+}

@@ -11,7 +11,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::Error,
     fs::{
-        node::{create_file, lookup_node, Node, WriteonlyFile, ROOT_NODE},
+        node::{create_file, lookup_node, Node, ROOT_NODE},
         Path,
     },
     user::process::memory::MemoryPermissions,
@@ -30,7 +30,10 @@ use self::{
 };
 
 use super::{
-    fd::{file::ReadonlyFileFileDescription, pipe, FileDescriptorTable},
+    fd::{
+        file::{ReadonlyFileFileDescription, WriteonlyFileFileDescription},
+        pipe, FileDescriptorTable,
+    },
     memory::VirtualMemoryActivator,
     thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, THREADS},
     Process,
@@ -215,7 +218,9 @@ impl Syscall3 for SysOpen {
             if flags.contains(OpenFlags::CREAT) {
                 let dynamic_file =
                     create_file(Node::Directory(ROOT_NODE.clone()), &filename, false)?;
-                let fd_num = thread.fdtable().insert(WriteonlyFile::new(dynamic_file));
+                let fd_num = thread
+                    .fdtable()
+                    .insert(WriteonlyFileFileDescription::new(dynamic_file));
                 Ok(fd_num.get() as u64)
             } else {
                 todo!()
