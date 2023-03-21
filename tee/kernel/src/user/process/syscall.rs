@@ -30,7 +30,7 @@ use self::{
 };
 
 use super::{
-    fd::{file::ReadonlyFile, pipe, FileDescriptorTable},
+    fd::{file::ReadonlyFileFileDescription, pipe, FileDescriptorTable},
     memory::VirtualMemoryActivator,
     thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, THREADS},
     Process,
@@ -229,9 +229,9 @@ impl Syscall3 for SysOpen {
                 Node::File(file) => file,
                 Node::Directory(_) => return Err(Error::IsDir),
             };
-
-            let snapshot = file.read_snapshot()?;
-            let fd_num = thread.fdtable().insert(ReadonlyFile::new(snapshot));
+            let fd_num = thread
+                .fdtable()
+                .insert(ReadonlyFileFileDescription::new(file));
             Ok(fd_num.get() as u64)
         }
     }
