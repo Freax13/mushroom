@@ -1,11 +1,6 @@
 use core::ffi::CStr;
 
-use alloc::{
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-};
-use spin::mutex::Mutex;
-use x86_64::VirtAddr;
+use alloc::sync::Arc;
 
 use crate::{
     error::{Error, Result},
@@ -17,19 +12,21 @@ use crate::{
 
 use self::{
     fd::FileDescriptorTable,
+    futex::Futexes,
     memory::{VirtualMemory, VirtualMemoryActivator},
     thread::{new_tid, Thread},
 };
 
 mod elf;
 pub mod fd;
+mod futex;
 pub mod memory;
 mod syscall;
 pub mod thread;
 
 pub struct Process {
     pid: u32,
-    waits: Mutex<BTreeMap<VirtAddr, VecDeque<u32>>>,
+    futexes: Futexes,
 }
 
 impl Process {
@@ -72,7 +69,7 @@ impl Process {
     fn new(first_tid: u32) -> Self {
         Self {
             pid: first_tid,
-            waits: Mutex::new(BTreeMap::new()),
+            futexes: Futexes::new(),
         }
     }
 }

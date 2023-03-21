@@ -1,9 +1,10 @@
 use core::{
     cmp,
     fmt::{self},
+    num::NonZeroU32,
 };
 
-use alloc::{collections::btree_map::Entry, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use x86_64::VirtAddr;
 
@@ -31,7 +32,7 @@ use self::{
 use super::{
     fd::{file::ReadonlyFile, pipe, FileDescriptorTable},
     memory::VirtualMemoryActivator,
-    thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, RUNNABLE_THREADS, THREADS},
+    thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, THREADS},
     Process,
 };
 
@@ -641,6 +642,8 @@ impl Syscall1 for SysExit {
             vm_activator.activate(thread.virtual_memory(), |vm| {
                 vm.write(clear_child_tid, &0u32.to_ne_bytes())
             })?;
+
+            thread.process().futexes.wake(clear_child_tid, 1, None);
         }
 
         THREADS.lock().remove(&thread.tid);
@@ -799,47 +802,24 @@ impl Syscall6 for SysFutex {
         val: u32,
         _utime: u64,
         _uaddr2: Pointer,
-        _val3: u64,
+        val3: u64,
     ) -> SyscallResult {
         match op.op {
             FutexOp::Wait => {
-                let mut compare_value = 0;
-                vm_activator.activate(thread.virtual_memory(), |vm| {
-                    vm.read(uaddr.get(), bytes_of_mut(&mut compare_value))
-                })?;
-                if compare_value != val {
-                    return Err(Error::Again);
-                }
+                assert_eq!(_utime, 0);
 
-                thread
-                    .process()
-                    .waits
-                    .lock()
-                    .entry(uaddr.get())
-                    .or_default()
-                    .push_back(thread.tid);
+                vm_activator.activate(&thread.virtual_memory(), |vm| {
+                    thread
+                        .process()
+                        .futexes
+                        .wait(thread.tid, uaddr.get(), val, None, vm)
+                })?;
 
                 Yield
             }
             FutexOp::Wake => {
-                let mut no = 0;
-
-                if let Entry::Occupied(mut entry) = thread.process().waits.lock().entry(uaddr.get())
-                {
-                    let threads = entry.get_mut();
-                    for _ in 0..val {
-                        let Some(thread) = threads.pop_front() else { break; };
-                        THREADS.lock()[&thread].lock().registers.rax = 0;
-                        RUNNABLE_THREADS.lock().push_back(thread);
-                        no += 1;
-                    }
-
-                    if threads.is_empty() {
-                        entry.remove();
-                    }
-                }
-
-                Ok(no)
+                let woken = thread.process().futexes.wake(uaddr.get(), val, None);
+                Ok(u64::from(woken))
             }
             FutexOp::Fd => Err(Error::NoSys),
             FutexOp::REQUEUE => Err(Error::NoSys),
@@ -848,8 +828,27 @@ impl Syscall6 for SysFutex {
             FutexOp::LockPi => Err(Error::NoSys),
             FutexOp::UnlockPi => Err(Error::NoSys),
             FutexOp::TrylockPi => Err(Error::NoSys),
-            FutexOp::WaitBitset => Err(Error::NoSys),
-            FutexOp::WakeBitset => Err(Error::NoSys),
+            FutexOp::WaitBitset => {
+                assert_eq!(_utime, 0);
+                let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
+
+                vm_activator.activate(&thread.virtual_memory(), |vm| {
+                    thread
+                        .process()
+                        .futexes
+                        .wait(thread.tid, uaddr.get(), val, Some(bitset), vm)
+                })?;
+
+                Yield
+            }
+            FutexOp::WakeBitset => {
+                let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
+                let woken = thread
+                    .process()
+                    .futexes
+                    .wake(uaddr.get(), val, Some(bitset));
+                Ok(u64::from(woken))
+            }
             FutexOp::WaitRequeuePi => Err(Error::NoSys),
             FutexOp::CmpRequeuePi => Err(Error::NoSys),
             FutexOp::LockPi2 => Err(Error::NoSys),
