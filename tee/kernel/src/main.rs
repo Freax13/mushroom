@@ -11,6 +11,8 @@
     const_pointer_byte_offsets,
     const_slice_from_raw_parts_mut,
     core_intrinsics,
+    drain_filter,
+    drain_keep_rest,
     inline_const,
     int_roundings,
     naked_functions,
@@ -26,7 +28,6 @@ extern crate alloc;
 
 use constants::{KICK_AP_PORT, MAX_APS_COUNT};
 use exception::switch_stack;
-use log::info;
 use serial_log::SerialLogger;
 use x86_64::instructions::port::PortWriteOnly;
 
@@ -59,8 +60,6 @@ unsafe fn main() -> ! {
 }
 
 extern "C" fn init() -> ! {
-    info!("Hello from AP {}", PerCpu::get().idx);
-
     unsafe {
         // SAFETY: We're the only ones calling these functions and we're only
         // called once.

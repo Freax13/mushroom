@@ -19,7 +19,10 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET};
+use crate::{
+    per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
+    supervisor::schedule_vcpu,
+};
 
 use super::{
     fd::FileDescriptorTable,
@@ -28,11 +31,17 @@ use super::{
 };
 
 pub static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
-pub static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 
 pub fn new_tid() -> u32 {
     static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
     PID_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
+pub fn schedule_thread(tid: u32) {
+    RUNNABLE_THREADS.lock().push_back(tid);
+
+    schedule_vcpu();
 }
 
 pub struct Thread {
@@ -144,7 +153,7 @@ impl Thread {
         let tid = self.tid;
         let arc = Arc::new(Mutex::new(self));
         THREADS.lock().insert(tid, arc);
-        RUNNABLE_THREADS.lock().push_back(tid);
+        schedule_thread(tid);
     }
 
     fn run(&mut self, vm_activator: &mut VirtualMemoryActivator) {
@@ -435,14 +444,16 @@ impl UserspaceRegisters {
     };
 }
 
-pub fn run_thread(vm_activator: &mut VirtualMemoryActivator) {
-    let pid = RUNNABLE_THREADS.lock().pop_front();
-    let pid = pid.unwrap();
+/// Returns true if a thread was run.
+pub fn run_thread(vm_activator: &mut VirtualMemoryActivator) -> bool {
+    let Some(pid) = RUNNABLE_THREADS.lock().pop_front() else { return false; };
 
     let thread = THREADS.lock().get(&pid).cloned().unwrap();
 
     let mut guard = thread.lock();
     guard.run(vm_activator);
+
+    true
 }
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]

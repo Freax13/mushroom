@@ -25,6 +25,8 @@ pub const EXIT_PORT: u16 = 0xf4;
 pub const LOG_PORT: u16 = 0x3f8;
 pub const MEMORY_PORT: u16 = 0x1337;
 pub const KICK_AP_PORT: u16 = 0x7331;
+pub const SCHEDULE_PORT: u16 = 0x1373;
+pub const HALT_PORT: u16 = 0x7313;
 pub const MEMORY_MSR: u32 = 0x4000_0000;
 
 macro_rules! address {

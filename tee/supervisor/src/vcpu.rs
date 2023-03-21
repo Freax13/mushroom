@@ -1,10 +1,13 @@
 use core::{
-    cell::{RefCell, UnsafeCell},
+    cell::{Cell, RefCell, UnsafeCell},
     mem::replace,
 };
 
 use bit_field::BitField;
-use constants::{EXIT_PORT, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_MSR};
+use constants::{
+    EXIT_PORT, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_MSR,
+    SCHEDULE_PORT,
+};
 use log::{debug, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
@@ -39,6 +42,8 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
 pub static VCPUS: FakeSync<[RefCell<Vcpu>; MAX_APS_COUNT as usize]> =
     FakeSync::new([const { RefCell::new(Vcpu::new()) }; MAX_APS_COUNT as usize]);
 
+static SCHEDULE_COUNTER: FakeSync<Cell<u8>> = FakeSync::new(Cell::new(0));
+
 #[allow(clippy::large_enum_variant)]
 pub enum Vcpu {
     Uninitialized,
@@ -63,6 +68,7 @@ impl Vcpu {
 }
 
 pub struct Initialized {
+    halted: bool,
     apic_id: u8,
     log_buffer: LogBuffer,
     vmsa: AlignedVmsa,
@@ -264,6 +270,7 @@ impl Initialized {
         };
 
         Initialized {
+            halted: false,
             apic_id,
             log_buffer: LogBuffer::new(),
             vmsa: AlignedVmsa::new(vmsa),
@@ -301,7 +308,13 @@ impl Initialized {
 
         match guest_exit_code {
             VMEXIT_CPUID => handle_cpuid(vmsa),
-            VMEXIT_IOIO => handle_ioio_prot(guest_exit_info1, vmsa.rax, vmsa, &mut self.log_buffer),
+            VMEXIT_IOIO => handle_ioio_prot(
+                guest_exit_info1,
+                vmsa.rax,
+                vmsa,
+                &mut self.log_buffer,
+                &mut self.halted,
+            ),
             VMEXIT_MSR => handle_msr_prot(
                 guest_exit_info1,
                 vmsa.rax as u32,
@@ -317,7 +330,9 @@ impl Initialized {
             self.set_runnable(true);
         }
 
-        self.kick();
+        if !self.halted {
+            self.kick();
+        }
     }
 
     unsafe fn set_runnable(&mut self, runnable: bool) {
@@ -410,7 +425,13 @@ fn handle_cpuid(vmsa: &mut Vmsa) {
     vmsa.rip = vmsa.guest_nrip;
 }
 
-fn handle_ioio_prot(guest_exit_info1: u64, rax: u64, vmsa: &mut Vmsa, log_buffer: &mut LogBuffer) {
+fn handle_ioio_prot(
+    guest_exit_info1: u64,
+    rax: u64,
+    vmsa: &mut Vmsa,
+    log_buffer: &mut LogBuffer,
+    halted: &mut bool,
+) {
     let port = guest_exit_info1.get_bits(16..=31) as u16;
 
     match port {
@@ -436,6 +457,15 @@ fn handle_ioio_prot(guest_exit_info1: u64, rax: u64, vmsa: &mut Vmsa, log_buffer
                 Vcpu::Uninitialized => vcpu.start(FIRST_AP + apic_id),
                 Vcpu::Initialized(initialized) => initialized.kick(),
             }
+        }
+        SCHEDULE_PORT => {
+            let old_schedule_counter = SCHEDULE_COUNTER.get();
+            let new_schedule_counter =
+                old_schedule_counter.saturating_add(u8::try_from(rax).unwrap_or(!0));
+            SCHEDULE_COUNTER.set(new_schedule_counter);
+        }
+        HALT_PORT => {
+            *halted = true;
         }
         _ => unimplemented!("write to unexpected port: {port:#x}"),
     }
@@ -493,4 +523,50 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
 
     // Advance RIP.
     vmsa.rip = vmsa.guest_nrip;
+}
+
+pub fn schedule_vcpus() {
+    let mut schedule_counter = SCHEDULE_COUNTER.get();
+
+    while schedule_counter > 0 {
+        if !schedule_one() {
+            break;
+        }
+        schedule_counter -= 1;
+    }
+
+    SCHEDULE_COUNTER.set(schedule_counter);
+}
+
+/// Returns true if a vcpu was scheduled.
+fn schedule_one() -> bool {
+    for vcpu in VCPUS.iter() {
+        let mut vcpu = vcpu.borrow_mut();
+        if let Vcpu::Initialized(initialized) = &mut *vcpu {
+            if initialized.halted {
+                debug!("kick core {}", initialized.apic_id - FIRST_AP);
+                initialized.halted = false;
+                initialized.kick();
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Returns true if all APs are halted.
+pub fn all_halted() -> bool {
+    for vcpu in VCPUS.iter() {
+        match &*vcpu.borrow() {
+            Vcpu::Uninitialized => {}
+            Vcpu::Initialized(i) => {
+                if !i.halted {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
 }

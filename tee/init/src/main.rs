@@ -6,23 +6,22 @@ fn main() -> Result<()> {
     let tid = gettid();
     println!("Hi, my pid is {pid}, my tid is {tid:?}!");
 
-    let _ = std::thread::spawn(|| {
-        let pid = std::process::id();
-        let tid = gettid();
-        println!("Hi, my pid is {pid}, my tid is {tid:?}!");
-    })
-    .join();
-
-    if std::env::args().count() == 1 {
-        println!("Hello from process 1");
-
-        std::process::Command::new("/bin/init")
-            .arg("hello")
-            .status()?;
-    } else {
-        println!("Hello from process 2");
-
-        return Ok(());
+    for i in 0..4 {
+        std::thread::spawn(|| {
+            for i in 0..4 {
+                let _ = std::thread::spawn(|| {
+                    std::thread::spawn(|| {
+                        for i in 0..4 {
+                            let _ = std::thread::spawn(|| {
+                                let pid = std::process::id();
+                                let tid = gettid();
+                                println!("Hi, my pid is {pid}, my tid is {tid:?}!");
+                            });
+                        }
+                    });
+                });
+            }
+        });
     }
 
     let mut input = std::fs::File::open("/dev/input").context("failed to open input file")?;

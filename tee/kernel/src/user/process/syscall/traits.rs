@@ -8,6 +8,7 @@ use log::{trace, warn};
 
 use crate::{
     error::{Error, Result},
+    per_cpu::PerCpu,
     user::process::{memory::VirtualMemoryActivator, thread::Thread},
 };
 
@@ -525,7 +526,12 @@ impl SyscallHandlers {
             arg4,
             arg5,
         };
-        trace!("{formatted_syscall} = {res:?}");
+
+        trace!(
+            "core={} tid={} @ {formatted_syscall} = {res:?}",
+            PerCpu::get().idx,
+            thread.tid
+        );
 
         res
     }

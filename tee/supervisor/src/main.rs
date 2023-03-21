@@ -17,7 +17,11 @@ use log::{debug, info, LevelFilter};
 use serial_log::SerialLogger;
 use x86_64::instructions::hlt;
 
-use crate::{doorbell::DOORBELL, ghcb::eoi, vcpu::Vcpu};
+use crate::{
+    doorbell::DOORBELL,
+    ghcb::eoi,
+    vcpu::{all_halted, Vcpu},
+};
 
 mod cpuid;
 mod doorbell;
@@ -50,6 +54,10 @@ fn main() {
     loop {
         let pending_event = DOORBELL.fetch_pending_event();
         if pending_event.is_empty() {
+            if all_halted() {
+                panic!("all APs are halted");
+            }
+
             hlt();
             continue;
         }
@@ -67,6 +75,8 @@ fn main() {
                 panic!("can't handle event for uninitialized vcpu");
             }
         }
+
+        vcpu::schedule_vcpus();
 
         if DOORBELL.requires_eoi() {
             eoi().unwrap();

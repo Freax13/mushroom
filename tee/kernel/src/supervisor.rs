@@ -1,5 +1,6 @@
-use constants::MEMORY_MSR;
+use constants::{HALT_PORT, MEMORY_MSR, SCHEDULE_PORT};
 use x86_64::{
+    instructions::port::PortWriteOnly,
     registers::model_specific::Msr,
     structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB},
     PhysAddr,
@@ -30,5 +31,19 @@ impl FrameDeallocator<Size2MiB> for Allocator {
         unsafe {
             memory_msr.write(addr);
         }
+    }
+}
+
+/// Halt this vcpu.
+pub fn halt() {
+    unsafe {
+        PortWriteOnly::new(HALT_PORT).write(0u32);
+    }
+}
+
+/// Tell the supervisor to schedule another vcpu.
+pub fn schedule_vcpu() {
+    unsafe {
+        PortWriteOnly::new(SCHEDULE_PORT).write(1u32);
     }
 }
