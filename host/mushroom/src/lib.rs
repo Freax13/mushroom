@@ -5,7 +5,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
     mem::size_of,
-    num::Saturating,
     ptr::NonNull,
     sync::Arc,
     thread::JoinHandle,
@@ -192,8 +191,6 @@ impl VmContext {
     pub fn run_bsp(&mut self) -> Result<MushroomResult> {
         let mut output = Vec::new();
         let kvm_run = self.bsp.get_kvm_run_block()?;
-
-        let mut cooldown = Saturating(0u32);
 
         const DEBUG: bool = false;
 
@@ -403,13 +400,6 @@ impl VmContext {
                 }
                 KvmExit::Hlt => {
                     dbg!("hlt");
-                }
-                KvmExit::IrqWindowOpen => {
-                    cooldown -= 1;
-                    if cooldown.0 == 0 {
-                        // dbg!(vcpu.queue_interrupt(NonZeroU8::new(step as u8).unwrap()));
-                        cooldown = Saturating(10);
-                    }
                 }
                 KvmExit::Interrupted => {}
                 exit => {
