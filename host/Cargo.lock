@@ -1589,8 +1589,3 @@ dependencies = [
  "rustversion",
  "volatile 0.4.5",
 ]
-
-[[patch.unused]]
-name = "tokio"
-version = "1.23.0"
-source = "git+https://github.com/tokio-rs/tokio?rev=0fb1b29#0fb1b29f4056353eafe077ff13babf3d247db1d1"

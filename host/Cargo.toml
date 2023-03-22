@@ -13,4 +13,3 @@ vcek-kds = { path = "vcek-kds" }
 [patch.crates-io]
 bytemuck = { git = "https://github.com/Freax13/bytemuck.git", rev = "e63ffe8d10129a70a28fcad2bf656782bec8d4bb" }
 nix = { path = "../../code/nix" }
-tokio = { git = "https://github.com/tokio-rs/tokio", rev = "0fb1b29" }
