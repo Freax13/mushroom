@@ -382,7 +382,7 @@ impl VmContext {
                     FINISH_OUTPUT_MSR => {
                         let gfn =
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
-                        let len = ((msr.data & 0xfff) + 1) as usize;
+                        let len = (msr.data & 0xfff) as usize;
 
                         let slot = find_slot(gfn, &mut self.memory_slots)?;
                         let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
