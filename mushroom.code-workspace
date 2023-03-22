@@ -1,17 +1,18 @@
 {
-  "folders": [
-	{
-		"path": "common"
-	},
-	{
-		"path": "host"
-	},
-	{
-		"path": "tee"
+	"folders": [
+		{
+			"path": "common"
+		},
+		{
+			"path": "host"
+		},
+		{
+			"path": "tee"
+		}
+	],
+	"settings": {
+		"rust-analyzer.checkOnSave.allTargets": false,
+		"rust-analyzer.check.allTargets": false,
+		"rust-analyzer.cargo.features": "all",
 	}
-],
-"settings": {
-	"rust-analyzer.checkOnSave.allTargets": false,
-	"rust-analyzer.check.allTargets": false
-}
 }
