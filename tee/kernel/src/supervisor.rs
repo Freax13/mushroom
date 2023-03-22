@@ -1,10 +1,15 @@
-use constants::{HALT_PORT, MEMORY_MSR, SCHEDULE_PORT};
+use core::cell::LazyCell;
+
+use constants::{HALT_PORT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR};
+use spin::Mutex;
 use x86_64::{
     instructions::port::PortWriteOnly,
     registers::model_specific::Msr,
     structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB},
     PhysAddr,
 };
+
+use crate::memory::{frame::DUMB_FRAME_ALLOCATOR, temporary::copy_into_frame};
 
 pub struct Allocator;
 
@@ -45,5 +50,30 @@ pub fn halt() {
 pub fn schedule_vcpu() {
     unsafe {
         PortWriteOnly::new(SCHEDULE_PORT).write(1u32);
+    }
+}
+
+pub fn output(bytes: &[u8]) {
+    static FRAME: Mutex<LazyCell<PhysFrame>> = Mutex::new(LazyCell::new(|| {
+        (&DUMB_FRAME_ALLOCATOR)
+            .allocate_frame()
+            .expect("failed to allocate frame for output")
+    }));
+
+    let guard = FRAME.lock();
+    let frame = **guard;
+
+    for chunk in bytes.chunks(0x1000) {
+        let mut buffer = [0; 0x1000];
+        buffer[..chunk.len()].copy_from_slice(chunk);
+
+        unsafe {
+            copy_into_frame(frame, &buffer);
+        }
+
+        let command = frame.start_address().as_u64() | (chunk.len() as u64 - 1);
+        unsafe {
+            Msr::new(UPDATE_OUTPUT_MSR).write(command);
+        }
     }
 }

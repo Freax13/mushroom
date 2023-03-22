@@ -1116,6 +1116,9 @@ impl KvmRun {
             24 => KvmExit::SystemEvent(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitSystemEvent>()],
             )),
+            30 => KvmExit::Msr(pod_read_unaligned(
+                &self.exit_data[..size_of::<KvmExitMsr>()],
+            )),
             38 => KvmExit::MemoryFault(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitMemoryFault>()],
             )),
@@ -1226,6 +1229,7 @@ pub enum KvmExit {
     Interrupted,
     Internal(KvmExitInternalError),
     SystemEvent(KvmExitSystemEvent),
+    Msr(KvmExitMsr),
     MemoryFault(KvmExitMemoryFault),
     Vmgexit(KvmExitVmgexit),
     ReflectVc,
@@ -1293,6 +1297,26 @@ pub struct KvmExitSystemEvent {
 
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
 #[repr(C, packed)]
+pub struct KvmExitMsr {
+    _error: u8, /* user -> kernel */
+    _pad: [u8; 7],
+    pub reason: KvmMsrExitReason, /* kernel -> user */
+    pub index: u32,               /* kernel -> user */
+    pub data: u64,                /* kernel <-> user */
+}
+
+bitflags! {
+    #[derive(Pod, Zeroable)]
+    #[repr(transparent)]
+    pub struct KvmMsrExitReason: u32 {
+        const INVAL = 1 << 0;
+        const UNKNOWN = 1 << 1;
+        const FILTER = 1 << 2;
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable, Debug)]
+#[repr(C, packed)]
 pub struct KvmExitMemoryFault {
     pub flags: KvmExitMemoryFaultFlags,
     pub gpa: u64,
@@ -1351,6 +1375,7 @@ pub struct KvmCap(pub u32);
 impl KvmCap {
     pub const SPLIT_IRQCHIP: Self = Self(121);
     pub const X2APIC_API: Self = Self(129);
+    pub const X86_USER_SPACE_MSR: Self = Self(188);
     pub const PRIVATE_MEM: Self = Self(224);
     pub const UNMAPPED_PRIVATE_MEM: Self = Self(240);
 }

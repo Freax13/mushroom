@@ -28,6 +28,8 @@ pub const KICK_AP_PORT: u16 = 0x7331;
 pub const SCHEDULE_PORT: u16 = 0x1373;
 pub const HALT_PORT: u16 = 0x7313;
 pub const MEMORY_MSR: u32 = 0x4000_0000;
+pub const UPDATE_OUTPUT_MSR: u32 = 0x4000_0001;
+pub const FINISH_OUTPUT_MSR: u32 = 0x4000_0002;
 
 macro_rules! address {
     ($(#[$meta:meta])* const $ident:ident = $start:literal;) => {

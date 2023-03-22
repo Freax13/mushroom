@@ -6,16 +6,16 @@ use core::{
 use bit_field::BitField;
 use constants::{
     EXIT_PORT, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_MSR,
-    SCHEDULE_PORT,
+    SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
 };
-use log::{debug, trace};
+use log::{debug, info, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
     vmsa::{Segment, SevFeatures, Vmsa},
     Reserved, Uninteresting, VmplPermissions,
 };
 use x86_64::{
-    instructions::port::PortWriteOnly,
+    instructions::{hlt, port::PortWriteOnly},
     registers::{
         control::{Cr0Flags, Cr4Flags},
         model_specific::EferFlags,
@@ -26,8 +26,10 @@ use x86_64::{
 
 use crate::{
     cpuid::{c_bit_location, get_cpuid_value},
+    doorbell::DOORBELL,
     dynamic::{rmpadjust, HOST_ALLOCTOR},
-    ghcb::{create_ap, exit},
+    ghcb::{create_ap, eoi, exit},
+    output::update_output,
     pagetable::{ref_to_pa, TEMPORARY_MAPPER},
     FakeSync,
 };
@@ -505,15 +507,31 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
         }
         1 => {
             // Write
+            let value = u64::from(edx) << 32 | u64::from(eax);
             match ecx {
                 MEMORY_MSR => {
-                    let value = u64::from(edx) << 32 | u64::from(eax);
                     let addr = PhysAddr::new(value);
                     let frame = PhysFrame::from_start_address(addr).unwrap();
                     trace!("deallocating {frame:?}");
                     unsafe {
                         (&HOST_ALLOCTOR).deallocate_frame(frame);
                     }
+                }
+                UPDATE_OUTPUT_MSR => {
+                    let frame = PhysFrame::containing_address(PhysAddr::new(value));
+                    let len = ((value & 0xfff) + 1) as usize;
+
+                    let mut buffer = [0; 0x1000];
+                    let buffer = &mut buffer[..len];
+
+                    {
+                        let mapping = TEMPORARY_MAPPER
+                            .borrow_mut()
+                            .create_temporary_mapping_4kib(frame);
+                        mapping.read(buffer);
+                    }
+
+                    update_output(buffer);
                 }
                 _ => unimplemented!("unhandled MSR {ecx:#x}"),
             }
@@ -523,6 +541,45 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
 
     // Advance RIP.
     vmsa.rip = vmsa.guest_nrip;
+}
+
+pub fn run_aps() {
+    info!("booting first AP");
+    let mut first_vcpu = VCPUS[0].borrow_mut();
+    first_vcpu.start(FIRST_AP);
+    drop(first_vcpu);
+
+    loop {
+        let pending_event = DOORBELL.fetch_pending_event();
+        if pending_event.is_empty() {
+            if all_halted() {
+                break;
+            }
+
+            hlt();
+            continue;
+        }
+
+        assert!(!pending_event.nmi());
+        assert!(!pending_event.mc());
+
+        let vector = pending_event.vector().unwrap().get();
+        let idx = usize::from(vector - FIRST_AP);
+        {
+            let mut vcpu = VCPUS[idx].borrow_mut();
+            if let Vcpu::Initialized(initialized) = &mut *vcpu {
+                initialized.handle_vc();
+            } else {
+                panic!("can't handle event for uninitialized vcpu");
+            }
+        }
+
+        schedule_vcpus();
+
+        if DOORBELL.requires_eoi() {
+            eoi().unwrap();
+        }
+    }
 }
 
 pub fn schedule_vcpus() {

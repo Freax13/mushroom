@@ -16,7 +16,8 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use bit_field::BitField;
 use bytemuck::NoUninit;
 use constants::{
-    physical_address::DYNAMIC, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_PORT,
+    physical_address::DYNAMIC, FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT,
+    MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use kvm::{KvmHandle, Page, VcpuHandle};
 use snp_types::{
@@ -35,26 +36,24 @@ use volatile::{
     map_field, map_field_mut, VolatilePtr,
 };
 use x86_64::{
-    structures::paging::{PageSize as _, PhysFrame, Size2MiB},
+    structures::paging::{PageSize as _, PhysFrame, Size2MiB, Size4KiB},
     PhysAddr,
 };
 
 use crate::{
-    kvm::{KvmExit, KvmExitUnknown, KvmMemoryAttributes, SevHandle, VmHandle},
+    kvm::{KvmCap, KvmExit, KvmExitUnknown, KvmMemoryAttributes, SevHandle, VmHandle},
     slot::Slot,
 };
 
 mod kvm;
 mod slot;
 
-pub fn main(init: &[u8], input: &[u8]) -> Result<()> {
+pub fn main(init: &[u8], input: &[u8]) -> Result<MushroomResult> {
     let kvm_handle = KvmHandle::new()?;
     let sev_handle = SevHandle::new()?;
 
     let mut vm_context = VmContext::prepare_vm(init, input, &kvm_handle, &sev_handle)?;
-    vm_context.run_bsp()?;
-
-    Ok(())
+    vm_context.run_bsp()
 }
 
 struct VmContext {
@@ -82,6 +81,9 @@ impl VmContext {
 
         let vm = kvm_handle.create_vm(true)?;
         let vm = Arc::new(vm);
+
+        const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
+        vm.enable_capability(KvmCap::X86_USER_SPACE_MSR, KVM_MSR_EXIT_REASON_UNKNOWN)?;
 
         vm.create_irqchip()?;
 
@@ -187,7 +189,8 @@ impl VmContext {
         })
     }
 
-    pub fn run_bsp(&mut self) -> Result<()> {
+    pub fn run_bsp(&mut self) -> Result<MushroomResult> {
+        let mut output = Vec::new();
         let kvm_run = self.bsp.get_kvm_run_block()?;
 
         let mut cooldown = Saturating(0u32);
@@ -290,7 +293,7 @@ impl VmContext {
                     match info {
                         GhcbInfo::GhcbGuestPhysicalAddress { address } => {
                             let ghcb_slot = find_slot(address, &mut self.memory_slots)?;
-                            let ghcb = ghcb_slot.read::<Ghcb>(ghcb_slot.gpa().start_address())?;
+                            let ghcb = ghcb_slot.read::<Ghcb>(address.start_address())?;
 
                             let exit_code = ghcb.sw_exit_code;
                             debug!(exit_code = %format_args!("{exit_code:#010x}"), "handling ghcb request");
@@ -367,6 +370,34 @@ impl VmContext {
                         _ => bail!("unsupported msr protocol value: {info:?}"),
                     }
                 }
+                KvmExit::Msr(msr) => match msr.index {
+                    UPDATE_OUTPUT_MSR => {
+                        let gfn =
+                            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
+                        let len = ((msr.data & 0xfff) + 1) as usize;
+
+                        let slot = find_slot(gfn, &mut self.memory_slots)?;
+                        let output_buffer = slot.read::<[u8; 4096]>(gfn.start_address())?;
+
+                        let output_slice = &output_buffer[..len];
+                        output.extend_from_slice(output_slice);
+                    }
+                    FINISH_OUTPUT_MSR => {
+                        let gfn =
+                            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
+                        let len = ((msr.data & 0xfff) + 1) as usize;
+
+                        let slot = find_slot(gfn, &mut self.memory_slots)?;
+                        let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
+
+                        let attestation_report = attestation_report[..len].to_vec();
+                        return Ok(MushroomResult {
+                            output,
+                            attestation_report,
+                        });
+                    }
+                    index => unimplemented!("unsupported MSR: {index:#08x}"),
+                },
                 KvmExit::Other { exit_reason } => {
                     unimplemented!("exit with type: {exit_reason}");
                 }
@@ -575,4 +606,9 @@ where
         // slice of bytes.
         VolatilePtr::new_generic(ptr)
     }
+}
+
+pub struct MushroomResult {
+    pub output: Vec<u8>,
+    pub attestation_report: Vec<u8>,
 }

@@ -373,6 +373,18 @@ impl TemporaryMapping<Size4KiB> {
 
         unsafe { &*self.page.start_address().as_ptr() }
     }
+
+    /// Copy memory from the mapping into a buffer.
+    pub fn read(&self, out: &mut [u8]) {
+        assert!(out.len() <= 4096);
+        unsafe {
+            core::intrinsics::volatile_copy_nonoverlapping_memory(
+                out.as_mut_ptr(),
+                self.page.start_address().as_ptr(),
+                out.len(),
+            );
+        }
+    }
 }
 
 impl TemporaryMapping<Size2MiB> {

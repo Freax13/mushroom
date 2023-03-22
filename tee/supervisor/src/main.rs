@@ -12,16 +12,11 @@
 
 use core::ops::Deref;
 
-use constants::FIRST_AP;
-use log::{debug, info, LevelFilter};
+use log::{debug, LevelFilter};
 use serial_log::SerialLogger;
 use x86_64::instructions::hlt;
 
-use crate::{
-    doorbell::DOORBELL,
-    ghcb::eoi,
-    vcpu::{all_halted, Vcpu},
-};
+use crate::{output::finish, vcpu::run_aps};
 
 mod cpuid;
 mod doorbell;
@@ -29,6 +24,7 @@ mod dynamic;
 mod exception;
 mod ghcb;
 mod input;
+mod output;
 mod pagetable;
 mod panic;
 mod reset_vector;
@@ -45,42 +41,12 @@ fn main() {
 
     input::verify_input();
 
-    {
-        info!("booting first AP");
-        let mut first_vcpu = vcpu::VCPUS[0].borrow_mut();
-        first_vcpu.start(FIRST_AP);
-    }
+    run_aps();
+
+    finish();
 
     loop {
-        let pending_event = DOORBELL.fetch_pending_event();
-        if pending_event.is_empty() {
-            if all_halted() {
-                panic!("all APs are halted");
-            }
-
-            hlt();
-            continue;
-        }
-
-        assert!(!pending_event.nmi());
-        assert!(!pending_event.mc());
-
-        let vector = pending_event.vector().unwrap().get();
-        let idx = usize::from(vector - FIRST_AP);
-        {
-            let mut vcpu = vcpu::VCPUS[idx].borrow_mut();
-            if let Vcpu::Initialized(initialized) = &mut *vcpu {
-                initialized.handle_vc();
-            } else {
-                panic!("can't handle event for uninitialized vcpu");
-            }
-        }
-
-        vcpu::schedule_vcpus();
-
-        if DOORBELL.requires_eoi() {
-            eoi().unwrap();
-        }
+        hlt();
     }
 }
 

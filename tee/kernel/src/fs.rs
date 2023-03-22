@@ -12,7 +12,10 @@ use crate::{
     },
 };
 
-use self::node::{special::NullFile, Directory, TmpFsDirectory, TmpFsFile, ROOT_NODE};
+use self::node::{
+    special::{NullFile, OutputFile},
+    Directory, TmpFsDirectory, TmpFsFile, ROOT_NODE,
+};
 
 pub mod node;
 pub mod path;
@@ -32,6 +35,7 @@ pub fn init() -> Result<()> {
         FileName::new(b"input").unwrap(),
         TmpFsFile::new(false, &INPUT),
     );
+    dev.mount(FileName::new(b"output").unwrap(), OutputFile::new());
     dev.mount(FileName::new(b"null").unwrap(), NullFile);
 
     Ok(())
