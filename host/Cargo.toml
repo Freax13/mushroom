@@ -1,9 +1,11 @@
 [workspace]
-members = ["mushroom"]
+members = ["mushroom", "mushroom-verify"]
 
 [workspace.dependencies]
 mushroom = { path = "mushroom" }
+mushroom-verify = { path = "mushroom-verify" }
 constants = { path = "../common/constants" }
+io = { path = "../common/io" }
 loader = { path = "../common/loader" }
 snp-types = { path = "../common/snp-types" }
 

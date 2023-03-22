@@ -308,12 +308,24 @@ dependencies = [
  "constants",
  "libc",
  "loader",
+ "mushroom-verify",
  "nix",
  "snp-types",
  "tracing",
  "tracing-subscriber",
  "volatile 0.4.4",
  "x86_64",
+]
+
+[[package]]
+name = "mushroom-verify"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "io",
+ "loader",
+ "sha2",
+ "snp-types",
 ]
 
 [[package]]

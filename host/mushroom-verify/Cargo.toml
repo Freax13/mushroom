@@ -1,0 +1,11 @@
+[package]
+name = "mushroom-verify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = { version = "1.13.0", features = ["derive", "min_const_generics"] }
+loader = { workspace = true }
+io = { workspace = true }
+sha2 = "0.10.6"
+snp-types = { workspace = true }

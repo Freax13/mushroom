@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use mushroom_verify::{Configuration, InputHash, OutputHash};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -9,6 +10,7 @@ fn main() -> Result<()> {
     let mushroom = Mushroom::parse();
     match mushroom.subcommand {
         MushroomSubcommand::Run(args) => run(args),
+        MushroomSubcommand::Verify(args) => verify(args),
     }
 }
 
@@ -23,6 +25,8 @@ struct Mushroom {
 enum MushroomSubcommand {
     /// Run some code.
     Run(RunCommand),
+    /// Verify a output and attestation report.
+    Verify(VerifyCommand),
 }
 
 #[derive(Args)]
@@ -43,13 +47,50 @@ struct RunCommand {
 
 fn run(run: RunCommand) -> Result<()> {
     let init = std::fs::read(run.init).context("failed to read init file")?;
-    let input = std::fs::read(run.input).context("failed to read init file")?;
+    let input = std::fs::read(run.input).context("failed to read input file")?;
 
     let result = mushroom::main(&init, &input)?;
 
     std::fs::write(run.output, result.output).context("failed to write output")?;
     std::fs::write(run.attestation_report, result.attestation_report)
         .context("failed to write attestation report")?;
+
+    Ok(())
+}
+
+#[derive(Args)]
+struct VerifyCommand {
+    /// Path to the binary to run.
+    #[arg(long, value_name = "PATH")]
+    init: PathBuf,
+    /// Path to the input to process.
+    #[arg(long, value_name = "PATH")]
+    input: PathBuf,
+    /// Path to store the output.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+    /// Path to store the attestation report.
+    #[arg(long, value_name = "PATH")]
+    attestation_report: PathBuf,
+}
+
+fn verify(run: VerifyCommand) -> Result<()> {
+    let init = std::fs::read(run.init).context("failed to read init file")?;
+    let input = std::fs::read(run.input).context("failed to read input file")?;
+    let output = std::fs::read(run.output).context("failed to read output file")?;
+    let attestation_report =
+        std::fs::read(run.attestation_report).context("failed to read attestation report")?;
+
+    let input_hash = InputHash::new(&input);
+    let output_hash = OutputHash::new(&output);
+
+    let configuration = Configuration::new(&init);
+    // FIXME: use proper error type and use `?` instead of unwrap.
+    configuration
+        .verify(input_hash, output_hash, &attestation_report)
+        .unwrap();
+
+    println!("Ok");
 
     Ok(())
 }
