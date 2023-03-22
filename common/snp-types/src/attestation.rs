@@ -1,4 +1,4 @@
-use bytemuck::{CheckedBitPattern, NoUninit};
+use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit};
 
 use crate::Reserved;
 
@@ -87,6 +87,13 @@ pub struct AttestionReportV2 {
     pub launch_tcb: TcbVersion,
     _reserved5: Reserved<168>,
     pub signature: [u8; 512],
+}
+
+#[derive(Clone, Copy, AnyBitPattern)]
+#[repr(C)]
+pub struct EcdsaP384Sha384Signature {
+    pub r: [u8; 72],
+    pub s: [u8; 72],
 }
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern)]

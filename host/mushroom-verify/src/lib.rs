@@ -1,12 +1,12 @@
 use std::mem::size_of;
 
-use bytemuck::{bytes_of, checked::try_pod_read_unaligned, NoUninit};
+use bytemuck::{bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned, NoUninit};
 use io::input::Header;
 use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
-use openssl::x509::X509;
+use openssl::{bn::BigNum, ecdsa::EcdsaSig, x509::X509};
 use sha2::{Digest, Sha256, Sha384};
 use snp_types::{
-    attestation::{AttestionReport, TcbVersion},
+    attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
     PageType, VmplPermissions,
 };
 
@@ -39,12 +39,12 @@ impl Configuration {
         input_hash: InputHash,
         output_hash: OutputHash,
         attestation_report: &[u8],
-        _vcek: &X509,
+        vcek: &X509,
     ) -> Result<(), VerificationError> {
-        let attestion_report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
+        let report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
             .map_err(|_| VerificationError(()))?;
 
-        let AttestionReport::V2(report) = attestion_report;
+        let AttestionReport::V2(report) = report;
 
         macro_rules! verify_eq {
             ($lhs:expr, $rhs:expr) => {
@@ -60,7 +60,20 @@ impl Configuration {
         verify_eq!(report.measurement, self.launch_digest);
         verify_eq!(report.host_data, input_hash.0);
 
-        // FIXME: Actually verify the signatures lol
+        verify_eq!(report.signature_algo, 1);
+
+        // Construct signature.
+        let signature = &report.signature[..size_of::<EcdsaP384Sha384Signature>()];
+        let signature = pod_read_unaligned::<EcdsaP384Sha384Signature>(signature);
+        let r = BigNum::from_slice(&signature.r).map_err(|_| VerificationError(()))?;
+        let s = BigNum::from_slice(&signature.r).map_err(|_| VerificationError(()))?;
+        let sig = EcdsaSig::from_private_components(r, s).map_err(|_| VerificationError(()))?;
+
+        // Verify signature.
+        let public_key = vcek.public_key().map_err(|_| VerificationError(()))?;
+        let ec_key = public_key.ec_key().map_err(|_| VerificationError(()))?;
+        sig.verify(&attestation_report[..=0x29f], &ec_key)
+            .map_err(|_| VerificationError(()))?;
 
         Ok(())
     }
