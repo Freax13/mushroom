@@ -15,7 +15,7 @@ use snp_types::{
         AttestionReport, KeySelect, MsgReportReq, MsgReportRspHeader, MsgReportRspStatus,
     },
     ghcb::{
-        msr_protocol::{GhcbInfo, GhcbProtocolMsr, TerminateReasonCode},
+        msr_protocol::{GhcbInfo, GhcbProtocolMsr, PageOperation, TerminateReasonCode},
         Ghcb, ProtocolVersion,
     },
     guest_message::{Algo, Content, ContentV1, Message},
@@ -127,6 +127,32 @@ pub fn ioio_write(port: u16, value: u32) {
         vmgexit();
     })
     .unwrap();
+}
+
+pub fn page_state_change(address: PhysFrame, operation: PageOperation) {
+    let mut msr = GhcbProtocolMsr::MSR;
+
+    // Save the GHCB MSR.
+    let prev_value = unsafe { msr.read() };
+
+    // Write the request.
+    let request = u64::from(GhcbInfo::SnpPageStateChangeRequest { operation, address });
+    unsafe { msr.write(request) }
+
+    // Execute the request.
+    vmgexit();
+
+    // Read the response.
+    let response = GhcbInfo::try_from(unsafe { msr.read() }).unwrap();
+
+    // Restore the GHCB MSR.
+    unsafe {
+        msr.write(prev_value);
+    }
+
+    // Verify the response.
+    let GhcbInfo::SnpPageStateChangeResponse { error_code } = response else { panic!("unexpected response: {response:?}") };
+    assert_eq!(error_code, None);
 }
 
 pub fn write_msr(msr: u32, value: u64) -> Result<(), GhcbInUse> {

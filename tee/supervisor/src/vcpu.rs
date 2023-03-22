@@ -525,9 +525,8 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
                     let buffer = &mut buffer[..len];
 
                     {
-                        let mapping = TEMPORARY_MAPPER
-                            .borrow_mut()
-                            .create_temporary_mapping_4kib(frame);
+                        let mut mapper = TEMPORARY_MAPPER.borrow_mut();
+                        let mapping = mapper.create_temporary_mapping_4kib(frame, true);
                         mapping.read(buffer);
                     }
 

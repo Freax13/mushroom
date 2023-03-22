@@ -6,7 +6,7 @@ use core::{
 };
 
 use bit_field::BitField;
-use snp_types::VmplPermissions;
+use snp_types::{ghcb::msr_protocol::PageOperation, VmplPermissions};
 use x86_64::{
     structures::paging::{
         page::NotGiantPageSize, Page, PageSize, PageTableIndex, PhysFrame, Size1GiB, Size2MiB,
@@ -18,7 +18,7 @@ use x86_64::{
 use crate::{
     cpuid::c_bit_location,
     dynamic::{pvalidate, pvalidate_2mib, rmpadjust, rmpadjust_2mib},
-    FakeSync,
+    ghcb, FakeSync,
 };
 
 /// A macro to get the physical address of a static variable.
@@ -261,9 +261,9 @@ impl PageTableEntry<Level2> {
 }
 
 impl PageTableEntry<Level1> {
-    pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size4KiB>) {
+    pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size4KiB>, private: bool) {
         self.value.store(
-            addr.start_address().as_u64() | 1 | (1 << 7) | (1 << c_bit_location()),
+            addr.start_address().as_u64() | 1 | (1 << 7) | (u64::from(private) << c_bit_location()),
             Ordering::SeqCst,
         );
     }
@@ -286,6 +286,7 @@ impl TemporaryMapper {
     pub fn create_temporary_mapping_4kib(
         &mut self,
         frame: PhysFrame<Size4KiB>,
+        private: bool,
     ) -> TemporaryMapping<Size4KiB> {
         let page = Page::from_start_address(VirtAddr::new(0x400000000000)).unwrap();
 
@@ -304,12 +305,16 @@ impl TemporaryMapper {
         };
         let pte = &pt[page.p1_index()];
         unsafe {
-            pte.create_temporary_mapping(frame);
+            pte.create_temporary_mapping(frame, private);
         }
 
         x86_64::instructions::tlb::flush_all();
 
-        TemporaryMapping { page }
+        TemporaryMapping {
+            mapper: self,
+            frame,
+            page,
+        }
     }
 
     pub fn create_temporary_mapping_2mib(
@@ -333,19 +338,25 @@ impl TemporaryMapper {
 
         x86_64::instructions::tlb::flush_all();
 
-        TemporaryMapping { page }
+        TemporaryMapping {
+            mapper: self,
+            frame,
+            page,
+        }
     }
 }
 
-pub struct TemporaryMapping<S>
+pub struct TemporaryMapping<'a, S>
 where
     S: NotGiantPageSize,
 {
+    mapper: &'a mut TemporaryMapper,
+    frame: PhysFrame<S>,
     page: Page<S>,
 }
 
-impl TemporaryMapping<Size4KiB> {
-    pub unsafe fn convert_to_private_in_place(&self) -> &[u8; 4096] {
+impl TemporaryMapping<'_, Size4KiB> {
+    pub unsafe fn convert_to_private_in_place(&mut self) -> &[u8; 4096] {
         // Copy to content out of the page.
         let mut content = [0u8; 0x1000];
         unsafe {
@@ -355,6 +366,11 @@ impl TemporaryMapping<Size4KiB> {
                 1,
             );
         }
+
+        // Tell the Hypervisor that we want to change the page to private.
+        ghcb::page_state_change(self.frame, PageOperation::PageAssignmentPrivate);
+
+        self.mapper.create_temporary_mapping_4kib(self.frame, true);
 
         // Convert the page to private.
         pvalidate(self.page, true).unwrap();
@@ -387,7 +403,7 @@ impl TemporaryMapping<Size4KiB> {
     }
 }
 
-impl TemporaryMapping<Size2MiB> {
+impl TemporaryMapping<'_, Size2MiB> {
     pub unsafe fn rmpadjust(&self, target_vmpl: u8, target_perm_mask: VmplPermissions, vmsa: bool) {
         rmpadjust_2mib(self.page, target_vmpl, target_perm_mask, vmsa);
     }
