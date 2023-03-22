@@ -2,15 +2,17 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use mushroom_verify::{Configuration, InputHash, OutputHash};
+use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
+use vcek_kds::Product;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let mushroom = Mushroom::parse();
     match mushroom.subcommand {
         MushroomSubcommand::Run(args) => run(args),
-        MushroomSubcommand::Verify(args) => verify(args),
+        MushroomSubcommand::Verify(args) => verify(args).await,
     }
 }
 
@@ -74,7 +76,7 @@ struct VerifyCommand {
     attestation_report: PathBuf,
 }
 
-fn verify(run: VerifyCommand) -> Result<()> {
+async fn verify(run: VerifyCommand) -> Result<()> {
     let init = std::fs::read(run.init).context("failed to read init file")?;
     let input = std::fs::read(run.input).context("failed to read input file")?;
     let output = std::fs::read(run.output).context("failed to read output file")?;
@@ -84,10 +86,23 @@ fn verify(run: VerifyCommand) -> Result<()> {
     let input_hash = InputHash::new(&input);
     let output_hash = OutputHash::new(&output);
 
+    // FIXME: use proper error type and use `?` instead of unwrap.
+    let product = Product::Milan;
+    let params = VcekParameters::for_attestaton_report(&attestation_report).unwrap();
+    let vcek_cert = vcek_kds::vcek_cert(
+        product,
+        params.chip_id,
+        params.tcb.bootloader(),
+        params.tcb.tee(),
+        params.tcb.snp(),
+        params.tcb.microcode(),
+    )
+    .await?;
+
     let configuration = Configuration::new(&init);
     // FIXME: use proper error type and use `?` instead of unwrap.
     configuration
-        .verify(input_hash, output_hash, &attestation_report)
+        .verify(input_hash, output_hash, &attestation_report, &vcek_cert)
         .unwrap();
 
     println!("Ok");

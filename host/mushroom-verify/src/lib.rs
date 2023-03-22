@@ -3,8 +3,12 @@ use std::mem::size_of;
 use bytemuck::{bytes_of, checked::try_pod_read_unaligned, NoUninit};
 use io::input::Header;
 use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
+use openssl::x509::X509;
 use sha2::{Digest, Sha256, Sha384};
-use snp_types::{attestation::AttestionReport, PageType, VmplPermissions};
+use snp_types::{
+    attestation::{AttestionReport, TcbVersion},
+    PageType, VmplPermissions,
+};
 
 pub struct Configuration {
     launch_digest: [u8; 48],
@@ -35,6 +39,7 @@ impl Configuration {
         input_hash: InputHash,
         output_hash: OutputHash,
         attestation_report: &[u8],
+        _vcek: &X509,
     ) -> Result<(), VerificationError> {
         let attestion_report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
             .map_err(|_| VerificationError(()))?;
@@ -58,6 +63,28 @@ impl Configuration {
         // FIXME: Actually verify the signatures lol
 
         Ok(())
+    }
+}
+
+pub struct VcekParameters {
+    pub chip_id: [u8; 64],
+    pub tcb: TcbVersion,
+}
+
+impl VcekParameters {
+    /// Extract the VCEK parameters from an attestation report.
+    ///
+    /// This information is necessairy to retrieve the VCEK.
+    pub fn for_attestaton_report(
+        attestation_report: &[u8],
+    ) -> Result<VcekParameters, VerificationError> {
+        let attestion_report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
+            .map_err(|_| VerificationError(()))?;
+        let AttestionReport::V2(report) = attestion_report;
+        Ok(VcekParameters {
+            chip_id: report.chip_id,
+            tcb: report.reported_tcb,
+        })
     }
 }
 
