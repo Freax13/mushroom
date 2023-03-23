@@ -1,6 +1,4 @@
 #![feature(saturating_int_impl, slice_ptr_len, pointer_byte_offsets)]
-// FIXME: Remove this once https://github.com/rust-lang/rust-clippy/pull/10321 lands on nightly.
-#![allow(clippy::extra_unused_type_parameters)]
 
 use std::{
     collections::{hash_map::Entry, HashMap},
