@@ -1,9 +1,12 @@
-use std::path::PathBuf;
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
-use vcek_kds::Product;
+use vcek_kds::{Product, Vcek};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,6 +77,9 @@ struct VerifyCommand {
     /// Path to store the attestation report.
     #[arg(long, value_name = "PATH")]
     attestation_report: PathBuf,
+    /// Path to store cached VCEKs.
+    #[arg(long, value_name = "PATH")]
+    vcek_cache: Option<PathBuf>,
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
@@ -89,15 +95,31 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     // FIXME: use proper error type and use `?` instead of unwrap.
     let product = Product::Milan;
     let params = VcekParameters::for_attestaton_report(&attestation_report).unwrap();
-    let vcek_cert = vcek_kds::vcek_cert(
-        product,
-        params.chip_id,
-        params.tcb.bootloader(),
-        params.tcb.tee(),
-        params.tcb.snp(),
-        params.tcb.microcode(),
-    )
-    .await?;
+
+    let mut vcek_cert = None;
+    if let Some(cache) = run.vcek_cache.as_ref() {
+        vcek_cert = load_vcek_from_cache(cache, product, params).await?;
+    }
+
+    let vcek_cert = if let Some(vcek_cert) = vcek_cert {
+        vcek_cert
+    } else {
+        let vcek_cert = vcek_kds::Vcek::download(
+            product,
+            params.chip_id.chip_id,
+            params.tcb.bootloader(),
+            params.tcb.tee(),
+            params.tcb.snp(),
+            params.tcb.microcode(),
+        )
+        .await?;
+
+        if let Some(cache) = run.vcek_cache.as_ref() {
+            save_vcek_to_cache(cache, params, &vcek_cert).await?;
+        }
+
+        vcek_cert
+    };
 
     let configuration = Configuration::new(&init);
     // FIXME: use proper error type and use `?` instead of unwrap.
@@ -107,5 +129,41 @@ async fn verify(run: VerifyCommand) -> Result<()> {
 
     println!("Ok");
 
+    Ok(())
+}
+
+fn cache_file_name(params: VcekParameters) -> String {
+    format!(
+        "{}-{}-{}-{}-{}.cert",
+        params.chip_id,
+        params.tcb.bootloader(),
+        params.tcb.tee(),
+        params.tcb.snp(),
+        params.tcb.microcode(),
+    )
+}
+
+async fn load_vcek_from_cache(
+    cache: &Path,
+    product: Product,
+    params: VcekParameters,
+) -> Result<Option<Vcek>> {
+    let cache_name = cache_file_name(params);
+    let res = tokio::fs::read(cache.join(cache_name)).await;
+    let bytes = match res {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).context("failed to load VCEK from cache"),
+    };
+    let vcek = Vcek::from_bytes(product, &bytes).context("failed to deserialize VCEK")?;
+    Ok(Some(vcek))
+}
+
+async fn save_vcek_to_cache(cache: &Path, params: VcekParameters, vcek: &Vcek) -> Result<()> {
+    let cache_name = cache_file_name(params);
+    let der = vcek.as_ref().to_der().context("failed to serialize VCEK")?;
+    tokio::fs::write(cache.join(cache_name), der)
+        .await
+        .context("failed to save VCEK")?;
     Ok(())
 }

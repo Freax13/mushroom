@@ -622,6 +622,7 @@ dependencies = [
  "openssl",
  "sha2",
  "snp-types",
+ "vcek-kds",
 ]
 
 [[package]]

@@ -1,14 +1,18 @@
-use std::mem::size_of;
+use std::{
+    fmt::{self, Display},
+    mem::size_of,
+};
 
 use bytemuck::{bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned, NoUninit};
 use io::input::Header;
 use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
-use openssl::{bn::BigNum, ecdsa::EcdsaSig, x509::X509};
+use openssl::{bn::BigNum, ecdsa::EcdsaSig};
 use sha2::{Digest, Sha256, Sha384};
 use snp_types::{
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
     PageType, VmplPermissions,
 };
+use vcek_kds::Vcek;
 
 pub struct Configuration {
     launch_digest: [u8; 48],
@@ -39,7 +43,7 @@ impl Configuration {
         input_hash: InputHash,
         output_hash: OutputHash,
         attestation_report: &[u8],
-        vcek: &X509,
+        vcek: &Vcek,
     ) -> Result<(), VerificationError> {
         let report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
             .map_err(|_| VerificationError(()))?;
@@ -70,7 +74,10 @@ impl Configuration {
         let sig = EcdsaSig::from_private_components(r, s).map_err(|_| VerificationError(()))?;
 
         // Verify signature.
-        let public_key = vcek.public_key().map_err(|_| VerificationError(()))?;
+        let public_key = vcek
+            .as_ref()
+            .public_key()
+            .map_err(|_| VerificationError(()))?;
         let ec_key = public_key.ec_key().map_err(|_| VerificationError(()))?;
         sig.verify(&attestation_report[..=0x29f], &ec_key)
             .map_err(|_| VerificationError(()))?;
@@ -79,8 +86,9 @@ impl Configuration {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct VcekParameters {
-    pub chip_id: [u8; 64],
+    pub chip_id: ChipId,
     pub tcb: TcbVersion,
 }
 
@@ -95,9 +103,25 @@ impl VcekParameters {
             .map_err(|_| VerificationError(()))?;
         let AttestionReport::V2(report) = attestion_report;
         Ok(VcekParameters {
-            chip_id: report.chip_id,
+            chip_id: ChipId {
+                chip_id: report.chip_id,
+            },
             tcb: report.reported_tcb,
         })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ChipId {
+    pub chip_id: [u8; 64],
+}
+
+impl Display for ChipId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for b in self.chip_id.iter() {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
     }
 }
 

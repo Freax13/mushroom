@@ -10,3 +10,4 @@ io = { workspace = true }
 openssl = "0.10.45"
 sha2 = "0.10.6"
 snp-types = { workspace = true }
+vcek-kds = { workspace = true }

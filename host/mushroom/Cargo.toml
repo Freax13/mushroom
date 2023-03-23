@@ -21,7 +21,7 @@ loader = { workspace = true }
 mushroom-verify = { workspace = true, optional = true }
 nix = "0.26.1"
 snp-types = { workspace = true }
-tokio = { version = "1.26.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.26.0", features = ["fs", "macros", "rt-multi-thread"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 vcek-kds = { workspace = true }
