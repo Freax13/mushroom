@@ -45,11 +45,13 @@ pub struct ContentV1 {
     pub msg_type: u8,
     pub msg_version: u8,
     pub msg_size: u16,
-    _reserved2: Reserved<4>,
-    pub msg_vmpck: u8,
-    _reserved3: Reserved<3>,
     // FIXME: The firmware doesn't respond with zeros. Find out why.
-    _reserved4: [u8; 32],
+    _reserved2: Reserved<4, false>,
+    pub msg_vmpck: u8,
+    // FIXME: The firmware doesn't respond with zeros. Find out why.
+    _reserved3: Reserved<3, false>,
+    // FIXME: The firmware doesn't respond with zeros. Find out why.
+    _reserved4: Reserved<32, false>,
     pub payload: [u8; 4000],
 }
 
@@ -70,7 +72,7 @@ impl ContentV1 {
             _reserved2: Reserved([0; 4]),
             msg_vmpck,
             _reserved3: Reserved([0; 3]),
-            _reserved4: [0; 32],
+            _reserved4: Reserved([0; 32]),
             payload,
         }
     }

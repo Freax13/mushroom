@@ -5,7 +5,7 @@ use core::{
 
 use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSizeAllocator};
 
-type CombinedAllocator<A: Allocator> = FallbackAllocator<
+type CombinedAllocator<A> = FallbackAllocator<
     FallbackAllocator<
         FallbackAllocator<
             FixedSizeAllocator<A, 8>,
@@ -37,10 +37,7 @@ impl<A> Combined<A>
 where
     A: Allocator,
 {
-    pub const fn new(allocator: A) -> Self
-    where
-        A: Copy,
-    {
+    pub const fn new(allocator: &'static A) -> Combined<&'static A> {
         let small8 = FixedSizeAllocator::<_, 8>::new(allocator);
         let small16 = FixedSizeAllocator::<_, 16>::new(allocator);
         let small24 = FixedSizeAllocator::<_, 24>::new(allocator);
@@ -62,7 +59,7 @@ where
         let allocator = FallbackAllocator::new(small_allocators, big_allocators);
         let allocator = FallbackAllocator::new(allocator, huge_allocator);
 
-        Self { allocator }
+        Combined { allocator }
     }
 }
 
