@@ -5,7 +5,7 @@ use snp_types::VmplPermissions;
 
 use crate::{LoadCommand, LoadCommandPayload};
 
-pub fn load_init<'a>(init: &'a [u8]) -> impl Iterator<Item = LoadCommand> + 'a {
+pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
     let mut frames = INIT.into_iter();
 
     let mut bytes = [0; 0x1000];

@@ -7,7 +7,7 @@ use snp_types::VmplPermissions;
 
 use crate::{LoadCommand, LoadCommandPayload};
 
-pub fn load_input<'a>(input: &'a [u8]) -> (impl Iterator<Item = LoadCommand> + 'a, [u8; 32]) {
+pub fn load_input(input: &[u8]) -> (impl Iterator<Item = LoadCommand> + '_, [u8; 32]) {
     let header = Header::new(input);
 
     let payloads = once(LoadCommandPayload::Shared({

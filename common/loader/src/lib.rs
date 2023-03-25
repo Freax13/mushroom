@@ -50,7 +50,7 @@ impl LoadCommandPayload {
     }
 }
 
-pub fn generate_base_load_commands<'a>(init: &'a [u8]) -> impl Iterator<Item = LoadCommand> + 'a {
+pub fn generate_base_load_commands(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
     let load_supervisor = supervisor::load_supervisor();
     let load_kernel = kernel::load_kernel();
     let load_init = init::load_init(init);
