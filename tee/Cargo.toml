@@ -1,7 +1,7 @@
 cargo-features = ["profile-rustflags"]
 
 [workspace]
-members = ["hello-world", "init", "kernel", "serial-log", "supervisor"]
+members = ["init", "kernel", "serial-log", "supervisor"]
 
 [workspace.dependencies]
 constants = { path = "../common/constants" }

@@ -231,10 +231,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hello-world"
-version = "0.1.0"
-
-[[package]]
 name = "init"
 version = "0.1.0"
 dependencies = [
