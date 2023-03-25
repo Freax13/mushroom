@@ -11,13 +11,7 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-/// The alignment of the TLS segment.
-pub const TLS_ALIGN: usize = 8;
-
 pub const MAX_APS_COUNT: u8 = 128;
-
-pub const PAGE_TABLE_WITH_RESET_VECTOR: u64 = 0;
-pub const PAGE_TABLE_WITHOUT_RESET_VECTOR: u64 = 0x1000;
 
 pub const FIRST_AP: u8 = 0x80;
 
@@ -167,7 +161,10 @@ impl IntoIterator for PageRange<PhysFrame> {
 }
 
 #[cfg(test)]
-fn check_ranges(ranges: &[PageRange]) {
+fn check_ranges<T>(ranges: &[PageRange<T>])
+where
+    T: PartialEq,
+{
     for (i, range_a) in ranges.iter().enumerate() {
         for range_b in ranges[..i].iter() {
             let r_a = range_a.start_addr..=range_a.end_inclusive_addr;
@@ -183,46 +180,57 @@ fn check_ranges(ranges: &[PageRange]) {
 
 #[cfg(test)]
 mod tests {
+    use x86_64::{structures::paging::Page, VirtAddr};
+
     use crate::{check_ranges, PageRange};
 
     #[test]
     fn test_address_range() {
-        let mut range = PageRange::new(0x1000..=0x3fff).into_iter();
-        assert_eq!(range.next(), Some(0x1000));
-        assert_eq!(range.next(), Some(0x2000));
-        assert_eq!(range.next(), Some(0x3000));
+        let mut range = PageRange::<Page>::new(0x1000..=0x3fff).into_iter();
+        assert_eq!(
+            range.next(),
+            Some(Page::containing_address(VirtAddr::new(0x1000)))
+        );
+        assert_eq!(
+            range.next(),
+            Some(Page::containing_address(VirtAddr::new(0x2000)))
+        );
+        assert_eq!(
+            range.next(),
+            Some(Page::containing_address(VirtAddr::new(0x3000)))
+        );
         assert_eq!(range.next(), None);
     }
 
     #[test]
     fn test_valid_range() {
-        PageRange::new(0x1000..=0x1fff);
+        PageRange::<Page>::new(0x1000..=0x1fff);
     }
 
     #[test]
     #[should_panic]
     fn test_bad_range_start() {
-        check_ranges(&[PageRange::new(0x1001..=0x1fff)])
+        check_ranges(&[PageRange::<Page>::new(0x1001..=0x1fff)])
     }
 
     #[test]
     #[should_panic]
     fn test_bad_range_end() {
-        check_ranges(&[PageRange::new(0x1000..=0x1ffe)])
+        check_ranges(&[PageRange::<Page>::new(0x1000..=0x1ffe)])
     }
 
     #[test]
     #[should_panic]
     fn test_bad_range() {
-        check_ranges(&[PageRange::new(0x1000..=0xfff)])
+        check_ranges(&[PageRange::<Page>::new(0x1000..=0xfff)])
     }
 
     #[test]
     #[should_panic]
     fn test_invalid_ranges() {
         check_ranges(&[
-            PageRange::new(0x1000..=0x3fff),
-            PageRange::new(0x2000..=0x2fff),
+            PageRange::<Page>::new(0x1000..=0x3fff),
+            PageRange::<Page>::new(0x2000..=0x2fff),
         ])
     }
 }
