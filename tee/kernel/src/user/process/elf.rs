@@ -54,7 +54,7 @@ impl ActiveVirtualMemory<'_, '_> {
             Some(stack),
             0x1000,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
-        );
+        )?;
 
         let mut addr = stack;
         let mut write = |value: u64| {
@@ -65,7 +65,7 @@ impl ActiveVirtualMemory<'_, '_> {
         let mut str_addr = stack + 0x800u64;
         let mut write_str = |value: &CStr| {
             let addr = str_addr;
-            self.write(str_addr, &value.to_bytes_with_nul())?;
+            self.write(str_addr, value.to_bytes_with_nul())?;
             str_addr += value.to_bytes_with_nul().len();
             Ok(addr)
         };

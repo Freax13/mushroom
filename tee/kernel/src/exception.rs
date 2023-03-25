@@ -64,7 +64,7 @@ pub fn load_gdt() {
 
     let mut tss = TaskStateSegment::new();
     tss.privilege_stack_table[0] = allocate_stack();
-    per_cpu.tss.set(tss);
+    per_cpu.tss.set(tss).expect("TSS was already initialized");
     let tss = per_cpu.tss.get().unwrap();
 
     let mut gdt = GlobalDescriptorTable::new();
@@ -80,7 +80,7 @@ pub fn load_gdt() {
     debug!("loading global descriptor table");
     gdt.load();
 
-    Star::write(user_cs, user_ds, kernel_cs, kernel_ds);
+    Star::write(user_cs, user_ds, kernel_cs, kernel_ds).unwrap();
 
     debug!("loading tss");
     unsafe {

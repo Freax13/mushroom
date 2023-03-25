@@ -288,7 +288,7 @@ enum_arg! {
         Wait = 0,
         Wake = 1,
         Fd = 2,
-        REQUEUE = 3,
+        Requeue = 3,
         CmpRequeue = 4,
         WakeOp = 5,
         LockPi = 6,
@@ -329,7 +329,7 @@ impl SyscallArg for FutexOpWithFlags {
     }
 
     fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        FutexOp::display(f, value & 0x7f);
+        FutexOp::display(f, value & 0x7f)?;
         write!(f, " | ")?;
         FutexFlags::display(f, value & !0x7f)
     }

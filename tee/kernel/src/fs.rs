@@ -62,7 +62,8 @@ fn load_static_file(
 
     let header_entry = PresentPageTableEntry::new(header_frame, PageTableFlags::GLOBAL);
     unsafe {
-        map_page(header_page, header_entry, &mut &DUMB_FRAME_ALLOCATOR);
+        map_page(header_page, header_entry, &mut &DUMB_FRAME_ALLOCATOR)
+            .expect("failed to map header");
     }
 
     let len = unsafe {
@@ -79,7 +80,8 @@ fn load_static_file(
 
         let input_entry = PresentPageTableEntry::new(input_frame, PageTableFlags::GLOBAL);
         unsafe {
-            map_page(input_page, input_entry, &mut &DUMB_FRAME_ALLOCATOR);
+            map_page(input_page, input_entry, &mut &DUMB_FRAME_ALLOCATOR)
+                .expect("failed to map content");
         }
     }
 

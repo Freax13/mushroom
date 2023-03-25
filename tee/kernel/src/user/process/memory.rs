@@ -186,7 +186,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let mut ret = Vec::new();
         loop {
             let mut buf = 0;
-            self.read(addr, core::array::from_mut(&mut buf));
+            self.read(addr, core::array::from_mut(&mut buf))?;
             if buf == 0 {
                 break;
             }
@@ -241,9 +241,13 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
     }
 
     pub fn mprotect(&self, addr: VirtAddr, len: u64, prot: ProtFlags) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
         let mut state = self.state.lock();
 
-        while len > 0 {
+        loop {
             let mapping = state
                 .mappings
                 .iter_mut()
@@ -562,7 +566,7 @@ impl Mapping {
                         PageTableFlags::USER | PageTableFlags::EXECUTABLE | PageTableFlags::COW,
                     );
                     unsafe {
-                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
+                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                     }
                 }
                 Cow::Owned(_) => todo!(),
@@ -599,7 +603,7 @@ impl Mapping {
 
             let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
             unsafe {
-                copy_into_frame(frame, &content);
+                copy_into_frame(frame, &content)?;
             }
 
             let new_entry =
@@ -659,7 +663,7 @@ impl Mapping {
                             // Fill the frame.
                             unsafe {
                                 // SAFETY: We just allocated the frame, so we can do whatever.
-                                copy_into_frame(frame, backing_bytes);
+                                copy_into_frame(frame, backing_bytes)?;
                             }
 
                             // Map the page.
@@ -669,7 +673,7 @@ impl Mapping {
                             }
                             let new_entry = PresentPageTableEntry::new(frame, flags);
                             unsafe {
-                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
+                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                             }
                         }
                         Cow::Owned(_) => todo!(),
@@ -680,7 +684,7 @@ impl Mapping {
 
                     unsafe {
                         // SAFETY: We just allocated the frame, so we can do whatever.
-                        zero_frame(frame);
+                        zero_frame(frame)?;
                     }
 
                     let mut flags = PageTableFlags::USER | PageTableFlags::WRITABLE;
@@ -689,7 +693,7 @@ impl Mapping {
                     }
                     let new_entry = PresentPageTableEntry::new(frame, flags);
                     unsafe {
-                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
+                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                     }
                 }
             }
@@ -736,7 +740,7 @@ impl Mapping {
                             let new_entry =
                                 PresentPageTableEntry::new(backing_entry.frame(), flags);
                             unsafe {
-                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
+                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                             }
                         }
                         Cow::Owned(_) => todo!(),
@@ -747,7 +751,7 @@ impl Mapping {
                     let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
                     unsafe {
                         // SAFETY: We just allocated the frame, so we can do whatever.
-                        zero_frame(frame);
+                        zero_frame(frame)?;
                     }
 
                     let mut flags = PageTableFlags::USER;
@@ -759,7 +763,7 @@ impl Mapping {
                     }
                     let new_entry = PresentPageTableEntry::new(frame, flags);
                     unsafe {
-                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR);
+                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                     }
                 }
             }

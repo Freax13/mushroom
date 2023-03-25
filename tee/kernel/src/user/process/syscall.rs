@@ -149,7 +149,7 @@ impl Syscall3 for SysRead {
         let len = fd.read(chunk)?;
         let chunk = &mut chunk[..len];
 
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, &chunk))?;
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
 
         let len = u64::try_from(len).unwrap();
 
@@ -388,7 +388,7 @@ impl Syscall1 for SysBrk {
             return Ok(0);
         }
 
-        return Err(Error::NoMem);
+        Err(Error::NoMem)
     }
 }
 
@@ -818,7 +818,7 @@ impl Syscall6 for SysFutex {
             FutexOp::Wait => {
                 assert_eq!(_utime, 0);
 
-                vm_activator.activate(&thread.virtual_memory(), |vm| {
+                vm_activator.activate(thread.virtual_memory(), |vm| {
                     thread
                         .process()
                         .futexes
@@ -832,7 +832,7 @@ impl Syscall6 for SysFutex {
                 Ok(u64::from(woken))
             }
             FutexOp::Fd => Err(Error::NoSys),
-            FutexOp::REQUEUE => Err(Error::NoSys),
+            FutexOp::Requeue => Err(Error::NoSys),
             FutexOp::CmpRequeue => Err(Error::NoSys),
             FutexOp::WakeOp => Err(Error::NoSys),
             FutexOp::LockPi => Err(Error::NoSys),
@@ -842,7 +842,7 @@ impl Syscall6 for SysFutex {
                 assert_eq!(_utime, 0);
                 let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
 
-                vm_activator.activate(&thread.virtual_memory(), |vm| {
+                vm_activator.activate(thread.virtual_memory(), |vm| {
                     thread
                         .process()
                         .futexes

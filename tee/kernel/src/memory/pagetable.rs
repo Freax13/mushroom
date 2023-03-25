@@ -34,7 +34,7 @@ use super::{frame::DUMB_FRAME_ALLOCATOR, temporary::copy_into_frame};
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(511);
 
-const INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
+static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
     for pml4e in pml4.entries[256..].iter() {
         let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
@@ -45,12 +45,14 @@ const INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     }
 });
 
-pub fn allocate_pml4() -> Option<PhysFrame> {
+pub fn allocate_pml4() -> Result<PhysFrame> {
     // Make sure that all pml4 kernel entries are initialized.
     Lazy::force(&INIT_KERNEL_PML4ES);
 
     // Allocate a frame for the new pml4.
-    let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame()?;
+    let frame = (&DUMB_FRAME_ALLOCATOR)
+        .allocate_frame()
+        .ok_or(Error::NoMem)?;
 
     // Copy the kernel entries into a temporary buffer.
     let pml4 = ActivePageTable::get();
@@ -70,10 +72,10 @@ pub fn allocate_pml4() -> Option<PhysFrame> {
 
     // Copy the buffer into the pml4.
     unsafe {
-        copy_into_frame(frame, bytemuck::cast_mut(&mut entries));
+        copy_into_frame(frame, bytemuck::cast_mut(&mut entries))?;
     }
 
-    Some(frame)
+    Ok(frame)
 }
 
 pub unsafe fn map_page(
@@ -229,6 +231,10 @@ struct Level2;
 struct Level1;
 
 /// A level that maps tables.
+///
+/// # Safety
+///
+/// This trait must only be implemented for page table levels.
 unsafe trait TableLevel {
     /// The next lower down level.
     type Next;
@@ -254,6 +260,11 @@ unsafe impl TableLevel for Level2 {
     const CAN_SET_GLOBAL: bool = true;
 }
 
+/// A level that has a parent level.
+///
+/// # Safety
+///
+/// This trait must only be implemented for page table levels.
 unsafe trait HasParentLevel {
     /// The previous upper level.
     type Prev: TableLevel;
@@ -600,8 +611,7 @@ where
         let entry_ptr = self as *const ActivePageTableEntry<L>;
         let entry_addr = entry_ptr as usize;
         let table_addr = entry_addr << 9;
-        let table_ptr = table_addr as *const ActivePageTable<L::Next>;
-        table_ptr
+        table_addr as *const ActivePageTable<L::Next>
     }
 }
 

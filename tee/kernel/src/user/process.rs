@@ -105,7 +105,7 @@ impl Process {
 
     pub fn exit_status(&self) -> Option<u8> {
         let exit_status = self.exit_status.load(Ordering::SeqCst);
-        exit_status.get_bit(15).then(|| exit_status as u8)
+        exit_status.get_bit(15).then_some(exit_status as u8)
     }
 }
 

@@ -208,6 +208,7 @@ pub trait Syscall6 {
     type Arg4: SyscallArg;
     type Arg5: SyscallArg;
 
+    #[allow(clippy::too_many_arguments)]
     fn execute(
         thread: &mut Thread,
         vm_activator: &mut VirtualMemoryActivator,
@@ -492,6 +493,7 @@ impl SyscallHandlers {
         core::mem::forget(val);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn execute(
         &self,
         thread: &mut Thread,

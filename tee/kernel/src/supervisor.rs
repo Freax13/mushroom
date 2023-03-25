@@ -68,7 +68,7 @@ pub fn output(bytes: &[u8]) {
         buffer[..chunk.len()].copy_from_slice(chunk);
 
         unsafe {
-            copy_into_frame(frame, &buffer);
+            copy_into_frame(frame, &buffer).expect("failed to copy into output frame");
         }
 
         let command = frame.start_address().as_u64() | (chunk.len() as u64 - 1);

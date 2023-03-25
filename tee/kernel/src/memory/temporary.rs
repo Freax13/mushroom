@@ -5,6 +5,7 @@ use spin::{Lazy, Mutex};
 use x86_64::structures::paging::{page::PageRangeInclusive, Page, PhysFrame, Size4KiB};
 
 use crate::{
+    error::Result,
     memory::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{map_page, PresentPageTableEntry},
@@ -19,11 +20,12 @@ use super::pagetable::{unmap_page, PageTableFlags};
 /// # Safety
 ///
 /// Writing to the frame must be safe.
-pub unsafe fn zero_frame(frame: PhysFrame) {
-    let mut mapping = TemporaryMapping::new(frame);
+pub unsafe fn zero_frame(frame: PhysFrame) -> Result<()> {
+    let mut mapping = TemporaryMapping::new(frame)?;
     unsafe {
         core::intrinsics::volatile_set_memory(mapping.as_mut_ptr(), 0, 1);
     }
+    Ok(())
 }
 
 /// Copy bytes into a frame.
@@ -31,11 +33,12 @@ pub unsafe fn zero_frame(frame: PhysFrame) {
 /// # Safety
 ///
 /// Writing to the frame must be safe.
-pub unsafe fn copy_into_frame(frame: PhysFrame, bytes: &[u8; 0x1000]) {
-    let mut mapping = TemporaryMapping::new(frame);
+pub unsafe fn copy_into_frame(frame: PhysFrame, bytes: &[u8; 0x1000]) -> Result<()> {
+    let mut mapping = TemporaryMapping::new(frame)?;
     unsafe {
         core::intrinsics::volatile_copy_nonoverlapping_memory(mapping.as_mut_ptr(), bytes, 1);
     }
+    Ok(())
 }
 
 struct TemporaryMapping {
@@ -43,7 +46,7 @@ struct TemporaryMapping {
 }
 
 impl TemporaryMapping {
-    pub fn new(frame: PhysFrame) -> Self {
+    pub fn new(frame: PhysFrame) -> Result<Self> {
         static PAGES: Lazy<Mutex<PageRangeInclusive<Size4KiB>>> =
             Lazy::new(|| Mutex::new(TEMPORARY.into_iter()));
 
@@ -55,10 +58,10 @@ impl TemporaryMapping {
         let entry =
             PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE | PageTableFlags::GLOBAL);
         unsafe {
-            map_page(*page, entry, &mut (&DUMB_FRAME_ALLOCATOR));
+            map_page(*page, entry, &mut (&DUMB_FRAME_ALLOCATOR))?;
         }
 
-        Self { page }
+        Ok(Self { page })
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut [u8; 4096] {
