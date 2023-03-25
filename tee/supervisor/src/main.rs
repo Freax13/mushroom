@@ -50,7 +50,7 @@ fn main() {
     }
 }
 
-/// The supervisor runs singlethreaded, so we don't need statics to be`Sync`.
+/// The supervisor runs singlethreaded, so we don't need statics to be `Sync`.
 /// This type can wrap another type and make it `Sync`.
 /// If we ever decide to run the supervisor with more than one thread, this
 /// type needs to be removed in favor of either a mutex or a thread-local.
