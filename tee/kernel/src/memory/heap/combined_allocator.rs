@@ -37,6 +37,7 @@ impl<A> Combined<A>
 where
     A: Allocator,
 {
+    // FIXME: This should just take `A` where `A: Copy`. https://github.com/rust-lang/rust-clippy/issues/10535
     pub const fn new(allocator: &'static A) -> Combined<&'static A> {
         let small8 = FixedSizeAllocator::<_, 8>::new(allocator);
         let small16 = FixedSizeAllocator::<_, 16>::new(allocator);
