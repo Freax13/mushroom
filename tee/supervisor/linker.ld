@@ -14,12 +14,12 @@ PHDRS
 }
 
 SECTIONS {
-    .cpuid_page (0xffff7000) : 
+    .cpuid_page (0xffa00000) : 
     {
         KEEP(*(.cpuid_page .cpuid_page.*))
     } :cpuid_page
 
-    .pagetables (0xffff8000) : 
+    .pagetables (0xffc00000) : 
     {
         KEEP(*(.pagetables .pagetables.*))
     } :pagetables

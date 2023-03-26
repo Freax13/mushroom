@@ -20,8 +20,15 @@ pml4:
 .align 4096
 pdp_0:
 .fill 3, 8, 0
-.quad 0x000c0000000 + PTE_PRESENT + PTE_HUGE
+.quad pd_0_3 + PTE_PRESENT + PTE_WRITABLE
 .fill 508, 8, 0
+
+.align 4096
+pd_0_3:
+.fill 509, 8, 0
+.quad 0x000ffa00000 + PTE_PRESENT + PTE_NO_EXECUTE + PTE_HUGE
+.quad 0x000ffc00000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
+.quad 0x000ffe00000 + PTE_PRESENT + PTE_HUGE
 
 .align 4096
 pdp_128:
