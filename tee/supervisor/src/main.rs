@@ -34,22 +34,27 @@ mod panic;
 mod reset_vector;
 
 fn main() {
-    exception::init();
-
     if cfg!(not(feature = "harden")) {
         log::set_logger(&SerialLogger).unwrap();
         log::set_max_level(LevelFilter::Trace);
         debug!("initialized logger");
     }
 
+    // Setup an IDT and negotiate with the Hypervisor how interrupts are
+    // signaled to us.
+    exception::init();
     doorbell::init();
 
-    input::verify_input();
+    // Fetch the input data for the workload.
+    input::verify_and_load();
 
+    // Run the workload.
     run_aps();
 
+    // Attest the output.
     finish();
 
+    // The host shouldn't keep running us. Do nothing.
     loop {
         hlt();
     }

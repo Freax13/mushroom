@@ -282,20 +282,21 @@ pub fn run_aps() {
     first_ap.start(FIRST_AP);
     drop(first_ap);
 
-    loop {
+    // Process events while there are still APs running.
+    while !all_halted() {
         let pending_event = DOORBELL.fetch_pending_event();
-        if pending_event.is_empty() {
-            if all_halted() {
-                break;
-            }
 
+        // If no AP requires assistance, sleep and try again.
+        if pending_event.is_empty() {
             hlt();
             continue;
         }
 
+        // These events shouldn't happen. Abort if they do.
         assert!(!pending_event.nmi());
         assert!(!pending_event.mc());
 
+        // Assist the AP the host requested us to assist.
         let vector = pending_event.vector().unwrap().get();
         let idx = usize::from(vector - FIRST_AP);
         {
@@ -307,11 +308,13 @@ pub fn run_aps() {
             }
         }
 
-        schedule_aps();
-
+        // We're done handling events.
         if DOORBELL.requires_eoi() {
             eoi().unwrap();
         }
+
+        // Schedule additionals APs if previously requested.
+        schedule_aps();
     }
 }
 

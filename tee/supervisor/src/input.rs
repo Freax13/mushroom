@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::{ghcb::get_host_data, pagetable::TEMPORARY_MAPPER};
 
 /// Verify the input and make it accessible to VMPL 1.
-pub fn verify_input() {
+pub fn verify_and_load() {
     let mut frames = INPUT.into_iter();
     let header_frame = frames.next().unwrap();
 
@@ -28,7 +28,7 @@ pub fn verify_input() {
 
     let mut hasher = Sha256::new();
 
-    // Copy pages at a time.
+    // Copy pages one at a time.
     let mut remaining_len = header.input_len;
     while remaining_len >= 0x1000 {
         let frame = frames.next().unwrap();
