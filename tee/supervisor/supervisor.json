@@ -13,5 +13,6 @@
     "cpu": "znver3",
     "code-model": "small",
     "relocation-model": "static",
-    "disable-redzone": true
+    "disable-redzone": true,
+    "singlethread": true
 }
