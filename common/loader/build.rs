@@ -45,7 +45,8 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
         Profile::Release => {
             profile_str = "supervisor-release";
             cmd.arg("-Z")
-                .arg("build-std-features=panic_immediate_abort");
+                .arg("build-std-features=compiler-builtins-mem,panic_immediate_abort");
+            cmd.arg("--features").arg("harden");
         }
     }
     cmd.arg("--profile").arg(profile_str);
@@ -71,7 +72,7 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
     }
 }
 
-fn build_kernel(root_dir: &Path, out_dir: &Path, _profile: Profile) {
+fn build_kernel(root_dir: &Path, out_dir: &Path, profile: Profile) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut cmd = Command::new(cargo);
     cmd.current_dir(root_dir.join("tee"));
@@ -82,6 +83,14 @@ fn build_kernel(root_dir: &Path, out_dir: &Path, _profile: Profile) {
     cmd.arg("-Z").arg("build-std=core,alloc");
     cmd.env_remove("RUSTFLAGS");
     cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+
+    match profile {
+        Profile::Debug => {}
+        Profile::Release => {
+            cmd.arg("--features").arg("harden");
+        }
+    }
+
     let status = cmd.status().expect("failed to run cargo build for kernel");
     if status.success() {
         let path = out_dir

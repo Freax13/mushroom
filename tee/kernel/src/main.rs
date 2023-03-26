@@ -49,8 +49,7 @@ mod user;
 ///
 /// This function must only be called once.
 unsafe fn main() -> ! {
-    #[cfg(debug_assertions)]
-    if cfg!(debug_assertions) {
+    if cfg!(not(feature = "harden")) {
         let _ = log::set_logger(&SerialLogger);
         log::set_max_level(log::LevelFilter::Trace);
     }

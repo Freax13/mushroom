@@ -33,9 +33,11 @@ mod vcpu;
 fn main() {
     exception::init();
 
-    log::set_logger(&SerialLogger).unwrap();
-    log::set_max_level(LevelFilter::Trace);
-    debug!("initialized logger");
+    if cfg!(not(feature = "harden")) {
+        log::set_logger(&SerialLogger).unwrap();
+        log::set_max_level(LevelFilter::Trace);
+        debug!("initialized logger");
+    }
 
     doorbell::init();
 
