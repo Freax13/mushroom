@@ -41,18 +41,18 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
         | SevFeatures::RESTRICTED_INJECTION.bits(),
 );
 
-pub static VCPUS: FakeSync<[RefCell<Vcpu>; MAX_APS_COUNT as usize]> =
-    FakeSync::new([const { RefCell::new(Vcpu::new()) }; MAX_APS_COUNT as usize]);
+static APS: FakeSync<[RefCell<Ap>; MAX_APS_COUNT as usize]> =
+    FakeSync::new([const { RefCell::new(Ap::new()) }; MAX_APS_COUNT as usize]);
 
 static SCHEDULE_COUNTER: FakeSync<Cell<u8>> = FakeSync::new(Cell::new(0));
 
 #[allow(clippy::large_enum_variant)]
-pub enum Vcpu {
+pub enum Ap {
     Uninitialized,
     Initialized(Initialized),
 }
 
-impl Vcpu {
+impl Ap {
     pub const fn new() -> Self {
         Self::Uninitialized
     }
@@ -60,7 +60,7 @@ impl Vcpu {
     pub fn start(&mut self, apic_id: u8) {
         debug!("initializing vcpu {apic_id}");
 
-        assert!(matches!(self, Vcpu::Uninitialized));
+        assert!(matches!(self, Ap::Uninitialized));
 
         *self = Self::Initialized(Initialized::new(apic_id));
 
@@ -449,11 +449,11 @@ fn handle_ioio_prot(
         KICK_AP_PORT => {
             let apic_id = u8::try_from(rax).unwrap();
 
-            let mut vcpu = VCPUS[usize::from(apic_id)].borrow_mut();
+            let mut ap = APS[usize::from(apic_id)].borrow_mut();
 
-            match &mut *vcpu {
-                Vcpu::Uninitialized => vcpu.start(FIRST_AP + apic_id),
-                Vcpu::Initialized(initialized) => initialized.kick(),
+            match &mut *ap {
+                Ap::Uninitialized => ap.start(FIRST_AP + apic_id),
+                Ap::Initialized(initialized) => initialized.kick(),
             }
         }
         SCHEDULE_PORT => {
@@ -540,9 +540,9 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
 
 pub fn run_aps() {
     info!("booting first AP");
-    let mut first_vcpu = VCPUS[0].borrow_mut();
-    first_vcpu.start(FIRST_AP);
-    drop(first_vcpu);
+    let mut first_ap = APS[0].borrow_mut();
+    first_ap.start(FIRST_AP);
+    drop(first_ap);
 
     loop {
         let pending_event = DOORBELL.fetch_pending_event();
@@ -561,15 +561,15 @@ pub fn run_aps() {
         let vector = pending_event.vector().unwrap().get();
         let idx = usize::from(vector - FIRST_AP);
         {
-            let mut vcpu = VCPUS[idx].borrow_mut();
-            if let Vcpu::Initialized(initialized) = &mut *vcpu {
+            let mut ap = APS[idx].borrow_mut();
+            if let Ap::Initialized(initialized) = &mut *ap {
                 initialized.handle_vc();
             } else {
-                panic!("can't handle event for uninitialized vcpu");
+                panic!("can't handle event for uninitialized ap");
             }
         }
 
-        schedule_vcpus();
+        schedule_aps();
 
         if DOORBELL.requires_eoi() {
             eoi().unwrap();
@@ -577,7 +577,7 @@ pub fn run_aps() {
     }
 }
 
-pub fn schedule_vcpus() {
+pub fn schedule_aps() {
     let mut schedule_counter = SCHEDULE_COUNTER.get();
 
     while schedule_counter > 0 {
@@ -590,11 +590,11 @@ pub fn schedule_vcpus() {
     SCHEDULE_COUNTER.set(schedule_counter);
 }
 
-/// Returns true if a vcpu was scheduled.
+/// Returns true if an AP was scheduled.
 fn schedule_one() -> bool {
-    for vcpu in VCPUS.iter() {
-        let mut vcpu = vcpu.borrow_mut();
-        if let Vcpu::Initialized(initialized) = &mut *vcpu {
+    for ap in APS.iter() {
+        let mut ap = ap.borrow_mut();
+        if let Ap::Initialized(initialized) = &mut *ap {
             if initialized.halted {
                 debug!("kick core {}", initialized.apic_id - FIRST_AP);
                 initialized.halted = false;
@@ -609,10 +609,10 @@ fn schedule_one() -> bool {
 
 /// Returns true if all APs are halted.
 pub fn all_halted() -> bool {
-    for vcpu in VCPUS.iter() {
-        match &*vcpu.borrow() {
-            Vcpu::Uninitialized => {}
-            Vcpu::Initialized(i) => {
+    for ap in APS.iter() {
+        match &*ap.borrow() {
+            Ap::Uninitialized => {}
+            Ap::Initialized(i) => {
                 if !i.halted {
                     return false;
                 }

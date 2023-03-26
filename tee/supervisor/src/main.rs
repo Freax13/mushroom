@@ -15,8 +15,9 @@ use core::ops::Deref;
 use log::{debug, LevelFilter};
 use x86_64::instructions::hlt;
 
-use crate::{logging::SerialLogger, output::finish, vcpu::run_aps};
+use crate::{ap::run_aps, logging::SerialLogger, output::finish};
 
+mod ap;
 mod cpuid;
 mod doorbell;
 mod dynamic;
@@ -28,7 +29,6 @@ mod output;
 mod pagetable;
 mod panic;
 mod reset_vector;
-mod vcpu;
 
 fn main() {
     exception::init();
