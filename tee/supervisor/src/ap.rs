@@ -30,7 +30,7 @@ use crate::{
     FakeSync,
 };
 
-use self::{log_buffer::LogBuffer, vmsa::AlignedVmsa};
+use self::{log_buffer::LogBuffer, vmsa::InitializedVmsa};
 
 mod log_buffer;
 mod vmsa;
@@ -74,7 +74,7 @@ pub struct Initialized {
     halted: bool,
     apic_id: u8,
     log_buffer: LogBuffer,
-    vmsa: AlignedVmsa,
+    vmsa: InitializedVmsa,
 }
 
 impl Initialized {
@@ -83,7 +83,7 @@ impl Initialized {
             halted: false,
             apic_id,
             log_buffer: LogBuffer::new(),
-            vmsa: AlignedVmsa::new(),
+            vmsa: InitializedVmsa::new(),
         }
     }
 

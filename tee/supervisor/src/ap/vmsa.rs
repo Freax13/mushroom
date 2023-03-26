@@ -1,9 +1,12 @@
 use core::{
-    cell::UnsafeCell,
+    cell::{SyncUnsafeCell, UnsafeCell},
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use bit_field::BitField;
+use constants::MAX_APS_COUNT;
 use snp_types::{
     vmsa::{Segment, Vmsa},
     Reserved, Uninteresting, VmplPermissions,
@@ -21,16 +24,46 @@ use crate::{cpuid::c_bit_location, dynamic::rmpadjust, pagetable::ref_to_pa};
 
 use super::SEV_FEATURES;
 
-#[repr(C, align(8192))]
-pub struct AlignedVmsa {
-    /// A padding byte to make sure that the VMSA is not at the start of a 2MiB
-    /// page.
-    _padding: u8,
-    vmsa: UnsafeCell<Vmsa>,
+/// Allocate a VMSA out of a pool and initialize it.
+fn allocate_vmsa(vmsa: Vmsa) -> &'static UnsafeCell<Vmsa> {
+    const fn unaligned_slots() -> usize {
+        let potential_unaligned = 1;
+        (MAX_APS_COUNT as usize) + (potential_unaligned as usize)
+    }
+
+    static SLOTS: [SyncUnsafeCell<MaybeUninit<Vmsa>>; unaligned_slots()] =
+        [const { SyncUnsafeCell::new(MaybeUninit::uninit()) }; unaligned_slots()];
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    let vmsa_slot = loop {
+        let idx = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let ptr = SLOTS[idx].get();
+
+        // Skips slots that are 2MiB aligned.
+        //
+        // There's an erratum which says that 2MiB aligned VMSAs can cause
+        // spurious #NPFs under certain conditions. For that reason the Linux
+        // kernel rejects all AP Creation events with a 2MiB aligned VMSA.
+        if ptr.is_aligned_to(0x200000) {
+            continue;
+        }
+
+        break unsafe { &mut *ptr };
+    };
+
+    let ptr = vmsa_slot.write(vmsa);
+    let ptr = ptr as *const _ as *const UnsafeCell<Vmsa>;
+    unsafe { &*ptr }
 }
 
-impl AlignedVmsa {
-    pub const fn new() -> Self {
+/// A wrapper around a reference to a VMSA.
+pub struct InitializedVmsa {
+    /// A reference to an VMSA allocated out of a pool.
+    vmsa: &'static UnsafeCell<Vmsa>,
+}
+
+impl InitializedVmsa {
+    pub fn new() -> Self {
         let data_segment = Segment {
             selector: 0x10,
             attrib: 0xc93,
@@ -225,21 +258,27 @@ impl AlignedVmsa {
         };
 
         Self {
-            _padding: 0,
-            vmsa: UnsafeCell::new(vmsa),
+            vmsa: allocate_vmsa(vmsa),
         }
     }
 
     pub fn phys_addr(&self) -> PhysFrame {
-        let vmsa_addr = ref_to_pa(&self.vmsa).unwrap();
+        let vmsa_addr = ref_to_pa(self.vmsa).unwrap();
         let mut vmsa_addr = vmsa_addr.as_u64();
         vmsa_addr.set_bit(c_bit_location(), false);
         let vmsa_addr = PhysAddr::new(vmsa_addr);
         PhysFrame::from_start_address(vmsa_addr).unwrap()
     }
 
+    /// Allow the VMSA to run.
+    ///
+    /// # Safety
+    ///
+    /// If `runnable` is true, the caller has to ensure that there are no
+    /// references to the VMSA and that the VMSA is allowed to run (e.g. all
+    /// reflected #VCs are handled).
     pub unsafe fn set_runnable(&mut self, runnable: bool) {
-        let addr = VirtAddr::from_ptr(&self.vmsa);
+        let addr = VirtAddr::from_ptr(self.vmsa);
         let page = Page::<Size4KiB>::from_start_address(addr).unwrap();
 
         unsafe {
@@ -248,7 +287,8 @@ impl AlignedVmsa {
     }
 
     /// Sets the VMSA as unrunnable and returns a wrapper around mutable
-    /// reference to it.
+    /// reference to it. This reference can be used to inspect and modify the
+    /// VMSA.
     /// The VMSA will automatically be marked as runnable once the wrapper is
     /// dropped.
     pub fn modify(&mut self) -> VmsaModifyGuard {
@@ -260,20 +300,20 @@ impl AlignedVmsa {
 }
 
 pub struct VmsaModifyGuard<'a> {
-    vmsa: &'a mut AlignedVmsa,
+    vmsa: &'a mut InitializedVmsa,
 }
 
 impl Deref for VmsaModifyGuard<'_> {
     type Target = Vmsa;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.vmsa.vmsa.get().cast_const() }
+        unsafe { &*self.vmsa.vmsa.get() }
     }
 }
 
 impl DerefMut for VmsaModifyGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.vmsa.vmsa.get_mut()
+        unsafe { &mut *self.vmsa.vmsa.get() }
     }
 }
 

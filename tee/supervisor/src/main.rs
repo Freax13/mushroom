@@ -5,9 +5,12 @@
     asm_const,
     core_intrinsics,
     inline_const,
+    int_roundings,
     layout_for_ptr,
     naked_functions,
-    lazy_cell
+    once_cell,
+    pointer_is_aligned,
+    sync_unsafe_cell
 )]
 
 use core::ops::Deref;
