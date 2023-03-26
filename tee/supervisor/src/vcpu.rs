@@ -28,7 +28,7 @@ use crate::{
     cpuid::{c_bit_location, get_cpuid_value},
     doorbell::DOORBELL,
     dynamic::{rmpadjust, HOST_ALLOCTOR},
-    ghcb::{create_ap, eoi, exit},
+    ghcb::{create_ap, eoi, exit, ioio_write},
     output::update_output,
     pagetable::{ref_to_pa, TEMPORARY_MAPPER},
     FakeSync,
@@ -348,9 +348,7 @@ impl Initialized {
 
     pub fn kick(&mut self) {
         let apic_id = self.apic_id;
-        unsafe {
-            PortWriteOnly::<u32>::new(KICK_AP_PORT).write(u32::from(apic_id));
-        }
+        ioio_write(KICK_AP_PORT, u32::from(apic_id));
     }
 }
 
