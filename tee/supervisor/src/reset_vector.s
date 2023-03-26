@@ -10,16 +10,16 @@ private_pagetables_start:
 .align 4096
 pml4:
 .quad pdp_0 + PTE_PRESENT + PTE_WRITABLE
-.fill 127, 8, 0 
+.fill 127, 8, 0
 .quad pdp_128 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
-.fill 127, 8, 0 
-.quad pdp_256 + PTE_PRESENT + PTE_WRITABLE
-.fill 254, 8, 0 
+.fill 382, 8, 0
 .quad pml4 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
 
 .align 4096
 pdp_0:
-.fill 3, 8, 0
+.quad 0
+.quad pd_0_0 + PTE_PRESENT + PTE_WRITABLE
+.quad 0
 .quad pd_0_3 + PTE_PRESENT + PTE_WRITABLE
 .fill 508, 8, 0
 
@@ -47,12 +47,7 @@ pt_128_0_0:
 .fill 511, 8, 0
 
 .align 4096
-pdp_256:
-.quad pd_256_0 + PTE_PRESENT + PTE_WRITABLE
-.fill 511, 8, 0
-
-.align 4096
-pd_256_0:
+pd_0_0:
 .quad 0x00100000000 + PTE_PRESENT + PTE_HUGE
 .quad 0x00100200000 + PTE_PRESENT + PTE_HUGE
 .quad 0x00100400000 + PTE_PRESENT + PTE_HUGE
@@ -81,7 +76,7 @@ pd_256_0:
 .quad 0x001c0000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
 .quad 0
 .quad 0x00200000000 + PTE_PRESENT + PTE_NO_EXECUTE + PTE_HUGE
-.quad 0x00000000000
+.quad 0
 .fill 3, 8, 0
 private_pagetables_end:
 .quad 0x00240000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
