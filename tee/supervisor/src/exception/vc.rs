@@ -1,18 +1,13 @@
 use core::arch::asm;
 
 use log::error;
-use snp_types::intercept::{VMEXIT_CPUID, VMEXIT_UNVALIDATED};
+use snp_types::intercept::VMEXIT_UNVALIDATED;
 use x86_64::{
-    registers::{
-        control::{Cr2, Cr4, Cr4Flags},
-        model_specific::Msr,
-        rflags::RFlags,
-        xcontrol::XCr0,
-    },
+    registers::{control::Cr2, rflags::RFlags},
     structures::{gdt::SegmentSelector, idt::InterruptStackFrame},
 };
 
-use crate::{cpuid::get_cpuid_value, ghcb::exit};
+use crate::ghcb::exit;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -102,7 +97,6 @@ pub(super) extern "x86-interrupt" fn vmm_communication_exception_handler(
 
 extern "sysv64" fn handle_vmm_communication_exception(frame: &mut StackFrame) {
     match frame.exception_code {
-        VMEXIT_CPUID => cpuid(frame),
         VMEXIT_UNVALIDATED => {
             let page = Cr2::read();
             error!("{page:?} is not validated");
@@ -145,28 +139,4 @@ extern "sysv64" fn handle_vmm_communication_exception(frame: &mut StackFrame) {
     error!("r12: {r12:#018x} r13: {r13:#018x} r14: {r14:#018x} r15: {r15:#018x}");
 
     exit();
-}
-
-fn cpuid(frame: &mut StackFrame) {
-    // Get the input.
-    let eax = frame.rax as u32;
-    let ecx = frame.rcx as u32;
-    let (xcr0, xss) = if Cr4::read().contains(Cr4Flags::OSXSAVE) {
-        (XCr0::read_raw(), unsafe { Msr::new(0xda0).read() })
-    } else {
-        // FIXME: Figure out if 0 are reasonable values here.
-        (0, 0)
-    };
-
-    // Get the values for the cpuid function.
-    let (eax, ebx, ecx, edx) = get_cpuid_value(eax, ecx, xcr0, xss);
-
-    // Write the results back.
-    frame.rax = u64::from(eax);
-    frame.rbx = u64::from(ebx);
-    frame.rcx = u64::from(ecx);
-    frame.rdx = u64::from(edx);
-
-    // FIXME: Ensure that the opcode was a two byte cpuid instruction.
-    frame.rip += 2;
 }
