@@ -1,7 +1,7 @@
 use core::arch::asm;
 
 use log::error;
-use snp_types::intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_UNVALIDATED};
+use snp_types::intercept::{VMEXIT_CPUID, VMEXIT_UNVALIDATED};
 use x86_64::{
     registers::{
         control::{Cr2, Cr4, Cr4Flags},
@@ -12,10 +12,7 @@ use x86_64::{
     structures::{gdt::SegmentSelector, idt::InterruptStackFrame},
 };
 
-use crate::{
-    cpuid::get_cpuid_value,
-    ghcb::{exit, ioio_write},
-};
+use crate::{cpuid::get_cpuid_value, ghcb::exit};
 
 #[derive(Debug)]
 #[repr(C)]
@@ -106,10 +103,6 @@ pub(super) extern "x86-interrupt" fn vmm_communication_exception_handler(
 extern "sysv64" fn handle_vmm_communication_exception(frame: &mut StackFrame) {
     match frame.exception_code {
         VMEXIT_CPUID => cpuid(frame),
-        VMEXIT_IOIO => {
-            ioio_prot(frame);
-            return;
-        }
         VMEXIT_UNVALIDATED => {
             let page = Cr2::read();
             error!("{page:?} is not validated");
@@ -176,28 +169,4 @@ fn cpuid(frame: &mut StackFrame) {
 
     // FIXME: Ensure that the opcode was a two byte cpuid instruction.
     frame.rip += 2;
-}
-
-fn ioio_prot(frame: &mut StackFrame) {
-    // FIXME: Figure out if passing these to the host is safe.
-    // Maybe only enable in debug mode, since that's what we're using these
-    // for?
-
-    let first_byte = unsafe {
-        // FIXME: Figure out if this is safe.
-        (frame.rip as *const u8).read()
-    };
-    match first_byte {
-        0xef => {
-            // OUT DX, EAX
-            let port = frame.rdx as u16;
-            let value = frame.rax as u32;
-
-            ioio_write(port, value);
-
-            // Fixme: Overflow and address gap jump
-            frame.rip += 1;
-        }
-        _ => panic!("unsupported opcode: {first_byte:#02x?}"),
-    }
 }
