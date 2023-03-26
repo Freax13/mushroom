@@ -205,6 +205,22 @@ mov ss, ax
 mov ds, ax
 mov es, ax
 
+# 7. Enable CPU Extensions
+# 7.1 Enable SSE
+mov rax, cr0
+or rax, 1 << 1
+mov cr0, rax
+mov rax, cr4
+or rax, 1 << 9
+or rax, 1 << 10
+or rax, 1 << 18
+mov cr4, rax
+# 7.2 Enable AVX
+xor rcx, rcx
+xgetbv
+or rax, 7
+xsetbv
+
 # 7. Enter the Kernel
 mov rax, qword ptr [rip+start_addr]
 jmp rax

@@ -31,10 +31,12 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
     cmd.env_remove("RUSTFLAGS");
     cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
     cmd.arg("build").arg("-p").arg("supervisor");
-    cmd.arg("--target").arg("x86_64-unknown-none");
+    cmd.arg("--target").arg("supervisor/supervisor.json");
     cmd.arg("--target-dir").arg(out_dir);
 
-    cmd.arg("-Z").arg("build-std=core,alloc");
+    cmd.arg("-Z").arg("build-std=core,alloc,compiler_builtins");
+    cmd.arg("-Z")
+        .arg("build-std-features=compiler-builtins-mem");
     let profile_str;
     match profile {
         Profile::Debug => {
@@ -53,7 +55,7 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
         .expect("failed to run cargo build for supervisor");
     if status.success() {
         let path = out_dir
-            .join("x86_64-unknown-none")
+            .join("supervisor")
             .join(profile_str)
             .join("supervisor");
         assert!(
