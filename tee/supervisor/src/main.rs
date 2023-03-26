@@ -56,7 +56,8 @@ fn main() {
 /// This type can wrap another type and make it `Sync`.
 /// If we ever decide to run the supervisor with more than one thread, this
 /// type needs to be removed in favor of either a mutex or a thread-local.
-// FIXME: exception can be considered a second thread. Is this safe?
+/// Note that we also don't have any exception handlers that could be
+/// considered a second thread.
 pub struct FakeSync<T>(T);
 
 impl<T> FakeSync<T> {

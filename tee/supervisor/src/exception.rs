@@ -2,9 +2,7 @@ use core::cell::LazyCell;
 
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
-use crate::{exception::vc::vmm_communication_exception_handler, FakeSync};
-
-mod vc;
+use crate::FakeSync;
 
 pub fn init() {
     static IDT: FakeSync<LazyCell<InterruptDescriptorTable>> = FakeSync::new(LazyCell::new(|| {
@@ -12,8 +10,6 @@ pub fn init() {
 
         idt.hv_injection_exception
             .set_handler_fn(hv_injection_exception_handler);
-        idt.vmm_communication_exception
-            .set_handler_fn(vmm_communication_exception_handler);
 
         idt
     }));
@@ -21,4 +17,6 @@ pub fn init() {
     IDT.load();
 }
 
-pub(super) extern "x86-interrupt" fn hv_injection_exception_handler(_frame: InterruptStackFrame) {}
+pub(super) extern "x86-interrupt" fn hv_injection_exception_handler(_frame: InterruptStackFrame) {
+    // This exception handler has to be empty for `FakeSync` to be sound.
+}
