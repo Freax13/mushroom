@@ -34,6 +34,10 @@ use crate::{
     FakeSync,
 };
 
+use self::log_buffer::LogBuffer;
+
+mod log_buffer;
+
 const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
     SevFeatures::SNP_ACTIVE.bits()
         | SevFeatures::V_TOM.bits()
@@ -349,43 +353,6 @@ impl Initialized {
     pub fn kick(&mut self) {
         let apic_id = self.apic_id;
         ioio_write(KICK_AP_PORT, u32::from(apic_id));
-    }
-}
-
-struct LogBuffer {
-    buffer: [u8; 256],
-    cursor: usize,
-}
-
-impl LogBuffer {
-    pub const fn new() -> Self {
-        Self {
-            buffer: [0; 256],
-            cursor: 0,
-        }
-    }
-
-    pub fn write(&mut self, c: char) {
-        // Encode the char.
-        let mut bytes = [0; 4];
-        let str = c.encode_utf8(&mut bytes);
-
-        // Write to the buffer.
-        self.buffer[self.cursor..][..str.len()].copy_from_slice(str.as_bytes());
-        self.cursor += str.len();
-
-        let remaining = self.buffer.len() - self.cursor;
-        if remaining < 4 || c == '\n' {
-            self.flush();
-        }
-    }
-
-    pub fn flush(&mut self) {
-        let str = unsafe { core::str::from_utf8_unchecked(&self.buffer[..self.cursor]) };
-        for c in str.chars() {
-            ioio_write(LOG_PORT, u32::from(c));
-        }
-        self.cursor = 0;
     }
 }
 
