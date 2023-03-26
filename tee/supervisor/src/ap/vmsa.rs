@@ -247,6 +247,10 @@ impl AlignedVmsa {
         }
     }
 
+    /// Sets the VMSA as unrunnable and returns a wrapper around mutable
+    /// reference to it.
+    /// The VMSA will automatically be marked as runnable once the wrapper is
+    /// dropped.
     pub fn modify(&mut self) -> VmsaModifyGuard {
         unsafe {
             self.set_runnable(false);
