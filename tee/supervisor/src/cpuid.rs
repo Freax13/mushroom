@@ -1,4 +1,4 @@
-use core::cell::{LazyCell, UnsafeCell};
+use core::cell::{LazyCell, SyncUnsafeCell};
 
 use snp_types::cpuid::CpuidPage;
 
@@ -6,11 +6,6 @@ use bit_field::BitField;
 use log::warn;
 
 use crate::FakeSync;
-
-#[no_mangle]
-#[link_section = ".cpuid_page"]
-static CPUID_PAGE: FakeSync<UnsafeCell<CpuidPage>> =
-    FakeSync::new(UnsafeCell::new(CpuidPage::zero()));
 
 pub fn c_bit_location() -> usize {
     static C_BIT: FakeSync<LazyCell<usize>> = FakeSync::new(LazyCell::new(|| {
@@ -20,28 +15,47 @@ pub fn c_bit_location() -> usize {
     **C_BIT
 }
 
+/// Look up the host-provided values for a given function. In theory the
+/// SEV-SNP firmware has verified these values, but for some values there is
+/// some leeway as to what's regarded as valid (e.g. the host can disable most
+/// features bits), so handle these with care.
 pub fn lookup_provided_cpuid_function(
     eax: u32,
     ecx: u32,
     xcr0: u64,
     xss: u64,
 ) -> Option<snp_types::cpuid::CpuidFunction> {
-    let mut cpuid_page = CpuidPage::zero();
-    unsafe {
-        core::intrinsics::volatile_copy_nonoverlapping_memory(
-            &mut cpuid_page,
-            CPUID_PAGE.get().cast(),
-            1,
-        );
-    }
+    // Rust/LLVM is a bit to eager while inlining statics:
+    // The contents of this page are filled in by the SEV-SNP firmware and
+    // aren't actually zero. The compiler see that we never write to this page
+    // and incorrectly assumes that the page always stays all zeroes.
+    // To work around this we volatilely copy the page into a separate static
+    // variable which we then access like normal.
+    static CPUID_PAGE: FakeSync<LazyCell<CpuidPage>> = FakeSync::new(LazyCell::new(|| {
+        /// This is the actual page that is filled in by the firmware.
+        #[no_mangle]
+        #[link_section = ".cpuid_page"]
+        static CPUID_PAGE: SyncUnsafeCell<CpuidPage> = SyncUnsafeCell::new(CpuidPage::zero());
 
-    let size = usize::try_from(cpuid_page.count).unwrap();
-    cpuid_page.functions[..size]
+        let mut cpuid_page = CpuidPage::zero();
+        unsafe {
+            core::intrinsics::volatile_copy_nonoverlapping_memory(
+                &mut cpuid_page,
+                CPUID_PAGE.get(),
+                1,
+            );
+        }
+        cpuid_page
+    }));
+
+    let size = usize::try_from(CPUID_PAGE.count).unwrap();
+    CPUID_PAGE.functions[..size]
         .iter()
         .find(|function| function.matches(eax, ecx, xcr0, xss))
         .copied()
 }
 
+/// Simulate the CPUID instruction with the given inputs.
 pub fn get_cpuid_value(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> (u32, u32, u32, u32) {
     // Try to find a cpuid function.
     let index = usize::try_from(eax & !0x8000_0000).unwrap();
