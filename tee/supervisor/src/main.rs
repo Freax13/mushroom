@@ -13,10 +13,9 @@
 use core::ops::Deref;
 
 use log::{debug, LevelFilter};
-use serial_log::SerialLogger;
 use x86_64::instructions::hlt;
 
-use crate::{output::finish, vcpu::run_aps};
+use crate::{logging::SerialLogger, output::finish, vcpu::run_aps};
 
 mod cpuid;
 mod doorbell;
@@ -24,6 +23,7 @@ mod dynamic;
 mod exception;
 mod ghcb;
 mod input;
+mod logging;
 mod output;
 mod pagetable;
 mod panic;

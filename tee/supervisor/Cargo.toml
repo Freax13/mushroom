@@ -16,7 +16,6 @@ bytemuck = "1.13.0"
 constants = { workspace = true }
 io = { workspace = true }
 log = { version = "0.4.17", default-features = false }
-serial-log = { workspace = true }
 sha2 = { version = "0.10.6", default-features = false }
 snp-types = { workspace = true }
 volatile = { git = "https://github.com/Freax13/volatile", rev = "d7c0373", features = ["unstable"] }

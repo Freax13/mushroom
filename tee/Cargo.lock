@@ -445,7 +445,6 @@ dependencies = [
  "constants",
  "io",
  "log",
- "serial-log",
  "sha2",
  "snp-types",
  "volatile 0.4.4",
