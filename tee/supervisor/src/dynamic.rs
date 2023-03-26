@@ -10,7 +10,6 @@ use bit_field::BitField;
 use constants::{physical_address::DYNAMIC, MEMORY_PORT};
 use snp_types::VmplPermissions;
 use x86_64::{
-    instructions::port::PortWriteOnly,
     structures::paging::{
         page::NotGiantPageSize, FrameAllocator, FrameDeallocator, Page, PhysFrame, Size2MiB,
         Size4KiB,
@@ -18,7 +17,7 @@ use x86_64::{
     PhysAddr,
 };
 
-use crate::pagetable::TEMPORARY_MAPPER;
+use crate::{ghcb::ioio_write, pagetable::TEMPORARY_MAPPER};
 
 const SLOTS: usize = 1 << 15;
 const BITMAP_SIZE: usize = SLOTS / 8;
@@ -129,7 +128,7 @@ pub unsafe fn update_slot_status(slot_id: u16, enabled: bool) {
     let mut request: u32 = 0;
     request.set_bits(0..15, u32::from(slot_id));
     request.set_bit(15, enabled);
-    PortWriteOnly::new(MEMORY_PORT).write(request);
+    ioio_write(MEMORY_PORT, request);
 }
 
 pub unsafe fn pvalidate_2mib(page: Page<Size2MiB>, valid: bool) {
