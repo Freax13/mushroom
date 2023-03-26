@@ -35,12 +35,12 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
     cmd.arg("--target-dir").arg(out_dir);
 
     cmd.arg("-Z").arg("build-std=core,alloc,compiler_builtins");
-    cmd.arg("-Z")
-        .arg("build-std-features=compiler-builtins-mem");
     let profile_str;
     match profile {
         Profile::Debug => {
             profile_str = "supervisor";
+            cmd.arg("-Z")
+                .arg("build-std-features=compiler-builtins-mem");
         }
         Profile::Release => {
             profile_str = "supervisor-release";
