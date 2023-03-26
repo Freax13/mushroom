@@ -15,7 +15,7 @@ use snp_types::{
     Reserved, Uninteresting, VmplPermissions,
 };
 use x86_64::{
-    instructions::{hlt, port::PortWriteOnly},
+    instructions::hlt,
     registers::{
         control::{Cr0Flags, Cr4Flags},
         model_specific::EferFlags,
@@ -383,9 +383,7 @@ impl LogBuffer {
     pub fn flush(&mut self) {
         let str = unsafe { core::str::from_utf8_unchecked(&self.buffer[..self.cursor]) };
         for c in str.chars() {
-            unsafe {
-                PortWriteOnly::new(LOG_PORT).write(u32::from(c));
-            }
+            ioio_write(LOG_PORT, u32::from(c));
         }
         self.cursor = 0;
     }
