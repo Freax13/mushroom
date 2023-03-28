@@ -20,7 +20,7 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use crate::{cpuid::c_bit_location, dynamic::rmpadjust, pagetable::ref_to_pa};
+use crate::{cpuid::c_bit_location, pagetable::ref_to_pa, rmp::rmpadjust};
 
 use super::SEV_FEATURES;
 

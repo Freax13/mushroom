@@ -32,6 +32,7 @@ mod output;
 mod pagetable;
 mod panic;
 mod reset_vector;
+mod rmp;
 
 fn main() {
     if cfg!(not(feature = "harden")) {

@@ -17,8 +17,9 @@ use x86_64::{
 
 use crate::{
     cpuid::c_bit_location,
-    dynamic::{pvalidate, pvalidate_2mib, rmpadjust, rmpadjust_2mib},
-    ghcb, FakeSync,
+    ghcb,
+    rmp::{pvalidate, pvalidate_2mib, rmpadjust, rmpadjust_2mib},
+    FakeSync,
 };
 
 /// A macro to get the physical address of a static variable.
@@ -251,21 +252,24 @@ impl PageTableEntry<Level1> {
     }
 }
 
+const PRESENT: u64 = 1 << 0;
+const HUGE_PAGE: u64 = 1 << 7;
+
 impl PageTableEntry<Level2> {
     pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size2MiB>) {
-        self.value.store(
-            addr.start_address().as_u64() | 1 | (1 << 7) | (1 << c_bit_location()),
-            Ordering::SeqCst,
-        );
+        let page_table_entry =
+            addr.start_address().as_u64() | PRESENT | HUGE_PAGE | (1 << c_bit_location());
+        self.value.store(page_table_entry, Ordering::SeqCst);
     }
 }
 
 impl PageTableEntry<Level1> {
     pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size4KiB>, private: bool) {
-        self.value.store(
-            addr.start_address().as_u64() | 1 | (1 << 7) | (u64::from(private) << c_bit_location()),
-            Ordering::SeqCst,
-        );
+        let page_table_entry = addr.start_address().as_u64()
+            | PRESENT
+            | HUGE_PAGE
+            | (u64::from(private) << c_bit_location());
+        self.value.store(page_table_entry, Ordering::SeqCst);
     }
 }
 
@@ -404,10 +408,20 @@ impl TemporaryMapping<'_, Size4KiB> {
 }
 
 impl TemporaryMapping<'_, Size2MiB> {
+    /// Adjust the permissions of a frame at a given VMPL.
+    ///
+    /// # Safety
+    ///
+    /// This is inherently dangerous.
     pub unsafe fn rmpadjust(&self, target_vmpl: u8, target_perm_mask: VmplPermissions, vmsa: bool) {
         rmpadjust_2mib(self.page, target_vmpl, target_perm_mask, vmsa);
     }
 
+    /// Update the validation status of the frame.
+    ///
+    /// # Safety
+    ///
+    /// This is inherently dangerous.
     pub unsafe fn pvalidate(&self, valid: bool) {
         pvalidate_2mib(self.page, valid);
 
