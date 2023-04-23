@@ -190,13 +190,8 @@ impl VmContext {
         let mut output = Vec::new();
         let kvm_run = self.bsp.get_kvm_run_block()?;
 
-        const DEBUG: bool = false;
-
         loop {
             let exit = kvm_run.read().exit();
-            if DEBUG {
-                dbg!(exit);
-            }
 
             match exit {
                 KvmExit::Unknown(KvmExitUnknown {
@@ -407,71 +402,7 @@ impl VmContext {
 
             let run_res = self.bsp.run();
 
-            let ready_for_interrupt_injection =
-                map_field!(kvm_run.ready_for_interrupt_injection).read();
-            if DEBUG {
-                dbg!(ready_for_interrupt_injection);
-            }
-
-            if DEBUG {
-                let res = self.vm.sev_snp_dbg_decrypt_vmsa(0)?;
-                let vmsa = bytemuck::checked::try_pod_read_unaligned::<Vmsa>(&res)?;
-                dbg!(format_args!("{vmsa:#x?}"));
-                dbg!(format_args!("{:#x?}", vmsa.rip));
-            }
-
-            if false {
-                fn debug_page_table(vm_handle: &VmHandle) -> Result<()> {
-                    let target_addr = 0xffff800003800000u64;
-
-                    let c_bit_location = 51;
-
-                    let res = vm_handle.sev_snp_dbg_decrypt_vmsa(0)?;
-                    let vmsa = bytemuck::checked::try_pod_read_unaligned::<Vmsa>(&res)?;
-
-                    let res = vm_handle.sev_snp_dbg_decrypt(vmsa.cr3.get_bits(12..=38))?;
-                    let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                    let entry = page_table[target_addr.get_bits(39..=47) as usize];
-                    dbg!(format_args!("entry = {entry:#018x}"));
-                    let mut gfn = entry.get_bits(12..=51);
-                    gfn.set_bit(c_bit_location - 12, false);
-                    dbg!(format_args!("{gfn:#018x}"));
-
-                    let res = vm_handle.sev_snp_dbg_decrypt(gfn)?;
-                    let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                    let entry = page_table[target_addr.get_bits(30..=38) as usize];
-                    dbg!(format_args!("entry = {entry:#018x}"));
-                    let mut gfn = entry.get_bits(12..=51);
-                    gfn.set_bit(c_bit_location - 12, false);
-                    dbg!(format_args!("{gfn:#018x}"));
-
-                    let res = vm_handle.sev_snp_dbg_decrypt(gfn)?;
-                    let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                    let entry = page_table[target_addr.get_bits(21..=29) as usize];
-                    dbg!(format_args!("entry = {entry:#018x}"));
-                    let mut gfn = entry.get_bits(12..=51);
-                    gfn.set_bit(c_bit_location - 12, false);
-                    dbg!(format_args!("{gfn:#018x}"));
-
-                    let res = vm_handle.sev_snp_dbg_decrypt(gfn)?;
-                    let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                    let entry = page_table[target_addr.get_bits(12..=20) as usize];
-                    dbg!(format_args!("entry = {entry:#018x}"));
-                    let mut gfn = entry.get_bits(12..=51);
-                    gfn.set_bit(c_bit_location - 12, false);
-                    dbg!(format_args!("{gfn:#018x}"));
-
-                    Ok(())
-                }
-
-                let _ = dbg!(debug_page_table(&self.vm));
-            }
-
-            if DEBUG {
-                dbg!(run_res?);
-            } else {
-                run_res?;
-            }
+            run_res?;
         }
 
         todo!()
