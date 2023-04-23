@@ -34,6 +34,7 @@ fn build_supervisor(root_dir: &Path, out_dir: &Path, profile: Profile) {
     cmd.arg("--target").arg("supervisor/supervisor.json");
     cmd.arg("--target-dir").arg(out_dir);
 
+    cmd.env("RUSTFLAGS", "-Z cf-protection=return");
     cmd.arg("-Z").arg("build-std=core,alloc,compiler_builtins");
     let profile_str;
     match profile {

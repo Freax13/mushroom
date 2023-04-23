@@ -2,6 +2,7 @@
 
 .set PTE_PRESENT, 1 << 0
 .set PTE_WRITABLE, 1 << 1
+.set PTE_DIRTY, 1 << 6
 .set PTE_HUGE, 1 << 7
 .set PTE_NO_EXECUTE, 1 << 63
 
@@ -77,10 +78,20 @@ pd_0_0:
 .quad 0
 .quad 0x00200000000 + PTE_PRESENT + PTE_NO_EXECUTE + PTE_HUGE
 .quad 0
-.fill 3, 8, 0
+.quad 0x00240000000 + PTE_PRESENT + PTE_NO_EXECUTE + PTE_DIRTY + PTE_HUGE
+.quad 0
+.quad 0
 private_pagetables_end:
-.quad 0x00240000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
+.quad 0x00280000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
 .fill 479, 8, 0
+
+# Shadow stack
+.section .shadow_stack, "a"
+.align 4096
+.set SHADOW_STACK_SIZE, 4096
+shadow_stack:
+.fill SHADOW_STACK_SIZE - 8, 1, 0
+.quad shadow_stack + SHADOW_STACK_SIZE + 1
 
 .section .reset_vector, "ax"
 .code16
@@ -224,12 +235,30 @@ or rax, 7
 xsetbv
 # 7.3 Enable Write Protection
 mov rax, cr0
-or rax, 1<<16
+or rax, 1 << 16
 mov cr0, rax
 
-# 8. Enter the Kernel
+# 8. Enable Shadow Stacks
+# 8.1 Enable CR4.CET
+mov rax, cr4
+or rax, 1 << 23
+mov cr4, rax
+# 8.2 Enable Shadow Stacks in in SCET MSR
+mov ecx, 0x6a2
+xor edx, edx
+mov eax, 1
+wrmsr
+# 8.3 Load SSP
+mov rax, [rip+shadow_stack_token_addr]
+rstorssp [rax]
+
+# 9. Enter the Kernel
 mov rax, qword ptr [rip+start_addr]
 jmp rax
+
+# Addresses
+shadow_stack_token_addr:
+.quad shadow_stack + SHADOW_STACK_SIZE - 8
 start_addr:
 .quad _start
 

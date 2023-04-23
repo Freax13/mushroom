@@ -7,7 +7,8 @@ PHDRS
     data         PT_LOAD AT(0x00180000000);
     stack        PT_LOAD AT(0x001c0000000);
     secrets      PT_LOAD AT(0x00200000000) FLAGS((1 << 1) | (1 << 2) | (1 << 29));
-    shared       PT_LOAD AT(0x00240000000) FLAGS((1 << 2) | (1 << 30));
+    shadow_stack PT_LOAD AT(0x00240000000);
+    shared       PT_LOAD AT(0x00280000000) FLAGS((1 << 2) | (1 << 30));
     cpuid_page   PT_LOAD FLAGS((1 << 2) | (1 << 28));
     pagetables   PT_LOAD;
     reset_vector PT_LOAD;
@@ -42,6 +43,11 @@ SECTIONS {
     {
         *(.secrets .secrets.*)
     } :secrets
+
+    .shadow_stack (0x43a00000) :
+    {
+        *(.shadow_stack .shadow_stack.*)
+    } :shadow_stack
 
     .shared (0x44000000) :
     {
