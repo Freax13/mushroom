@@ -17,12 +17,18 @@ const BITMAP_SIZE: usize = SLOTS / 8;
 
 pub static HOST_ALLOCTOR: HostAllocator = HostAllocator::new();
 
+/// An allocator for dynamically allocating 2MiB frames from the host.
+///
+/// Allocated frames are automatically validated and zeroed.
+///
+/// Deallocated frames are automatically invalidated and the permissions for
+/// lower VMPL's cleared.
 pub struct HostAllocator {
     bitmap: [AtomicU8; BITMAP_SIZE],
 }
 
 impl HostAllocator {
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self {
             bitmap: [const { AtomicU8::new(0) }; BITMAP_SIZE],
         }
@@ -117,7 +123,7 @@ impl FrameDeallocator<Size2MiB> for &'_ HostAllocator {
     }
 }
 
-pub unsafe fn update_slot_status(slot_id: u16, enabled: bool) {
+unsafe fn update_slot_status(slot_id: u16, enabled: bool) {
     let mut request: u32 = 0;
     request.set_bits(0..15, u32::from(slot_id));
     request.set_bit(15, enabled);

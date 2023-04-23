@@ -45,6 +45,9 @@ macro_rules! pa_of {
     }};
 }
 
+/// Translate a reference to a physical address.
+///
+/// Returns an error if the memory is not contiguous or if the reference is zero sized.
 pub fn ref_to_pa<T>(value: &T) -> Result<PhysAddr, TranslationError>
 where
     T: ?Sized,
@@ -52,6 +55,13 @@ where
     unsafe { ptr_to_pa(value) }
 }
 
+/// Translate a pointer to a physical address.
+///
+/// Returns an error if the memory is not contiguous or if the reference is zero sized.
+///
+/// # Safety
+///
+/// The caller must ensure that the pointer points to mapped memory.
 pub unsafe fn ptr_to_pa<T>(value: *const T) -> Result<PhysAddr, TranslationError>
 where
     T: ?Sized,
@@ -78,6 +88,8 @@ where
     Ok(frame.start_address() + offset_in_start_page)
 }
 
+/// Translate a page to a frame.
+///
 /// # Safety
 ///
 /// The page has to be mapped.
@@ -200,7 +212,7 @@ where
 }
 
 impl PageTableEntry<Level4> {
-    pub fn table(&self) -> Option<&PageTable<Level3>> {
+    fn table(&self) -> Option<&PageTable<Level3>> {
         if !self.present() {
             return None;
         }
