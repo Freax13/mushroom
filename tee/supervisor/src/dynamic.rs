@@ -82,7 +82,7 @@ unsafe impl FrameAllocator<Size2MiB> for &'_ HostAllocator {
 
         // Create a temporary mapping.
         let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-        let mapping = mapper.create_temporary_mapping_2mib(frame);
+        let mapping = mapper.create_temporary_mapping_2mib(frame, true);
 
         // Validate the memory.
         unsafe {
@@ -101,7 +101,7 @@ impl FrameDeallocator<Size2MiB> for &'_ HostAllocator {
 
         // Create a temporary mapping.
         let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-        let mapping = mapper.create_temporary_mapping_2mib(frame);
+        let mapping = mapper.create_temporary_mapping_2mib(frame, false);
 
         // Reset the VMPL permissions.
         unsafe {

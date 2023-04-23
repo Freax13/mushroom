@@ -221,7 +221,7 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
                     if let Some(frame) = frame {
                         // Create a temporary mapping.
                         let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-                        let mapping = mapper.create_temporary_mapping_2mib(frame);
+                        let mapping = mapper.create_temporary_mapping_2mib(frame, false);
 
                         // Make the frame accessible to VMPL 1.
                         unsafe {
@@ -260,7 +260,7 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
 
                     {
                         let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-                        let mapping = mapper.create_temporary_mapping_4kib(frame, true);
+                        let mapping = mapper.create_temporary_mapping_4kib(frame, true, false);
                         mapping.read(buffer);
                     }
 

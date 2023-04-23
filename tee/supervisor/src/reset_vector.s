@@ -222,8 +222,12 @@ xor rcx, rcx
 xgetbv
 or rax, 7
 xsetbv
+# 7.3 Enable Write Protection
+mov rax, cr0
+or rax, 1<<16
+mov cr0, rax
 
-# 7. Enter the Kernel
+# 8. Enter the Kernel
 mov rax, qword ptr [rip+start_addr]
 jmp rax
 start_addr:

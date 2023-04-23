@@ -15,7 +15,7 @@ pub fn verify_and_load() {
 
     // Read the input header.
     let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-    let mut mapping = mapper.create_temporary_mapping_4kib(header_frame, false);
+    let mut mapping = mapper.create_temporary_mapping_4kib(header_frame, false, false);
     let header_page_bytes = unsafe { mapping.convert_to_private_in_place() };
     let header_bytes = &header_page_bytes[..size_of::<Header>()];
     let header = pod_read_unaligned::<Header>(header_bytes);
@@ -33,7 +33,7 @@ pub fn verify_and_load() {
     while remaining_len >= 0x1000 {
         let frame = frames.next().unwrap();
 
-        let mut mapping = mapper.create_temporary_mapping_4kib(frame, false);
+        let mut mapping = mapper.create_temporary_mapping_4kib(frame, false, false);
         let input_bytes = unsafe { mapping.convert_to_private_in_place() };
         hasher.update(input_bytes);
 
@@ -44,7 +44,7 @@ pub fn verify_and_load() {
     if remaining_len > 0 {
         let frame = frames.next().unwrap();
 
-        let mut mapping = mapper.create_temporary_mapping_4kib(frame, false);
+        let mut mapping = mapper.create_temporary_mapping_4kib(frame, false, false);
         let input_bytes = unsafe { mapping.convert_to_private_in_place() };
         let (input_bytes, rest) = input_bytes.split_at(remaining_len);
         hasher.update(input_bytes);

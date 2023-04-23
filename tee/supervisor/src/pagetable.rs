@@ -266,21 +266,27 @@ impl PageTableEntry<Level1> {
 
 const PRESENT: u64 = 1 << 0;
 const HUGE_PAGE: u64 = 1 << 7;
+const WRITE_BIT: usize = 1;
 
 impl PageTableEntry<Level2> {
-    pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size2MiB>) {
-        let page_table_entry =
+    pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size2MiB>, write: bool) {
+        let mut page_table_entry =
             addr.start_address().as_u64() | PRESENT | HUGE_PAGE | (1 << c_bit_location());
+        page_table_entry.set_bit(WRITE_BIT, write);
         self.value.store(page_table_entry, Ordering::SeqCst);
     }
 }
 
 impl PageTableEntry<Level1> {
-    pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size4KiB>, private: bool) {
-        let page_table_entry = addr.start_address().as_u64()
-            | PRESENT
-            | HUGE_PAGE
-            | (u64::from(private) << c_bit_location());
+    pub unsafe fn create_temporary_mapping(
+        &self,
+        addr: PhysFrame<Size4KiB>,
+        private: bool,
+        write: bool,
+    ) {
+        let mut page_table_entry = addr.start_address().as_u64() | PRESENT | HUGE_PAGE;
+        page_table_entry.set_bit(WRITE_BIT, write);
+        page_table_entry.set_bit(c_bit_location(), private);
         self.value.store(page_table_entry, Ordering::SeqCst);
     }
 }
@@ -303,6 +309,7 @@ impl TemporaryMapper {
         &mut self,
         frame: PhysFrame<Size4KiB>,
         private: bool,
+        write: bool,
     ) -> TemporaryMapping<Size4KiB> {
         let page = Page::from_start_address(VirtAddr::new(0x400000000000)).unwrap();
 
@@ -321,7 +328,7 @@ impl TemporaryMapper {
         };
         let pte = &pt[page.p1_index()];
         unsafe {
-            pte.create_temporary_mapping(frame, private);
+            pte.create_temporary_mapping(frame, private, write);
         }
 
         x86_64::instructions::tlb::flush_all();
@@ -336,6 +343,7 @@ impl TemporaryMapper {
     pub fn create_temporary_mapping_2mib(
         &mut self,
         frame: PhysFrame<Size2MiB>,
+        write: bool,
     ) -> TemporaryMapping<Size2MiB> {
         let page = Page::from_start_address(VirtAddr::new(0x400000200000)).unwrap();
 
@@ -349,7 +357,7 @@ impl TemporaryMapper {
         };
         let pde = &pd[page.p2_index()];
         unsafe {
-            pde.create_temporary_mapping(frame);
+            pde.create_temporary_mapping(frame, write);
         }
 
         x86_64::instructions::tlb::flush_all();
@@ -386,7 +394,8 @@ impl TemporaryMapping<'_, Size4KiB> {
         // Tell the Hypervisor that we want to change the page to private.
         ghcb::page_state_change(self.frame, PageOperation::PageAssignmentPrivate);
 
-        self.mapper.create_temporary_mapping_4kib(self.frame, true);
+        self.mapper
+            .create_temporary_mapping_4kib(self.frame, true, true);
 
         // Convert the page to private.
         pvalidate(self.page, true).unwrap();
