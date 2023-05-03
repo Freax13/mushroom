@@ -2,18 +2,17 @@ use std::{
     ffi::c_void,
     mem::size_of,
     num::NonZeroUsize,
-    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
     ptr::{copy_nonoverlapping, NonNull},
 };
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{CheckedBitPattern, Pod};
 use nix::{
+    errno::Errno,
     fcntl::{fallocate, FallocateFlags},
-    sys::{
-        memfd::memfd_restricted,
-        mman::{mmap, munmap, MapFlags, ProtFlags},
-    },
+    libc,
+    sys::mman::{mmap, munmap, MapFlags, ProtFlags},
 };
 use volatile::VolatilePtr;
 use x86_64::{structures::paging::PhysFrame, PhysAddr};
@@ -34,13 +33,6 @@ impl Slot {
         let restricted_fd = memfd_restricted().context("failed to create memfd")?;
         fallocate(restricted_fd.as_raw_fd(), FallocateFlags::empty(), 0, len)
             .context("failed to allocate private memory")?;
-        fallocate(
-            restricted_fd.as_raw_fd(),
-            FallocateFlags::empty(),
-            0x1337_0000,
-            len,
-        )
-        .context("failed to allocate private memory")?;
 
         Ok(Self {
             gpa,
@@ -138,12 +130,12 @@ impl AnonymousPrivateMapping {
         let len = NonZeroUsize::new(len).context("cannot create empty mmap")?;
 
         let res = unsafe {
-            mmap::<OwnedFd>(
+            mmap(
                 None,
                 len,
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_ANONYMOUS | MapFlags::MAP_PRIVATE,
-                None,
+                0,
                 0,
             )
         };
@@ -167,4 +159,15 @@ impl Drop for AnonymousPrivateMapping {
         let res = unsafe { munmap(self.ptr.as_ptr(), self.len.get()) };
         res.unwrap();
     }
+}
+
+/// Create a restricted memfd.
+///
+/// This is useful for UPM in KVM.
+// FIXME: This should be moved into the `nix` crate once `SYS_MEMFD_RESTRICTED`
+// is upstreamed.
+fn memfd_restricted() -> nix::Result<OwnedFd> {
+    const SYS_MEMFD_RESTRICTED: i64 = 451;
+    let res = unsafe { libc::syscall(SYS_MEMFD_RESTRICTED, 0) };
+    Errno::result(res).map(|r| unsafe { OwnedFd::from_raw_fd(r as RawFd) })
 }

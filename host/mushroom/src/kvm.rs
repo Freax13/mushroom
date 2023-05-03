@@ -877,7 +877,7 @@ impl VcpuHandle {
                 NonZeroUsize::new(size_of::<KvmRun>()).unwrap(),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED,
-                Some(self.fd.as_fd()),
+                self.fd.as_raw_fd(),
                 0,
             )
         };
