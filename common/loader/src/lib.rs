@@ -1,4 +1,3 @@
-#![feature(int_roundings)]
 #![forbid(unsafe_code)]
 
 use bytemuck::cast;
