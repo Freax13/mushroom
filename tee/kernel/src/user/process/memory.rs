@@ -13,7 +13,7 @@ use log::debug;
 use spin::Mutex;
 use x86_64::{
     align_down,
-    instructions::{random::RdRand, tlb::Pcid},
+    instructions::{interrupts::without_interrupts, random::RdRand, tlb::Pcid},
     registers::{
         control::{Cr0, Cr0Flags, Cr3},
         rflags::{self, RFlags},
@@ -904,44 +904,48 @@ pub fn without_smap<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let rflags = rflags::read();
-    let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
-    if changed {
-        unsafe {
-            asm!("stac");
+    without_interrupts(|| {
+        let rflags = rflags::read();
+        let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
+        if changed {
+            unsafe {
+                asm!("stac");
+            }
         }
-    }
 
-    let result = f();
+        let result = f();
 
-    if changed {
-        unsafe {
-            asm!("clac");
+        if changed {
+            unsafe {
+                asm!("clac");
+            }
         }
-    }
 
-    result
+        result
+    })
 }
 
 pub fn without_write_protect<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let cr0 = Cr0::read();
-    let changed = cr0.contains(Cr0Flags::WRITE_PROTECT);
-    if changed {
-        unsafe {
-            Cr0::write(cr0 & !Cr0Flags::WRITE_PROTECT);
+    without_interrupts(|| {
+        let cr0 = Cr0::read();
+        let changed = cr0.contains(Cr0Flags::WRITE_PROTECT);
+        if changed {
+            unsafe {
+                Cr0::write(cr0 & !Cr0Flags::WRITE_PROTECT);
+            }
         }
-    }
 
-    let result = f();
+        let result = f();
 
-    if changed {
-        unsafe {
-            Cr0::write(cr0 | Cr0Flags::WRITE_PROTECT);
+        if changed {
+            unsafe {
+                Cr0::write(cr0 | Cr0Flags::WRITE_PROTECT);
+            }
         }
-    }
 
-    result
+        result
+    })
 }
