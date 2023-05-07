@@ -85,10 +85,8 @@ impl InitializedVmsa {
         let gdtr = Segment {
             selector: 0,
             attrib: 0,
-            // FIXME: Fill in correct values.
-            limit: 0x27,
-            // FIXME: Fill in correct values.
-            base: 0xfffff120,
+            limit: 0,
+            base: 0,
         };
         let ldtr = Segment {
             selector: 0,
@@ -142,7 +140,6 @@ impl InitializedVmsa {
                 | Cr4Flags::PCID.bits()
                 | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
                 | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
-            // FIXME: Fill in correct values.
             cr3: 0x100_0000_0000,
             cr0: Cr0Flags::PROTECTED_MODE_ENABLE.bits()
                 | Cr0Flags::EXTENSION_TYPE.bits()
@@ -150,9 +147,7 @@ impl InitializedVmsa {
                 | Cr0Flags::PAGING.bits(),
             dr7: 0x400,
             dr6: 0xffff0ff0,
-            // FIXME: Fill in correct values.
             rflags: 2,
-            // FIXME: Fill in correct values.
             rip: 0xffff_8000_0000_0000,
             dr0: 0,
             dr1: 0,
@@ -163,30 +158,21 @@ impl InitializedVmsa {
             dr2_addr_mask: 0,
             dr3_addr_mask: 0,
             _reserved4: Reserved::ZERO,
-            // FIXME: Fill in correct values.
             rsp: 0xffff800004003ff8,
             s_cet: 0,
             ssp: 0,
             isst_addr: 0,
             rax: 0,
-            // FIXME: Fill in correct values.
             star: 0,
-            // FIXME: Fill in correct values.
             lstar: 0,
-            // FIXME: Fill in correct values.
             cstar: 0,
-            // FIXME: Fill in correct values.
             sfmask: 0,
             kernel_gs_base: 0,
-            // FIXME: Fill in correct values.
             sysenter_cs: 0,
-            // FIXME: Fill in correct values.
             sysenter_esp: 0,
-            // FIXME: Fill in correct values.
             sysenter_eip: 0,
             cr2: 0,
             _reserved5: Reserved::ZERO,
-            // FIXME: Does this value make sense?
             g_pat: 0x7040600070406,
             dbgctl: 0,
             br_from: 0,
@@ -227,7 +213,6 @@ impl InitializedVmsa {
             tlb_id: 0,
             pcpu_id: 0,
             event_inj: 0,
-            // FIXME: Do we currently handle cpuid lookup correct? I think we're assuming 0.
             xcr0: 1,
             _reserved10: Reserved::ZERO,
             x87_dp: 0,
