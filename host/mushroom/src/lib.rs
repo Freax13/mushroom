@@ -1,4 +1,4 @@
-#![feature(saturating_int_impl, slice_ptr_len, pointer_byte_offsets)]
+#![feature(pointer_byte_offsets, saturating_int_impl, slice_ptr_len)]
 
 use std::{
     collections::{hash_map::Entry, HashMap},

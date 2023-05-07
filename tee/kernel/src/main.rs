@@ -2,8 +2,8 @@
 #![no_main]
 #![feature(
     abi_x86_interrupt,
-    allocator_api,
     alloc_error_handler,
+    allocator_api,
     asm_const,
     const_mut_refs,
     const_nonnull_new,
@@ -15,8 +15,8 @@
     drain_keep_rest,
     inline_const,
     int_roundings,
+    lazy_cell,
     naked_functions,
-    once_cell,
     pointer_byte_offsets,
     ptr_sub_ptr,
     step_trait,
