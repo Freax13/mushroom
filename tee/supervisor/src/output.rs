@@ -6,7 +6,10 @@ use core::{
 use constants::{FINISH_OUTPUT_MSR, UPDATE_OUTPUT_MSR};
 use sha2::{Digest, Sha256};
 use snp_types::attestation::AttestionReport;
-use x86_64::structures::paging::{PhysFrame, Size4KiB};
+use x86_64::{
+    instructions::hlt,
+    structures::paging::{PhysFrame, Size4KiB},
+};
 
 use crate::{
     ghcb::{self, write_msr},
@@ -56,7 +59,7 @@ pub fn update_output(bytes: &[u8]) {
 }
 
 // Finish output.
-pub fn finish() {
+pub fn finish() -> ! {
     // Finish the running hash.
     let mut guard = HASHER.borrow_mut();
     let hasher = guard.take().expect("hasher was already finished");
@@ -86,4 +89,9 @@ pub fn finish() {
     let frame = PhysFrame::<Size4KiB>::from_start_address(addr).unwrap();
     let value = frame.start_address().as_u64() | (size_of::<AttestionReport>() as u64);
     write_msr(FINISH_OUTPUT_MSR, value).unwrap();
+
+    // The host shouldn't keep running us. Do nothing.
+    loop {
+        hlt();
+    }
 }

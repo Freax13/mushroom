@@ -15,9 +15,8 @@
 use core::ops::Deref;
 
 use log::{debug, LevelFilter};
-use x86_64::instructions::hlt;
 
-use crate::{ap::run_aps, logging::SerialLogger, output::finish};
+use crate::{ap::run_aps, logging::SerialLogger};
 
 mod ap;
 mod cpuid;
@@ -50,14 +49,6 @@ fn main() {
 
     // Run the workload.
     run_aps();
-
-    // Attest the output.
-    finish();
-
-    // The host shouldn't keep running us. Do nothing.
-    loop {
-        hlt();
-    }
 }
 
 /// The supervisor runs singlethreaded, so we don't need statics to be `Sync`.

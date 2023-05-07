@@ -273,7 +273,7 @@ impl VmContext {
                         other => unimplemented!("unimplemented io port: {other}"),
                     }
                 }
-                KvmExit::Shutdown => break,
+                KvmExit::Shutdown | KvmExit::SystemEvent(_) => bail!("no output was produced"),
                 KvmExit::MemoryFault(fault) => {
                     dbg!(fault);
                 }
@@ -404,8 +404,6 @@ impl VmContext {
 
             run_res?;
         }
-
-        todo!()
     }
 
     fn run_ap(id: u8, vm: Arc<VmHandle>) -> JoinHandle<()> {

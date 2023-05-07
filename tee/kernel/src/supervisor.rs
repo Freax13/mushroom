@@ -1,6 +1,6 @@
 use core::cell::LazyCell;
 
-use constants::{HALT_PORT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR};
+use constants::{FINISH_OUTPUT_MSR, HALT_PORT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR};
 use spin::Mutex;
 use x86_64::{
     instructions::port::PortWriteOnly,
@@ -76,4 +76,20 @@ pub fn output(bytes: &[u8]) {
             Msr::new(UPDATE_OUTPUT_MSR).write(command);
         }
     }
+}
+
+/// Tell to supervisor to commit the output and produce and attestation report.
+pub fn commit_output() -> ! {
+    unsafe {
+        Msr::new(FINISH_OUTPUT_MSR).write(1);
+    }
+    unreachable!();
+}
+
+/// Tell the supervisor that something went wrong and to discard the output.
+pub fn fail() -> ! {
+    unsafe {
+        Msr::new(FINISH_OUTPUT_MSR).write(0);
+    }
+    unreachable!();
 }

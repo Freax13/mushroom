@@ -5,8 +5,8 @@ use core::{
 
 use bit_field::BitField;
 use constants::{
-    EXIT_PORT, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT, MEMORY_MSR,
-    SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
+    EXIT_PORT, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT,
+    MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
 };
 use log::{debug, info, trace};
 use snp_types::{
@@ -25,7 +25,7 @@ use crate::{
     doorbell::DOORBELL,
     dynamic::HOST_ALLOCTOR,
     ghcb::{create_ap, eoi, exit, ioio_write},
-    output::update_output,
+    output::{self, update_output},
     pagetable::TEMPORARY_MAPPER,
     FakeSync,
 };
@@ -265,6 +265,14 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
                     }
 
                     update_output(buffer);
+                }
+                FINISH_OUTPUT_MSR => {
+                    if value == 0 {
+                        panic!("init process failed");
+                    }
+
+                    // Create the attestation report.
+                    output::finish();
                 }
                 _ => unimplemented!("unhandled MSR {ecx:#x}"),
             }

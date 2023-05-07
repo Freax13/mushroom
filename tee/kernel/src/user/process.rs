@@ -12,6 +12,7 @@ use crate::{
         node::{lookup_node, Node, ROOT_NODE},
         Path,
     },
+    supervisor,
 };
 
 use self::{
@@ -84,6 +85,16 @@ impl Process {
     /// The returned exit status may not be the same as the requested
     /// if another thread terminated the thread group at the same time.
     pub fn exit(&self, exit_status: u8) -> u8 {
+        if self.pid == 1 {
+            // Commit or fail the output depending on the exit status of the
+            // init process.
+            if exit_status == 0 {
+                supervisor::commit_output();
+            } else {
+                supervisor::fail();
+            }
+        }
+
         let mut encoded_exit_status = u16::from(exit_status);
         encoded_exit_status.set_bit(15, true);
 
