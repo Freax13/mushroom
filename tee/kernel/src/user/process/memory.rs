@@ -1,6 +1,7 @@
 use core::{
     arch::asm,
     cmp,
+    intrinsics::volatile_copy_nonoverlapping_memory,
     iter::Step,
     ops::Deref,
     sync::atomic::{AtomicU16, Ordering},
@@ -245,6 +246,10 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             return Ok(());
         }
 
+        if !addr.is_aligned(0x1000u64) || len % 0x1000 != 0 {
+            unimplemented!()
+        }
+
         let mut state = self.state.lock();
 
         loop {
@@ -362,6 +367,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let mut state = self.state.lock();
 
         let addr = addr.unwrap_or_else(|| state.find_free_address(len));
+        let end = addr + len;
 
         debug!(
             "adding mapping {:?}-{:?} {:?}",
@@ -377,35 +383,110 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             backing,
         };
 
-        for m in state.mappings.iter() {
-            if let Some(overlapping_page) = m.page_overlaps(&mapping)? {
-                match (&m.backing, &mapping.backing) {
-                    (Backing::File(_), Backing::File(_)) => todo!(),
-                    (_, Backing::Zero) => {
-                        let ptr = unsafe { m.remove_cow(overlapping_page)? };
-                        let zero_start = cmp::max(overlapping_page.start_address(), mapping.addr);
-                        let zero_end =
-                            cmp::min((overlapping_page + 1).start_address(), mapping.end());
+        fn ensure_page_is_mapped(page: Page, permissions: MemoryPermissions) -> Result<(), Error> {
+            let entry = entry_for_page(page);
+            if entry.is_some() {
+                return Ok(());
+            }
 
-                        let zero_start_offset = usize::from(zero_start.page_offset());
-                        let zero_end_offset = usize::from((zero_end - 1u64).page_offset()) + 1;
-                        let zero_len = zero_end_offset - zero_start_offset;
+            let frame = (&DUMB_FRAME_ALLOCATOR)
+                .allocate_frame()
+                .ok_or(Error::NoMem)?;
+            unsafe {
+                zero_frame(frame)?;
+            }
+            let entry = PresentPageTableEntry::new(
+                frame,
+                PageTableFlags::USER | PageTableFlags::from(permissions),
+            );
+            unsafe { map_page(page, entry, &mut &DUMB_FRAME_ALLOCATOR) }
+        }
 
-                        without_smap(|| {
-                            without_write_protect(|| unsafe {
-                                let copy_ptr =
-                                    ptr.cast::<u8>().add(usize::from(zero_start.page_offset()));
-                                core::intrinsics::volatile_set_memory(copy_ptr, 0, zero_len);
-                            });
-                        });
-                    }
-                    (Backing::File(_), Backing::Stack) => todo!(),
-                    (Backing::Zero, Backing::File(_)) => todo!(),
-                    (Backing::Zero, Backing::Stack) => todo!(),
-                    (Backing::Stack, Backing::File(_)) => todo!(),
-                    (Backing::Stack, Backing::Stack) => todo!(),
+        fn copy_unaligned_start_and_end(start: VirtAddr, end: VirtAddr, backing: &Backing) {
+            // Collect the unaligned part into a buffer.
+            let mut buffer = [0; 0x1000];
+            let start_idx = start.as_u64() as usize % 0x1000;
+            let end_idx = end.as_u64() as usize % 0x1000;
+            let buffer = &mut buffer[start_idx..end_idx];
+            backing.copy_initial_memory_to_slice(0, buffer);
+
+            // Copy the unaligned part into the page.
+            without_smap(|| {
+                without_write_protect(|| unsafe {
+                    volatile_copy_nonoverlapping_memory(
+                        start.as_mut_ptr(),
+                        buffer.as_ptr(),
+                        buffer.len(),
+                    );
+                })
+            });
+        }
+
+        fn copy_unaligned_start(start: VirtAddr, backing: &Backing) {
+            // Collect the unaligned part into a buffer.
+            let mut buffer = [0; 0x1000];
+            let start_idx = start.as_u64() as usize % 0x1000;
+            let buffer = &mut buffer[start_idx..];
+            backing.copy_initial_memory_to_slice(0, buffer);
+
+            // Copy the unaligned part into the page.
+            without_smap(|| {
+                without_write_protect(|| unsafe {
+                    volatile_copy_nonoverlapping_memory(
+                        start.as_mut_ptr(),
+                        buffer.as_ptr(),
+                        buffer.len(),
+                    );
+                })
+            });
+        }
+
+        fn copy_unaligned_end(end: VirtAddr, backing: &Backing, total_len: u64) {
+            // Collect the unaligned part into a buffer.
+            let mut buffer = [0; 0x1000];
+            let buffer_len_as_u64 = end.as_u64() % 0x1000;
+            let end_idx = buffer_len_as_u64 as usize;
+            let buffer = &mut buffer[..end_idx];
+            backing.copy_initial_memory_to_slice(total_len - buffer_len_as_u64, buffer);
+
+            // Copy the unaligned part into the page.
+            without_smap(|| {
+                without_write_protect(|| unsafe {
+                    volatile_copy_nonoverlapping_memory(
+                        end.as_mut_ptr::<u8>().sub(end_idx),
+                        buffer.as_ptr(),
+                        buffer.len(),
+                    );
+                })
+            });
+        }
+
+        // If the mapping isn't page aligned, immediately map pages for the unaligned start and end.
+        match (addr.is_aligned(0x1000u64), end.is_aligned(0x1000u64)) {
+            (false, false) => {
+                let start_page = Page::containing_address(addr);
+                let end_page = Page::containing_address(end);
+                if start_page == end_page {
+                    ensure_page_is_mapped(start_page, permissions)?;
+                    copy_unaligned_start_and_end(addr, end, &mapping.backing);
+                } else {
+                    ensure_page_is_mapped(start_page, permissions)?;
+                    copy_unaligned_start(addr, &mapping.backing);
+                    ensure_page_is_mapped(end_page, permissions)?;
+                    copy_unaligned_end(end, &mapping.backing, len);
                 }
             }
+            (false, true) => {
+                let start_page = Page::containing_address(addr);
+                ensure_page_is_mapped(start_page, permissions)?;
+                copy_unaligned_start(addr, &mapping.backing);
+            }
+            (true, false) => {
+                let end_page = Page::containing_address(end);
+                ensure_page_is_mapped(end_page, permissions)?;
+                copy_unaligned_end(end, &mapping.backing, len);
+            }
+            (true, true) => {}
         }
 
         let addr = mapping.addr;
@@ -484,36 +565,6 @@ impl Mapping {
             || self.contains(end)
             || (addr..=end).contains(&self.addr)
             || (addr..=end).contains(&(self.end() - 1u64))
-    }
-
-    /// Check if the two mappings are mapped to the same page.
-    ///
-    /// Returns an error if the mappings overlap.
-    pub fn page_overlaps(&self, mapping: &Self) -> Result<Option<Page>> {
-        if self.contains(mapping.addr)
-            || self.contains(mapping.end() - 1u64)
-            || mapping.contains(self.addr)
-            || mapping.contains(self.end() - 1u64)
-        {
-            return Err(Error::Inval);
-        }
-
-        let self_start_page = Page::<Size4KiB>::containing_address(self.addr);
-        let self_end_page = Page::<Size4KiB>::containing_address(self.addr + (self.len - 1));
-        let other_start_page = Page::<Size4KiB>::containing_address(mapping.addr);
-        let other_end_page = Page::<Size4KiB>::containing_address(mapping.addr + (mapping.len - 1));
-
-        if (self_start_page..=self_end_page).contains(&other_start_page) {
-            Ok(Some(other_start_page))
-        } else if (self_start_page..=self_end_page).contains(&other_end_page) {
-            Ok(Some(other_end_page))
-        } else if (other_start_page..=other_end_page).contains(&self_start_page) {
-            Ok(Some(self_start_page))
-        } else if (other_start_page..=other_end_page).contains(&self_end_page) {
-            Ok(Some(self_end_page))
-        } else {
-            Ok(None)
-        }
     }
 
     /// Split the mapping into two parts. `self` will contain `[..offset)` and
@@ -814,6 +865,23 @@ impl Backing {
             Backing::File(file) => Backing::File(file.split(offset)),
             Backing::Zero => Backing::Zero,
             Backing::Stack => Backing::Stack,
+        }
+    }
+
+    /// In some situations we can't always let the backing provide the frames
+    /// for virtual memory e.g. when two mappings with different backings
+    /// overlap. In those cases a fresh frame will be allocated and the
+    /// backing's memory will be copied into it.
+    pub fn copy_initial_memory_to_slice(&self, offset: u64, buf: &mut [u8]) {
+        match self {
+            Backing::File(backing) => {
+                let offset = usize::try_from(backing.offset + offset).unwrap();
+                buf.copy_from_slice(&backing.bytes[offset..][..buf.len()]);
+            }
+            Backing::Zero | Backing::Stack => {
+                // The memory in these backings starts out as zero.
+                buf.fill(0);
+            }
         }
     }
 }
