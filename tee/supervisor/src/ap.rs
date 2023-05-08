@@ -1,7 +1,4 @@
-use core::{
-    cell::{Cell, RefCell},
-    mem::replace,
-};
+use core::cell::{Cell, RefCell};
 
 use bit_field::BitField;
 use constants::{
@@ -11,7 +8,7 @@ use constants::{
 use log::{debug, info, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
-    vmsa::{SevFeatures, Vmsa},
+    vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
     VmplPermissions,
 };
 use x86_64::{
@@ -24,7 +21,7 @@ use crate::{
     cpuid::get_cpuid_value,
     doorbell::DOORBELL,
     dynamic::HOST_ALLOCTOR,
-    ghcb::{create_ap, eoi, exit, ioio_write},
+    ghcb::{create_ap, eoi, exit, ioio_write, vmsa_tweak_bitmap},
     output::{self, update_output},
     pagetable::TEMPORARY_MAPPER,
     FakeSync,
@@ -39,7 +36,8 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
     SevFeatures::SNP_ACTIVE.bits()
         | SevFeatures::V_TOM.bits()
         | SevFeatures::REFLECT_VC.bits()
-        | SevFeatures::RESTRICTED_INJECTION.bits(),
+        | SevFeatures::RESTRICTED_INJECTION.bits()
+        | SevFeatures::VMSA_REG_PROT.bits(),
 );
 
 static APS: FakeSync<[RefCell<Ap>; MAX_APS_COUNT as usize]> =
@@ -83,7 +81,7 @@ impl Initialized {
             halted: false,
             apic_id,
             log_buffer: LogBuffer::new(),
-            vmsa: InitializedVmsa::new(),
+            vmsa: InitializedVmsa::new(vmsa_tweak_bitmap()),
         }
     }
 
@@ -104,28 +102,33 @@ impl Initialized {
             self.vmsa.set_runnable(false);
         }
 
+        let tweak_bitmap = vmsa_tweak_bitmap();
+
         let mut vmsa = self.vmsa.modify();
         // Replace the exit code to prevent the host to tell us to handle the
         // same exception twice.
-        let guest_exit_code = replace(&mut vmsa.guest_exit_code, 0xffff_ffff);
-        let guest_exit_info1 = vmsa.guest_exit_info1;
-        let _guest_nrip = vmsa.guest_nrip;
+        let guest_exit_code = vmsa.guest_exit_code(tweak_bitmap);
+        vmsa.set_guest_exit_code(0xffff_ffff, tweak_bitmap);
+        let guest_exit_info1 = vmsa.guest_exit_info1(tweak_bitmap);
+        let _guest_nrip = vmsa.guest_nrip(tweak_bitmap);
 
         match guest_exit_code {
-            VMEXIT_CPUID => handle_cpuid(&mut vmsa),
+            VMEXIT_CPUID => handle_cpuid(&mut vmsa, tweak_bitmap),
             VMEXIT_IOIO => handle_ioio_prot(
                 guest_exit_info1,
-                vmsa.rax,
+                vmsa.rax(tweak_bitmap),
                 &mut vmsa,
                 &mut self.log_buffer,
                 &mut self.halted,
+                tweak_bitmap,
             ),
             VMEXIT_MSR => handle_msr_prot(
                 guest_exit_info1,
-                vmsa.rax as u32,
-                vmsa.rcx as u32,
-                vmsa.rdx as u32,
+                vmsa.rax(tweak_bitmap) as u32,
+                vmsa.rcx(tweak_bitmap) as u32,
+                vmsa.rdx(tweak_bitmap) as u32,
                 &mut vmsa,
+                tweak_bitmap,
             ),
             _ => todo!("unhandled guest exit code: {guest_exit_code:#x}"),
         }
@@ -144,21 +147,21 @@ impl Initialized {
     }
 }
 
-fn handle_cpuid(vmsa: &mut Vmsa) {
-    let eax = vmsa.rax as u32;
-    let ecx = vmsa.rcx as u32;
-    let xcr0 = vmsa.xcr0;
-    let xss = vmsa.xss;
+fn handle_cpuid(vmsa: &mut Vmsa, tweak_bitmap: &VmsaTweakBitmap) {
+    let eax = vmsa.rax(tweak_bitmap) as u32;
+    let ecx = vmsa.rcx(tweak_bitmap) as u32;
+    let xcr0 = vmsa.xcr0(tweak_bitmap);
+    let xss = vmsa.xss(tweak_bitmap);
 
     let (eax, ebx, ecx, edx) = get_cpuid_value(eax, ecx, xcr0, xss);
 
-    vmsa.rax = u64::from(eax);
-    vmsa.rbx = u64::from(ebx);
-    vmsa.rcx = u64::from(ecx);
-    vmsa.rdx = u64::from(edx);
+    vmsa.set_rax(u64::from(eax), tweak_bitmap);
+    vmsa.set_rbx(u64::from(ebx), tweak_bitmap);
+    vmsa.set_rcx(u64::from(ecx), tweak_bitmap);
+    vmsa.set_rdx(u64::from(edx), tweak_bitmap);
 
     // Advance RIP.
-    vmsa.rip = vmsa.guest_nrip;
+    vmsa.set_rip(vmsa.guest_nrip(tweak_bitmap), tweak_bitmap);
 }
 
 fn handle_ioio_prot(
@@ -167,6 +170,7 @@ fn handle_ioio_prot(
     vmsa: &mut Vmsa,
     log_buffer: &mut LogBuffer,
     halted: &mut bool,
+    tweak_bitmap: &VmsaTweakBitmap,
 ) {
     let port = guest_exit_info1.get_bits(16..=31) as u16;
 
@@ -207,10 +211,17 @@ fn handle_ioio_prot(
     }
 
     // Advance RIP.
-    vmsa.rip = vmsa.guest_nrip;
+    vmsa.set_rip(vmsa.guest_nrip(tweak_bitmap), tweak_bitmap);
 }
 
-fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &mut Vmsa) {
+fn handle_msr_prot(
+    guest_exit_info1: u64,
+    eax: u32,
+    ecx: u32,
+    edx: u32,
+    vmsa: &mut Vmsa,
+    tweak_bitmap: &VmsaTweakBitmap,
+) {
     match guest_exit_info1 {
         0 => {
             // Read
@@ -233,8 +244,8 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
                     let value = frame
                         .map(PhysFrame::start_address)
                         .map_or(0, PhysAddr::as_u64);
-                    vmsa.rax = value.get_bits(..32);
-                    vmsa.rdx = value.get_bits(32..);
+                    vmsa.set_rax(value.get_bits(..32), tweak_bitmap);
+                    vmsa.set_rdx(value.get_bits(32..), tweak_bitmap);
                 }
                 _ => unimplemented!("unhandled MSR {ecx:#x}"),
             }
@@ -281,7 +292,7 @@ fn handle_msr_prot(guest_exit_info1: u64, eax: u32, ecx: u32, edx: u32, vmsa: &m
     }
 
     // Advance RIP.
-    vmsa.rip = vmsa.guest_nrip;
+    vmsa.set_rip(vmsa.guest_nrip(tweak_bitmap), tweak_bitmap);
 }
 
 pub fn run_aps() {

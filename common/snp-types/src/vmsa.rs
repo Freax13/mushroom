@@ -1,131 +1,211 @@
+//! Related to the VMSA. The VMSA type is aware of VMSA register protection.
+
+use bit_field::BitArray;
 use bitflags::bitflags;
-use bytemuck::{CheckedBitPattern, Pod, Zeroable};
+use bytemuck::{bytes_of, bytes_of_mut, cast, offset_of, CheckedBitPattern, Pod, Zeroable};
+use paste::paste;
 
 use crate::{Reserved, Uninteresting};
 
-#[derive(Clone, Copy, Debug, CheckedBitPattern, Zeroable)]
-#[repr(C, align(4096))]
-pub struct Vmsa {
-    pub es: Segment,
-    pub cs: Segment,
-    pub ss: Segment,
-    pub ds: Segment,
-    pub fs: Segment,
-    pub gs: Segment,
-    pub gdtr: Segment,
-    pub ldtr: Segment,
-    pub idtr: Segment,
-    pub tr: Segment,
-    pub pl0_ssp: u64,
-    pub pl1_ssp: u64,
-    pub pl2_ssp: u64,
-    pub pl3_ssp: u64,
-    pub ucet: u64,
-    pub _reserved1: Reserved<2>,
-    pub vpml: u8,
-    pub cpl: u8,
-    pub _reserved2: Reserved<4>,
-    pub efer: u64,
-    pub _reserved3: Reserved<104>,
-    pub xss: u64,
-    pub cr4: u64,
-    pub cr3: u64,
-    pub cr0: u64,
-    pub dr7: u64,
-    pub dr6: u64,
-    pub rflags: u64,
-    pub rip: u64,
-    pub dr0: u64,
-    pub dr1: u64,
-    pub dr2: u64,
-    pub dr3: u64,
-    pub dr0_addr_mask: u64,
-    pub dr1_addr_mask: u64,
-    pub dr2_addr_mask: u64,
-    pub dr3_addr_mask: u64,
-    pub _reserved4: Reserved<24>,
-    pub rsp: u64,
-    pub s_cet: u64,
-    pub ssp: u64,
-    pub isst_addr: u64,
-    pub rax: u64,
-    pub star: u64,
-    pub lstar: u64,
-    pub cstar: u64,
-    pub sfmask: u64,
-    pub kernel_gs_base: u64,
-    pub sysenter_cs: u64,
-    pub sysenter_esp: u64,
-    pub sysenter_eip: u64,
-    pub cr2: u64,
-    pub _reserved5: Reserved<32>,
-    pub g_pat: u64,
-    pub dbgctl: u64,
-    pub br_from: u64,
-    pub br_to: u64,
-    pub lsat_excp_from: u64,
-    pub last_excp_to: u64,
-    pub _reserved6: Reserved<72>,
-    pub _reserved7: Reserved<8>,
-    pub pkru: u32,
-    pub tsc_aux: u32,
-    pub guest_tsc_scale: u64,
-    pub guest_tsc_offset: u64,
-    pub reg_prot_nonce: u64,
-    pub rcx: u64,
-    pub rdx: u64,
-    pub rbx: u64,
-    pub _reserved8: Reserved<8>,
-    pub rbp: u64,
-    pub rsi: u64,
-    pub rdi: u64,
-    pub r8: u64,
-    pub r9: u64,
-    pub r10: u64,
-    pub r11: u64,
-    pub r12: u64,
-    pub r13: u64,
-    pub r14: u64,
-    pub r15: u64,
-    pub _reserved9: Reserved<16, false>,
-    pub guest_exit_info1: u64,
-    pub guest_exit_info2: u64,
-    pub guest_exit_int_info: u64,
-    pub guest_nrip: u64,
-    pub sev_features: SevFeatures,
-    pub vintr_ctrl: u64,
-    pub guest_exit_code: u64,
-    pub virtual_tom: u64,
-    pub tlb_id: u64,
-    pub pcpu_id: u64,
-    pub event_inj: u64,
-    pub xcr0: u64,
-    pub _reserved10: Reserved<16>,
-    pub x87_dp: u64,
-    pub mxcsr: u32,
-    pub x87_ftw: u16,
-    pub x87_fsw: u16,
-    pub x87_fcw: u16,
-    pub x87_fop: u16,
-    pub x87_ds: u16,
-    pub x87_cs: u16,
-    pub x87_rip: u64,
-    pub fpreg_x87: Uninteresting<[u8; 80]>,
-    pub fpreg_xmm: Uninteresting<[u8; 256]>,
-    pub fpreg_ymm: Uninteresting<[u8; 256]>,
-    pub lbr_stack_state: Uninteresting<[u8; 256]>,
-    pub lbr_select: u64,
-    pub ibs_fetch_ctl: u64,
-    pub ibs_fetch_linaddr: u64,
-    pub ibs_op_ctl: u64,
-    pub ibs_op_rip: u64,
-    pub ibs_op_data: u64,
-    pub ibs_op_data2: u64,
-    pub ibs_op_data3: u64,
-    pub ibs_dc_linaddr: u64,
-    pub bp_ibstgt_rip: u64,
-    pub ic_ibs_extd_ctl: u64,
-    pub _padding: Reserved<2104>,
+use core::mem::size_of;
+
+macro_rules! vmsa_def {
+    (
+        $($vis:vis $ident:ident: $ty:ty = $default:expr,)*
+    ) => {
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        #[repr(C, align(4096))]
+        pub struct Vmsa {
+            $($ident: [u8; size_of::<$ty>()],)*
+        }
+
+        paste! {
+            #[allow(dead_code)]
+            impl Vmsa {
+                $(
+                    $vis fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
+                        let mut buffer = [0; size_of::<$ty>()];
+                        self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
+                        bytemuck::checked::cast(buffer)
+                    }
+
+                    $vis fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
+                        let buffer: [u8; size_of::<$ty>()] = cast(value);
+                        self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
+                    }
+                )*
+            }
+        }
+
+        impl Default for Vmsa {
+            fn default() -> Self {
+                Self {
+                    $($ident: cast::<$ty, _>($default),)*
+                }
+            }
+        }
+    };
+}
+
+impl Vmsa {
+    /// Read bytes from the VMSA and deobfuscate protected registers.
+    fn read(&self, offset: usize, buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
+        for (b, offset) in buffer.iter_mut().zip(offset..) {
+            *b = bytes_of(self)[offset];
+
+            if tweak_bitmap.bitmap.get_bit(offset / 8) {
+                *b ^= self.reg_prot_nonce[offset % 8];
+            }
+        }
+    }
+
+    /// Write bytes to the VMSA and deobfuscate protected registers.
+    fn write(&mut self, offset: usize, buffer: &[u8], tweak_bitmap: &VmsaTweakBitmap) {
+        for (mut b, offset) in buffer.iter().copied().zip(offset..) {
+            if tweak_bitmap.bitmap.get_bit(offset / 8) {
+                b ^= self.reg_prot_nonce[offset % 8];
+            }
+
+            bytes_of_mut(self)[offset] = b;
+        }
+    }
+
+    /// Update the nonce and reencrypt all values in place.
+    pub fn update_nonce(&mut self, new_nonce: u64, tweak_bitmap: &VmsaTweakBitmap) {
+        let old_nonce = u64::from_ne_bytes(self.reg_prot_nonce);
+        let nonce_update_xor = old_nonce ^ new_nonce;
+        let nonce_update_xor = (nonce_update_xor).to_ne_bytes();
+        self.reg_prot_nonce = new_nonce.to_ne_bytes();
+
+        for (i, b) in bytes_of_mut(self).iter_mut().enumerate() {
+            if tweak_bitmap.bitmap.get_bit(i / 8) {
+                *b ^= nonce_update_xor[i % 8];
+            }
+        }
+    }
+}
+
+vmsa_def! {
+    pub es: Segment = Segment::DATA,
+    pub cs: Segment = Segment::CODE,
+    pub ss: Segment = Segment::DATA,
+    pub ds: Segment = Segment::DATA,
+    pub fs: Segment = Segment::FS_GS,
+    pub gs: Segment = Segment::FS_GS,
+    pub gdtr: Segment = Segment::NULL,
+    pub ldtr: Segment = Segment::NULL,
+    pub idtr: Segment = Segment::NULL,
+    pub tr: Segment = Segment::NULL,
+    pub pl0_ssp: u64 = 0,
+    pub pl1_ssp: u64 = 0,
+    pub pl2_ssp: u64 = 0,
+    pub pl3_ssp: u64 = 0,
+    pub ucet: u64 = 0,
+    reserved1: Reserved<2> = Reserved::ZERO,
+    pub vpml: u8 = 0,
+    pub cpl: u8 = 0,
+    reserved2: Reserved<4> = Reserved::ZERO,
+    pub efer: u64 = 0,
+    reserved3: Reserved<104> = Reserved::ZERO,
+    pub xss: u64 = 0,
+    pub cr4: u64 = 0,
+    pub cr3: u64 = 0,
+    pub cr0: u64 = 0,
+    pub dr7: u64 = 0x400,
+    pub dr6: u64 = 0xffff0ff0,
+    pub rflags: u64 = 2,
+    pub rip: u64 = 0,
+    pub dr0: u64 = 0,
+    pub dr1: u64 = 0,
+    pub dr2: u64 = 0,
+    pub dr3: u64 = 0,
+    pub dr0_addr_mask: u64 = 0,
+    pub dr1_addr_mask: u64 = 0,
+    pub dr2_addr_mask: u64 = 0,
+    pub dr3_addr_mask: u64 = 0,
+    reserved4: Reserved<24> = Reserved::ZERO,
+    pub rsp: u64 = 0,
+    pub s_cet: u64 = 0,
+    pub ssp: u64 = 0,
+    pub isst_addr: u64 = 0,
+    pub rax: u64 = 0,
+    pub star: u64 = 0,
+    pub lstar: u64 = 0,
+    pub cstar: u64 = 0,
+    pub sfmask: u64 = 0,
+    pub kernel_gs_base: u64 = 0,
+    pub sysenter_cs: u64 = 0,
+    pub sysenter_esp: u64 = 0,
+    pub sysenter_eip: u64 = 0,
+    pub cr2: u64 = 0,
+    reserved5: Reserved<32> = Reserved::ZERO,
+    pub g_pat: u64 = 0x7040600070406,
+    pub dbgctl: u64 = 0,
+    pub br_from: u64 = 0,
+    pub br_to: u64 = 0,
+    pub lsat_excp_from: u64 = 0,
+    pub last_excp_to: u64 = 0,
+    reserved6: Reserved<72> = Reserved::ZERO,
+    reserved7: Reserved<8> = Reserved::ZERO,
+    pub pkru: u32 = 0,
+    pub tsc_aux: u32 = 0,
+    pub guest_tsc_scale: u64 = 0,
+    pub guest_tsc_offset: u64 = 0,
+    reg_prot_nonce: u64 = 0,
+    pub rcx: u64 = 0,
+    pub rdx: u64 = 0,
+    pub rbx: u64 = 0,
+    reserved8: Reserved<8> = Reserved::ZERO,
+    pub rbp: u64 = 0,
+    pub rsi: u64 = 0,
+    pub rdi: u64 = 0,
+    pub r8: u64 = 0,
+    pub r9: u64 = 0,
+    pub r10: u64 = 0,
+    pub r11: u64 = 0,
+    pub r12: u64 = 0,
+    pub r13: u64 = 0,
+    pub r14: u64 = 0,
+    pub r15: u64 = 0,
+    reserved9: Reserved<16, false> = Reserved::ZERO,
+    pub guest_exit_info1: u64 = 0,
+    pub guest_exit_info2: u64 = 0,
+    pub guest_exit_int_info: u64 = 0,
+    pub guest_nrip: u64 = 0,
+    pub sev_features: SevFeatures = SevFeatures::SNP_ACTIVE,
+    pub vintr_ctrl: u64 = 0,
+    pub guest_exit_code: u64 = 0,
+    pub virtual_tom: u64 = 0,
+    pub tlb_id: u64 = 0,
+    pub pcpu_id: u64 = 0,
+    pub event_inj: u64 = 0,
+    pub xcr0: u64 = 1,
+    reserved10: Reserved<16> = Reserved::ZERO,
+    pub x87_dp: u64 = 0,
+    pub mxcsr: u32 = 0,
+    pub x87_ftw: u16 = 0,
+    pub x87_fsw: u16 = 0,
+    pub x87_fcw: u16 = 0x40,
+    pub x87_fop: u16 = 0,
+    pub x87_ds: u16 = 0,
+    pub x87_cs: u16 = 0,
+    pub x87_rip: u64 = 0,
+    pub fpreg_x87: Uninteresting<[u8; 80]> = Uninteresting::new([0; 80]),
+    pub fpreg_xmm: Uninteresting<[u8; 256]> = Uninteresting::new([0; 256]),
+    pub fpreg_ymm: Uninteresting<[u8; 256]> = Uninteresting::new([0; 256]),
+    pub lbr_stack_state: Uninteresting<[u8; 256]> = Uninteresting::new([0; 256]),
+    pub lbr_select: u64 = 0,
+    pub ibs_fetch_ctl: u64 = 0,
+    pub ibs_fetch_linaddr: u64 = 0,
+    pub ibs_op_ctl: u64 = 0,
+    pub ibs_op_rip: u64 = 0,
+    pub ibs_op_data: u64 = 0,
+    pub ibs_op_data2: u64 = 0,
+    pub ibs_op_data3: u64 = 0,
+    pub ibs_dc_linaddr: u64 = 0,
+    pub bp_ibstgt_rip: u64 = 0,
+    pub ic_ibs_extd_ctl: u64 = 0,
+    padding: Reserved<2104> = Reserved::ZERO,
 }
 
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -135,6 +215,36 @@ pub struct Segment {
     pub attrib: u16,
     pub limit: u32,
     pub base: u64,
+}
+
+impl Segment {
+    const DATA: Self = Self {
+        selector: 0x10,
+        attrib: 0xc93,
+        limit: 0xffffffff,
+        base: 0,
+    };
+
+    const CODE: Self = Self {
+        selector: 0x08,
+        attrib: 0x29b,
+        limit: 0xffffffff,
+        base: 0,
+    };
+
+    const FS_GS: Self = Self {
+        selector: 0,
+        attrib: 0x92,
+        limit: 0xffff,
+        base: 0,
+    };
+
+    const NULL: Self = Self {
+        selector: 0,
+        attrib: 0,
+        limit: 0,
+        base: 0,
+    };
 }
 
 bitflags! {
@@ -156,4 +266,13 @@ bitflags! {
         const VMSA_REG_PROT = 1 << 14;
         const SMT_PROTECTION = 1 << 15;
     }
+}
+
+/// VMSA register protection will obfuscate some values in the VMSA by xor'ing
+/// it with a nonce. This bitmap contains a bit for each quardword in the VMSA
+/// describing whether register protection applies for the quadword.
+#[derive(Debug, Clone, Copy, CheckedBitPattern)]
+#[repr(transparent)]
+pub struct VmsaTweakBitmap {
+    bitmap: [u8; 0x40],
 }

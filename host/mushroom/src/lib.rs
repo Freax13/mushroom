@@ -24,7 +24,6 @@ use snp_types::{
         Ghcb, PageSize, PageStateChangeEntry, PageStateChangeHeader,
     },
     guest_policy::GuestPolicy,
-    vmsa::Vmsa,
     PageType,
 };
 use tracing::{debug, info};
@@ -415,13 +414,6 @@ impl VmContext {
                 // Run the AP.
                 let res = ap.run();
 
-                if res.is_err() {
-                    let res = vm.sev_snp_dbg_decrypt_vmsa(u32::from(id)).unwrap();
-                    let vmsa = bytemuck::checked::try_pod_read_unaligned::<Vmsa>(&res).unwrap();
-                    dbg!(format_args!("{vmsa:#x?}"));
-                    dbg!(format_args!("{:#x?}", vmsa.rip));
-                }
-
                 res.unwrap();
 
                 // Check the exit.
@@ -435,56 +427,6 @@ impl VmContext {
                         std::thread::park();
                     }
                     exit => {
-                        let res = vm.sev_snp_dbg_decrypt_vmsa(u32::from(id)).unwrap();
-                        let vmsa = bytemuck::checked::try_pod_read_unaligned::<Vmsa>(&res).unwrap();
-                        dbg!(format_args!("{vmsa:#x?}"));
-                        dbg!(format_args!("{:#x?}", vmsa.rip));
-
-                        fn debug_page_table(id: u8, vm: &VmHandle, addr: u64) -> Result<()> {
-                            let c_bit_location = 51;
-
-                            let res = vm.sev_snp_dbg_decrypt_vmsa(u32::from(id))?;
-                            let vmsa = bytemuck::checked::try_pod_read_unaligned::<Vmsa>(&res)?;
-                            let cr3 = vmsa.cr3.get_bits(12..=38);
-                            dbg!(format_args!("{cr3:#018x}"));
-
-                            let res = vm.sev_snp_dbg_decrypt(cr3)?;
-                            let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                            let entry = page_table[addr.get_bits(39..=47) as usize];
-                            dbg!(format_args!("entry = {entry:#018x}"));
-                            let mut gfn = entry.get_bits(12..=51);
-                            gfn.set_bit(c_bit_location - 12, false);
-                            dbg!(format_args!("{gfn:#018x}"));
-
-                            let res = vm.sev_snp_dbg_decrypt(gfn)?;
-                            let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                            let entry = page_table[addr.get_bits(30..=38) as usize];
-                            dbg!(format_args!("entry = {entry:#018x}"));
-                            let mut gfn = entry.get_bits(12..=51);
-                            gfn.set_bit(c_bit_location - 12, false);
-                            dbg!(format_args!("{gfn:#018x}"));
-
-                            let res = vm.sev_snp_dbg_decrypt(gfn)?;
-                            let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                            let entry = page_table[addr.get_bits(21..=29) as usize];
-                            dbg!(format_args!("entry = {entry:#018x}"));
-                            let mut gfn = entry.get_bits(12..=51);
-                            gfn.set_bit(c_bit_location - 12, false);
-                            dbg!(format_args!("{gfn:#018x}"));
-
-                            let res = vm.sev_snp_dbg_decrypt(gfn)?;
-                            let page_table = bytemuck::pod_read_unaligned::<[u64; 512]>(&res);
-                            let entry = page_table[addr.get_bits(12..=20) as usize];
-                            dbg!(format_args!("entry = {entry:#018x}"));
-                            let mut gfn = entry.get_bits(12..=51);
-                            gfn.set_bit(c_bit_location - 12, false);
-                            dbg!(format_args!("{gfn:#018x}"));
-
-                            Ok(())
-                        }
-
-                        let _ = dbg!(debug_page_table(id, &vm, vmsa.rip));
-
                         panic!("unexpected exit {exit:?}");
                     }
                 }

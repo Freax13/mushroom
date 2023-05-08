@@ -431,7 +431,8 @@ impl VmHandle {
 
     pub fn sev_snp_init(&self) -> Result<()> {
         let mut data = KvmSnpInit {
-            flags: KvmSnpInitFlags::KVM_SEV_SNP_RESTRICTED_INJET,
+            flags: KvmSnpInitFlags::KVM_SEV_SNP_RESTRICTED_INJET
+                | KvmSnpInitFlags::KVM_SEV_SNP_VMSA_REG_PROT,
         };
         let payload = KvmSevCmdPayload::KvmSevSnpInit { data: &mut data };
         let res = unsafe { self.memory_encrypt_op(payload, None) };
@@ -1462,6 +1463,7 @@ bitflags! {
     pub struct KvmSnpInitFlags: u64 {
         const KVM_SEV_SNP_RESTRICTED_INJET = 1 << 0;
         const KVM_SEV_SNP_RESTRICTED_TIMER_INJET = 1 << 1;
+        const KVM_SEV_SNP_VMSA_REG_PROT = 1 << 2;
     }
 }
 

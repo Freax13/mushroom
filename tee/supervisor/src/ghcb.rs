@@ -21,7 +21,7 @@ use snp_types::{
     guest_message::{Algo, Content, ContentV1, Message},
     intercept::{VMEXIT_IOIO, VMEXIT_MSR},
     secrets::Secrets,
-    vmsa::SevFeatures,
+    vmsa::{SevFeatures, VmsaTweakBitmap},
 };
 use volatile::{map_field, map_field_mut, VolatilePtr};
 use x86_64::structures::paging::PhysFrame;
@@ -40,6 +40,11 @@ static SECRETS: FakeSync<LazyCell<Secrets>> = FakeSync::new(LazyCell::new(|| {
     }
     pod_read_unaligned(&bytes)
 }));
+
+pub fn vmsa_tweak_bitmap() -> &'static VmsaTweakBitmap {
+    let Secrets::V3(v3) = &**SECRETS;
+    &v3.vmsa_tweak_bitmap
+}
 
 /// Initialize a GHCB and pass it to the closure.
 pub fn with_ghcb<R>(f: impl FnOnce(&mut VolatilePtr<'static, Ghcb>) -> R) -> Result<R, GhcbInUse> {

@@ -1,4 +1,5 @@
 use core::{
+    arch::x86_64::_rdrand64_step,
     cell::{SyncUnsafeCell, UnsafeCell},
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
@@ -8,8 +9,8 @@ use core::{
 use bit_field::BitField;
 use constants::MAX_APS_COUNT;
 use snp_types::{
-    vmsa::{Segment, Vmsa},
-    Reserved, Uninteresting, VmplPermissions,
+    vmsa::{Vmsa, VmsaTweakBitmap},
+    VmplPermissions,
 };
 use x86_64::{
     registers::{
@@ -63,184 +64,41 @@ pub struct InitializedVmsa {
 }
 
 impl InitializedVmsa {
-    pub fn new() -> Self {
-        let data_segment = Segment {
-            selector: 0x10,
-            attrib: 0xc93,
-            limit: 0xffffffff,
-            base: 0,
-        };
-        let code_segment = Segment {
-            selector: 0x08,
-            attrib: 0x29b,
-            limit: 0xffffffff,
-            base: 0,
-        };
-        let fs_gs = Segment {
-            selector: 0,
-            attrib: 0x92,
-            limit: 0xffff,
-            base: 0,
-        };
-        let gdtr = Segment {
-            selector: 0,
-            attrib: 0,
-            limit: 0,
-            base: 0,
-        };
-        let ldtr = Segment {
-            selector: 0,
-            attrib: 0x82,
-            limit: 0xffff,
-            base: 0,
-        };
-        let idtr = Segment {
-            selector: 0,
-            attrib: 0,
-            limit: 0xfff,
-            base: 0xffff800002000030,
-        };
-        let tr = Segment {
-            selector: 0,
-            attrib: 0x83,
-            limit: 0xffff,
-            base: 0,
-        };
-
-        let vmsa = Vmsa {
-            es: data_segment,
-            cs: code_segment,
-            ss: data_segment,
-            ds: data_segment,
-            fs: fs_gs,
-            gs: fs_gs,
-            gdtr,
-            ldtr,
-            idtr,
-            tr,
-            pl0_ssp: 0,
-            pl1_ssp: 0,
-            pl2_ssp: 0,
-            pl3_ssp: 0,
-            ucet: 0,
-            _reserved1: Reserved::ZERO,
-            vpml: 1,
-            cpl: 0,
-            _reserved2: Reserved::ZERO,
-            efer: EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
+    pub fn new(tweak_bitmap: &VmsaTweakBitmap) -> Self {
+        let mut vmsa = Vmsa::default();
+        vmsa.set_vpml(1, tweak_bitmap);
+        vmsa.set_virtual_tom(!0, tweak_bitmap);
+        vmsa.set_efer(
+            EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
                 | EferFlags::LONG_MODE_ENABLE.bits()
                 | EferFlags::LONG_MODE_ACTIVE.bits()
                 | EferFlags::NO_EXECUTE_ENABLE.bits()
                 | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
-            _reserved3: Reserved::ZERO,
-            xss: 0,
-            cr4: Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
+            tweak_bitmap,
+        );
+        vmsa.set_cr4(
+            Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
                 | Cr4Flags::PAGE_GLOBAL.bits()
                 | Cr4Flags::FSGSBASE.bits()
                 | Cr4Flags::PCID.bits()
                 | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
                 | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
-            cr3: 0x100_0000_0000,
-            cr0: Cr0Flags::PROTECTED_MODE_ENABLE.bits()
+            tweak_bitmap,
+        );
+        vmsa.set_cr3(0x100_0000_0000, tweak_bitmap);
+        vmsa.set_cr0(
+            Cr0Flags::PROTECTED_MODE_ENABLE.bits()
                 | Cr0Flags::EXTENSION_TYPE.bits()
                 | Cr0Flags::WRITE_PROTECT.bits()
                 | Cr0Flags::PAGING.bits(),
-            dr7: 0x400,
-            dr6: 0xffff0ff0,
-            rflags: 2,
-            rip: 0xffff_8000_0000_0000,
-            dr0: 0,
-            dr1: 0,
-            dr2: 0,
-            dr3: 0,
-            dr0_addr_mask: 0,
-            dr1_addr_mask: 0,
-            dr2_addr_mask: 0,
-            dr3_addr_mask: 0,
-            _reserved4: Reserved::ZERO,
-            rsp: 0xffff800004003ff8,
-            s_cet: 0,
-            ssp: 0,
-            isst_addr: 0,
-            rax: 0,
-            star: 0,
-            lstar: 0,
-            cstar: 0,
-            sfmask: 0,
-            kernel_gs_base: 0,
-            sysenter_cs: 0,
-            sysenter_esp: 0,
-            sysenter_eip: 0,
-            cr2: 0,
-            _reserved5: Reserved::ZERO,
-            g_pat: 0x7040600070406,
-            dbgctl: 0,
-            br_from: 0,
-            br_to: 0,
-            lsat_excp_from: 0,
-            last_excp_to: 0,
-            _reserved6: Reserved::ZERO,
-            _reserved7: Reserved::ZERO,
-            pkru: 0,
-            tsc_aux: 0,
-            guest_tsc_scale: 0,
-            guest_tsc_offset: 0,
-            reg_prot_nonce: 0,
-            rcx: 0,
-            rdx: 0,
-            rbx: 0,
-            _reserved8: Reserved::ZERO,
-            rbp: 0,
-            rsi: 0,
-            rdi: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r11: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
-            _reserved9: Reserved::ZERO,
-            guest_exit_info1: 0,
-            guest_exit_info2: 0,
-            guest_exit_int_info: 0,
-            guest_nrip: 0,
-            sev_features: SEV_FEATURES,
-            vintr_ctrl: 0,
-            guest_exit_code: 0,
-            virtual_tom: !0,
-            tlb_id: 0,
-            pcpu_id: 0,
-            event_inj: 0,
-            xcr0: 1,
-            _reserved10: Reserved::ZERO,
-            x87_dp: 0,
-            mxcsr: 0,
-            x87_ftw: 0,
-            x87_fsw: 0,
-            x87_fcw: 0x40,
-            x87_fop: 0,
-            x87_ds: 0,
-            x87_cs: 0,
-            x87_rip: 0,
-            fpreg_x87: Uninteresting::new([0; 80]),
-            fpreg_xmm: Uninteresting::new([0; 256]),
-            fpreg_ymm: Uninteresting::new([0; 256]),
-            lbr_stack_state: Uninteresting::new([0; 256]),
-            lbr_select: 0,
-            ibs_fetch_ctl: 0,
-            ibs_fetch_linaddr: 0,
-            ibs_op_ctl: 0,
-            ibs_op_rip: 0,
-            ibs_op_data: 0,
-            ibs_op_data2: 0,
-            ibs_op_data3: 0,
-            ibs_dc_linaddr: 0,
-            bp_ibstgt_rip: 0,
-            ic_ibs_extd_ctl: 0,
-            _padding: Reserved::ZERO,
-        };
+            tweak_bitmap,
+        );
+        vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);
+        vmsa.set_rsp(0xffff_8000_0400_3ff8, tweak_bitmap);
+        vmsa.set_sev_features(SEV_FEATURES, tweak_bitmap);
+
+        // Randomize that starting nonce.
+        vmsa.update_nonce(random(), tweak_bitmap);
 
         Self {
             vmsa: allocate_vmsa(vmsa),
@@ -308,4 +166,20 @@ impl Drop for VmsaModifyGuard<'_> {
             self.vmsa.set_runnable(true);
         }
     }
+}
+
+/// Generate a random number.
+fn random() -> u64 {
+    const ATTEMPTS: usize = 100;
+
+    // rdrand can fail. Limit the number of attempts.
+    for _ in 0..ATTEMPTS {
+        let mut new_nonce = 0;
+        let res = unsafe { _rdrand64_step(&mut new_nonce) };
+        if res == 1 {
+            return new_nonce;
+        }
+    }
+
+    panic!("failed to generate random number")
 }
