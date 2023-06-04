@@ -4,13 +4,24 @@ use super::{File, FileSnapshot};
 use crate::{
     error::{Error, Result},
     supervisor,
+    user::process::syscall::args::FileMode,
 };
 
-pub struct NullFile;
+pub struct NullFile {
+    mode: FileMode,
+}
+
+impl NullFile {
+    pub fn new() -> Self {
+        Self {
+            mode: FileMode::from_bits_truncate(0o666),
+        }
+    }
+}
 
 impl File for NullFile {
-    fn is_executable(&self) -> bool {
-        false
+    fn mode(&self) -> FileMode {
+        self.mode
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
@@ -27,20 +38,22 @@ impl File for NullFile {
 }
 
 pub struct OutputFile {
+    mode: FileMode,
     offset: Mutex<usize>,
 }
 
 impl OutputFile {
     pub fn new() -> Self {
         Self {
+            mode: FileMode::OWNER_ALL,
             offset: Mutex::new(0),
         }
     }
 }
 
 impl File for OutputFile {
-    fn is_executable(&self) -> bool {
-        false
+    fn mode(&self) -> FileMode {
+        self.mode
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {

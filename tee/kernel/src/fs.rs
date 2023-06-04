@@ -10,6 +10,7 @@ use crate::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
     },
+    user::process::syscall::args::FileMode,
 };
 
 use self::node::{
@@ -26,17 +27,20 @@ pub fn init() -> Result<()> {
     let bin = ROOT_NODE.mkdir(FileName::new(b"bin").unwrap(), false)?;
     let bin =
         <dyn Any>::downcast_ref::<TmpFsDirectory>(&*bin as &dyn Any).expect("/bin/ is not a tmpfs");
-    bin.mount(FileName::new(b"init").unwrap(), TmpFsFile::new(true, &INIT));
+    bin.mount(
+        FileName::new(b"init").unwrap(),
+        TmpFsFile::new(FileMode::from_bits_truncate(0o755), &INIT),
+    );
 
     let dev = ROOT_NODE.mkdir(FileName::new(b"dev").unwrap(), false)?;
     let dev =
         <dyn Any>::downcast_ref::<TmpFsDirectory>(&*dev as &dyn Any).expect("/dev/ is not a tmpfs");
     dev.mount(
         FileName::new(b"input").unwrap(),
-        TmpFsFile::new(false, &INPUT),
+        TmpFsFile::new(FileMode::from_bits_truncate(0o444), &INPUT),
     );
     dev.mount(FileName::new(b"output").unwrap(), OutputFile::new());
-    dev.mount(FileName::new(b"null").unwrap(), NullFile);
+    dev.mount(FileName::new(b"null").unwrap(), NullFile::new());
 
     Ok(())
 }

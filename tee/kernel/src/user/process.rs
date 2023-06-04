@@ -19,6 +19,7 @@ use self::{
     fd::FileDescriptorTable,
     futex::Futexes,
     memory::{VirtualMemory, VirtualMemoryActivator},
+    syscall::args::FileMode,
     thread::{new_tid, Thread},
 };
 
@@ -26,7 +27,7 @@ mod elf;
 pub mod fd;
 mod futex;
 pub mod memory;
-mod syscall;
+pub mod syscall;
 pub mod thread;
 
 pub struct Process {
@@ -45,7 +46,7 @@ impl Process {
     ) -> Result<()> {
         let node = lookup_node(Node::Directory(ROOT_NODE.clone()), path)?;
         let Node::File(file) = node else { return Err(Error::is_dir()) };
-        if !file.is_executable() {
+        if !file.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces());
         }
         let elf_file = file.read_snapshot()?;

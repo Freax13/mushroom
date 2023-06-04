@@ -189,7 +189,7 @@ fn open(
 
     if flags.contains(OpenFlags::WRONLY) {
         if flags.contains(OpenFlags::CREAT) {
-            let file = create_file(Node::Directory(ROOT_NODE.clone()), &filename)?;
+            let file = create_file(Node::Directory(ROOT_NODE.clone()), &filename, mode)?;
             let fd = thread
                 .fdtable()
                 .insert(WriteonlyFileFileDescription::new(file));

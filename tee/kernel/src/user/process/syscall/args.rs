@@ -161,15 +161,18 @@ bitflags! {
 
 bitflags! {
     pub struct FileMode {
-        const EXECUTE = 1 << 0;
-        const WRITE = 1 << 1;
-        const READ = 1 << 2;
-        const GROUP_EXECUTE = 1 << 3;
-        const GROUP_WRITE = 1 << 4;
-        const GROUP_READ = 1 << 5;
-        const OWNER_EXECUTE = 1 << 6;
-        const OWNER_WRITE = 1 << 7;
-        const OWNER_READ = 1 << 8;
+        const ALL = 0o777;
+
+        const EXECUTE = 0o001;
+        const WRITE = 0o002;
+        const READ = 0o004;
+        const GROUP_EXECUTE = 0o010;
+        const GROUP_WRITE = 0o020;
+        const GROUP_READ = 0o040;
+        const OWNER_EXECUTE = 0o100;
+        const OWNER_WRITE = 0o200;
+        const OWNER_READ = 0o400;
+        const OWNER_ALL = 0o700;
     }
 }
 

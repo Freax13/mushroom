@@ -7,7 +7,10 @@ use alloc::{
 };
 use spin::{Lazy, Mutex};
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    user::process::syscall::args::FileMode,
+};
 
 use super::{path::FileName, Path, PathSegment};
 
@@ -22,7 +25,7 @@ pub enum Node {
 }
 
 pub trait File: Send + Sync + 'static {
-    fn is_executable(&self) -> bool;
+    fn mode(&self) -> FileMode;
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
     fn read_snapshot(&self) -> Result<FileSnapshot>;
@@ -59,7 +62,12 @@ impl Deref for FileSnapshot {
 pub trait Directory: Any + Send + Sync {
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
     fn mkdir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>>;
-    fn create(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn File>>;
+    fn create(
+        &self,
+        file_name: FileName,
+        mode: FileMode,
+        create_new: bool,
+    ) -> Result<Arc<dyn File>>;
 }
 
 pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
@@ -82,7 +90,7 @@ pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
         })
 }
 
-pub fn create_file(start_node: Node, path: &Path) -> Result<Arc<dyn File>> {
+pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<dyn File>> {
     let mut start_node = match start_node {
         Node::File(_) => return Err(Error::not_dir()),
         Node::Directory(dir) => dir,
@@ -112,7 +120,7 @@ pub fn create_file(start_node: Node, path: &Path) -> Result<Arc<dyn File>> {
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let file = dir.create(file_name.clone(), false)?;
+    let file = dir.create(file_name.clone(), mode, false)?;
     Ok(file)
 }
 
@@ -164,12 +172,17 @@ impl Directory for TmpFsDirectory {
         }
     }
 
-    fn create(&self, path_segment: FileName, create_new: bool) -> Result<Arc<dyn File>> {
+    fn create(
+        &self,
+        path_segment: FileName,
+        mode: FileMode,
+        create_new: bool,
+    ) -> Result<Arc<dyn File>> {
         let mut guard = self.items.lock();
         let entry = guard.entry(path_segment);
         match entry {
             Entry::Vacant(entry) => {
-                let file = Arc::new(TmpFsFile::new(false, &[]));
+                let file = Arc::new(TmpFsFile::new(mode, &[]));
                 entry.insert(Node::File(file.clone()));
                 Ok(file)
             }
@@ -188,21 +201,21 @@ impl Directory for TmpFsDirectory {
 
 pub struct TmpFsFile {
     content: Mutex<Arc<Cow<'static, [u8]>>>,
-    executable: bool,
+    mode: FileMode,
 }
 
 impl TmpFsFile {
-    pub fn new(executable: bool, content: &'static [u8]) -> Self {
+    pub fn new(mode: FileMode, content: &'static [u8]) -> Self {
         Self {
             content: Mutex::new(Arc::new(Cow::Borrowed(content))),
-            executable,
+            mode,
         }
     }
 }
 
 impl File for TmpFsFile {
-    fn is_executable(&self) -> bool {
-        self.executable
+    fn mode(&self) -> FileMode {
+        self.mode
     }
 
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
