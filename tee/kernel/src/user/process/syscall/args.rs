@@ -154,6 +154,7 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREAT = 1 << 6;
         const EXCL = 1 << 9;
+        const LARGEFILE = 1 << 15;
         const SYNC = 1 << 19;
     }
 }
