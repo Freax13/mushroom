@@ -295,7 +295,7 @@ fn handle_msr_prot(
     vmsa.set_rip(vmsa.guest_nrip(tweak_bitmap), tweak_bitmap);
 }
 
-pub fn run_aps() {
+pub fn run_aps() -> ! {
     info!("booting first AP");
     let mut first_ap = APS[0].borrow_mut();
     first_ap.start(FIRST_AP);
@@ -335,6 +335,8 @@ pub fn run_aps() {
         // Schedule additionals APs if previously requested.
         schedule_aps();
     }
+
+    panic!("all APs stopped!")
 }
 
 pub fn schedule_aps() {
