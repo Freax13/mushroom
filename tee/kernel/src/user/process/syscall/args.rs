@@ -229,7 +229,14 @@ impl SyscallArg for FdNum {
     fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
         match Self::parse(value) {
             Ok(fd) => write!(f, "{fd}"),
-            Err(_) => write!(f, "{value} (invalid fd)"),
+            Err(_) => {
+                if let Ok(value) = u32::try_from(value) {
+                    write!(f, "{}", value as i32)?;
+                } else {
+                    write!(f, "{value}")?;
+                }
+                write!(f, " (invalid fd)")
+            }
         }
     }
 }
