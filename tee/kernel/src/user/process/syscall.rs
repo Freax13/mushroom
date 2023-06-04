@@ -553,7 +553,7 @@ fn exit(
         schedule_thread(thread);
     }
 
-    THREADS.remove(thread.tid);
+    THREADS.remove(thread.tid());
 
     Yield
 }
@@ -646,7 +646,7 @@ fn arch_prctl(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer) -> Syscal
 
 #[syscall(no = 186)]
 fn gettid(thread: &mut Thread) -> SyscallResult {
-    let tid = thread.tid;
+    let tid = thread.tid();
     Ok(u64::from(tid))
 }
 
@@ -715,7 +715,7 @@ fn futex(
 #[syscall(no = 218)]
 fn set_tid_address(thread: &mut Thread, tidptr: Pointer) -> SyscallResult {
     thread.clear_child_tid = tidptr.get().as_u64();
-    Ok(u64::from(thread.tid))
+    Ok(u64::from(thread.tid()))
 }
 
 #[syscall(no = 231)]

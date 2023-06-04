@@ -88,7 +88,7 @@ pub struct Thread {
 
     pub registers: UserspaceRegisters,
 
-    pub tid: u32,
+    tid: u32,
 
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
@@ -221,6 +221,10 @@ impl Thread {
 
     pub fn weak(&self) -> &WeakThread {
         &self.self_weak
+    }
+
+    pub fn tid(&self) -> u32 {
+        self.tid
     }
 
     pub fn process(&self) -> &Arc<Process> {

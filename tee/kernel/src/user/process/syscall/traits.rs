@@ -574,7 +574,7 @@ impl SyscallHandlers {
         trace!(
             "core={} tid={} @ {formatted_syscall} = {res:?}",
             PerCpu::get().idx,
-            thread.tid
+            thread.tid()
         );
 
         res
