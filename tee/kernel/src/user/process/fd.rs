@@ -70,11 +70,15 @@ impl FileDescriptorTable {
             .lock()
             .get(&fd_num.get())
             .cloned()
-            .ok_or(Error::BadF)
+            .ok_or(Error::bad_f())
     }
 
     pub fn close(&self, fd_num: FdNum) -> Result<()> {
-        let fd = self.table.lock().remove(&fd_num.get()).ok_or(Error::BadF)?;
+        let fd = self
+            .table
+            .lock()
+            .remove(&fd_num.get())
+            .ok_or(Error::bad_f())?;
         fd.close()
     }
 }
@@ -97,12 +101,12 @@ impl Clone for FileDescriptorTable {
 pub trait OpenFileDescription: Send + Sync + 'static {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
-        Err(Error::Inval)
+        Err(Error::inval())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
-        Err(Error::Inval)
+        Err(Error::inval())
     }
 
     fn close(&self) -> Result<()> {

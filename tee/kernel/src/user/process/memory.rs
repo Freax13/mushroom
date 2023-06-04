@@ -162,7 +162,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 .mappings
                 .iter()
                 .find(|mapping| mapping.contains(copy_start))
-                .ok_or(Error::Fault)?;
+                .ok_or(Error::fault())?;
             let ptr = unsafe { mapping.make_readable(page)? };
 
             let src_offset = usize::try_from(copy_start - addr).unwrap();
@@ -192,7 +192,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 break;
             }
             if ret.len() == max_length {
-                return Err(Error::NameTooLong);
+                return Err(Error::name_too_long());
             }
             addr = Step::forward(addr, 1);
             ret.push(buf);
@@ -222,7 +222,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 .mappings
                 .iter()
                 .find(|mapping| mapping.contains(copy_start))
-                .ok_or(Error::Fault)?;
+                .ok_or(Error::fault())?;
             let ptr = unsafe { mapping.make_writable(page)? };
 
             let src_offset = usize::try_from(copy_start - addr).unwrap();
@@ -257,7 +257,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 .mappings
                 .iter_mut()
                 .find(|m| m.contains(addr))
-                .ok_or(Error::Fault)?;
+                .ok_or(Error::fault())?;
 
             let start_offset = addr - mapping.addr;
             if start_offset > 0 {
@@ -391,7 +391,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
             let frame = (&DUMB_FRAME_ALLOCATOR)
                 .allocate_frame()
-                .ok_or(Error::NoMem)?;
+                .ok_or(Error::no_mem())?;
             unsafe {
                 zero_frame(frame)?;
             }
@@ -588,7 +588,7 @@ impl Mapping {
     unsafe fn make_executable(&self, page: Page) -> Result<*const [u8; 4096]> {
         if !self.permissions.contains(MemoryPermissions::EXECUTE) {
             // FIXME: Or ACCESS?
-            return Err(Error::Fault);
+            return Err(Error::fault());
         }
 
         if let Some(entry) = entry_for_page(page) {
@@ -638,7 +638,7 @@ impl Mapping {
             self.make_readable(page)?;
         }
 
-        let mut current_entry = entry_for_page(page).ok_or(Error::Fault)?;
+        let mut current_entry = entry_for_page(page).ok_or(Error::fault())?;
         loop {
             if !current_entry.cow() {
                 return Ok(ptr);
@@ -678,7 +678,7 @@ impl Mapping {
     unsafe fn make_writable(&self, page: Page) -> Result<*mut [u8; 4096]> {
         if !self.permissions.contains(MemoryPermissions::WRITE) {
             // FIXME: Or ACCESS?
-            return Err(Error::Fault);
+            return Err(Error::fault());
         }
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
@@ -759,7 +759,7 @@ impl Mapping {
     unsafe fn make_readable(&self, page: Page) -> Result<*const [u8; 4096]> {
         if !self.permissions.contains(MemoryPermissions::READ) {
             // FIXME: Or ACCESS?
-            return Err(Error::Fault);
+            return Err(Error::fault());
         }
 
         let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();

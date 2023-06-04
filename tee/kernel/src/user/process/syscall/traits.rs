@@ -32,11 +32,11 @@ impl FromResidual<Result<Infallible, Error>> for SyscallResult {
 
 impl SyscallArg for u32 {
     fn parse(value: u64) -> Result<Self> {
-        u32::try_from(value).map_err(|_| Error::Inval)
+        u32::try_from(value).map_err(|_| Error::inval())
     }
 
     fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        if let Ok(value) = u32::try_from(value).map_err(|_| Error::Inval) {
+        if let Ok(value) = u32::try_from(value).map_err(|_| Error::inval()) {
             write!(f, "{value}")
         } else {
             write!(f, "{value} (out of bounds)")
@@ -556,7 +556,7 @@ impl SyscallHandlers {
             .flatten()
             .ok_or_else(|| {
                 warn!("unsupported syscall: {syscall_no}");
-                Error::NoSys
+                Error::no_sys()
             })?;
 
         let res = (handler.exeute)(thread, vm_activator, arg0, arg1, arg2, arg3, arg4, arg5);
