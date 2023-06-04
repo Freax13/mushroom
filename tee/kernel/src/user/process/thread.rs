@@ -12,7 +12,7 @@ use alloc::{
 };
 use bitflags::bitflags;
 use bytemuck::{offset_of, Pod, Zeroable};
-use log::info;
+use log::warn;
 use spin::Mutex;
 use x86_64::{
     registers::{
@@ -93,6 +93,7 @@ pub struct Thread {
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
+    pub dead: bool,
     pub clear_child_tid: u64,
     pub waiters: Vec<Waiter>,
 }
@@ -135,6 +136,7 @@ impl Thread {
             sigaction: [Sigaction::DEFAULT; 64],
             sigaltstack: None,
             clear_child_tid: 0,
+            dead: false,
             waiters: Vec::new(),
         }
     }
@@ -499,7 +501,11 @@ impl Thread {
 impl Drop for Thread {
     fn drop(&mut self) {
         if !self.waiters.is_empty() {
-            info!("thread {} exited with waiters", self.tid);
+            warn!(
+                "thread {} exited with {} waiter(s)",
+                self.tid,
+                self.waiters.len(),
+            );
         }
     }
 }

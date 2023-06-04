@@ -555,6 +555,8 @@ fn exit(
 
     THREADS.remove(thread.tid());
 
+    thread.dead = true;
+
     Yield
 }
 
@@ -578,6 +580,11 @@ fn wait4(
             let t = THREADS.by_id(pid as u32).ok_or_else(Error::child)?;
 
             let mut guard = t.lock();
+            if guard.dead {
+                // Return immediatly for dead tasks.
+                return Ok(0);
+            }
+
             guard.waiters.push(Waiter {
                 thread: thread.weak().clone(),
                 wstatus: wstatus.get(),
