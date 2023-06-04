@@ -86,7 +86,7 @@ impl Thread {
 
     /// Execute the exit syscall.
     pub fn exit(&mut self, vm_activator: &mut VirtualMemoryActivator, status: u8) {
-        <SysExit as Syscall1>::execute(self, vm_activator, u64::from(status));
+        exit(self, vm_activator, u64::from(status));
     }
 }
 
@@ -680,7 +680,7 @@ fn exit_group(
     status: u64,
 ) -> SyscallResult {
     let status = thread.process().exit(status as u8);
-    <SysExit as Syscall1>::execute(thread, vm_activator, u64::from(status))
+    exit(thread, vm_activator, u64::from(status))
 }
 
 #[syscall(no = 293)]
