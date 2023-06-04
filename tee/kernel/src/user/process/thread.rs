@@ -1,15 +1,18 @@
 use core::{
     arch::asm,
+    ffi::CStr,
     ops::{BitAndAssign, BitOrAssign, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use alloc::{
     collections::{BTreeMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, Weak},
+    vec::Vec,
 };
 use bitflags::bitflags;
 use bytemuck::{offset_of, Pod, Zeroable};
+use log::info;
 use spin::Mutex;
 use x86_64::{
     registers::{
@@ -20,6 +23,11 @@ use x86_64::{
 };
 
 use crate::{
+    error::{Error, Result},
+    fs::{
+        node::{lookup_node, Node, ROOT_NODE},
+        Path,
+    },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
     supervisor::schedule_vcpu,
 };
@@ -27,24 +35,53 @@ use crate::{
 use super::{
     fd::FileDescriptorTable,
     memory::{VirtualMemory, VirtualMemoryActivator},
+    syscall::args::FileMode,
     Process,
 };
 
-pub static THREADS: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>> = Mutex::new(BTreeMap::new());
-static RUNNABLE_THREADS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+pub static THREADS: Threads = Threads::new();
+static RUNNABLE_THREADS: Mutex<VecDeque<WeakThread>> = Mutex::new(VecDeque::new());
 
 pub fn new_tid() -> u32 {
     static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
     PID_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
-pub fn schedule_thread(tid: u32) {
-    RUNNABLE_THREADS.lock().push_back(tid);
-
+pub fn schedule_thread(thread: WeakThread) {
+    RUNNABLE_THREADS.lock().push_back(thread);
     schedule_vcpu();
 }
 
+pub struct Threads {
+    map: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>>,
+}
+
+impl Threads {
+    const fn new() -> Self {
+        Self {
+            map: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    pub fn add(&self, thread: Arc<Mutex<Thread>>) -> u32 {
+        let tid = { thread.lock().tid };
+        self.map.lock().insert(tid, thread);
+        tid
+    }
+
+    pub fn by_id(&self, tid: u32) -> Option<Arc<Mutex<Thread>>> {
+        self.map.lock().get(&tid).cloned()
+    }
+
+    pub fn remove(&self, tid: u32) {
+        self.map.lock().remove(&tid);
+    }
+}
+
+pub type WeakThread = Weak<Mutex<Thread>>;
+
 pub struct Thread {
+    self_weak: WeakThread,
     process: Arc<Process>,
     virtual_memory: Arc<VirtualMemory>,
     fdtable: Arc<FileDescriptorTable>,
@@ -60,34 +97,34 @@ pub struct Thread {
 }
 
 impl Thread {
-    pub fn new(
+    fn new(
         tid: u32,
+        self_weak: WeakThread,
         process: Arc<Process>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
-        stack: u64,
-        entry: u64,
     ) -> Self {
         let registers = UserspaceRegisters {
-            rax: 0x1000,
-            rbx: 0x2000,
-            rdx: 0x3000,
-            rsi: 0x4000,
-            rdi: 0x5000,
-            rsp: stack,
-            rbp: 0x6000,
-            r8: 0x7000,
-            r9: 0x8000,
-            r10: 0x9000,
-            r12: 0xa000,
-            r13: 0xb000,
-            r14: 0xc000,
-            r15: 0xd000,
-            rip: entry,
+            rax: 0,
+            rbx: 0,
+            rdx: 0,
+            rsi: 0,
+            rdi: 0,
+            rsp: 0,
+            rbp: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            rip: 0,
             rflags: 0,
             fs_base: 0,
         };
         Self {
+            self_weak,
             process,
             virtual_memory,
             fdtable,
@@ -100,8 +137,20 @@ impl Thread {
         }
     }
 
+    pub fn empty(self_weak: WeakThread, tid: u32) -> Self {
+        Self::new(
+            tid,
+            self_weak,
+            Arc::new(Process::new(tid)),
+            Arc::new(VirtualMemory::new()),
+            Arc::new(FileDescriptorTable::new()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn clone(
         &self,
+        self_weak: WeakThread,
         new_process: Option<Arc<Process>>,
         new_virtual_memory: Option<Arc<VirtualMemory>>,
         new_fdtable: Option<Arc<FileDescriptorTable>>,
@@ -113,7 +162,7 @@ impl Thread {
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
         let fdtable = new_fdtable.unwrap_or_else(|| Arc::new((*self.fdtable).clone()));
 
-        let mut thread = Self::new(new_tid(), process, virtual_memory, fdtable, 0, 0);
+        let mut thread = Self::new(new_tid(), self_weak, process, virtual_memory, fdtable);
 
         if let Some(clear_child_tid) = new_clear_child_tid {
             thread.clear_child_tid = clear_child_tid.as_u64();
@@ -137,6 +186,40 @@ impl Thread {
         thread
     }
 
+    pub fn spawn(create_thread: impl FnOnce(WeakThread) -> Result<Self>) -> Result<u32> {
+        let mut error = None;
+
+        // Create the thread.
+        let arc = Arc::new_cyclic(|self_weak| {
+            let res = create_thread(self_weak.clone());
+            let thread = res.unwrap_or_else(|err| {
+                error = Some(err);
+
+                // Create a temporary fake thread.
+                // FIXME: Why isn't try_new_cyclic a thing?
+                Thread::empty(self_weak.clone(), new_tid())
+            });
+            Mutex::new(thread)
+        });
+
+        if let Some(error) = error {
+            return Err(error);
+        }
+
+        // Register the thread.
+        let tid = THREADS.add(arc.clone());
+
+        // Schedule the thread.
+        let weak = Arc::downgrade(&arc);
+        schedule_thread(weak);
+
+        Ok(tid)
+    }
+
+    pub fn weak(&self) -> &WeakThread {
+        &self.self_weak
+    }
+
     pub fn process(&self) -> &Arc<Process> {
         &self.process
     }
@@ -149,11 +232,54 @@ impl Thread {
         &self.fdtable
     }
 
-    pub fn spawn(self) {
-        let tid = self.tid;
-        let arc = Arc::new(Mutex::new(self));
-        THREADS.lock().insert(tid, arc);
-        schedule_thread(tid);
+    pub fn execve(
+        &mut self,
+        path: &Path,
+        argv: &[impl AsRef<CStr>],
+        envp: &[impl AsRef<CStr>],
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> Result<()> {
+        let node = lookup_node(Node::Directory(ROOT_NODE.clone()), path)?;
+        let Node::File(file) = node else { return Err(Error::is_dir()) };
+        if !file.mode().contains(FileMode::EXECUTE) {
+            return Err(Error::acces());
+        }
+        let elf_file = file.read_snapshot()?;
+
+        let virtual_memory = VirtualMemory::new();
+        // Create stack.
+        let len = 0x1_0000;
+        let stack =
+            vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(None, len))? + len;
+        // Load the elf.
+        let entry = vm_activator.activate(&virtual_memory, |vm| {
+            vm.load_elf(elf_file, stack, argv, envp)
+        })?;
+
+        // Success! Commit the new state to the thread.
+
+        self.virtual_memory = Arc::new(virtual_memory);
+        self.registers = UserspaceRegisters {
+            rax: 0,
+            rbx: 0,
+            rdx: 0,
+            rsi: 0,
+            rdi: 0,
+            rsp: stack.as_u64(),
+            rbp: 0,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            rip: entry,
+            rflags: 0,
+            fs_base: 0,
+        };
+
+        Ok(())
     }
 
     fn run(&mut self, vm_activator: &mut VirtualMemoryActivator) {
@@ -449,11 +575,11 @@ impl UserspaceRegisters {
     };
 }
 
-/// Returns true if a thread was run.
+/// Returns true if progress was made.
 pub fn run_thread(vm_activator: &mut VirtualMemoryActivator) -> bool {
-    let Some(pid) = RUNNABLE_THREADS.lock().pop_front() else { return false; };
+    let Some(weak_thread) = RUNNABLE_THREADS.lock().pop_front() else { return false; };
 
-    let thread = THREADS.lock().get(&pid).cloned().unwrap();
+    let Some(thread) = weak_thread.upgrade() else { return true; };
 
     let mut guard = thread.lock();
     guard.run(vm_activator);

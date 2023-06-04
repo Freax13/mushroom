@@ -1,13 +1,13 @@
 use core::num::NonZeroU32;
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{collections::BTreeMap, sync::Weak, vec::Vec};
 use bytemuck::bytes_of_mut;
 use spin::Mutex;
 use x86_64::VirtAddr;
 
 use super::{
     memory::ActiveVirtualMemory,
-    thread::{schedule_thread, THREADS},
+    thread::{schedule_thread, Thread, WeakThread},
 };
 use crate::error::{Error, Result};
 
@@ -24,7 +24,7 @@ impl Futexes {
 
     pub fn wait(
         &self,
-        tid: u32,
+        weak_thread: &WeakThread,
         uaddr: VirtAddr,
         val: u32,
         bitset: Option<NonZeroU32>,
@@ -46,10 +46,11 @@ impl Futexes {
             return Err(Error::again());
         }
 
-        guard
-            .entry(uaddr)
-            .or_default()
-            .push(FutexWaiter { tid, bitset });
+        let weak_thread = weak_thread.clone();
+        guard.entry(uaddr).or_default().push(FutexWaiter {
+            weak_thread,
+            bitset,
+        });
 
         Ok(())
     }
@@ -69,8 +70,17 @@ impl Futexes {
                 .by_ref()
                 .take(usize::try_from(num_waiters).unwrap())
             {
-                THREADS.lock()[&waiter.tid].lock().registers.rax = 0;
-                schedule_thread(waiter.tid);
+                // Write the result to the thread.
+                {
+                    let Some(thread) = waiter.weak_thread.upgrade() else { continue; };
+                    let mut guard = thread.lock();
+                    guard.registers.rax = 0;
+                }
+
+                // Schedule the thread.
+                schedule_thread(waiter.weak_thread.clone());
+
+                // Record that the thread was woken up.
                 woken += 1;
             }
 
@@ -82,7 +92,7 @@ impl Futexes {
 }
 
 struct FutexWaiter {
-    tid: u32,
+    weak_thread: Weak<Mutex<Thread>>,
     bitset: Option<NonZeroU32>,
 }
 

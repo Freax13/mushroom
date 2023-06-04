@@ -36,7 +36,7 @@ use super::{
         pipe, FileDescriptorTable,
     },
     memory::VirtualMemoryActivator,
-    thread::{Sigset, Stack, StackFlags, Thread, UserspaceRegisters, THREADS},
+    thread::{schedule_thread, Sigset, Stack, StackFlags, Thread, UserspaceRegisters, THREADS},
     Process,
 };
 
@@ -449,29 +449,32 @@ fn clone(
         None
     };
 
-    let new_thread = thread.clone(
-        new_process,
-        new_virtual_memory,
-        new_fdtable,
-        stack.get(),
-        new_clear_child_tid,
-        new_tls,
-    );
-    let tid = new_thread.tid;
+    let tid = Thread::spawn(|weak_thread| {
+        let new_thread = thread.clone(
+            weak_thread,
+            new_process,
+            new_virtual_memory,
+            new_fdtable,
+            stack.get(),
+            new_clear_child_tid,
+            new_tls,
+        );
+        let tid = new_thread.tid;
 
-    if flags.contains(CloneFlags::PARENT_SETTID) {
-        vm_activator.activate(thread.virtual_memory(), |vm| {
-            vm.write(parent_tid.get(), &tid.to_ne_bytes())
-        })?;
-    }
+        if flags.contains(CloneFlags::PARENT_SETTID) {
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.write(parent_tid.get(), &tid.to_ne_bytes())
+            })?;
+        }
 
-    if flags.contains(CloneFlags::CHILD_SETTID) {
-        vm_activator.activate(new_thread.virtual_memory(), |vm| {
-            vm.write(child_tid.get(), &tid.to_ne_bytes())
-        })?;
-    }
+        if flags.contains(CloneFlags::CHILD_SETTID) {
+            vm_activator.activate(new_thread.virtual_memory(), |vm| {
+                vm.write(child_tid.get(), &tid.to_ne_bytes())
+            })?;
+        }
 
-    new_thread.spawn();
+        Result::Ok(new_thread)
+    })?;
 
     Ok(u64::from(tid))
 }
@@ -515,9 +518,9 @@ fn execve(
     })?;
 
     let path = Path::new(pathname.as_bytes());
-    Process::create(thread.tid, &path, &args, &envs, vm_activator)?;
+    thread.execve(&path, &args, &envs, vm_activator)?;
 
-    Yield
+    Ok(0)
 }
 
 #[syscall(no = 60)]
@@ -535,7 +538,8 @@ fn exit(
         thread.process().futexes.wake(clear_child_tid, 1, None);
     }
 
-    THREADS.lock().remove(&thread.tid);
+    THREADS.remove(thread.tid);
+
     Yield
 }
 
@@ -625,7 +629,7 @@ fn futex(
                 thread
                     .process()
                     .futexes
-                    .wait(thread.tid, uaddr.get(), val, None, vm)
+                    .wait(thread.weak(), uaddr.get(), val, None, vm)
             })?;
 
             Yield
@@ -649,7 +653,7 @@ fn futex(
                 thread
                     .process()
                     .futexes
-                    .wait(thread.tid, uaddr.get(), val, Some(bitset), vm)
+                    .wait(thread.weak(), uaddr.get(), val, Some(bitset), vm)
             })?;
 
             Yield
