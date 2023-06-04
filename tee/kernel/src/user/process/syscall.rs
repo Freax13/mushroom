@@ -37,7 +37,8 @@ use super::{
     },
     memory::VirtualMemoryActivator,
     thread::{
-        schedule_thread, Sigset, Stack, StackFlags, Thread, UserspaceRegisters, Waiter, THREADS,
+        new_tid, schedule_thread, Sigset, Stack, StackFlags, Thread, UserspaceRegisters, Waiter,
+        THREADS,
     },
     Process,
 };
@@ -421,10 +422,12 @@ fn clone(
     child_tid: Pointer,
     tls: u64,
 ) -> SyscallResult {
+    let new_tid = new_tid();
+
     let new_process = if flags.contains(CloneFlags::THREAD) {
         None
     } else {
-        Some(Arc::new(Process::new(thread.tid)))
+        Some(Arc::new(Process::new(new_tid)))
     };
 
     let new_virtual_memory = if flags.contains(CloneFlags::VM) {
@@ -453,6 +456,7 @@ fn clone(
 
     let tid = Thread::spawn(|weak_thread| {
         let new_thread = thread.clone(
+            new_tid,
             weak_thread,
             new_process,
             new_virtual_memory,
@@ -461,17 +465,16 @@ fn clone(
             new_clear_child_tid,
             new_tls,
         );
-        let tid = new_thread.tid;
 
         if flags.contains(CloneFlags::PARENT_SETTID) {
             vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.write(parent_tid.get(), &tid.to_ne_bytes())
+                vm.write(parent_tid.get(), &new_tid.to_ne_bytes())
             })?;
         }
 
         if flags.contains(CloneFlags::CHILD_SETTID) {
             vm_activator.activate(new_thread.virtual_memory(), |vm| {
-                vm.write(child_tid.get(), &tid.to_ne_bytes())
+                vm.write(child_tid.get(), &new_tid.to_ne_bytes())
             })?;
         }
 

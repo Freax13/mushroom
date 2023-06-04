@@ -152,6 +152,7 @@ impl Thread {
     #[allow(clippy::too_many_arguments)]
     pub fn clone(
         &self,
+        new_tid: u32,
         self_weak: WeakThread,
         new_process: Option<Arc<Process>>,
         new_virtual_memory: Option<Arc<VirtualMemory>>,
@@ -164,7 +165,7 @@ impl Thread {
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
         let fdtable = new_fdtable.unwrap_or_else(|| Arc::new((*self.fdtable).clone()));
 
-        let mut thread = Self::new(new_tid(), self_weak, process, virtual_memory, fdtable);
+        let mut thread = Self::new(new_tid, self_weak, process, virtual_memory, fdtable);
 
         if let Some(clear_child_tid) = new_clear_child_tid {
             thread.clear_child_tid = clear_child_tid.as_u64();
