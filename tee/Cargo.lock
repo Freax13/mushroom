@@ -101,7 +101,7 @@ source = "git+https://github.com/Freax13/bytemuck.git?rev=e63ffe8d10129a70a28fca
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -231,6 +231,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
 name = "init"
 version = "0.1.0"
 dependencies = [
@@ -264,10 +270,20 @@ dependencies = [
  "bytemuck",
  "constants",
  "goblin",
+ "kernel-macros",
  "log",
  "serial-log",
  "spin",
  "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
+]
+
+[[package]]
+name = "kernel-macros"
+version = "0.1.0"
+dependencies = [
+ "heck",
+ "quote",
+ "syn 2.0.18",
 ]
 
 [[package]]
@@ -378,7 +394,7 @@ checksum = "bdbda6ac5cd1321e724fa9cee216f3a61885889b896f073b8f82322789c5250e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -460,6 +476,17 @@ name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32d41677bcbe24c20c52e7c70b0d8db04134c5d1066bf98662e2871ad200ea3e"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -60,6 +60,7 @@ pub trait Syscall1 {
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
+    const ARG0_NAME: &'static str;
 
     fn execute(
         thread: &mut Thread,
@@ -68,7 +69,7 @@ pub trait Syscall1 {
     ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64) -> fmt::Result {
-        write!(f, "{}(", Self::NAME)?;
+        write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
         <Self::Arg0>::display(f, arg0)?;
         write!(f, ")")
     }
@@ -79,7 +80,9 @@ pub trait Syscall2 {
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
+    const ARG0_NAME: &'static str;
     type Arg1: SyscallArg;
+    const ARG1_NAME: &'static str;
 
     fn execute(
         thread: &mut Thread,
@@ -89,9 +92,9 @@ pub trait Syscall2 {
     ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64) -> fmt::Result {
-        write!(f, "{}(", Self::NAME)?;
+        write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
         <Self::Arg0>::display(f, arg0)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG1_NAME)?;
         <Self::Arg1>::display(f, arg1)?;
         write!(f, ")")
     }
@@ -102,8 +105,11 @@ pub trait Syscall3 {
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
+    const ARG0_NAME: &'static str;
     type Arg1: SyscallArg;
+    const ARG1_NAME: &'static str;
     type Arg2: SyscallArg;
+    const ARG2_NAME: &'static str;
 
     fn execute(
         thread: &mut Thread,
@@ -114,11 +120,11 @@ pub trait Syscall3 {
     ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64) -> fmt::Result {
-        write!(f, "{}(", Self::NAME)?;
+        write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
         <Self::Arg0>::display(f, arg0)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG1_NAME)?;
         <Self::Arg1>::display(f, arg1)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG2_NAME)?;
         <Self::Arg2>::display(f, arg2)?;
         write!(f, ")")
     }
@@ -129,9 +135,13 @@ pub trait Syscall4 {
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
+    const ARG0_NAME: &'static str;
     type Arg1: SyscallArg;
+    const ARG1_NAME: &'static str;
     type Arg2: SyscallArg;
+    const ARG2_NAME: &'static str;
     type Arg3: SyscallArg;
+    const ARG3_NAME: &'static str;
 
     fn execute(
         thread: &mut Thread,
@@ -143,13 +153,13 @@ pub trait Syscall4 {
     ) -> SyscallResult;
 
     fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64, arg3: u64) -> fmt::Result {
-        write!(f, "{}(", Self::NAME)?;
+        write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
         <Self::Arg0>::display(f, arg0)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG1_NAME)?;
         <Self::Arg1>::display(f, arg1)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG2_NAME)?;
         <Self::Arg2>::display(f, arg2)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG3_NAME)?;
         <Self::Arg3>::display(f, arg3)?;
         write!(f, ")")
     }
@@ -160,10 +170,15 @@ pub trait Syscall5 {
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
+    const ARG0_NAME: &'static str;
     type Arg1: SyscallArg;
+    const ARG1_NAME: &'static str;
     type Arg2: SyscallArg;
+    const ARG2_NAME: &'static str;
     type Arg3: SyscallArg;
+    const ARG3_NAME: &'static str;
     type Arg4: SyscallArg;
+    const ARG4_NAME: &'static str;
 
     fn execute(
         thread: &mut Thread,
@@ -183,15 +198,15 @@ pub trait Syscall5 {
         arg3: u64,
         arg4: u64,
     ) -> fmt::Result {
-        write!(f, "{}(", Self::NAME)?;
+        write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
         <Self::Arg0>::display(f, arg0)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG1_NAME)?;
         <Self::Arg1>::display(f, arg1)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG2_NAME)?;
         <Self::Arg2>::display(f, arg2)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG3_NAME)?;
         <Self::Arg3>::display(f, arg3)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG4_NAME)?;
         <Self::Arg4>::display(f, arg4)?;
         write!(f, ")")
     }
@@ -202,11 +217,17 @@ pub trait Syscall6 {
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
+    const ARG0_NAME: &'static str;
     type Arg1: SyscallArg;
+    const ARG1_NAME: &'static str;
     type Arg2: SyscallArg;
+    const ARG2_NAME: &'static str;
     type Arg3: SyscallArg;
+    const ARG3_NAME: &'static str;
     type Arg4: SyscallArg;
+    const ARG4_NAME: &'static str;
     type Arg5: SyscallArg;
+    const ARG5_NAME: &'static str;
 
     #[allow(clippy::too_many_arguments)]
     fn execute(
@@ -229,17 +250,17 @@ pub trait Syscall6 {
         arg4: u64,
         arg5: u64,
     ) -> fmt::Result {
-        write!(f, "{}(", Self::NAME)?;
+        write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
         <Self::Arg0>::display(f, arg0)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG1_NAME)?;
         <Self::Arg1>::display(f, arg1)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG2_NAME)?;
         <Self::Arg2>::display(f, arg2)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG3_NAME)?;
         <Self::Arg3>::display(f, arg3)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG4_NAME)?;
         <Self::Arg4>::display(f, arg4)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", Self::ARG5_NAME)?;
         <Self::Arg5>::display(f, arg5)?;
         write!(f, ")")
     }
@@ -253,6 +274,7 @@ where
     const NAME: &'static str = <T as Syscall0>::NAME;
 
     type Arg0 = Ignored;
+    const ARG0_NAME: &'static str = "ignored";
 
     fn execute(
         thread: &mut Thread,
@@ -275,7 +297,9 @@ where
     const NAME: &'static str = <T as Syscall1>::NAME;
 
     type Arg0 = <T as Syscall1>::Arg0;
+    const ARG0_NAME: &'static str = <T as Syscall1>::ARG0_NAME;
     type Arg1 = Ignored;
+    const ARG1_NAME: &'static str = "ignored";
 
     fn execute(
         thread: &mut Thread,
@@ -299,8 +323,11 @@ where
     const NAME: &'static str = <T as Syscall2>::NAME;
 
     type Arg0 = <T as Syscall2>::Arg0;
+    const ARG0_NAME: &'static str = <T as Syscall2>::ARG0_NAME;
     type Arg1 = <T as Syscall2>::Arg1;
+    const ARG1_NAME: &'static str = <T as Syscall2>::ARG1_NAME;
     type Arg2 = Ignored;
+    const ARG2_NAME: &'static str = "ignored";
 
     fn execute(
         thread: &mut Thread,
@@ -325,9 +352,13 @@ where
     const NAME: &'static str = <T as Syscall3>::NAME;
 
     type Arg0 = <T as Syscall3>::Arg0;
+    const ARG0_NAME: &'static str = <T as Syscall3>::ARG0_NAME;
     type Arg1 = <T as Syscall3>::Arg1;
+    const ARG1_NAME: &'static str = <T as Syscall3>::ARG1_NAME;
     type Arg2 = <T as Syscall3>::Arg2;
+    const ARG2_NAME: &'static str = <T as Syscall3>::ARG2_NAME;
     type Arg3 = Ignored;
+    const ARG3_NAME: &'static str = "ignored";
 
     fn execute(
         thread: &mut Thread,
@@ -353,10 +384,15 @@ where
     const NAME: &'static str = <T as Syscall4>::NAME;
 
     type Arg0 = <T as Syscall4>::Arg0;
+    const ARG0_NAME: &'static str = <T as Syscall4>::ARG0_NAME;
     type Arg1 = <T as Syscall4>::Arg1;
+    const ARG1_NAME: &'static str = <T as Syscall4>::ARG1_NAME;
     type Arg2 = <T as Syscall4>::Arg2;
+    const ARG2_NAME: &'static str = <T as Syscall4>::ARG2_NAME;
     type Arg3 = <T as Syscall4>::Arg3;
+    const ARG3_NAME: &'static str = <T as Syscall4>::ARG3_NAME;
     type Arg4 = Ignored;
+    const ARG4_NAME: &'static str = "ignored";
 
     fn execute(
         thread: &mut Thread,
@@ -390,11 +426,17 @@ where
     const NAME: &'static str = <T as Syscall5>::NAME;
 
     type Arg0 = <T as Syscall5>::Arg0;
+    const ARG0_NAME: &'static str = <T as Syscall5>::ARG0_NAME;
     type Arg1 = <T as Syscall5>::Arg1;
+    const ARG1_NAME: &'static str = <T as Syscall5>::ARG1_NAME;
     type Arg2 = <T as Syscall5>::Arg2;
+    const ARG2_NAME: &'static str = <T as Syscall5>::ARG2_NAME;
     type Arg3 = <T as Syscall5>::Arg3;
+    const ARG3_NAME: &'static str = <T as Syscall5>::ARG3_NAME;
     type Arg4 = <T as Syscall5>::Arg4;
+    const ARG4_NAME: &'static str = <T as Syscall5>::ARG4_NAME;
     type Arg5 = Ignored;
+    const ARG5_NAME: &'static str = "ignored";
 
     fn execute(
         thread: &mut Thread,

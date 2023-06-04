@@ -6,6 +6,7 @@ use core::{
 
 use alloc::{sync::Arc, vec::Vec};
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
+use kernel_macros::syscall;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -119,319 +120,223 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers
 };
 
-struct SysRead;
+#[syscall(no = 0)]
+fn read(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    buf: Pointer,
+    count: u64,
+) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
 
-impl Syscall3 for SysRead {
-    const NO: usize = 0;
-    const NAME: &'static str = "read";
+    let buf = buf.get();
+    let count = usize::try_from(count).unwrap();
 
-    type Arg0 = FdNum;
-    type Arg1 = Pointer;
-    type Arg2 = u64;
+    let mut chunk = [0u8; 128];
+    let max_chunk_len = chunk.len();
+    let len = cmp::min(max_chunk_len, count);
+    let chunk = &mut chunk[..len];
 
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        fd_num: FdNum,
-        buf: Pointer,
-        count: u64,
-    ) -> SyscallResult {
-        let fd = thread.fdtable().get(fd_num)?;
+    let len = fd.read(chunk)?;
+    let chunk = &mut chunk[..len];
 
-        let buf = buf.get();
-        let count = usize::try_from(count).unwrap();
+    vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
 
-        let mut chunk = [0u8; 128];
-        let max_chunk_len = chunk.len();
-        let len = cmp::min(max_chunk_len, count);
-        let chunk = &mut chunk[..len];
+    let len = u64::try_from(len).unwrap();
 
-        let len = fd.read(chunk)?;
-        let chunk = &mut chunk[..len];
-
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
-
-        let len = u64::try_from(len).unwrap();
-
-        Ok(len)
-    }
+    Ok(len)
 }
 
-struct SysWrite;
+#[syscall(no = 1)]
+fn write(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    buf: Pointer,
+    count: u64,
+) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
 
-impl Syscall3 for SysWrite {
-    const NO: usize = 1;
-    const NAME: &'static str = "write";
+    let buf = buf.get();
+    let count = usize::try_from(count).unwrap();
 
-    type Arg0 = FdNum;
-    type Arg1 = Pointer;
-    type Arg2 = u64;
+    let mut chunk = [0u8; 128];
+    let max_chunk_len = chunk.len();
+    let len = cmp::min(max_chunk_len, count);
+    let chunk = &mut chunk[..len];
+    vm_activator.activate(thread.virtual_memory(), |vm| vm.read(buf, chunk))?;
 
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        fd_num: FdNum,
-        buf: Pointer,
-        count: u64,
-    ) -> SyscallResult {
-        let fd = thread.fdtable().get(fd_num)?;
+    let len = fd.write(chunk)?;
 
-        let buf = buf.get();
-        let count = usize::try_from(count).unwrap();
-
-        let mut chunk = [0u8; 128];
-        let max_chunk_len = chunk.len();
-        let len = cmp::min(max_chunk_len, count);
-        let chunk = &mut chunk[..len];
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.read(buf, chunk))?;
-
-        let len = fd.write(chunk)?;
-
-        let len = u64::try_from(len).unwrap();
-        Ok(len)
-    }
+    let len = u64::try_from(len).unwrap();
+    Ok(len)
 }
 
-struct SysOpen;
+#[syscall(no = 2)]
+fn open(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    pathname: Pointer,
+    flags: OpenFlags,
+    mode: FileMode,
+) -> SyscallResult {
+    let filename = vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm.read_cstring(pathname.get(), 4096)
+    })?;
+    let filename = Path::new(filename.as_bytes());
 
-impl Syscall3 for SysOpen {
-    const NO: usize = 2;
-    const NAME: &'static str = "open";
-
-    type Arg0 = Pointer;
-    type Arg1 = OpenFlags;
-    type Arg2 = FileMode;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        filename: Pointer,
-        flags: OpenFlags,
-        _mode: FileMode,
-    ) -> SyscallResult {
-        let filename = vm_activator.activate(thread.virtual_memory(), |vm| {
-            vm.read_cstring(filename.get(), 4096)
-        })?;
-        let filename = Path::new(filename.as_bytes());
-
-        if flags.contains(OpenFlags::WRONLY) {
-            if flags.contains(OpenFlags::CREAT) {
-                let file = create_file(Node::Directory(ROOT_NODE.clone()), &filename)?;
-                let fd_num = thread
-                    .fdtable()
-                    .insert(WriteonlyFileFileDescription::new(file));
-                Ok(fd_num.get() as u64)
-            } else {
-                todo!()
-            }
-        } else if flags.contains(OpenFlags::RDWR) {
-            todo!()
-        } else {
-            let node = lookup_node(Node::Directory(ROOT_NODE.clone()), &filename)?;
-
-            let file = match node {
-                Node::File(file) => file,
-                Node::Directory(_) => return Err(Error::IsDir),
-            };
-            let fd_num = thread
+    if flags.contains(OpenFlags::WRONLY) {
+        if flags.contains(OpenFlags::CREAT) {
+            let file = create_file(Node::Directory(ROOT_NODE.clone()), &filename)?;
+            let fd = thread
                 .fdtable()
-                .insert(ReadonlyFileFileDescription::new(file));
-            Ok(fd_num.get() as u64)
-        }
-    }
-}
-
-struct SysClose;
-
-impl Syscall1 for SysClose {
-    const NO: usize = 3;
-    const NAME: &'static str = "close";
-
-    type Arg0 = FdNum;
-
-    fn execute(
-        thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        fd_num: FdNum,
-    ) -> SyscallResult {
-        thread.fdtable().close(fd_num)?;
-        Ok(0)
-    }
-}
-
-struct SysPoll;
-
-impl Syscall3 for SysPoll {
-    const NO: usize = 7;
-    const NAME: &'static str = "poll";
-
-    type Arg0 = Pointer;
-    type Arg1 = u64;
-    type Arg2 = u64;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        fds: Pointer,
-        nfds: u64,
-        timeout: u64,
-    ) -> SyscallResult {
-        vm_activator.activate(thread.virtual_memory(), |vm| {
-            for i in 0..nfds {
-                let mut pollfd = Pollfd::zeroed();
-                vm.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
-            }
-            Result::Ok(())
-        })?;
-
-        if timeout != 0 {
+                .insert(WriteonlyFileFileDescription::new(file));
+            Ok(fd.get() as u64)
+        } else {
             todo!()
         }
+    } else if flags.contains(OpenFlags::RDWR) {
+        todo!()
+    } else {
+        let node = lookup_node(Node::Directory(ROOT_NODE.clone()), &filename)?;
 
-        Ok(0)
+        let file = match node {
+            Node::File(file) => file,
+            Node::Directory(_) => return Err(Error::IsDir),
+        };
+        let fd = thread
+            .fdtable()
+            .insert(ReadonlyFileFileDescription::new(file));
+        Ok(fd.get() as u64)
     }
 }
 
-struct SysMmap;
+#[syscall(no = 3)]
+fn close(thread: &mut Thread, fd: FdNum) -> SyscallResult {
+    thread.fdtable().close(fd)?;
+    Ok(0)
+}
 
-impl Syscall6 for SysMmap {
-    const NO: usize = 9;
-    const NAME: &'static str = "mmap";
+#[syscall(no = 7)]
+fn poll(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fds: Pointer,
+    nfds: u64,
+    timeout: u64,
+) -> SyscallResult {
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        for i in 0..nfds {
+            let mut pollfd = Pollfd::zeroed();
+            vm.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
+        }
+        Result::Ok(())
+    })?;
 
-    type Arg0 = Pointer;
-    type Arg1 = u64;
-    type Arg2 = ProtFlags;
-    type Arg3 = MmapFlags;
-    type Arg4 = u64;
-    type Arg5 = u64;
+    if timeout != 0 {
+        todo!()
+    }
 
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        addr: Pointer,
-        len: u64,
-        prot: ProtFlags,
-        flags: MmapFlags,
-        fd: u64,
-        off: u64,
-    ) -> SyscallResult {
-        if flags.contains(MmapFlags::SHARED_VALIDATE) {
-            todo!("{addr} {len} {prot:?} {flags:?} {fd} {off}");
-        } else if flags.contains(MmapFlags::SHARED) {
-            todo!("{addr} {len} {prot:?} {flags:?} {fd} {off}");
-        } else if flags.contains(MmapFlags::PRIVATE) {
-            if flags.contains(MmapFlags::STACK) {
-                assert!(flags.contains(MmapFlags::ANONYMOUS));
-                assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
+    Ok(0)
+}
 
-                assert_eq!(addr.get().as_u64(), 0);
-                let addr = vm_activator
-                    .activate(thread.virtual_memory(), |vm| vm.allocate_stack(None, len))?;
+#[syscall(no = 9)]
+fn mmap(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    addr: Pointer,
+    length: u64,
+    prot: ProtFlags,
+    flags: MmapFlags,
+    fd: u64,
+    offset: u64,
+) -> SyscallResult {
+    if flags.contains(MmapFlags::SHARED_VALIDATE) {
+        todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
+    } else if flags.contains(MmapFlags::SHARED) {
+        todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
+    } else if flags.contains(MmapFlags::PRIVATE) {
+        if flags.contains(MmapFlags::STACK) {
+            assert!(flags.contains(MmapFlags::ANONYMOUS));
+            assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
-                Ok(addr.as_u64())
-            } else if flags.contains(MmapFlags::ANONYMOUS) {
-                assert_eq!(addr.get().as_u64(), 0);
+            assert_eq!(addr.get().as_u64(), 0);
+            let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.allocate_stack(None, length)
+            })?;
 
-                let permissions = MemoryPermissions::from(prot);
-                let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
-                    vm.mmap_zero(None, len, permissions)
-                })?;
+            Ok(addr.as_u64())
+        } else if flags.contains(MmapFlags::ANONYMOUS) {
+            assert_eq!(addr.get().as_u64(), 0);
 
-                Ok(addr.as_u64())
-            } else {
-                todo!("{addr} {len} {prot:?} {flags:?} {fd} {off}");
-            }
+            let permissions = MemoryPermissions::from(prot);
+            let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
+                vm.mmap_zero(None, length, permissions)
+            })?;
+
+            Ok(addr.as_u64())
         } else {
-            return Err(Error::Inval);
+            todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
         }
+    } else {
+        return Err(Error::Inval);
     }
 }
 
-struct SysMprotect;
+#[syscall(no = 10)]
+fn mprotect(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    addr: Pointer,
+    len: u64,
+    prot: ProtFlags,
+) -> SyscallResult {
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm.mprotect(addr.get(), len, prot)
+    })?;
+    Ok(0)
+}
 
-impl Syscall3 for SysMprotect {
-    const NO: usize = 10;
-    const NAME: &'static str = "mprotect";
+// FIXME: use correct name for brk_value
+#[syscall(no = 12)]
+fn brk(brk_value: u64) -> SyscallResult {
+    if brk_value == 0 || brk_value == 0x1000 {
+        return Ok(0);
+    }
 
-    type Arg0 = Pointer;
-    type Arg1 = u64;
-    type Arg2 = ProtFlags;
+    Err(Error::NoMem)
+}
 
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        start: Pointer,
-        len: u64,
-        prot: ProtFlags,
-    ) -> SyscallResult {
+#[syscall(no = 13)]
+fn rt_sigaction(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    signum: u64,
+    act: Pointer,
+    oldact: Pointer,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let signum = usize::try_from(signum).unwrap();
+
+    // FIXME: SIGKILL and SIGSTOP are special
+    // FIXME: sigsetsize
+
+    if !oldact.is_null() {
+        let sigaction = thread.sigaction.get(signum).ok_or(Error::Inval)?;
         vm_activator.activate(thread.virtual_memory(), |vm| {
-            vm.mprotect(start.get(), len, prot)
+            vm.write(oldact.get(), bytes_of(sigaction))
         })?;
-        Ok(0)
     }
-}
-
-struct SysBrk;
-
-impl Syscall1 for SysBrk {
-    const NO: usize = 12;
-    const NAME: &'static str = "brk";
-
-    type Arg0 = u64;
-
-    fn execute(
-        _thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        brk: u64,
-    ) -> SyscallResult {
-        if brk == 0 || brk == 0x1000 {
-            return Ok(0);
-        }
-
-        Err(Error::NoMem)
+    if !act.is_null() {
+        let virtual_memory = thread.virtual_memory().clone();
+        let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::Inval)?;
+        vm_activator.activate(&virtual_memory, |vm| {
+            vm.read(act.get(), bytes_of_mut(sigaction))
+        })?;
     }
-}
 
-struct SysRtSigaction;
-
-impl Syscall4 for SysRtSigaction {
-    const NO: usize = 13;
-    const NAME: &'static str = "rt_sigaction";
-
-    type Arg0 = u64;
-    type Arg1 = Pointer;
-    type Arg2 = Pointer;
-    type Arg3 = u64;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        signum: u64,
-        act: Pointer,
-        oldact: Pointer,
-        _sigsetsize: u64,
-    ) -> SyscallResult {
-        let signum = usize::try_from(signum).unwrap();
-
-        // FIXME: SIGKILL and SIGSTOP are special
-        // FIXME: sigsetsize
-
-        if !oldact.is_null() {
-            let sigaction = thread.sigaction.get(signum).ok_or(Error::Inval)?;
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.write(oldact.get(), bytes_of(sigaction))
-            })?;
-        }
-        if !act.is_null() {
-            let virtual_memory = thread.virtual_memory().clone();
-            let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::Inval)?;
-            vm_activator.activate(&virtual_memory, |vm| {
-                vm.read(act.get(), bytes_of_mut(sigaction))
-            })?;
-        }
-
-        Ok(0)
-    }
+    Ok(0)
 }
 
 struct SysRtSigprocmask;
@@ -441,8 +346,11 @@ impl Syscall3 for SysRtSigprocmask {
     const NAME: &'static str = "rt_sigprocmask";
 
     type Arg0 = u64;
+    const ARG0_NAME: &'static str = "how";
     type Arg1 = Pointer;
+    const ARG1_NAME: &'static str = "set";
     type Arg2 = Pointer;
+    const ARG2_NAME: &'static str = "oldset";
 
     fn execute(
         thread: &mut Thread,
@@ -475,463 +383,327 @@ impl Syscall3 for SysRtSigprocmask {
     }
 
     fn display(f: &mut dyn fmt::Write, how: u64, set: u64, oldset: u64) -> fmt::Result {
-        write!(f, "{}(", <Self as Syscall3>::NAME)?;
+        write!(
+            f,
+            "{}({}=",
+            <Self as Syscall3>::NAME,
+            <Self as Syscall3>::ARG0_NAME
+        )?;
         if set == 0 {
             write!(f, "ignored")?;
         } else {
             RtSigprocmaskHow::display(f, how)?;
         }
-        write!(f, ", ")?;
+        write!(f, ", {}=", <Self as Syscall3>::ARG1_NAME)?;
         Pointer::display(f, set)?;
-        write!(f, ", ")?;
+        write!(f, ", {}=", <Self as Syscall3>::ARG2_NAME)?;
         Pointer::display(f, oldset)?;
         write!(f, ")")
     }
 }
 
-struct SysGetpid;
-
-impl Syscall0 for SysGetpid {
-    const NO: usize = 39;
-    const NAME: &'static str = "getpid";
-
-    fn execute(thread: &mut Thread, _vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
-        let pid = thread.process().pid;
-        Ok(u64::from(pid))
-    }
+#[syscall(no = 39)]
+fn getpid(thread: &mut Thread) -> SyscallResult {
+    let pid = thread.process().pid;
+    Ok(u64::from(pid))
 }
 
-struct SysClone;
+#[syscall(no = 56)]
+fn clone(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    flags: CloneFlags,
+    stack: Pointer,
+    parent_tid: Pointer,
+    child_tid: Pointer,
+    tls: u64,
+) -> SyscallResult {
+    let new_process = if flags.contains(CloneFlags::THREAD) {
+        None
+    } else {
+        Some(Arc::new(Process::new(thread.tid)))
+    };
 
-impl Syscall5 for SysClone {
-    const NO: usize = 56;
-    const NAME: &'static str = "clone";
+    let new_virtual_memory = if flags.contains(CloneFlags::VM) {
+        None
+    } else {
+        todo!()
+    };
 
-    type Arg0 = CloneFlags;
-    type Arg1 = Pointer;
-    type Arg2 = Pointer;
-    type Arg3 = Pointer;
-    type Arg4 = u64;
+    let new_fdtable = if flags.contains(CloneFlags::FILES) {
+        None
+    } else {
+        Some(Arc::new(FileDescriptorTable::new()))
+    };
 
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        flags: CloneFlags,
-        stack: Pointer,
-        parent_tid: Pointer,
-        child_tid: Pointer,
-        tls: u64,
-    ) -> SyscallResult {
-        let new_process = if flags.contains(CloneFlags::THREAD) {
-            None
-        } else {
-            Some(Arc::new(Process::new(thread.tid)))
-        };
+    let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
+        Some(child_tid.get())
+    } else {
+        None
+    };
 
-        let new_virtual_memory = if flags.contains(CloneFlags::VM) {
-            None
-        } else {
-            todo!()
-        };
+    let new_tls = if flags.contains(CloneFlags::SETTLS) {
+        Some(tls)
+    } else {
+        None
+    };
 
-        let new_fdtable = if flags.contains(CloneFlags::FILES) {
-            None
-        } else {
-            Some(Arc::new(FileDescriptorTable::new()))
-        };
+    let new_thread = thread.clone(
+        new_process,
+        new_virtual_memory,
+        new_fdtable,
+        stack.get(),
+        new_clear_child_tid,
+        new_tls,
+    );
+    let tid = new_thread.tid;
 
-        let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
-            Some(child_tid.get())
-        } else {
-            None
-        };
-
-        let new_tls = if flags.contains(CloneFlags::SETTLS) {
-            Some(tls)
-        } else {
-            None
-        };
-
-        let new_thread = thread.clone(
-            new_process,
-            new_virtual_memory,
-            new_fdtable,
-            stack.get(),
-            new_clear_child_tid,
-            new_tls,
-        );
-        let tid = new_thread.tid;
-
-        if flags.contains(CloneFlags::PARENT_SETTID) {
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.write(parent_tid.get(), &tid.to_ne_bytes())
-            })?;
-        }
-
-        if flags.contains(CloneFlags::CHILD_SETTID) {
-            vm_activator.activate(new_thread.virtual_memory(), |vm| {
-                vm.write(child_tid.get(), &tid.to_ne_bytes())
-            })?;
-        }
-
-        new_thread.spawn();
-
-        Ok(u64::from(tid))
+    if flags.contains(CloneFlags::PARENT_SETTID) {
+        vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm.write(parent_tid.get(), &tid.to_ne_bytes())
+        })?;
     }
+
+    if flags.contains(CloneFlags::CHILD_SETTID) {
+        vm_activator.activate(new_thread.virtual_memory(), |vm| {
+            vm.write(child_tid.get(), &tid.to_ne_bytes())
+        })?;
+    }
+
+    new_thread.spawn();
+
+    Ok(u64::from(tid))
 }
 
-struct SysExecve;
+#[syscall(no = 59)]
+fn execve(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    pathname: Pointer,
+    argv: Pointer,
+    envp: Pointer,
+) -> SyscallResult {
+    let (pathname, args, envs) = vm_activator.activate(thread.virtual_memory(), |vm| {
+        let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
 
-impl Syscall3 for SysExecve {
-    const NO: usize = 59;
-    const NAME: &'static str = "execve";
-
-    type Arg0 = Pointer;
-    type Arg1 = Pointer;
-    type Arg2 = Pointer;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        pathname: Pointer,
-        argv: Pointer,
-        envp: Pointer,
-    ) -> SyscallResult {
-        let (pathname, args, envs) = vm_activator.activate(thread.virtual_memory(), |vm| {
-            let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
-
-            let mut args = Vec::new();
-            for i in 0u64.. {
-                let argpp = argv.get() + i * 8;
-                let mut argp = 0u64;
-                vm.read(argpp, bytes_of_mut(&mut argp))?;
-                if argp == 0 {
-                    break;
-                }
-                let argp = VirtAddr::try_new(argp).map_err(|_| Error::Fault)?;
-                args.push(vm.read_cstring(argp, 0x1000)?);
+        let mut args = Vec::new();
+        for i in 0u64.. {
+            let argpp = argv.get() + i * 8;
+            let mut argp = 0u64;
+            vm.read(argpp, bytes_of_mut(&mut argp))?;
+            if argp == 0 {
+                break;
             }
+            let argp = VirtAddr::try_new(argp).map_err(|_| Error::Fault)?;
+            args.push(vm.read_cstring(argp, 0x1000)?);
+        }
 
-            let mut envs = Vec::new();
-            for i in 0u64.. {
-                let envpp = envp.get() + i * 8;
-                let mut envp = 0u64;
-                vm.read(envpp, bytes_of_mut(&mut envp))?;
-                if envp == 0 {
-                    break;
-                }
-                let envp = VirtAddr::try_new(envp).map_err(|_| Error::Fault)?;
-                envs.push(vm.read_cstring(envp, 0x1000)?);
+        let mut envs = Vec::new();
+        for i in 0u64.. {
+            let envpp = envp.get() + i * 8;
+            let mut envp = 0u64;
+            vm.read(envpp, bytes_of_mut(&mut envp))?;
+            if envp == 0 {
+                break;
             }
+            let envp = VirtAddr::try_new(envp).map_err(|_| Error::Fault)?;
+            envs.push(vm.read_cstring(envp, 0x1000)?);
+        }
 
-            Result::Ok((pathname, args, envs))
+        Result::Ok((pathname, args, envs))
+    })?;
+
+    let path = Path::new(pathname.as_bytes());
+    Process::create(thread.tid, &path, &args, &envs, vm_activator)?;
+
+    Yield
+}
+
+#[syscall(no = 60)]
+fn exit(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    status: u64,
+) -> SyscallResult {
+    if thread.clear_child_tid != 0 {
+        let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
+        vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm.write(clear_child_tid, &0u32.to_ne_bytes())
         })?;
 
-        let path = Path::new(pathname.as_bytes());
-        Process::create(thread.tid, &path, &args, &envs, vm_activator)?;
-
-        Yield
+        thread.process().futexes.wake(clear_child_tid, 1, None);
     }
+
+    THREADS.lock().remove(&thread.tid);
+    Yield
 }
 
-struct SysExit;
-
-impl Syscall1 for SysExit {
-    const NO: usize = 60;
-    const NAME: &'static str = "exit";
-
-    type Arg0 = u64;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        _status: Self::Arg0,
-    ) -> SyscallResult {
-        if thread.clear_child_tid != 0 {
-            let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.write(clear_child_tid, &0u32.to_ne_bytes())
-            })?;
-
-            thread.process().futexes.wake(clear_child_tid, 1, None);
-        }
-
-        THREADS.lock().remove(&thread.tid);
-        Yield
-    }
+#[syscall(no = 61)]
+fn wait4(pid: u64, wstatus: Pointer, options: WaitOptions, rusage: Pointer) -> SyscallResult {
+    Yield
 }
 
-struct SysWait4;
-
-impl Syscall4 for SysWait4 {
-    const NO: usize = 61;
-    const NAME: &'static str = "wait4";
-
-    type Arg0 = u64;
-    type Arg1 = Pointer;
-    type Arg2 = WaitOptions;
-    type Arg3 = Pointer;
-
-    fn execute(
-        _thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        _pid: u64,
-        _wstatus: Pointer,
-        _options: WaitOptions,
-        _rusage: Pointer,
-    ) -> SyscallResult {
-        Yield
-    }
-}
-
-struct SysFcntl;
-
-impl Syscall3 for SysFcntl {
-    const NO: usize = 72;
-    const NAME: &'static str = "fcntl";
-
-    type Arg0 = FdNum;
-    type Arg1 = FcntlCmd;
-    type Arg2 = u64;
-
-    fn execute(
-        _thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        _fd_num: FdNum,
-        cmd: FcntlCmd,
-        _arg: u64,
-    ) -> SyscallResult {
-        match cmd {
-            FcntlCmd::SetFd => {
-                // FIXME: implement this
-                Ok(0)
-            }
+#[syscall(no = 72)]
+fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
+    match cmd {
+        FcntlCmd::SetFd => {
+            // FIXME: implement this
+            Ok(0)
         }
     }
 }
 
-struct SysSigaltstack;
+#[syscall(no = 131)]
+fn sigaltstack(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    ss: Pointer,
+    old_ss: Pointer,
+) -> SyscallResult {
+    if !old_ss.is_null() {
+        let old_ss_value = thread.sigaltstack.unwrap_or_else(|| {
+            let mut stack = Stack::zeroed();
+            stack.flags |= StackFlags::DISABLE;
+            stack
+        });
 
-impl Syscall2 for SysSigaltstack {
-    const NO: usize = 131;
-    const NAME: &'static str = "sigaltstack";
+        vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm.write(old_ss.get(), bytes_of(&old_ss_value))
+        })?;
+    }
 
-    type Arg0 = Pointer;
-    type Arg1 = Pointer;
+    if !ss.is_null() {
+        let mut ss_value = Stack::zeroed();
+        vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm.read(ss.get(), bytes_of_mut(&mut ss_value))
+        })?;
 
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        ss: Pointer,
-        old_ss: Pointer,
-    ) -> SyscallResult {
-        if !old_ss.is_null() {
-            let old_ss_value = thread.sigaltstack.unwrap_or_else(|| {
-                let mut stack = Stack::zeroed();
-                stack.flags |= StackFlags::DISABLE;
-                stack
-            });
+        let allowed_flags = StackFlags::AUTODISARM;
+        if !allowed_flags.contains(ss_value.flags) {
+            return Err(Error::Inval);
+        }
+
+        thread.sigaltstack = Some(ss_value);
+    }
+
+    Ok(0)
+}
+
+#[syscall(no = 158)]
+fn arch_prctl(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer) -> SyscallResult {
+    match code {
+        ArchPrctlCode::SetFs => {
+            thread.registers.fs_base = addr.get().as_u64();
+            Ok(0)
+        }
+    }
+}
+
+#[syscall(no = 186)]
+fn gettid(thread: &mut Thread) -> SyscallResult {
+    let tid = thread.tid;
+    Ok(u64::from(tid))
+}
+
+#[syscall(no = 202)]
+fn futex(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    uaddr: Pointer,
+    op: FutexOpWithFlags,
+    val: u32,
+    utime: u64,
+    uaddr2: Pointer,
+    val3: u64,
+) -> SyscallResult {
+    match op.op {
+        FutexOp::Wait => {
+            assert_eq!(utime, 0);
 
             vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.write(old_ss.get(), bytes_of(&old_ss_value))
-            })?;
-        }
-
-        if !ss.is_null() {
-            let mut ss_value = Stack::zeroed();
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.read(ss.get(), bytes_of_mut(&mut ss_value))
-            })?;
-
-            let allowed_flags = StackFlags::AUTODISARM;
-            if !allowed_flags.contains(ss_value.flags) {
-                return Err(Error::Inval);
-            }
-
-            thread.sigaltstack = Some(ss_value);
-        }
-
-        Ok(0)
-    }
-}
-
-struct SysArchPrctl;
-
-impl Syscall2 for SysArchPrctl {
-    const NO: usize = 158;
-    const NAME: &'static str = "arch_prctl";
-
-    type Arg0 = ArchPrctlCode;
-    type Arg1 = Pointer;
-
-    fn execute(
-        thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        code: ArchPrctlCode,
-        addr: Pointer,
-    ) -> SyscallResult {
-        match code {
-            ArchPrctlCode::SetFs => {
-                thread.registers.fs_base = addr.get().as_u64();
-                Ok(0)
-            }
-        }
-    }
-}
-
-struct SysGettid;
-
-impl Syscall0 for SysGettid {
-    const NO: usize = 186;
-    const NAME: &'static str = "gettid";
-
-    fn execute(thread: &mut Thread, _vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
-        let tid = thread.tid;
-        Ok(u64::from(tid))
-    }
-}
-
-struct SysFutex;
-
-impl Syscall6 for SysFutex {
-    const NO: usize = 202;
-    const NAME: &'static str = "futex";
-
-    type Arg0 = Pointer;
-    type Arg1 = FutexOpWithFlags;
-    type Arg2 = u32;
-    type Arg3 = u64;
-    type Arg4 = Pointer;
-    type Arg5 = u64;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        uaddr: Pointer,
-        op: FutexOpWithFlags,
-        val: u32,
-        _utime: u64,
-        _uaddr2: Pointer,
-        val3: u64,
-    ) -> SyscallResult {
-        match op.op {
-            FutexOp::Wait => {
-                assert_eq!(_utime, 0);
-
-                vm_activator.activate(thread.virtual_memory(), |vm| {
-                    thread
-                        .process()
-                        .futexes
-                        .wait(thread.tid, uaddr.get(), val, None, vm)
-                })?;
-
-                Yield
-            }
-            FutexOp::Wake => {
-                let woken = thread.process().futexes.wake(uaddr.get(), val, None);
-                Ok(u64::from(woken))
-            }
-            FutexOp::Fd => Err(Error::NoSys),
-            FutexOp::Requeue => Err(Error::NoSys),
-            FutexOp::CmpRequeue => Err(Error::NoSys),
-            FutexOp::WakeOp => Err(Error::NoSys),
-            FutexOp::LockPi => Err(Error::NoSys),
-            FutexOp::UnlockPi => Err(Error::NoSys),
-            FutexOp::TrylockPi => Err(Error::NoSys),
-            FutexOp::WaitBitset => {
-                assert_eq!(_utime, 0);
-                let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
-
-                vm_activator.activate(thread.virtual_memory(), |vm| {
-                    thread
-                        .process()
-                        .futexes
-                        .wait(thread.tid, uaddr.get(), val, Some(bitset), vm)
-                })?;
-
-                Yield
-            }
-            FutexOp::WakeBitset => {
-                let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
-                let woken = thread
+                thread
                     .process()
                     .futexes
-                    .wake(uaddr.get(), val, Some(bitset));
-                Ok(u64::from(woken))
-            }
-            FutexOp::WaitRequeuePi => Err(Error::NoSys),
-            FutexOp::CmpRequeuePi => Err(Error::NoSys),
-            FutexOp::LockPi2 => Err(Error::NoSys),
+                    .wait(thread.tid, uaddr.get(), val, None, vm)
+            })?;
+
+            Yield
         }
-    }
-}
-
-struct SysSetTidAddress;
-
-impl Syscall1 for SysSetTidAddress {
-    const NO: usize = 218;
-    const NAME: &'static str = "set_tid_address";
-
-    type Arg0 = Pointer;
-
-    fn execute(
-        thread: &mut Thread,
-        _vm_activator: &mut VirtualMemoryActivator,
-        tidptr: Pointer,
-    ) -> SyscallResult {
-        thread.clear_child_tid = tidptr.get().as_u64();
-        Ok(u64::from(thread.tid))
-    }
-}
-
-struct SysExitGroup;
-
-impl Syscall1 for SysExitGroup {
-    const NO: usize = 231;
-    const NAME: &'static str = "exit_group";
-
-    type Arg0 = u64;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        status: u64,
-    ) -> SyscallResult {
-        let status = thread.process().exit(status as u8);
-        <SysExit as Syscall1>::execute(thread, vm_activator, u64::from(status))
-    }
-}
-
-struct SysPipe2;
-
-impl Syscall2 for SysPipe2 {
-    const NO: usize = 293;
-    const NAME: &'static str = "pipe2";
-
-    type Arg0 = Pointer;
-    type Arg1 = Pipe2Flags;
-
-    fn execute(
-        thread: &mut Thread,
-        vm_activator: &mut VirtualMemoryActivator,
-        pipefd: Pointer,
-        flags: Pipe2Flags,
-    ) -> SyscallResult {
-        if flags != Pipe2Flags::CLOEXEC {
-            todo!()
+        FutexOp::Wake => {
+            let woken = thread.process().futexes.wake(uaddr.get(), val, None);
+            Ok(u64::from(woken))
         }
+        FutexOp::Fd => Err(Error::NoSys),
+        FutexOp::Requeue => Err(Error::NoSys),
+        FutexOp::CmpRequeue => Err(Error::NoSys),
+        FutexOp::WakeOp => Err(Error::NoSys),
+        FutexOp::LockPi => Err(Error::NoSys),
+        FutexOp::UnlockPi => Err(Error::NoSys),
+        FutexOp::TrylockPi => Err(Error::NoSys),
+        FutexOp::WaitBitset => {
+            assert_eq!(utime, 0);
+            let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
 
-        let (read_half, write_half) = pipe::new();
+            vm_activator.activate(thread.virtual_memory(), |vm| {
+                thread
+                    .process()
+                    .futexes
+                    .wait(thread.tid, uaddr.get(), val, Some(bitset), vm)
+            })?;
 
-        let fdtable = thread.fdtable();
-        let read_half = fdtable.insert(read_half);
-        let write_half = fdtable.insert(write_half);
-
-        let mut bytes = [0; 8];
-        bytes[0..4].copy_from_slice(&read_half.get().to_ne_bytes());
-        bytes[4..8].copy_from_slice(&write_half.get().to_ne_bytes());
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.write(pipefd.get(), &bytes))?;
-
-        Ok(0)
+            Yield
+        }
+        FutexOp::WakeBitset => {
+            let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::Inval)?;
+            let woken = thread
+                .process()
+                .futexes
+                .wake(uaddr.get(), val, Some(bitset));
+            Ok(u64::from(woken))
+        }
+        FutexOp::WaitRequeuePi => Err(Error::NoSys),
+        FutexOp::CmpRequeuePi => Err(Error::NoSys),
+        FutexOp::LockPi2 => Err(Error::NoSys),
     }
+}
+
+#[syscall(no = 218)]
+fn set_tid_address(thread: &mut Thread, tidptr: Pointer) -> SyscallResult {
+    thread.clear_child_tid = tidptr.get().as_u64();
+    Ok(u64::from(thread.tid))
+}
+
+#[syscall(no = 231)]
+fn exit_group(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    status: u64,
+) -> SyscallResult {
+    let status = thread.process().exit(status as u8);
+    <SysExit as Syscall1>::execute(thread, vm_activator, u64::from(status))
+}
+
+#[syscall(no = 293)]
+fn pipe2(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    pipefd: Pointer,
+    flags: Pipe2Flags,
+) -> SyscallResult {
+    if flags != Pipe2Flags::CLOEXEC {
+        todo!()
+    }
+
+    let (read_half, write_half) = pipe::new();
+
+    let fdtable = thread.fdtable();
+    let read_half = fdtable.insert(read_half);
+    let write_half = fdtable.insert(write_half);
+
+    let mut bytes = [0; 8];
+    bytes[0..4].copy_from_slice(&read_half.get().to_ne_bytes());
+    bytes[4..8].copy_from_slice(&write_half.get().to_ne_bytes());
+    vm_activator.activate(thread.virtual_memory(), |vm| vm.write(pipefd.get(), &bytes))?;
+
+    Ok(0)
 }

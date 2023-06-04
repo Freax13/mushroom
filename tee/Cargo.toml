@@ -1,12 +1,13 @@
 cargo-features = ["profile-rustflags"]
 
 [workspace]
-members = ["init", "kernel", "serial-log", "supervisor"]
+members = ["init", "kernel", "kernel-macros", "serial-log", "supervisor"]
 resolver = "2"
 
 [workspace.dependencies]
 constants = { path = "../common/constants" }
 io = { path = "../common/io" }
+kernel-macros = { path = "kernel-macros" }
 serial-log = { path = "serial-log" }
 snp-types = { path = "../common/snp-types" }
 
