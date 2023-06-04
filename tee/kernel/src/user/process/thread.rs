@@ -94,6 +94,7 @@ pub struct Thread {
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
     pub clear_child_tid: u64,
+    pub waiters: Vec<Waiter>,
 }
 
 impl Thread {
@@ -134,6 +135,7 @@ impl Thread {
             sigaction: [Sigaction::DEFAULT; 64],
             sigaltstack: None,
             clear_child_tid: 0,
+            waiters: Vec::new(),
         }
     }
 
@@ -489,6 +491,14 @@ impl Thread {
     }
 }
 
+impl Drop for Thread {
+    fn drop(&mut self) {
+        if !self.waiters.is_empty() {
+            info!("thread {} exited with waiters", self.tid);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct KernelRegisters {
     rax: u64,
@@ -646,4 +656,9 @@ bitflags! {
         const DISABLE = 1 << 1;
         const AUTODISARM = 1 << 31;
     }
+}
+
+pub struct Waiter {
+    pub thread: WeakThread,
+    pub wstatus: VirtAddr,
 }

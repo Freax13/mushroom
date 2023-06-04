@@ -36,7 +36,9 @@ use super::{
         pipe, FileDescriptorTable,
     },
     memory::VirtualMemoryActivator,
-    thread::{schedule_thread, Sigset, Stack, StackFlags, Thread, UserspaceRegisters, THREADS},
+    thread::{
+        schedule_thread, Sigset, Stack, StackFlags, Thread, UserspaceRegisters, Waiter, THREADS,
+    },
     Process,
 };
 
@@ -538,14 +540,49 @@ fn exit(
         thread.process().futexes.wake(clear_child_tid, 1, None);
     }
 
+    for Waiter { thread, wstatus: _ } in core::mem::take(&mut thread.waiters) {
+        {
+            let Some(thread) = thread.upgrade() else { continue; };
+            let mut guard = thread.lock();
+            guard.registers.rax = 0;
+        }
+
+        schedule_thread(thread);
+    }
+
     THREADS.remove(thread.tid);
 
     Yield
 }
 
 #[syscall(no = 61)]
-fn wait4(pid: u64, wstatus: Pointer, options: WaitOptions, rusage: Pointer) -> SyscallResult {
-    Yield
+fn wait4(
+    thread: &mut Thread,
+    pid: u64,
+    wstatus: Pointer,
+    options: WaitOptions,
+    rusage: Pointer,
+) -> SyscallResult {
+    if !rusage.is_null() {
+        todo!()
+    }
+
+    match pid as i64 {
+        ..=-2 => todo!(),
+        -1 => todo!(),
+        0 => todo!(),
+        1.. => {
+            let t = THREADS.by_id(pid as u32).ok_or_else(Error::child)?;
+
+            let mut guard = t.lock();
+            guard.waiters.push(Waiter {
+                thread: thread.weak().clone(),
+                wstatus: wstatus.get(),
+            });
+
+            Yield
+        }
+    }
 }
 
 #[syscall(no = 72)]
