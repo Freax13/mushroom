@@ -591,40 +591,17 @@ impl Mapping {
             return Err(Error::fault());
         }
 
-        if let Some(entry) = entry_for_page(page) {
-            if !entry.executable() {
-                unsafe {
-                    add_flags(page, PageTableFlags::EXECUTABLE);
-                }
-            }
-        } else {
-            let Backing::File(file_backing) = &self.backing else { todo!(); };
+        // Map the page in.
+        let ptr = unsafe { self.make_readable(page)? };
 
-            match *file_backing.bytes {
-                Cow::Borrowed(bytes) => {
-                    // FIXME: Get rid of as_u64
-                    let offset =
-                        usize::try_from(file_backing.offset + (page.start_address() - self.addr))
-                            .unwrap();
-                    let backing_bytes = &bytes[offset..][..0x1000];
-                    let backing_addr =
-                        VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
-                    let backing_page = Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
-                    let backing_entry = entry_for_page(backing_page).unwrap();
-
-                    let new_entry = PresentPageTableEntry::new(
-                        backing_entry.frame(),
-                        PageTableFlags::USER | PageTableFlags::EXECUTABLE | PageTableFlags::COW,
-                    );
-                    unsafe {
-                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
-                    }
-                }
-                Cow::Owned(_) => todo!(),
+        // Mark it as executable if it isn't already.
+        let entry = entry_for_page(page).unwrap();
+        if !entry.executable() {
+            unsafe {
+                add_flags(page, PageTableFlags::EXECUTABLE);
             }
         }
 
-        let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
         Ok(ptr)
     }
 
@@ -681,72 +658,12 @@ impl Mapping {
             return Err(Error::fault());
         }
 
-        let ptr = page.start_address().as_mut_ptr::<[u8; 0x1000]>();
+        let ptr = unsafe { self.remove_cow(page)? };
 
-        if let Some(entry) = entry_for_page(page) {
-            if !entry.writable() {
-                // Check if we have to copy the page.
-                if entry.cow() {
-                    unsafe {
-                        self.remove_cow(page)?;
-                    }
-                }
-
-                unsafe {
-                    add_flags(page, PageTableFlags::WRITABLE | PageTableFlags::USER);
-                }
-            }
-        } else {
-            match &self.backing {
-                Backing::File(file_backing) => {
-                    match *file_backing.bytes {
-                        Cow::Borrowed(bytes) => {
-                            // FIXME: Get rid of as_u64
-                            let offset = usize::try_from(
-                                file_backing.offset + (page.start_address() - self.addr),
-                            )
-                            .unwrap();
-                            let backing_bytes = &bytes[offset..][..0x1000];
-                            let backing_bytes: &[u8; 0x1000] = backing_bytes.try_into().unwrap();
-
-                            let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
-
-                            // Fill the frame.
-                            unsafe {
-                                // SAFETY: We just allocated the frame, so we can do whatever.
-                                copy_into_frame(frame, backing_bytes)?;
-                            }
-
-                            // Map the page.
-                            let mut flags = PageTableFlags::USER | PageTableFlags::WRITABLE;
-                            if self.permissions.contains(MemoryPermissions::EXECUTE) {
-                                flags |= PageTableFlags::EXECUTABLE;
-                            }
-                            let new_entry = PresentPageTableEntry::new(frame, flags);
-                            unsafe {
-                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
-                            }
-                        }
-                        Cow::Owned(_) => todo!(),
-                    }
-                }
-                Backing::Zero | Backing::Stack => {
-                    let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
-
-                    unsafe {
-                        // SAFETY: We just allocated the frame, so we can do whatever.
-                        zero_frame(frame)?;
-                    }
-
-                    let mut flags = PageTableFlags::USER | PageTableFlags::WRITABLE;
-                    if self.permissions.contains(MemoryPermissions::EXECUTE) {
-                        flags |= PageTableFlags::EXECUTABLE;
-                    }
-                    let new_entry = PresentPageTableEntry::new(frame, flags);
-                    unsafe {
-                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
-                    }
-                }
+        let entry = entry_for_page(page).unwrap();
+        if !entry.writable() {
+            unsafe {
+                add_flags(page, PageTableFlags::WRITABLE | PageTableFlags::USER);
             }
         }
 
@@ -769,7 +686,7 @@ impl Mapping {
         } else {
             match &self.backing {
                 Backing::File(file_backing) => {
-                    match *file_backing.bytes {
+                    match &*file_backing.bytes {
                         Cow::Borrowed(bytes) => {
                             // FIXME: Get rid of as_u64
                             let offset = usize::try_from(
@@ -794,7 +711,31 @@ impl Mapping {
                                 map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                             }
                         }
-                        Cow::Owned(_) => todo!(),
+                        Cow::Owned(bytes) => {
+                            let offset = usize::try_from(
+                                file_backing.offset + (page.start_address() - self.addr),
+                            )
+                            .unwrap();
+                            let backing_bytes = &bytes[offset..][..0x1000];
+                            let backing_bytes = <&[u8; 4096]>::try_from(backing_bytes).unwrap();
+
+                            let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+                            unsafe {
+                                copy_into_frame(frame, backing_bytes)?;
+                            }
+
+                            let mut flags = PageTableFlags::USER;
+                            if self.permissions.contains(MemoryPermissions::EXECUTE) {
+                                flags |= PageTableFlags::EXECUTABLE;
+                            }
+                            if self.permissions.contains(MemoryPermissions::WRITE) {
+                                flags |= PageTableFlags::WRITABLE;
+                            }
+                            let new_entry = PresentPageTableEntry::new(frame, flags);
+                            unsafe {
+                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
+                            }
+                        }
                     }
                 }
                 Backing::Zero | Backing::Stack => {
