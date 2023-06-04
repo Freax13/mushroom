@@ -2,6 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [workspace]
 members = ["init", "kernel", "serial-log", "supervisor"]
+resolver = "2"
 
 [workspace.dependencies]
 constants = { path = "../common/constants" }

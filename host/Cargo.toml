@@ -1,5 +1,6 @@
 [workspace]
 members = ["mushroom", "mushroom-verify", "vcek-kds"]
+resolver = "2"
 
 [workspace.dependencies]
 mushroom = { path = "mushroom" }
