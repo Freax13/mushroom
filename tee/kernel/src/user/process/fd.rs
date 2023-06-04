@@ -112,4 +112,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn close(&self) -> Result<()> {
         Ok(())
     }
+
+    fn write_all(&self, mut buf: &[u8]) -> Result<()> {
+        while !buf.is_empty() {
+            let len = self.write(buf)?;
+            buf = &buf[len..];
+        }
+        Ok(())
+    }
 }
