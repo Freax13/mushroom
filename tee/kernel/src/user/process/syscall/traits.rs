@@ -464,7 +464,7 @@ where
     }
 }
 
-const MAX_SYSCALL_HANDLER: usize = 294;
+const MAX_SYSCALL_HANDLER: usize = 327;
 
 #[derive(Clone, Copy)]
 struct SyscallHandler {

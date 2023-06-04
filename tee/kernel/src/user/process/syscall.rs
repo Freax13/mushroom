@@ -20,9 +20,9 @@ use crate::{
 
 use self::{
     args::{
-        ArchPrctlCode, CloneFlags, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags, MmapFlags,
-        OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SyscallArg,
-        WaitOptions,
+        ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
+        FutexOpWithFlags, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags,
+        RtSigprocmaskHow, SyscallArg, WaitOptions,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -116,6 +116,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysExitGroup);
     handlers.register(SysPipe2);
+    handlers.register(SysCopyFileRange);
 
     handlers
 };
@@ -706,4 +707,51 @@ fn pipe2(
     vm_activator.activate(thread.virtual_memory(), |vm| vm.write(pipefd.get(), &bytes))?;
 
     Ok(0)
+}
+
+#[syscall(no = 326)]
+fn copy_file_range(
+    thread: &mut Thread,
+    fd_in: FdNum,
+    off_in: Pointer,
+    fd_out: FdNum,
+    off_out: Pointer,
+    len: u64,
+    flags: CopyFileRangeFlags,
+) -> SyscallResult {
+    let fdtable = thread.fdtable();
+    let fd_in = fdtable.get(fd_in)?;
+    let fd_out = fdtable.get(fd_out)?;
+
+    if !off_in.is_null() || !off_out.is_null() {
+        todo!()
+    }
+
+    let mut len = usize::try_from(len).unwrap_or(!0);
+    let mut copied = 0;
+
+    let mut buffer = [0; 128];
+
+    while len > 0 {
+        // Setup buffer.
+        let chunk_len = cmp::min(buffer.len(), len);
+        let buffer = &mut buffer[..chunk_len];
+
+        // Read from fd_in.
+        let num = fd_in.read(buffer)?;
+        if num == 0 {
+            break;
+        }
+
+        // Write to fd_out.
+        let buffer = &buffer[..num];
+        fd_out.write_all(buffer)?;
+
+        // Update len and copied.
+        len -= num;
+        let num = u64::try_from(num).unwrap();
+        copied += num;
+    }
+
+    Ok(copied)
 }

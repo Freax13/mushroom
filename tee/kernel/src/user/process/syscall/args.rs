@@ -357,3 +357,7 @@ bitflags! {
         const CONTINUED = 1 << 3;
     }
 }
+
+bitflags! {
+    pub struct CopyFileRangeFlags {}
+}
