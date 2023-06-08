@@ -199,10 +199,8 @@ fn open(
     flags: OpenFlags,
     mode: FileMode,
 ) -> SyscallResult {
-    let filename = vm_activator.activate(thread.virtual_memory(), |vm| {
-        vm.read_cstring(pathname.get(), 4096)
-    })?;
-    let filename = Path::new(filename.as_bytes())?;
+    let filename =
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
 
     if flags.contains(OpenFlags::WRONLY) {
         if flags.contains(OpenFlags::CREAT) {
@@ -244,9 +242,8 @@ fn stat(
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
     vm_activator.activate(thread.virtual_memory(), |vm| {
-        let filename = vm.read_cstring(filename.get(), 0x1000)?;
+        let filename = vm.read_path(filename.get())?;
 
-        let filename = Path::new(filename.as_bytes())?;
         let _node = lookup_node(ROOT_NODE.clone(), &filename)?;
 
         // FIXME: Fill in the values.
@@ -279,9 +276,8 @@ fn lstat(
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
     vm_activator.activate(thread.virtual_memory(), |vm| {
-        let filename = vm.read_cstring(filename.get(), 0x1000)?;
+        let filename = vm.read_path(filename.get())?;
 
-        let filename = Path::new(filename.as_bytes())?;
         // FIXME: Don't resolve links.
         let _node = lookup_node(ROOT_NODE.clone(), &filename)?;
 
@@ -666,7 +662,7 @@ fn execve(
     envp: Pointer<[&'static CStr]>,
 ) -> SyscallResult {
     let (pathname, args, envs) = vm_activator.activate(thread.virtual_memory(), |vm| {
-        let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
+        let pathname = vm.read_path(pathname.get())?;
 
         let mut args = Vec::new();
         for i in 0u64.. {
@@ -695,8 +691,7 @@ fn execve(
         Result::<_, Error>::Ok((pathname, args, envs))
     })?;
 
-    let path = Path::new(pathname.as_bytes())?;
-    thread.execve(&path, &args, &envs, vm_activator)?;
+    thread.execve(&pathname, &args, &envs, vm_activator)?;
 
     Ok(0)
 }
@@ -785,12 +780,10 @@ fn mkdir(
     pathname: Pointer<CStr>,
     mode: FileMode,
 ) -> SyscallResult {
-    let pathname = vm_activator.activate(thread.virtual_memory(), |vm| {
-        vm.read_cstring(pathname.get(), 0x1000)
-    })?;
+    let pathname =
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
 
-    let path = Path::new(pathname.as_bytes())?;
-    create_directory(Node::Directory(ROOT_NODE.clone()), &path)?;
+    create_directory(Node::Directory(ROOT_NODE.clone()), &pathname)?;
 
     Ok(0)
 }
@@ -803,13 +796,10 @@ fn symlink(
     newname: Pointer<CStr>,
 ) -> SyscallResult {
     let (oldname, newname) = vm_activator.activate(thread.virtual_memory(), |vm| {
-        let oldname = vm.read_cstring(oldname.get(), 0x1000)?;
-        let newname = vm.read_cstring(newname.get(), 0x1000)?;
+        let oldname = vm.read_path(oldname.get())?;
+        let newname = vm.read_path(newname.get())?;
         Result::<_, Error>::Ok((oldname, newname))
     })?;
-
-    let oldname = Path::new(oldname.as_bytes())?;
-    let newname = Path::new(newname.as_bytes())?;
 
     create_link(Node::Directory(ROOT_NODE.clone()), &newname, oldname)?;
 
@@ -827,9 +817,8 @@ fn readlink(
     let bufsiz = usize::try_from(bufsiz)?;
 
     let len = vm_activator.activate(thread.virtual_memory(), |vm| {
-        let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
-        let path = Path::new(pathname.as_bytes())?;
-        let target = read_link(Node::Directory(ROOT_NODE.clone()), &path)?;
+        let pathname = vm.read_path(pathname.get())?;
+        let target = read_link(Node::Directory(ROOT_NODE.clone()), &pathname)?;
 
         let bytes = target.to_bytes();
         // Truncate to `bufsiz`.
