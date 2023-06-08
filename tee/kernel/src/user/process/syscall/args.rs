@@ -234,6 +234,7 @@ impl Pointee for [FdNum; 2] {}
 impl Pointee for [u8] {}
 impl Pointee for c_void {}
 impl Pointee for FdNum {}
+impl Pointee for Iovec {}
 impl Pointee for Sigaction {}
 impl Pointee for Sigset {}
 impl Pointee for Stack {}
@@ -491,4 +492,11 @@ bitflags! {
 
 bitflags! {
     pub struct CopyFileRangeFlags {}
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Iovec {
+    pub base: u64,
+    pub len: u64,
 }

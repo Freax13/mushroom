@@ -2,6 +2,7 @@ use core::{
     cmp,
     ffi::{c_void, CStr},
     fmt::{self},
+    mem::size_of,
     num::NonZeroU32,
 };
 
@@ -22,7 +23,7 @@ use crate::{
 use self::{
     args::{
         ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
-        FutexOpWithFlags, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags,
+        FutexOpWithFlags, Iovec, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags,
         RtSigprocmaskHow, SyscallArg, WaitOptions, Whence,
     },
     traits::{
@@ -108,6 +109,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysReadv);
+    handlers.register(SysWritev);
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysClone);
@@ -426,6 +429,62 @@ impl Syscall3 for SysRtSigprocmask {
         Pointer::<Sigset>::display(f, oldset, thread, vm_activator)?;
         write!(f, ")")
     }
+}
+
+#[syscall(no = 19)]
+fn readv(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    vec: Pointer<Iovec>,
+    vlen: u64,
+) -> SyscallResult {
+    if vlen == 0 {
+        return SyscallResult::Ok(0);
+    }
+    let vlen = usize::try_from(vlen)?;
+
+    let iovec = vm_activator.activate(thread.virtual_memory(), |vm| {
+        let mut iovec = Iovec::zeroed();
+        for i in 0..vlen {
+            vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
+            if iovec.len != 0 {
+                break;
+            }
+        }
+        Result::<_, Error>::Ok(iovec)
+    })?;
+
+    let addr = Pointer::parse(iovec.base)?;
+    read(thread, vm_activator, fd, addr, iovec.len)
+}
+
+#[syscall(no = 20)]
+fn writev(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    vec: Pointer<Iovec>,
+    vlen: u64,
+) -> SyscallResult {
+    if vlen == 0 {
+        return SyscallResult::Ok(0);
+    }
+    let vlen = usize::try_from(vlen)?;
+
+    let iovec = vm_activator.activate(thread.virtual_memory(), |vm| {
+        let mut iovec = Iovec::zeroed();
+        for i in 0..vlen {
+            vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
+            if iovec.len != 0 {
+                break;
+            }
+        }
+        Result::<_, Error>::Ok(iovec)
+    })?;
+
+    let addr = Pointer::parse(iovec.base)?;
+    write(thread, vm_activator, fd, addr, iovec.len)
 }
 
 #[syscall(no = 33)]
