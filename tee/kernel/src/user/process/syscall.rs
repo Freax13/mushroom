@@ -15,7 +15,7 @@ use crate::{
     error::Error,
     fs::node::{
         create_directory, create_file, create_link, lookup_and_resolve_node, lookup_node,
-        read_link, Node, NonLinkNode, ROOT_NODE,
+        read_link, set_mode, Node, NonLinkNode, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -123,6 +123,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysMkdir);
     handlers.register(SysSymlink);
     handlers.register(SysReadlink);
+    handlers.register(SysChmod);
+    handlers.register(SysFchmod);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysGettid);
@@ -780,7 +782,7 @@ fn mkdir(
     let pathname =
         vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
 
-    create_directory(Node::Directory(ROOT_NODE.clone()), &pathname)?;
+    create_directory(Node::Directory(ROOT_NODE.clone()), &pathname, mode)?;
 
     Ok(0)
 }
@@ -829,6 +831,27 @@ fn readlink(
 
     let len = u64::try_from(len)?;
     Ok(len)
+}
+
+#[syscall(no = 90)]
+fn chmod(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    filename: Pointer<CStr>,
+    mode: FileMode,
+) -> SyscallResult {
+    let path = vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(filename.get()))?;
+
+    set_mode(ROOT_NODE.clone(), &path, mode)?;
+
+    Ok(0)
+}
+
+#[syscall(no = 91)]
+fn fchmod(thread: &mut Thread, fd: FdNum, mode: FileMode) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
+    fd.set_mode(mode)?;
+    Ok(0)
 }
 
 #[syscall(no = 131)]

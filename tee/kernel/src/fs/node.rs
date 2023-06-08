@@ -16,7 +16,8 @@ use super::{path::FileName, Path, PathSegment};
 
 pub mod special;
 
-pub static ROOT_NODE: Lazy<Arc<TmpFsDirectory>> = Lazy::new(|| Arc::new(TmpFsDirectory::new()));
+pub static ROOT_NODE: Lazy<Arc<TmpFsDirectory>> =
+    Lazy::new(|| Arc::new(TmpFsDirectory::new(FileMode::from_bits_truncate(0o755))));
 
 #[derive(Clone)]
 pub enum Node {
@@ -51,6 +52,15 @@ pub enum NonLinkNode {
     Directory(Arc<dyn Directory>),
 }
 
+impl NonLinkNode {
+    pub fn set_mode(&self, mode: FileMode) {
+        match self {
+            NonLinkNode::File(file) => file.set_mode(mode),
+            NonLinkNode::Directory(dir) => dir.set_mode(mode),
+        }
+    }
+}
+
 impl TryFrom<NonLinkNode> for Arc<dyn Directory> {
     type Error = Error;
 
@@ -65,6 +75,7 @@ impl TryFrom<NonLinkNode> for Arc<dyn Directory> {
 
 pub trait File: Send + Sync + 'static {
     fn mode(&self) -> FileMode;
+    fn set_mode(&self, mode: FileMode);
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
     fn read_snapshot(&self) -> Result<FileSnapshot>;
@@ -99,6 +110,7 @@ impl Deref for FileSnapshot {
 }
 
 pub trait Directory: Any + Send + Sync {
+    fn set_mode(&self, mode: FileMode);
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
     fn create_file(
         &self,
@@ -106,7 +118,7 @@ pub trait Directory: Any + Send + Sync {
         mode: FileMode,
         create_new: bool,
     ) -> Result<Arc<dyn File>>;
-    fn create_dir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>>;
+    fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>>;
     fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
 }
 
@@ -202,7 +214,11 @@ pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<
     Ok(file)
 }
 
-pub fn create_directory(start_node: Node, path: &Path) -> Result<Arc<dyn Directory>> {
+pub fn create_directory(
+    start_node: Node,
+    path: &Path,
+    mode: FileMode,
+) -> Result<Arc<dyn Directory>> {
     let (dir, last) = find_parent(start_node, path)?;
     let file_name = match last {
         PathSegment::Empty => todo!(),
@@ -210,7 +226,7 @@ pub fn create_directory(start_node: Node, path: &Path) -> Result<Arc<dyn Directo
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let file = dir.create_dir(file_name.clone(), false)?;
+    let file = dir.create_dir(file_name.clone(), mode)?;
     Ok(file)
 }
 
@@ -234,51 +250,62 @@ pub fn read_link(start_dir: Arc<dyn Directory>, path: &Path) -> Result<Path> {
     }
 }
 
+pub fn set_mode(start_dir: Arc<dyn Directory>, path: &Path, mode: FileMode) -> Result<()> {
+    let node = lookup_and_resolve_node(start_dir, path)?;
+    node.set_mode(mode);
+    Ok(())
+}
+
 pub struct TmpFsDirectory {
-    items: Mutex<BTreeMap<FileName, Node>>,
+    internal: Mutex<TmpFsDirectoryInternal>,
+}
+
+struct TmpFsDirectoryInternal {
+    mode: FileMode,
+    items: BTreeMap<FileName, Node>,
 }
 
 impl TmpFsDirectory {
-    pub const fn new() -> Self {
+    pub const fn new(mode: FileMode) -> Self {
         Self {
-            items: Mutex::new(BTreeMap::new()),
+            internal: Mutex::new(TmpFsDirectoryInternal {
+                mode,
+                items: BTreeMap::new(),
+            }),
         }
     }
 
     /// Mount a special file into the tmpfs directory.
     pub fn mount(&self, path_segment: FileName, file: impl File) {
-        let mut guard = self.items.lock();
-        guard.insert(path_segment, Node::File(Arc::new(file)));
+        let mut guard = self.internal.lock();
+        guard.items.insert(path_segment, Node::File(Arc::new(file)));
     }
 }
 
 impl Directory for TmpFsDirectory {
+    fn set_mode(&self, mode: FileMode) {
+        self.internal.lock().mode = mode;
+    }
+
     fn get_node(&self, path_segment: &FileName) -> Result<Node> {
-        self.items
+        self.internal
             .lock()
+            .items
             .get(path_segment)
             .cloned()
             .ok_or(Error::no_ent(()))
     }
 
-    fn create_dir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>> {
-        let mut guard = self.items.lock();
-        let entry = guard.entry(file_name);
+    fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let dir = Arc::new(TmpFsDirectory::new());
+                let dir = Arc::new(TmpFsDirectory::new(mode));
                 entry.insert(Node::Directory(dir.clone()));
                 Ok(dir)
             }
-            Entry::Occupied(entry) => {
-                if create_new {
-                    return Err(Error::exist(()));
-                }
-                match entry.get() {
-                    Node::Directory(dir) => Ok(dir.clone()),
-                    Node::File(_) | Node::Link(_) => Err(Error::exist(())),
-                }
-            }
+            Entry::Occupied(_) => Err(Error::exist(())),
         }
     }
 
@@ -288,8 +315,8 @@ impl Directory for TmpFsDirectory {
         mode: FileMode,
         create_new: bool,
     ) -> Result<Arc<dyn File>> {
-        let mut guard = self.items.lock();
-        let entry = guard.entry(path_segment);
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(path_segment);
         match entry {
             Entry::Vacant(entry) => {
                 let file = Arc::new(TmpFsFile::new(mode, &[]));
@@ -310,8 +337,8 @@ impl Directory for TmpFsDirectory {
     }
 
     fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()> {
-        let mut guard = self.items.lock();
-        let entry = guard.entry(file_name);
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
                 entry.insert(Node::Link(Link { target }));
@@ -329,35 +356,45 @@ impl Directory for TmpFsDirectory {
 }
 
 pub struct TmpFsFile {
-    content: Mutex<Arc<Cow<'static, [u8]>>>,
+    internal: Mutex<TmpFsFileInternal>,
+}
+
+struct TmpFsFileInternal {
+    content: Arc<Cow<'static, [u8]>>,
     mode: FileMode,
 }
 
 impl TmpFsFile {
     pub fn new(mode: FileMode, content: &'static [u8]) -> Self {
         Self {
-            content: Mutex::new(Arc::new(Cow::Borrowed(content))),
-            mode,
+            internal: Mutex::new(TmpFsFileInternal {
+                content: Arc::new(Cow::Borrowed(content)),
+                mode,
+            }),
         }
     }
 }
 
 impl File for TmpFsFile {
     fn mode(&self) -> FileMode {
-        self.mode
+        self.internal.lock().mode
+    }
+
+    fn set_mode(&self, mode: FileMode) {
+        self.internal.lock().mode = mode;
     }
 
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
-        let guard = self.content.lock();
-        let slice = guard.get(offset..).ok_or(Error::inval(()))?;
+        let guard = self.internal.lock();
+        let slice = guard.content.get(offset..).ok_or(Error::inval(()))?;
         let len = cmp::min(slice.len(), buf.len());
         buf[..len].copy_from_slice(&slice[..len]);
         Ok(len)
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.content.lock();
-        let bytes = Arc::make_mut(&mut guard);
+        let mut guard = self.internal.lock();
+        let bytes = Arc::make_mut(&mut guard.content);
         let bytes = bytes.to_mut();
 
         // Grow the file to be able to hold at least `offset+buf.len()` bytes.
@@ -373,7 +410,7 @@ impl File for TmpFsFile {
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
-        let content = self.content.lock().clone();
+        let content = self.internal.lock().content.clone();
         Ok(FileSnapshot(content))
     }
 }

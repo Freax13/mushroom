@@ -8,20 +8,24 @@ use crate::{
 };
 
 pub struct NullFile {
-    mode: FileMode,
+    mode: Mutex<FileMode>,
 }
 
 impl NullFile {
     pub fn new() -> Self {
         Self {
-            mode: FileMode::from_bits_truncate(0o666),
+            mode: Mutex::new(FileMode::from_bits_truncate(0o666)),
         }
     }
 }
 
 impl File for NullFile {
     fn mode(&self) -> FileMode {
-        self.mode
+        *self.mode.lock()
+    }
+
+    fn set_mode(&self, mode: FileMode) {
+        *self.mode.lock() = mode;
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
@@ -38,22 +42,32 @@ impl File for NullFile {
 }
 
 pub struct OutputFile {
+    internal: Mutex<OutputFileInternal>,
+}
+
+struct OutputFileInternal {
     mode: FileMode,
-    offset: Mutex<usize>,
+    offset: usize,
 }
 
 impl OutputFile {
     pub fn new() -> Self {
         Self {
-            mode: FileMode::OWNER_ALL,
-            offset: Mutex::new(0),
+            internal: Mutex::new(OutputFileInternal {
+                mode: FileMode::OWNER_ALL,
+                offset: 0,
+            }),
         }
     }
 }
 
 impl File for OutputFile {
     fn mode(&self) -> FileMode {
-        self.mode
+        self.internal.lock().mode
+    }
+
+    fn set_mode(&self, mode: FileMode) {
+        self.internal.lock().mode = mode;
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
@@ -61,15 +75,15 @@ impl File for OutputFile {
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.offset.lock();
+        let mut guard = self.internal.lock();
 
         // Make sure that writes always append.
-        if *guard != offset {
+        if guard.offset != offset {
             return Err(Error::inval(()));
         }
 
         supervisor::output(buf);
-        *guard += buf.len();
+        guard.offset += buf.len();
 
         Ok(buf.len())
     }

@@ -8,7 +8,7 @@ use spin::Mutex;
 
 use crate::error::{Error, Result};
 
-use super::syscall::args::{FdNum, Whence};
+use super::syscall::args::{FdNum, FileMode, Whence};
 
 pub mod file;
 pub mod pipe;
@@ -130,5 +130,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
             buf = &buf[len..];
         }
         Ok(())
+    }
+
+    fn set_mode(&self, mode: FileMode) -> Result<()> {
+        let _ = mode;
+        Err(Error::io(()))
     }
 }

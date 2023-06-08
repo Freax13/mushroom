@@ -4,7 +4,7 @@ use spin::Mutex;
 use crate::{
     error::{Error, Result},
     fs::node::File,
-    user::process::syscall::args::Whence,
+    user::process::syscall::args::{FileMode, Whence},
 };
 
 use super::OpenFileDescription;
@@ -43,6 +43,11 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         }
         Ok(*guard)
     }
+
+    fn set_mode(&self, mode: FileMode) -> Result<()> {
+        self.file.set_mode(mode);
+        Ok(())
+    }
 }
 
 /// A file description for files opened as write-only.
@@ -66,5 +71,10 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         let len = self.file.write(*guard, buf)?;
         *guard += len;
         Ok(len)
+    }
+
+    fn set_mode(&self, mode: FileMode) -> Result<()> {
+        self.file.set_mode(mode);
+        Ok(())
     }
 }
