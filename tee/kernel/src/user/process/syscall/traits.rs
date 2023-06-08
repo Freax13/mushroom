@@ -1,4 +1,5 @@
 use core::{
+    cell::RefCell,
     convert::Infallible,
     fmt::{self, Display},
     ops::FromResidual,
@@ -39,8 +40,13 @@ impl SyscallArg for u32 {
         Ok(u32::try_from(value)?)
     }
 
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        if let Ok(value) = u32::try_from(value).map_err(|_| Error::inval(())) {
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        _thread: &Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        if let Ok(value) = u32::try_from(value) {
             write!(f, "{value}")
         } else {
             write!(f, "{value} (out of bounds)")
@@ -54,7 +60,11 @@ pub trait Syscall0 {
 
     fn execute(thread: &mut Thread, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult;
 
-    fn display(f: &mut dyn fmt::Write) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        _thread: &Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "{}()", Self::NAME)
     }
 }
@@ -72,9 +82,14 @@ pub trait Syscall1 {
         arg0: Self::Arg0,
     ) -> SyscallResult;
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
-        <Self::Arg0>::display(f, arg0)?;
+        <Self::Arg0>::display(f, arg0, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -95,11 +110,17 @@ pub trait Syscall2 {
         arg1: Self::Arg1,
     ) -> SyscallResult;
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        arg1: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
-        <Self::Arg0>::display(f, arg0)?;
+        <Self::Arg0>::display(f, arg0, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG1_NAME)?;
-        <Self::Arg1>::display(f, arg1)?;
+        <Self::Arg1>::display(f, arg1, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -123,13 +144,20 @@ pub trait Syscall3 {
         arg2: Self::Arg2,
     ) -> SyscallResult;
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        arg1: u64,
+        arg2: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
-        <Self::Arg0>::display(f, arg0)?;
+        <Self::Arg0>::display(f, arg0, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG1_NAME)?;
-        <Self::Arg1>::display(f, arg1)?;
+        <Self::Arg1>::display(f, arg1, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG2_NAME)?;
-        <Self::Arg2>::display(f, arg2)?;
+        <Self::Arg2>::display(f, arg2, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -156,15 +184,23 @@ pub trait Syscall4 {
         arg3: Self::Arg3,
     ) -> SyscallResult;
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64, arg3: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        arg1: u64,
+        arg2: u64,
+        arg3: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
-        <Self::Arg0>::display(f, arg0)?;
+        <Self::Arg0>::display(f, arg0, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG1_NAME)?;
-        <Self::Arg1>::display(f, arg1)?;
+        <Self::Arg1>::display(f, arg1, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG2_NAME)?;
-        <Self::Arg2>::display(f, arg2)?;
+        <Self::Arg2>::display(f, arg2, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG3_NAME)?;
-        <Self::Arg3>::display(f, arg3)?;
+        <Self::Arg3>::display(f, arg3, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -194,6 +230,7 @@ pub trait Syscall5 {
         arg4: Self::Arg4,
     ) -> SyscallResult;
 
+    #[allow(clippy::too_many_arguments)]
     fn display(
         f: &mut dyn fmt::Write,
         arg0: u64,
@@ -201,17 +238,19 @@ pub trait Syscall5 {
         arg2: u64,
         arg3: u64,
         arg4: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
-        <Self::Arg0>::display(f, arg0)?;
+        <Self::Arg0>::display(f, arg0, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG1_NAME)?;
-        <Self::Arg1>::display(f, arg1)?;
+        <Self::Arg1>::display(f, arg1, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG2_NAME)?;
-        <Self::Arg2>::display(f, arg2)?;
+        <Self::Arg2>::display(f, arg2, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG3_NAME)?;
-        <Self::Arg3>::display(f, arg3)?;
+        <Self::Arg3>::display(f, arg3, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG4_NAME)?;
-        <Self::Arg4>::display(f, arg4)?;
+        <Self::Arg4>::display(f, arg4, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -245,6 +284,7 @@ pub trait Syscall6 {
         arg5: Self::Arg5,
     ) -> SyscallResult;
 
+    #[allow(clippy::too_many_arguments)]
     fn display(
         f: &mut dyn fmt::Write,
         arg0: u64,
@@ -253,19 +293,21 @@ pub trait Syscall6 {
         arg3: u64,
         arg4: u64,
         arg5: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
-        <Self::Arg0>::display(f, arg0)?;
+        <Self::Arg0>::display(f, arg0, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG1_NAME)?;
-        <Self::Arg1>::display(f, arg1)?;
+        <Self::Arg1>::display(f, arg1, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG2_NAME)?;
-        <Self::Arg2>::display(f, arg2)?;
+        <Self::Arg2>::display(f, arg2, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG3_NAME)?;
-        <Self::Arg3>::display(f, arg3)?;
+        <Self::Arg3>::display(f, arg3, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG4_NAME)?;
-        <Self::Arg4>::display(f, arg4)?;
+        <Self::Arg4>::display(f, arg4, thread, vm_activator)?;
         write!(f, ", {}=", Self::ARG5_NAME)?;
-        <Self::Arg5>::display(f, arg5)?;
+        <Self::Arg5>::display(f, arg5, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -288,8 +330,13 @@ where
         <T as Syscall0>::execute(thread, vm_activator)
     }
 
-    fn display(f: &mut dyn fmt::Write, _arg0: u64) -> fmt::Result {
-        <T as Syscall0>::display(f)
+    fn display(
+        f: &mut dyn fmt::Write,
+        _arg0: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        <T as Syscall0>::display(f, thread, vm_activator)
     }
 }
 
@@ -314,8 +361,14 @@ where
         <T as Syscall1>::execute(thread, vm_activator, arg0)
     }
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64, _arg1: u64) -> fmt::Result {
-        <T as Syscall1>::display(f, arg0)
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        _arg1: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        <T as Syscall1>::display(f, arg0, thread, vm_activator)
     }
 }
 
@@ -343,8 +396,15 @@ where
         <T as Syscall2>::execute(thread, vm_activator, arg0, arg1)
     }
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, _arg2: u64) -> fmt::Result {
-        <T as Syscall2>::display(f, arg0, arg1)
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        arg1: u64,
+        _arg2: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        <T as Syscall2>::display(f, arg0, arg1, thread, vm_activator)
     }
 }
 
@@ -375,8 +435,16 @@ where
         <T as Syscall3>::execute(thread, vm_activator, arg0, arg1, arg2)
     }
 
-    fn display(f: &mut dyn fmt::Write, arg0: u64, arg1: u64, arg2: u64, _arg3: u64) -> fmt::Result {
-        <T as Syscall3>::display(f, arg0, arg1, arg2)
+    fn display(
+        f: &mut dyn fmt::Write,
+        arg0: u64,
+        arg1: u64,
+        arg2: u64,
+        _arg3: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        <T as Syscall3>::display(f, arg0, arg1, arg2, thread, vm_activator)
     }
 }
 
@@ -417,8 +485,10 @@ where
         arg2: u64,
         arg3: u64,
         _arg4: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
-        <T as Syscall4>::display(f, arg0, arg1, arg2, arg3)
+        <T as Syscall4>::display(f, arg0, arg1, arg2, arg3, thread, vm_activator)
     }
 }
 
@@ -463,8 +533,10 @@ where
         arg3: u64,
         arg4: u64,
         _arg5: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
-        <T as Syscall5>::display(f, arg0, arg1, arg2, arg3, arg4)
+        <T as Syscall5>::display(f, arg0, arg1, arg2, arg3, arg4, thread, vm_activator)
     }
 }
 
@@ -482,6 +554,7 @@ struct SyscallHandler {
         arg4: u64,
         arg5: u64,
     ) -> SyscallResult,
+    #[allow(clippy::type_complexity)]
     display: fn(
         f: &mut dyn fmt::Write,
         arg0: u64,
@@ -490,6 +563,8 @@ struct SyscallHandler {
         arg3: u64,
         arg4: u64,
         arg5: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result,
 }
 
@@ -573,19 +648,23 @@ impl SyscallHandlers {
             arg3,
             arg4,
             arg5,
+            thread,
+            vm_activator: RefCell::new(vm_activator),
         };
 
-        trace!(
-            "core={} tid={} @ {formatted_syscall} = {res:?}",
-            PerCpu::get().idx,
-            thread.tid()
-        );
+        if !matches!(syscall_no, 0 | 1) && thread.tid() != 100 {
+            trace!(
+                "core={} tid={} @ {formatted_syscall} = {res:?}",
+                PerCpu::get().idx,
+                thread.tid()
+            );
+        }
 
         res
     }
 }
 
-struct FormattedSyscall {
+struct FormattedSyscall<'a> {
     handler: SyscallHandler,
     arg0: u64,
     arg1: u64,
@@ -593,12 +672,22 @@ struct FormattedSyscall {
     arg3: u64,
     arg4: u64,
     arg5: u64,
+    thread: &'a Thread,
+    vm_activator: RefCell<&'a mut VirtualMemoryActivator>,
 }
 
-impl Display for FormattedSyscall {
+impl Display for FormattedSyscall<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (self.handler.display)(
-            f, self.arg0, self.arg1, self.arg2, self.arg3, self.arg4, self.arg5,
+            f,
+            self.arg0,
+            self.arg1,
+            self.arg2,
+            self.arg3,
+            self.arg4,
+            self.arg5,
+            self.thread,
+            &mut self.vm_activator.borrow_mut(),
         )
     }
 }

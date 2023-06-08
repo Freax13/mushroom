@@ -1,5 +1,6 @@
 use core::{
     cmp,
+    ffi::{c_void, CStr},
     fmt::{self},
     num::NonZeroU32,
 };
@@ -37,8 +38,8 @@ use super::{
     },
     memory::VirtualMemoryActivator,
     thread::{
-        new_tid, schedule_thread, Sigset, Stack, StackFlags, Thread, UserspaceRegisters, Waiter,
-        THREADS,
+        new_tid, schedule_thread, Sigaction, Sigset, Stack, StackFlags, Thread, UserspaceRegisters,
+        Waiter, THREADS,
     },
     Process,
 };
@@ -130,7 +131,7 @@ fn read(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
-    buf: Pointer,
+    buf: Pointer<[u8]>,
     count: u64,
 ) -> SyscallResult {
     let fd = thread.fdtable().get(fd)?;
@@ -158,7 +159,7 @@ fn write(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
-    buf: Pointer,
+    buf: Pointer<[u8]>,
     count: u64,
 ) -> SyscallResult {
     let fd = thread.fdtable().get(fd)?;
@@ -182,7 +183,7 @@ fn write(
 fn open(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    pathname: Pointer,
+    pathname: Pointer<CStr>,
     flags: OpenFlags,
     mode: FileMode,
 ) -> SyscallResult {
@@ -227,7 +228,7 @@ fn close(thread: &mut Thread, fd: FdNum) -> SyscallResult {
 fn poll(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    fds: Pointer,
+    fds: Pointer<FdNum>,
     nfds: u64,
     timeout: u64,
 ) -> SyscallResult {
@@ -261,7 +262,7 @@ fn lseek(thread: &mut Thread, fd: FdNum, offset: u64, whence: Whence) -> Syscall
 fn mmap(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    addr: Pointer,
+    addr: Pointer<c_void>,
     length: u64,
     prot: ProtFlags,
     flags: MmapFlags,
@@ -304,7 +305,7 @@ fn mmap(
 fn mprotect(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    addr: Pointer,
+    addr: Pointer<c_void>,
     len: u64,
     prot: ProtFlags,
 ) -> SyscallResult {
@@ -329,8 +330,8 @@ fn rt_sigaction(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
     signum: u64,
-    act: Pointer,
-    oldact: Pointer,
+    act: Pointer<Sigaction>,
+    oldact: Pointer<Sigaction>,
     sigsetsize: u64,
 ) -> SyscallResult {
     let signum = usize::try_from(signum).unwrap();
@@ -363,17 +364,17 @@ impl Syscall3 for SysRtSigprocmask {
 
     type Arg0 = u64;
     const ARG0_NAME: &'static str = "how";
-    type Arg1 = Pointer;
+    type Arg1 = Pointer<Sigset>;
     const ARG1_NAME: &'static str = "set";
-    type Arg2 = Pointer;
+    type Arg2 = Pointer<Sigset>;
     const ARG2_NAME: &'static str = "oldset";
 
     fn execute(
         thread: &mut Thread,
         vm_activator: &mut VirtualMemoryActivator,
         how: u64,
-        set: Pointer,
-        oldset: Pointer,
+        set: Pointer<Sigset>,
+        oldset: Pointer<Sigset>,
     ) -> SyscallResult {
         if !oldset.is_null() {
             vm_activator.activate(thread.virtual_memory(), |vm| {
@@ -398,7 +399,14 @@ impl Syscall3 for SysRtSigprocmask {
         Ok(0)
     }
 
-    fn display(f: &mut dyn fmt::Write, how: u64, set: u64, oldset: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        how: u64,
+        set: u64,
+        oldset: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(
             f,
             "{}({}=",
@@ -408,12 +416,12 @@ impl Syscall3 for SysRtSigprocmask {
         if set == 0 {
             write!(f, "ignored")?;
         } else {
-            RtSigprocmaskHow::display(f, how)?;
+            RtSigprocmaskHow::display(f, how, thread, vm_activator)?;
         }
         write!(f, ", {}=", <Self as Syscall3>::ARG1_NAME)?;
-        Pointer::display(f, set)?;
+        Pointer::<Sigset>::display(f, set, thread, vm_activator)?;
         write!(f, ", {}=", <Self as Syscall3>::ARG2_NAME)?;
-        Pointer::display(f, oldset)?;
+        Pointer::<Sigset>::display(f, oldset, thread, vm_activator)?;
         write!(f, ")")
     }
 }
@@ -429,9 +437,9 @@ fn clone(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
     flags: CloneFlags,
-    stack: Pointer,
-    parent_tid: Pointer,
-    child_tid: Pointer,
+    stack: Pointer<c_void>,
+    parent_tid: Pointer<u32>,
+    child_tid: Pointer<u32>,
     tls: u64,
 ) -> SyscallResult {
     let new_tid = new_tid();
@@ -500,9 +508,9 @@ fn clone(
 fn execve(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    pathname: Pointer,
-    argv: Pointer,
-    envp: Pointer,
+    pathname: Pointer<CStr>,
+    argv: Pointer<[&'static CStr]>,
+    envp: Pointer<[&'static CStr]>,
 ) -> SyscallResult {
     let (pathname, args, envs) = vm_activator.activate(thread.virtual_memory(), |vm| {
         let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
@@ -576,9 +584,9 @@ fn exit(
 fn wait4(
     thread: &mut Thread,
     pid: u64,
-    wstatus: Pointer,
+    wstatus: Pointer<c_void>, // FIXME: use correct type
     options: WaitOptions,
-    rusage: Pointer,
+    rusage: Pointer<c_void>, // FIXME: use correct type
 ) -> SyscallResult {
     if !rusage.is_null() {
         todo!()
@@ -621,8 +629,8 @@ fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
 fn sigaltstack(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    ss: Pointer,
-    old_ss: Pointer,
+    ss: Pointer<Stack>,
+    old_ss: Pointer<Stack>,
 ) -> SyscallResult {
     if !old_ss.is_null() {
         let old_ss_value = thread.sigaltstack.unwrap_or_else(|| {
@@ -654,7 +662,7 @@ fn sigaltstack(
 }
 
 #[syscall(no = 158)]
-fn arch_prctl(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer) -> SyscallResult {
+fn arch_prctl(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer<c_void>) -> SyscallResult {
     match code {
         ArchPrctlCode::SetFs => {
             thread.registers.fs_base = addr.get().as_u64();
@@ -673,11 +681,11 @@ fn gettid(thread: &mut Thread) -> SyscallResult {
 fn futex(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    uaddr: Pointer,
+    uaddr: Pointer<c_void>,
     op: FutexOpWithFlags,
     val: u32,
     utime: u64,
-    uaddr2: Pointer,
+    uaddr2: Pointer<c_void>,
     val3: u64,
 ) -> SyscallResult {
     match op.op {
@@ -732,7 +740,7 @@ fn futex(
 }
 
 #[syscall(no = 218)]
-fn set_tid_address(thread: &mut Thread, tidptr: Pointer) -> SyscallResult {
+fn set_tid_address(thread: &mut Thread, tidptr: Pointer<u32>) -> SyscallResult {
     thread.clear_child_tid = tidptr.get().as_u64();
     Ok(u64::from(thread.tid()))
 }
@@ -751,7 +759,7 @@ fn exit_group(
 fn pipe2(
     thread: &mut Thread,
     vm_activator: &mut VirtualMemoryActivator,
-    pipefd: Pointer,
+    pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
     if flags != Pipe2Flags::CLOEXEC {
@@ -776,9 +784,9 @@ fn pipe2(
 fn copy_file_range(
     thread: &mut Thread,
     fd_in: FdNum,
-    off_in: Pointer,
+    off_in: Pointer<u64>,
     fd_out: FdNum,
-    off_out: Pointer,
+    off_out: Pointer<u64>,
     len: u64,
     flags: CopyFileRangeFlags,
 ) -> SyscallResult {

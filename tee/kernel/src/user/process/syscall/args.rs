@@ -1,14 +1,29 @@
-use core::fmt::{self, Display};
+use core::{
+    ffi::{c_void, CStr},
+    fmt::{self, Display},
+    marker::PhantomData,
+};
 
 use bytemuck::{Pod, Zeroable};
 use x86_64::VirtAddr;
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    user::process::{
+        memory::VirtualMemoryActivator,
+        thread::{Sigaction, Sigset, Stack, Thread},
+    },
+};
 
 pub trait SyscallArg: Display + Copy {
     fn parse(value: u64) -> Result<Self>;
 
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result;
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result;
 }
 
 macro_rules! bitflags {
@@ -36,7 +51,12 @@ macro_rules! bitflags {
                 Self::from_bits(value).ok_or(Error::inval(()))
             }
 
-            fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
+            fn display(
+                f: &mut dyn fmt::Write,
+                value: u64,
+                _thread: &Thread,
+                _vm_activator: &mut VirtualMemoryActivator,
+            ) -> fmt::Result {
                 let valid_bits = Self::from_bits_truncate(value);
                 let invalid_bits = value & !Self::all().bits();
 
@@ -80,7 +100,12 @@ macro_rules! enum_arg {
                 }
             }
 
-            fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
+            fn display(
+                f: &mut dyn fmt::Write,
+                value: u64,
+                _thread: &Thread,
+                _vm_activator: &mut VirtualMemoryActivator,
+            ) -> fmt::Result {
                 match Self::parse(value) {
                     Ok(value) => write!(f, "{value}"),
                     Err(_) => write!(f, "{value}"),
@@ -104,46 +129,128 @@ impl SyscallArg for Ignored {
         Ok(Self(()))
     }
 
-    fn display(f: &mut dyn fmt::Write, _value: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        _value: u64,
+        _thread: &Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "ignored")
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Pointer(u64);
+pub struct Pointer<T>
+where
+    T: ?Sized,
+{
+    value: u64,
+    _marker: PhantomData<T>,
+}
 
-impl Pointer {
+impl<T> Clone for Pointer<T>
+where
+    T: ?Sized,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Pointer<T> where T: ?Sized {}
+
+impl<T> Pointer<T>
+where
+    T: ?Sized,
+{
     pub fn is_null(&self) -> bool {
-        self.0 == 0
+        self.value == 0
     }
 
     pub fn get(self) -> VirtAddr {
-        VirtAddr::new(self.0)
+        VirtAddr::new(self.value)
     }
 }
 
-impl Display for Pointer {
+impl<T> Display for Pointer<T>
+where
+    T: ?Sized,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:#}", self.0)
+        write!(f, "{:#x}", self.value)
     }
 }
 
-impl SyscallArg for Pointer {
+impl<T> SyscallArg for Pointer<T>
+where
+    T: Pointee + ?Sized,
+{
     fn parse(value: u64) -> Result<Self> {
-        Ok(Self(value))
+        Ok(Self {
+            value,
+            _marker: PhantomData,
+        })
     }
 
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        write!(f, "{value:#x}")
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        T::display(f, VirtAddr::new(value), thread, vm_activator)
     }
 }
+
+pub trait Pointee {
+    fn display(
+        f: &mut dyn fmt::Write,
+        addr: VirtAddr,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        let _ = thread;
+        let _ = vm_activator;
+        write!(f, "{:#x}", addr.as_u64())
+    }
+}
+
+impl Pointee for CStr {
+    fn display(
+        f: &mut dyn fmt::Write,
+        addr: VirtAddr,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        let res = vm_activator.activate(thread.virtual_memory(), |vm| vm.read_cstring(addr, 128));
+        match res {
+            Ok(value) => write!(f, "{value:?}"),
+            Err(_) => write!(f, "{:#x} (invalid ptr)", addr.as_u64()),
+        }
+    }
+}
+
+impl Pointee for [&'static CStr] {}
+impl Pointee for [FdNum; 2] {}
+impl Pointee for [u8] {}
+impl Pointee for c_void {}
+impl Pointee for FdNum {}
+impl Pointee for Sigaction {}
+impl Pointee for Sigset {}
+impl Pointee for Stack {}
+impl Pointee for u32 {}
+impl Pointee for u64 {}
 
 impl SyscallArg for u64 {
     fn parse(value: u64) -> Result<Self> {
         Ok(value)
     }
 
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        _thread: &Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         write!(f, "{value}")
     }
 }
@@ -153,7 +260,8 @@ bitflags! {
         const WRONLY = 1 << 0;
         const RDWR = 1 << 1;
         const CREAT = 1 << 6;
-        const EXCL = 1 << 9;
+        const EXCL = 1 << 7;
+        const TRUNC = 1 << 9;
         const LARGEFILE = 1 << 15;
         const SYNC = 1 << 19;
     }
@@ -212,7 +320,7 @@ pub struct Pollfd {
     revents: u16,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FdNum(i32);
 
 impl FdNum {
@@ -239,7 +347,12 @@ impl SyscallArg for FdNum {
         }
     }
 
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        _thread: &Thread,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
         match Self::parse(value) {
             Ok(fd) => write!(f, "{fd}"),
             Err(_) => {
@@ -349,10 +462,15 @@ impl SyscallArg for FutexOpWithFlags {
         Ok(Self { op, flags })
     }
 
-    fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        FutexOp::display(f, value & 0x7f)?;
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        thread: &Thread,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        FutexOp::display(f, value & 0x7f, thread, vm_activator)?;
         write!(f, " | ")?;
-        FutexFlags::display(f, value & !0x7f)
+        FutexFlags::display(f, value & !0x7f, thread, vm_activator)
     }
 }
 
