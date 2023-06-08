@@ -24,7 +24,7 @@ pub mod path;
 pub use path::{FileName, Path, PathSegment};
 
 pub fn init() -> Result<()> {
-    let bin = ROOT_NODE.mkdir(FileName::new(b"bin").unwrap(), false)?;
+    let bin = ROOT_NODE.create_dir(FileName::new(b"bin").unwrap(), false)?;
     let bin =
         <dyn Any>::downcast_ref::<TmpFsDirectory>(&*bin as &dyn Any).expect("/bin/ is not a tmpfs");
     bin.mount(
@@ -32,7 +32,7 @@ pub fn init() -> Result<()> {
         TmpFsFile::new(FileMode::from_bits_truncate(0o755), &INIT),
     );
 
-    let dev = ROOT_NODE.mkdir(FileName::new(b"dev").unwrap(), false)?;
+    let dev = ROOT_NODE.create_dir(FileName::new(b"dev").unwrap(), false)?;
     let dev =
         <dyn Any>::downcast_ref::<TmpFsDirectory>(&*dev as &dyn Any).expect("/dev/ is not a tmpfs");
     dev.mount(

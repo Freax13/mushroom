@@ -80,7 +80,7 @@ pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
         let mut thread = Thread::empty(self_weak, new_tid());
 
         // Load the init process.
-        let path = Path::new(b"/bin/init");
+        let path = Path::new(b"/bin/init")?;
         thread.execve(
             &path,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],

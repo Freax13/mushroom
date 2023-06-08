@@ -25,7 +25,7 @@ use x86_64::{
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_node, Node, ROOT_NODE},
+        node::{lookup_node, NonLinkNode, ROOT_NODE},
         Path,
     },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
@@ -248,8 +248,8 @@ impl Thread {
         envp: &[impl AsRef<CStr>],
         vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
-        let node = lookup_node(Node::Directory(ROOT_NODE.clone()), path)?;
-        let Node::File(file) = node else { return Err(Error::is_dir(())) };
+        let node = lookup_node(ROOT_NODE.clone(), path)?;
+        let NonLinkNode::File(file) = node else { return Err(Error::is_dir(())) };
         if !file.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }

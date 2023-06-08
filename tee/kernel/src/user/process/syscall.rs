@@ -13,7 +13,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::Error,
     fs::{
-        node::{create_file, lookup_node, Node, ROOT_NODE},
+        node::{create_file, lookup_node, Node, NonLinkNode, ROOT_NODE},
         Path,
     },
     user::process::memory::MemoryPermissions,
@@ -190,7 +190,7 @@ fn open(
     let filename = vm_activator.activate(thread.virtual_memory(), |vm| {
         vm.read_cstring(pathname.get(), 4096)
     })?;
-    let filename = Path::new(filename.as_bytes());
+    let filename = Path::new(filename.as_bytes())?;
 
     if flags.contains(OpenFlags::WRONLY) {
         if flags.contains(OpenFlags::CREAT) {
@@ -205,11 +205,11 @@ fn open(
     } else if flags.contains(OpenFlags::RDWR) {
         todo!()
     } else {
-        let node = lookup_node(Node::Directory(ROOT_NODE.clone()), &filename)?;
+        let node = lookup_node(ROOT_NODE.clone(), &filename)?;
 
         let file = match node {
-            Node::File(file) => file,
-            Node::Directory(_) => return Err(Error::is_dir(())),
+            NonLinkNode::File(file) => file,
+            NonLinkNode::Directory(_) => return Err(Error::is_dir(())),
         };
         let fd = thread
             .fdtable()
@@ -542,7 +542,7 @@ fn execve(
         Result::<_, Error>::Ok((pathname, args, envs))
     })?;
 
-    let path = Path::new(pathname.as_bytes());
+    let path = Path::new(pathname.as_bytes())?;
     thread.execve(&path, &args, &envs, vm_activator)?;
 
     Ok(0)

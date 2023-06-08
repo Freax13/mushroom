@@ -22,6 +22,45 @@ pub static ROOT_NODE: Lazy<Arc<TmpFsDirectory>> = Lazy::new(|| Arc::new(TmpFsDir
 pub enum Node {
     File(Arc<dyn File>),
     Directory(Arc<dyn Directory>),
+    Link(Link),
+}
+
+impl Node {
+    fn resolve_link(self, start_dir: Arc<dyn Directory>) -> Result<NonLinkNode> {
+        self.resolve_link_recursive(start_dir, &mut 16)
+    }
+
+    fn resolve_link_recursive(
+        self,
+        start_dir: Arc<dyn Directory>,
+        recursion: &mut u8,
+    ) -> Result<NonLinkNode> {
+        match self {
+            Node::File(file) => Ok(NonLinkNode::File(file)),
+            Node::Directory(dir) => Ok(NonLinkNode::Directory(dir)),
+            Node::Link(link) => {
+                *recursion = recursion.checked_sub(1).ok_or_else(|| Error::r#loop(()))?;
+                lookup_node_recursive(start_dir, &link.target, recursion)
+            }
+        }
+    }
+}
+
+pub enum NonLinkNode {
+    File(Arc<dyn File>),
+    Directory(Arc<dyn Directory>),
+}
+
+impl TryFrom<NonLinkNode> for Arc<dyn Directory> {
+    type Error = Error;
+
+    #[track_caller]
+    fn try_from(value: NonLinkNode) -> Result<Self> {
+        match value {
+            NonLinkNode::File(_) => Err(Error::not_dir(())),
+            NonLinkNode::Directory(dir) => Ok(dir),
+        }
+    }
 }
 
 pub trait File: Send + Sync + 'static {
@@ -61,67 +100,110 @@ impl Deref for FileSnapshot {
 
 pub trait Directory: Any + Send + Sync {
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
-    fn mkdir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>>;
-    fn create(
+    fn create_file(
         &self,
         file_name: FileName,
         mode: FileMode,
         create_new: bool,
     ) -> Result<Arc<dyn File>>;
+    fn create_dir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>>;
+    fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
 }
 
-pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
+#[derive(Clone)]
+pub struct Link {
+    target: Path,
+}
+
+pub fn lookup_node(start_node: Arc<dyn Directory>, path: &Path) -> Result<NonLinkNode> {
+    lookup_node_recursive(start_node, path, &mut 16)
+}
+
+fn lookup_node_recursive(
+    mut start_node: Arc<dyn Directory>,
+    path: &Path,
+    recursion: &mut u8,
+) -> Result<NonLinkNode> {
     if path.is_absolute() {
-        start_node = Node::Directory(ROOT_NODE.clone());
+        start_node = ROOT_NODE.clone();
     }
     path.segments()
         .iter()
-        .try_fold(start_node, |node, segment| {
-            let dir = match node {
-                Node::File(_) => return Err(Error::not_dir(())),
-                Node::Directory(dir) => dir,
-            };
+        .try_fold(NonLinkNode::Directory(start_node), |node, segment| {
+            let dir = <Arc<dyn Directory>>::try_from(node)?;
 
             match segment {
-                PathSegment::Empty | PathSegment::Dot => Ok(Node::Directory(dir)),
+                PathSegment::Empty | PathSegment::Dot => Ok(NonLinkNode::Directory(dir)),
                 PathSegment::DotDot => todo!(),
-                PathSegment::FileName(file_name) => dir.get_node(file_name),
+                PathSegment::FileName(file_name) => {
+                    *recursion = recursion.checked_sub(1).ok_or_else(|| Error::r#loop(()))?;
+                    let node = dir.get_node(file_name)?;
+                    node.resolve_link_recursive(dir, recursion)
+                }
             }
         })
 }
 
-pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<dyn File>> {
-    let mut start_node = match start_node {
-        Node::File(_) => return Err(Error::not_dir(())),
-        Node::Directory(dir) => dir,
+fn find_parent(start_node: Node, path: &Path) -> Result<(Arc<dyn Directory>, &PathSegment)> {
+    let start_node = if path.is_absolute() {
+        ROOT_NODE.clone()
+    } else {
+        let start_node = start_node.resolve_link_recursive(ROOT_NODE.clone(), &mut 16)?;
+        <Arc<dyn Directory>>::try_from(start_node)?
     };
-    if path.is_absolute() {
-        start_node = ROOT_NODE.clone();
-    }
 
-    let (last, segments) = path.segments().split_last().unwrap();
+    let (last, segments) = path
+        .segments()
+        .split_last()
+        .ok_or_else(|| Error::inval(()))?;
     let dir = segments
         .iter()
         .try_fold(start_node, |dir, segment| match segment {
             PathSegment::Empty | PathSegment::Dot => Ok(dir),
             PathSegment::DotDot => todo!(),
             PathSegment::FileName(file_name) => {
-                let dir = dir.get_node(file_name)?;
-                match dir {
-                    Node::File(_) => Err(Error::not_dir(())),
-                    Node::Directory(dir) => Ok(dir),
-                }
+                let node = dir.get_node(file_name)?;
+                let node = node.resolve_link(dir.clone())?;
+                <Arc<dyn Directory>>::try_from(node)
             }
         })?;
+    Ok((dir, last))
+}
 
+pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<dyn File>> {
+    let (dir, last) = find_parent(start_node, path)?;
     let file_name = match last {
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let file = dir.create(file_name.clone(), mode, false)?;
+    let file = dir.create_file(file_name.clone(), mode, false)?;
     Ok(file)
+}
+
+pub fn create_directory(start_node: Node, path: &Path) -> Result<Arc<dyn Directory>> {
+    let (dir, last) = find_parent(start_node, path)?;
+    let file_name = match last {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(file_name) => file_name,
+    };
+    let file = dir.create_dir(file_name.clone(), false)?;
+    Ok(file)
+}
+
+pub fn create_link(start_node: Node, path: &Path, target: Path) -> Result<()> {
+    let (dir, last) = find_parent(start_node, path)?;
+    let file_name = match last {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(file_name) => file_name,
+    };
+    dir.create_link(file_name.clone(), target, true)?;
+    Ok(())
 }
 
 pub struct TmpFsDirectory {
@@ -151,9 +233,9 @@ impl Directory for TmpFsDirectory {
             .ok_or(Error::no_ent(()))
     }
 
-    fn mkdir(&self, path_segment: FileName, create_new: bool) -> Result<Arc<dyn Directory>> {
+    fn create_dir(&self, file_name: FileName, create_new: bool) -> Result<Arc<dyn Directory>> {
         let mut guard = self.items.lock();
-        let entry = guard.entry(path_segment);
+        let entry = guard.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
                 let dir = Arc::new(TmpFsDirectory::new());
@@ -165,14 +247,14 @@ impl Directory for TmpFsDirectory {
                     return Err(Error::exist(()));
                 }
                 match entry.get() {
-                    Node::File(_) => Err(Error::exist(())),
                     Node::Directory(dir) => Ok(dir.clone()),
+                    Node::File(_) | Node::Link(_) => Err(Error::exist(())),
                 }
             }
         }
     }
 
-    fn create(
+    fn create_file(
         &self,
         path_segment: FileName,
         mode: FileMode,
@@ -192,8 +274,27 @@ impl Directory for TmpFsDirectory {
                 }
                 match entry.get_mut() {
                     Node::File(f) => Ok(f.clone()),
+                    Node::Link(_) => Err(Error::exist(())),
                     Node::Directory(_) => Err(Error::exist(())),
                 }
+            }
+        }
+    }
+
+    fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()> {
+        let mut guard = self.items.lock();
+        let entry = guard.entry(file_name);
+        match entry {
+            Entry::Vacant(entry) => {
+                entry.insert(Node::Link(Link { target }));
+                Ok(())
+            }
+            Entry::Occupied(mut entry) => {
+                if create_new {
+                    return Err(Error::exist(()));
+                }
+                entry.insert(Node::Link(Link { target }));
+                Ok(())
             }
         }
     }
