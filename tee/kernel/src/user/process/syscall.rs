@@ -13,7 +13,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::Error,
     fs::{
-        node::{create_file, lookup_node, Node, NonLinkNode, ROOT_NODE},
+        node::{create_directory, create_file, lookup_node, Node, NonLinkNode, ROOT_NODE},
         Path,
     },
     user::process::memory::MemoryPermissions,
@@ -34,7 +34,7 @@ use self::{
 use super::{
     fd::{
         file::{ReadonlyFileFileDescription, WriteonlyFileFileDescription},
-        pipe, FileDescriptorTable,
+        pipe,
     },
     memory::VirtualMemoryActivator,
     thread::{
@@ -114,6 +114,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExit);
     handlers.register(SysWait4);
     handlers.register(SysFcntl);
+    handlers.register(SysMkdir);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysGettid);
@@ -625,6 +626,23 @@ fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
             Ok(0)
         }
     }
+}
+
+#[syscall(no = 83)]
+fn mkdir(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    pathname: Pointer<CStr>,
+    mode: FileMode,
+) -> SyscallResult {
+    let pathname = vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm.read_cstring(pathname.get(), 0x1000)
+    })?;
+
+    let path = Path::new(pathname.as_bytes())?;
+    create_directory(Node::Directory(ROOT_NODE.clone()), &path)?;
+
+    Ok(0)
 }
 
 #[syscall(no = 131)]
