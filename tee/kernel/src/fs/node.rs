@@ -9,7 +9,7 @@ use spin::{Lazy, Mutex};
 
 use crate::{
     error::{Error, Result},
-    user::process::syscall::args::FileMode,
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat},
 };
 
 use super::{path::FileName, Path, PathSegment};
@@ -45,6 +45,14 @@ impl Node {
             }
         }
     }
+
+    pub fn stat(&self) -> Stat {
+        match self {
+            Node::File(file) => file.stat(),
+            Node::Directory(dir) => dir.stat(),
+            Node::Link(link) => link.stat(),
+        }
+    }
 }
 
 pub enum NonLinkNode {
@@ -53,6 +61,13 @@ pub enum NonLinkNode {
 }
 
 impl NonLinkNode {
+    pub fn stat(&self) -> Stat {
+        match self {
+            NonLinkNode::File(file) => file.stat(),
+            NonLinkNode::Directory(dir) => dir.stat(),
+        }
+    }
+
     pub fn set_mode(&self, mode: FileMode) {
         match self {
             NonLinkNode::File(file) => file.set_mode(mode),
@@ -74,11 +89,15 @@ impl TryFrom<NonLinkNode> for Arc<dyn Directory> {
 }
 
 pub trait File: Send + Sync + 'static {
-    fn mode(&self) -> FileMode;
+    fn stat(&self) -> Stat;
     fn set_mode(&self, mode: FileMode);
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
     fn read_snapshot(&self) -> Result<FileSnapshot>;
+
+    fn mode(&self) -> FileMode {
+        self.stat().mode.mode()
+    }
 }
 
 #[derive(Clone)]
@@ -110,6 +129,7 @@ impl Deref for FileSnapshot {
 }
 
 pub trait Directory: Any + Send + Sync {
+    fn stat(&self) -> Stat;
     fn set_mode(&self, mode: FileMode);
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
     fn create_file(
@@ -120,11 +140,21 @@ pub trait Directory: Any + Send + Sync {
     ) -> Result<Arc<dyn File>>;
     fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>>;
     fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
+
+    fn mode(&self) -> FileMode {
+        self.stat().mode.mode()
+    }
 }
 
 #[derive(Clone)]
 pub struct Link {
     target: Path,
+}
+
+impl Link {
+    fn stat(&self) -> Stat {
+        todo!()
+    }
 }
 
 /// Find a node.
@@ -283,6 +313,32 @@ impl TmpFsDirectory {
 }
 
 impl Directory for TmpFsDirectory {
+    fn stat(&self) -> Stat {
+        let guard = self.internal.lock();
+        let mode = FileTypeAndMode::new(FileType::Dir, guard.mode);
+        // FIXME: Fill in more values.
+        Stat {
+            dev: 0,
+            ino: 0,
+            nlink: 1,
+            mode,
+            uid: 0,
+            gid: 0,
+            _pad0: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: 0,
+            atime_nsec: 0,
+            mtime: 0,
+            mtime_nsec: 0,
+            ctime: 0,
+            ctime_nsec: 0,
+            _unused: [0; 3],
+        }
+    }
+
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
@@ -376,8 +432,30 @@ impl TmpFsFile {
 }
 
 impl File for TmpFsFile {
-    fn mode(&self) -> FileMode {
-        self.internal.lock().mode
+    fn stat(&self) -> Stat {
+        let guard = self.internal.lock();
+        let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        // FIXME: Fill in more values.
+        Stat {
+            dev: 0,
+            ino: 0,
+            nlink: 1,
+            mode,
+            uid: 0,
+            gid: 0,
+            _pad0: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: 0,
+            atime_nsec: 0,
+            mtime: 0,
+            mtime_nsec: 0,
+            ctime: 0,
+            ctime_nsec: 0,
+            _unused: [0; 3],
+        }
     }
 
     fn set_mode(&self, mode: FileMode) {

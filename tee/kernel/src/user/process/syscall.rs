@@ -243,23 +243,8 @@ fn stat(
     vm_activator.activate(thread.virtual_memory(), |vm| {
         let filename = vm.read_path(filename.get())?;
 
-        let _node = lookup_node(ROOT_NODE.clone(), &filename)?;
-
-        // FIXME: Fill in the values.
-        let stat = Stat {
-            dev: 0,
-            ino: 0,
-            mode: 0,
-            nlink: 0,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
-            _padding: 0,
-            size: 0,
-            atime: 0,
-            mtime: 0,
-            ctime: 0,
-        };
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
+        let stat = node.stat();
 
         vm.write(statbuf.get(), bytes_of(&stat))
     })?;
@@ -277,24 +262,8 @@ fn lstat(
     vm_activator.activate(thread.virtual_memory(), |vm| {
         let filename = vm.read_path(filename.get())?;
 
-        // FIXME: Don't resolve links.
-        let _node = lookup_node(ROOT_NODE.clone(), &filename)?;
-
-        // FIXME: Fill in the values.
-        let stat = Stat {
-            dev: 0,
-            ino: 0,
-            mode: 0,
-            nlink: 0,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
-            _padding: 0,
-            size: 0,
-            atime: 0,
-            mtime: 0,
-            ctime: 0,
-        };
+        let node = lookup_node(ROOT_NODE.clone(), &filename)?;
+        let stat = node.stat();
 
         vm.write(statbuf.get(), bytes_of(&stat))
     })?;

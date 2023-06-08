@@ -4,7 +4,7 @@ use super::{File, FileSnapshot};
 use crate::{
     error::{Error, Result},
     supervisor,
-    user::process::syscall::args::FileMode,
+    user::process::syscall::args::{FileMode, Stat},
 };
 
 pub struct NullFile {
@@ -20,8 +20,8 @@ impl NullFile {
 }
 
 impl File for NullFile {
-    fn mode(&self) -> FileMode {
-        *self.mode.lock()
+    fn stat(&self) -> Stat {
+        todo!()
     }
 
     fn set_mode(&self, mode: FileMode) {
@@ -62,8 +62,8 @@ impl OutputFile {
 }
 
 impl File for OutputFile {
-    fn mode(&self) -> FileMode {
-        self.internal.lock().mode
+    fn stat(&self) -> Stat {
+        todo!()
     }
 
     fn set_mode(&self, mode: FileMode) {

@@ -4,7 +4,8 @@ use core::{
     marker::PhantomData,
 };
 
-use bytemuck::{Pod, Zeroable};
+use bit_field::BitField;
+use bytemuck::{checked, CheckedBitPattern, NoUninit, Pod, Zeroable};
 use x86_64::VirtAddr;
 
 use crate::{
@@ -495,21 +496,67 @@ bitflags! {
     pub struct CopyFileRangeFlags {}
 }
 
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Debug, Clone, Copy, Zeroable, NoUninit)]
 #[repr(C)]
 pub struct Stat {
-    pub dev: u16,
-    pub ino: u16,
-    pub mode: u16,
-    pub nlink: u16,
-    pub uid: u16,
-    pub gid: u16,
-    pub rdev: u16,
-    pub _padding: u16,
-    pub size: u32,
-    pub atime: u32,
-    pub mtime: u32,
-    pub ctime: u32,
+    pub dev: u64,
+    pub ino: u64,
+    pub nlink: u64,
+    pub mode: FileTypeAndMode,
+    pub uid: u32,
+    pub gid: u32,
+    pub _pad0: u32,
+    pub rdev: u64,
+    pub size: i64,
+    pub blksize: i64,
+    pub blocks: i64,
+    pub atime: u64,
+    pub atime_nsec: u64,
+    pub mtime: u64,
+    pub mtime_nsec: u64,
+    pub ctime: u64,
+    pub ctime_nsec: u64,
+    pub _unused: [i64; 3],
+}
+
+#[derive(Clone, Copy, Zeroable, NoUninit)]
+#[repr(transparent)]
+pub struct FileTypeAndMode(u32);
+
+impl fmt::Debug for FileTypeAndMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("FileTypeAndMode")
+            .field(&self.ty())
+            .field(&self.mode())
+            .field(&format_args!("{:#08o}", self.0))
+            .finish()
+    }
+}
+
+impl FileTypeAndMode {
+    pub fn new(ty: FileType, mode: FileMode) -> Self {
+        Self((ty as u32) << 12 | mode.bits() as u32)
+    }
+
+    pub fn ty(&self) -> FileType {
+        checked::cast(self.0.get_bits(12..))
+    }
+
+    pub fn mode(&self) -> FileMode {
+        FileMode::from_bits_truncate(u64::from(self.0))
+    }
+}
+
+#[derive(Debug, Clone, Copy, CheckedBitPattern)]
+#[repr(u32)]
+pub enum FileType {
+    Fifo = 0o01,
+    Char = 0o02,
+    Dir = 0o04,
+    Block = 0o06,
+    File = 0o10,
+    Link = 0o12,
+    Socket = 0o14,
 }
 
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
