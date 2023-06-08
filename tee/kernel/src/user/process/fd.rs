@@ -65,6 +65,11 @@ impl FileDescriptorTable {
         FdNum::new(fd_num)
     }
 
+    pub fn replace(&self, fd_num: FdNum, fd: impl Into<FileDescriptor>) {
+        let mut guard = self.table.lock();
+        guard.insert(fd_num.get(), fd.into());
+    }
+
     pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
         self.table
             .lock()

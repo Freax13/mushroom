@@ -108,6 +108,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysClone);
     handlers.register(SysExecve);
@@ -425,6 +426,18 @@ impl Syscall3 for SysRtSigprocmask {
         Pointer::<Sigset>::display(f, oldset, thread, vm_activator)?;
         write!(f, ")")
     }
+}
+
+#[syscall(no = 33)]
+fn dup2(thread: &mut Thread, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
+    let fdtable = thread.fdtable();
+    let fd = fdtable.get(oldfd)?;
+
+    if oldfd != newfd {
+        fdtable.replace(newfd, fd);
+    }
+
+    Ok(newfd.get() as u64)
 }
 
 #[syscall(no = 39)]
