@@ -379,6 +379,7 @@ enum_arg! {
 enum_arg! {
     pub enum FcntlCmd {
         SetFd = 2,
+        GetFl = 3,
     }
 }
 

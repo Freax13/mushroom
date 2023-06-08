@@ -765,6 +765,10 @@ fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
             // FIXME: implement this
             Ok(0)
         }
+        FcntlCmd::GetFl => {
+            // FIXME: implement this
+            Ok(0)
+        }
     }
 }
 
