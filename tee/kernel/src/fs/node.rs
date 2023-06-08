@@ -206,12 +206,14 @@ fn lookup_and_resolve_node_recursive(
     node.resolve_link_recursive(start_dir, recursion)
 }
 
-fn find_parent(start_node: Node, path: &Path) -> Result<(Arc<dyn Directory>, &PathSegment)> {
-    let start_node = if path.is_absolute() {
+fn find_parent(
+    start_dir: Arc<dyn Directory>,
+    path: &Path,
+) -> Result<(Arc<dyn Directory>, &PathSegment)> {
+    let start_dir = if path.is_absolute() {
         ROOT_NODE.clone()
     } else {
-        let start_node = start_node.resolve_link_recursive(ROOT_NODE.clone(), &mut 16)?;
-        <Arc<dyn Directory>>::try_from(start_node)?
+        start_dir
     };
 
     let (last, segments) = path
@@ -220,7 +222,7 @@ fn find_parent(start_node: Node, path: &Path) -> Result<(Arc<dyn Directory>, &Pa
         .ok_or_else(|| Error::inval(()))?;
     let dir = segments
         .iter()
-        .try_fold(start_node, |dir, segment| match segment {
+        .try_fold(start_dir, |dir, segment| match segment {
             PathSegment::Empty | PathSegment::Dot => Ok(dir),
             PathSegment::DotDot => todo!(),
             PathSegment::FileName(file_name) => {
@@ -232,8 +234,12 @@ fn find_parent(start_node: Node, path: &Path) -> Result<(Arc<dyn Directory>, &Pa
     Ok((dir, last))
 }
 
-pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<dyn File>> {
-    let (dir, last) = find_parent(start_node, path)?;
+pub fn create_file(
+    start_dir: Arc<dyn Directory>,
+    path: &Path,
+    mode: FileMode,
+) -> Result<Arc<dyn File>> {
+    let (dir, last) = find_parent(start_dir, path)?;
     let file_name = match last {
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
@@ -245,11 +251,11 @@ pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<
 }
 
 pub fn create_directory(
-    start_node: Node,
+    start_dir: Arc<dyn Directory>,
     path: &Path,
     mode: FileMode,
 ) -> Result<Arc<dyn Directory>> {
-    let (dir, last) = find_parent(start_node, path)?;
+    let (dir, last) = find_parent(start_dir, path)?;
     let file_name = match last {
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
@@ -260,8 +266,8 @@ pub fn create_directory(
     Ok(file)
 }
 
-pub fn create_link(start_node: Node, path: &Path, target: Path) -> Result<()> {
-    let (dir, last) = find_parent(start_node, path)?;
+pub fn create_link(start_dir: Arc<dyn Directory>, path: &Path, target: Path) -> Result<()> {
+    let (dir, last) = find_parent(start_dir, path)?;
     let file_name = match last {
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),

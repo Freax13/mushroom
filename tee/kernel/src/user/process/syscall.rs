@@ -204,7 +204,7 @@ fn open(
 
     if flags.contains(OpenFlags::WRONLY) {
         if flags.contains(OpenFlags::CREAT) {
-            let file = create_file(Node::Directory(ROOT_NODE.clone()), &filename, mode)?;
+            let file = create_file(ROOT_NODE.clone(), &filename, mode)?;
             let fd = thread
                 .fdtable()
                 .insert(WriteonlyFileFileDescription::new(file));
@@ -752,7 +752,7 @@ fn mkdir(
     let pathname =
         vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
 
-    create_directory(Node::Directory(ROOT_NODE.clone()), &pathname, mode)?;
+    create_directory(ROOT_NODE.clone(), &pathname, mode)?;
 
     Ok(0)
 }
@@ -770,7 +770,7 @@ fn symlink(
         Result::<_, Error>::Ok((oldname, newname))
     })?;
 
-    create_link(Node::Directory(ROOT_NODE.clone()), &newname, oldname)?;
+    create_link(ROOT_NODE.clone(), &newname, oldname)?;
 
     Ok(0)
 }
