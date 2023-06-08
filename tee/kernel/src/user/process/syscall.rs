@@ -131,6 +131,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFutex);
     handlers.register(SysSetTidAddress);
     handlers.register(SysExitGroup);
+    handlers.register(SysFutimesat);
     handlers.register(SysPipe2);
     handlers.register(SysCopyFileRange);
 
@@ -951,6 +952,16 @@ fn exit_group(
 ) -> SyscallResult {
     let status = thread.process().exit(status as u8);
     exit(thread, vm_activator, u64::from(status))
+}
+
+#[syscall(no = 261)]
+fn futimesat(
+    dirfd: FdNum,
+    pathname: Pointer<CStr>,
+    times: Pointer<c_void>, // FIXME: use correct type
+) -> SyscallResult {
+    // FIXME: Implement this.
+    Ok(0)
 }
 
 #[syscall(no = 293)]
