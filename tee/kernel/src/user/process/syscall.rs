@@ -15,7 +15,8 @@ use crate::{
     error::{Error, Result},
     fs::node::{
         create_directory, create_file, create_link, hard_link, lookup_and_resolve_node,
-        lookup_node, read_link, set_mode, Directory, Node, NonLinkNode, ROOT_NODE,
+        lookup_node, read_link, set_mode, unlink_dir, unlink_file, Directory, Node, NonLinkNode,
+        ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -24,7 +25,8 @@ use self::{
     args::{
         ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
         FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags,
-        Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, WaitOptions, Whence,
+        Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions, WaitOptions,
+        Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -136,6 +138,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysOpenat);
     handlers.register(SysExitGroup);
     handlers.register(SysFutimesat);
+    handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
     handlers.register(SysPipe2);
     handlers.register(SysCopyFileRange);
@@ -1064,6 +1067,36 @@ fn futimesat(
     times: Pointer<c_void>, // FIXME: use correct type
 ) -> SyscallResult {
     // FIXME: Implement this.
+    Ok(0)
+}
+
+#[syscall(no = 263)]
+fn unlinkat(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    dfd: FdNum,
+    pathname: Pointer<CStr>,
+    flags: UnlinkOptions,
+) -> SyscallResult {
+    let pathname =
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
+
+    let fdtable = thread.fdtable();
+
+    let start_dir = if dfd == FdNum::CWD {
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
+        <Arc<dyn Directory>>::try_from(node)?
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir()?
+    };
+
+    if flags.contains(UnlinkOptions::REMOVEDIR) {
+        unlink_dir(start_dir, &pathname)?;
+    } else {
+        unlink_file(start_dir, &pathname)?;
+    }
+
     Ok(0)
 }
 

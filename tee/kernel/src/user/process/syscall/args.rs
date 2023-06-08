@@ -578,6 +578,12 @@ pub struct LinuxDirent64 {
 }
 
 bitflags! {
+    pub struct UnlinkOptions {
+        const REMOVEDIR = 0x200;
+    }
+}
+
+bitflags! {
     pub struct LinkOptions {
         const SYMLINK_FOLLOW = 0x400;
         const EMPTY_PATH = 0x1000;

@@ -152,6 +152,8 @@ pub trait Directory: Any + Send + Sync {
     fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
     fn hard_link(&self, file_name: &FileName, node: Node) -> Result<()>;
     fn list_entries(&self) -> Vec<DirEntry>;
+    fn delete_non_dir(&self, file_name: FileName) -> Result<()>;
+    fn delete_dir(&self, file_name: FileName) -> Result<()>;
 
     fn mode(&self) -> FileMode {
         self.stat().mode.mode()
@@ -339,6 +341,26 @@ pub fn set_mode(start_dir: Arc<dyn Directory>, path: &Path, mode: FileMode) -> R
     Ok(())
 }
 
+pub fn unlink_file(start_dir: Arc<dyn Directory>, path: &Path) -> Result<()> {
+    let (parent, segment) = find_parent(start_dir, path)?;
+    match segment {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(filename) => parent.delete_non_dir(filename.clone()),
+    }
+}
+
+pub fn unlink_dir(start_dir: Arc<dyn Directory>, path: &Path) -> Result<()> {
+    let (parent, segment) = find_parent(start_dir, path)?;
+    match segment {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(filename) => parent.delete_dir(filename.clone()),
+    }
+}
+
 pub fn hard_link(
     start_dir: Arc<dyn Directory>,
     start_path: &Path,
@@ -515,6 +537,27 @@ impl Directory for TmpFsDirectory {
         entries
     }
 
+    fn delete_non_dir(&self, file_name: FileName) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let node = guard.items.entry(file_name);
+        let Entry::Occupied(entry) = node else { return Err(Error::no_ent(())) };
+        if matches!(entry.get(), Node::Directory(_)) {
+            return Err(Error::is_dir(()));
+        }
+        entry.remove();
+        Ok(())
+    }
+
+    fn delete_dir(&self, file_name: FileName) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let node = guard.items.entry(file_name);
+        let Entry::Occupied(entry) = node else { return Err(Error::no_ent(())) };
+        if !matches!(entry.get(), Node::Directory(_)) {
+            return Err(Error::is_dir(()));
+        }
+        entry.remove();
+        Ok(())
+    }
 }
 
 pub struct TmpFsFile {
