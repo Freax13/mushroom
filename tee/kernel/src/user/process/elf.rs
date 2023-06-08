@@ -3,7 +3,10 @@ use core::ffi::CStr;
 use alloc::borrow::ToOwned;
 use goblin::{
     elf::Elf,
-    elf64::{header::ET_DYN, program_header::PT_LOAD},
+    elf64::{
+        header::{ET_DYN, ET_EXEC},
+        program_header::PT_LOAD,
+    },
 };
 use x86_64::VirtAddr;
 
@@ -20,10 +23,16 @@ use crate::{
 };
 
 impl ActiveVirtualMemory<'_, '_> {
-    fn load_elf(&mut self, base: u64, elf_bytes: FileSnapshot) -> Result<LoadInfo> {
+    fn load_elf(&mut self, mut base: u64, elf_bytes: FileSnapshot) -> Result<LoadInfo> {
         let elf = Elf::parse(&elf_bytes).unwrap();
         assert!(elf.is_64);
-        assert_eq!(elf.header.e_type, ET_DYN);
+        match elf.header.e_type {
+            ET_DYN => {}
+            ET_EXEC => base = 0,
+            ty => unimplemented!("unimplemented type: {ty:#x}"),
+        }
+
+        let mut phdr = None;
 
         for ph in elf.program_headers.iter().filter(|ph| ph.p_type == PT_LOAD) {
             let addr = VirtAddr::new(base + ph.p_vaddr);
@@ -47,10 +56,14 @@ impl ActiveVirtualMemory<'_, '_> {
             if zero_len != 0 {
                 self.mmap_zero(Some(addr + ph.p_filesz), zero_len, permissions)?;
             }
+
+            if (ph.p_offset..ph.p_offset + ph.p_filesz).contains(&elf.header.e_phoff) {
+                phdr = Some(base + ph.p_vaddr + (elf.header.e_phoff - ph.p_offset));
+            }
         }
 
         Ok(LoadInfo {
-            phdr: base + elf.header.e_phoff,
+            phdr,
             phentsize: elf.header.e_phentsize,
             phnum: elf.header.e_phnum,
             base,
@@ -119,8 +132,10 @@ impl ActiveVirtualMemory<'_, '_> {
         }
         write(0);
 
-        write(3); // AT_PHDR
-        write(info.phdr);
+        if let Some(phdr) = info.phdr {
+            write(3); // AT_PHDR
+            write(phdr);
+        }
         write(4); // AT_PHENT
         write(u64::from(info.phentsize));
         write(5); // AT_PHNUM
@@ -139,8 +154,9 @@ impl ActiveVirtualMemory<'_, '_> {
     }
 }
 
+#[derive(Debug)]
 struct LoadInfo {
-    pub phdr: u64,
+    pub phdr: Option<u64>,
     pub phentsize: u16,
     pub phnum: u16,
     pub base: u64,
