@@ -100,7 +100,12 @@ impl VirtualMemory {
     /// # Safety
     ///
     /// The virtual memory must be active.
-    pub unsafe fn handle_page_fault(&self, addr: u64, error_code: PageFaultErrorCode) {
+    pub unsafe fn handle_page_fault(
+        &self,
+        addr: u64,
+        error_code: PageFaultErrorCode,
+        rip: VirtAddr,
+    ) {
         let addr = VirtAddr::new(addr);
         let page = Page::containing_address(addr);
 
@@ -108,11 +113,12 @@ impl VirtualMemory {
 
         let state = self.state.lock();
 
-        let mapping = state
-            .mappings
-            .iter()
-            .find(|mapping| mapping.contains(addr))
-            .unwrap();
+        let mapping_opt = state.mappings.iter().find(|mapping| mapping.contains(addr));
+        let mapping = if let Some(mapping) = mapping_opt {
+            mapping
+        } else {
+            panic!("page fault: {addr:#x} at {rip:?}");
+        };
 
         match error_code & !PageFaultErrorCode::USER_MODE {
             PageFaultErrorCode::INSTRUCTION_FETCH => unsafe {

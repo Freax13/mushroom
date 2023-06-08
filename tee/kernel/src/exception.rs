@@ -136,7 +136,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
         let current_virtual_memory = current_virtual_memory.unwrap();
         unsafe {
-            current_virtual_memory.handle_page_fault(cr2, error_code);
+            current_virtual_memory.handle_page_fault(cr2, error_code, frame.instruction_pointer);
         }
     } else {
         if let Ok(cr2) = VirtAddr::try_new(cr2) {
