@@ -268,8 +268,13 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             let mapping = state
                 .mappings
                 .iter_mut()
-                .find(|m| m.contains(addr))
+                .filter(|m| m.contains_range(addr, len))
+                .min_by_key(|m| m.addr)
                 .ok_or(Error::fault(()))?;
+
+            let new_addr = cmp::max(addr, mapping.addr);
+            let len = len - (new_addr - addr);
+            let addr = new_addr;
 
             let start_offset = addr - mapping.addr;
             if start_offset > 0 {
@@ -281,15 +286,15 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 // Check if permissions have been removed.
                 let removed_permissions = !new_permissions & old_permissions;
                 let flags = PageTableFlags::from(removed_permissions);
-
-                let start = new_mapping.addr;
-                let end_inclusive = new_mapping.end() - 1u64;
-                let start_page = Page::containing_address(start);
-                let end_inclusive_page = Page::containing_address(end_inclusive);
-
-                for page in start_page..=end_inclusive_page {
-                    unsafe {
-                        remove_flags(page, flags);
+                if !flags.is_empty() {
+                    let start = new_mapping.addr;
+                    let end_inclusive = new_mapping.end() - 1u64;
+                    let start_page = Page::containing_address(start);
+                    let end_inclusive_page = Page::containing_address(end_inclusive);
+                    for page in start_page..=end_inclusive_page {
+                        unsafe {
+                            remove_flags(page, flags);
+                        }
                     }
                 }
 
@@ -312,15 +317,15 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             // Check if permissions have been removed.
             let removed_permissions = !new_permissions & old_permissions;
             let flags = PageTableFlags::from(removed_permissions);
-
-            let start = mapping.addr;
-            let end_inclusive = mapping.end() - 1u64;
-            let start_page = Page::containing_address(start);
-            let end_inclusive_page = Page::containing_address(end_inclusive);
-
-            for page in start_page..=end_inclusive_page {
-                unsafe {
-                    remove_flags(page, flags);
+            if !flags.is_empty() {
+                let start = mapping.addr;
+                let end_inclusive = mapping.end() - 1u64;
+                let start_page = Page::containing_address(start);
+                let end_inclusive_page = Page::containing_address(end_inclusive);
+                for page in start_page..=end_inclusive_page {
+                    unsafe {
+                        remove_flags(page, flags);
+                    }
                 }
             }
 
