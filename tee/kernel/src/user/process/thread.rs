@@ -158,14 +158,13 @@ impl Thread {
         self_weak: WeakThread,
         new_process: Option<Arc<Process>>,
         new_virtual_memory: Option<Arc<VirtualMemory>>,
-        new_fdtable: Option<Arc<FileDescriptorTable>>,
+        fdtable: Arc<FileDescriptorTable>,
         stack: VirtAddr,
         new_clear_child_tid: Option<VirtAddr>,
         new_tls: Option<u64>,
     ) -> Self {
         let process = new_process.unwrap_or_else(|| self.process.clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
-        let fdtable = new_fdtable.unwrap_or_else(|| Arc::new((*self.fdtable).clone()));
 
         let mut thread = Self::new(new_tid, self_weak, process, virtual_memory, fdtable);
 

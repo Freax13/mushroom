@@ -457,9 +457,11 @@ fn clone(
     };
 
     let new_fdtable = if flags.contains(CloneFlags::FILES) {
-        None
+        // Reuse the same files.
+        thread.fdtable().clone()
     } else {
-        Some(Arc::new(FileDescriptorTable::new()))
+        // Create a shallow copy of the files.
+        Arc::new((**thread.fdtable()).clone())
     };
 
     let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
