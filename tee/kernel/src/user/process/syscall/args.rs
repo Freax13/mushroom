@@ -236,6 +236,7 @@ impl Pointee for [u8] {}
 impl Pointee for c_void {}
 impl Pointee for FdNum {}
 impl Pointee for Iovec {}
+impl Pointee for LinuxDirent64 {}
 impl Pointee for Sigaction {}
 impl Pointee for Sigset {}
 impl Pointee for Stack {}
@@ -563,4 +564,15 @@ pub enum FileType {
 pub struct Iovec {
     pub base: u64,
     pub len: u64,
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct LinuxDirent64 {
+    pub ino: u64,
+    pub off: i64,
+    pub reclen: u16,
+    pub ty: u8,
+    pub name: [u8; 0],
+    pub _padding: [u8; 5],
 }

@@ -3,12 +3,12 @@ use core::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use spin::Mutex;
 
 use crate::{
     error::{Error, Result},
-    fs::node::Directory,
+    fs::node::{DirEntry, Directory},
 };
 
 use super::syscall::args::{FdNum, FileMode, Stat, Whence};
@@ -146,6 +146,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     }
 
     fn as_dir(&self) -> Result<Arc<dyn Directory>> {
+        Err(Error::not_dir(()))
+    }
+
+    fn getdents64(&self, capacity: usize) -> Result<Vec<DirEntry>> {
+        let _ = capacity;
         Err(Error::not_dir(()))
     }
 }

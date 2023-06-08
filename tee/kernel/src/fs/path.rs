@@ -19,6 +19,12 @@ impl FileName {
     }
 }
 
+impl AsRef<[u8]> for FileName {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl Debug for FileName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Ok(str) = core::str::from_utf8(&self.0) {
@@ -62,7 +68,7 @@ impl AsRef<[u8]> for PathSegment {
             PathSegment::Empty => b"",
             PathSegment::Dot => b".",
             PathSegment::DotDot => b"..",
-            PathSegment::FileName(filename) => &filename.0,
+            PathSegment::FileName(filename) => filename.as_ref(),
         }
     }
 }

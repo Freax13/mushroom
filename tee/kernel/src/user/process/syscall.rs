@@ -12,7 +12,7 @@ use kernel_macros::syscall;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::Error,
+    error::{Error, Result},
     fs::node::{
         create_directory, create_file, create_link, lookup_and_resolve_node, lookup_node,
         read_link, set_mode, Directory, Node, NonLinkNode, ROOT_NODE,
@@ -23,8 +23,8 @@ use crate::{
 use self::{
     args::{
         ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
-        FutexOpWithFlags, Iovec, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags,
-        RtSigprocmaskHow, Stat, SyscallArg, WaitOptions, Whence,
+        FutexOpWithFlags, Iovec, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd,
+        ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -131,6 +131,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysArchPrctl);
     handlers.register(SysGettid);
     handlers.register(SysFutex);
+    handlers.register(SysGetdents64);
     handlers.register(SysSetTidAddress);
     handlers.register(SysOpenat);
     handlers.register(SysExitGroup);
@@ -305,7 +306,7 @@ fn poll(
             let mut pollfd = Pollfd::zeroed();
             vm.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
         }
-        Result::<_, Error>::Ok(())
+        Result::<_>::Ok(())
     })?;
 
     if timeout != 0 {
@@ -515,7 +516,7 @@ fn readv(
                 break;
             }
         }
-        Result::<_, Error>::Ok(iovec)
+        Result::<_>::Ok(iovec)
     })?;
 
     let addr = Pointer::parse(iovec.base)?;
@@ -543,7 +544,7 @@ fn writev(
                 break;
             }
         }
-        Result::<_, Error>::Ok(iovec)
+        Result::<_>::Ok(iovec)
     })?;
 
     let addr = Pointer::parse(iovec.base)?;
@@ -650,35 +651,36 @@ fn execve(
     argv: Pointer<[&'static CStr]>,
     envp: Pointer<[&'static CStr]>,
 ) -> SyscallResult {
-    let (pathname, args, envs) = vm_activator.activate(thread.virtual_memory(), |vm| {
-        let pathname = vm.read_path(pathname.get())?;
+    let (pathname, args, envs) =
+        vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+            let pathname = vm.read_path(pathname.get())?;
 
-        let mut args = Vec::new();
-        for i in 0u64.. {
-            let argpp = argv.get() + i * 8;
-            let mut argp = 0u64;
-            vm.read(argpp, bytes_of_mut(&mut argp))?;
-            if argp == 0 {
-                break;
+            let mut args = Vec::new();
+            for i in 0u64.. {
+                let argpp = argv.get() + i * 8;
+                let mut argp = 0u64;
+                vm.read(argpp, bytes_of_mut(&mut argp))?;
+                if argp == 0 {
+                    break;
+                }
+                let argp = VirtAddr::try_new(argp).map_err(|_| Error::fault(()))?;
+                args.push(vm.read_cstring(argp, 0x1000)?);
             }
-            let argp = VirtAddr::try_new(argp).map_err(|_| Error::fault(()))?;
-            args.push(vm.read_cstring(argp, 0x1000)?);
-        }
 
-        let mut envs = Vec::new();
-        for i in 0u64.. {
-            let envpp = envp.get() + i * 8;
-            let mut envp = 0u64;
-            vm.read(envpp, bytes_of_mut(&mut envp))?;
-            if envp == 0 {
-                break;
+            let mut envs = Vec::new();
+            for i in 0u64.. {
+                let envpp = envp.get() + i * 8;
+                let mut envp = 0u64;
+                vm.read(envpp, bytes_of_mut(&mut envp))?;
+                if envp == 0 {
+                    break;
+                }
+                let envp = VirtAddr::try_new(envp).map_err(|_| Error::fault(()))?;
+                envs.push(vm.read_cstring(envp, 0x1000)?);
             }
-            let envp = VirtAddr::try_new(envp).map_err(|_| Error::fault(()))?;
-            envs.push(vm.read_cstring(envp, 0x1000)?);
-        }
 
-        Result::<_, Error>::Ok((pathname, args, envs))
-    })?;
+            Result::Ok((pathname, args, envs))
+        })?;
 
     thread.execve(&pathname, &args, &envs, vm_activator)?;
 
@@ -956,6 +958,44 @@ fn futex(
         FutexOp::CmpRequeuePi => Err(Error::no_sys(())),
         FutexOp::LockPi2 => Err(Error::no_sys(())),
     }
+}
+
+#[syscall(no = 217)]
+fn getdents64(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    dirent: Pointer<LinuxDirent64>,
+    count: u64,
+) -> SyscallResult {
+    let capacity = usize::try_from(count)?;
+    let fd = thread.fdtable().get(fd)?;
+    let entries = fd.getdents64(capacity)?;
+
+    let len = vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+        let mut addr = dirent.get();
+        for entry in entries {
+            let dirent = LinuxDirent64 {
+                ino: entry.ino,
+                off: i64::try_from(entry.len())?,
+                reclen: u16::try_from(entry.len())?,
+                ty: entry.ty as u8,
+                name: [],
+                _padding: [0; 5],
+            };
+            vm.write(addr, bytes_of(&dirent))?;
+            vm.write(addr + 19u64, entry.name.as_ref())?;
+            vm.write(addr + 19u64 + entry.name.as_ref().len(), &[0])?;
+
+            addr += entry.len();
+        }
+
+        let len = addr - dirent.get();
+
+        Result::Ok(len)
+    })?;
+
+    Ok(len)
 }
 
 #[syscall(no = 218)]

@@ -4,6 +4,7 @@ use alloc::{
     borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     sync::Arc,
+    vec::Vec,
 };
 use spin::{Lazy, Mutex};
 
@@ -149,9 +150,45 @@ pub trait Directory: Any + Send + Sync {
     ) -> Result<Arc<dyn File>>;
     fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>>;
     fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
+    fn list_entries(&self) -> Vec<DirEntry>;
 
     fn mode(&self) -> FileMode {
         self.stat().mode.mode()
+    }
+}
+
+pub struct DirEntry {
+    pub ino: u64,
+    pub ty: FileType,
+    pub name: DirEntryName,
+}
+
+impl DirEntry {
+    pub fn len(&self) -> usize {
+        let len = 19 + self.name.as_ref().len() + 1;
+        len.next_multiple_of(8)
+    }
+}
+
+pub enum DirEntryName {
+    FileName(FileName),
+    Dot,
+    DotDot,
+}
+
+impl AsRef<[u8]> for DirEntryName {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            DirEntryName::FileName(filename) => filename.as_ref(),
+            DirEntryName::Dot => b".",
+            DirEntryName::DotDot => b"..",
+        }
+    }
+}
+
+impl From<FileName> for DirEntryName {
+    fn from(value: FileName) -> Self {
+        Self::FileName(value)
     }
 }
 
@@ -424,6 +461,32 @@ impl Directory for TmpFsDirectory {
             }
         }
     }
+    fn list_entries(&self) -> Vec<DirEntry> {
+        let guard = self.internal.lock();
+
+        let mut entries = Vec::with_capacity(2 + guard.items.len());
+        entries.push(DirEntry {
+            ino: 0,
+            ty: FileType::Dir,
+            name: DirEntryName::Dot,
+        });
+        entries.push(DirEntry {
+            ino: 0,
+            ty: FileType::Dir,
+            name: DirEntryName::DotDot,
+        });
+        for (name, node) in guard.items.iter() {
+            let stat = node.stat();
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: stat.mode.ty(),
+                name: DirEntryName::from(name.clone()),
+            })
+        }
+
+        entries
+    }
+
 }
 
 pub struct TmpFsFile {
