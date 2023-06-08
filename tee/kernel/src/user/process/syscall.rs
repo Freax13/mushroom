@@ -27,7 +27,7 @@ use self::{
     args::{
         ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
         FutexOpWithFlags, Iovec, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags,
-        RtSigprocmaskHow, SyscallArg, WaitOptions, Whence,
+        RtSigprocmaskHow, Stat, SyscallArg, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -105,6 +105,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysWrite);
     handlers.register(SysOpen);
     handlers.register(SysClose);
+    handlers.register(SysStat);
+    handlers.register(SysLstat);
     handlers.register(SysPoll);
     handlers.register(SysLseek);
     handlers.register(SysMmap);
@@ -231,6 +233,77 @@ fn open(
 #[syscall(no = 3)]
 fn close(thread: &mut Thread, fd: FdNum) -> SyscallResult {
     thread.fdtable().close(fd)?;
+    Ok(0)
+}
+
+#[syscall(no = 4)]
+fn stat(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    filename: Pointer<CStr>,
+    statbuf: Pointer<Stat>,
+) -> SyscallResult {
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        let filename = vm.read_cstring(filename.get(), 0x1000)?;
+
+        let filename = Path::new(filename.as_bytes())?;
+        let _node = lookup_node(ROOT_NODE.clone(), &filename)?;
+
+        // FIXME: Fill in the values.
+        let stat = Stat {
+            dev: 0,
+            ino: 0,
+            mode: 0,
+            nlink: 0,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            _padding: 0,
+            size: 0,
+            atime: 0,
+            mtime: 0,
+            ctime: 0,
+        };
+
+        vm.write(statbuf.get(), bytes_of(&stat))
+    })?;
+
+    Ok(0)
+}
+
+#[syscall(no = 6)]
+fn lstat(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    filename: Pointer<CStr>,
+    statbuf: Pointer<Stat>,
+) -> SyscallResult {
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        let filename = vm.read_cstring(filename.get(), 0x1000)?;
+
+        let filename = Path::new(filename.as_bytes())?;
+        // FIXME: Don't resolve links.
+        let _node = lookup_node(ROOT_NODE.clone(), &filename)?;
+
+        // FIXME: Fill in the values.
+        let stat = Stat {
+            dev: 0,
+            ino: 0,
+            mode: 0,
+            nlink: 0,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            _padding: 0,
+            size: 0,
+            atime: 0,
+            mtime: 0,
+            ctime: 0,
+        };
+
+        vm.write(statbuf.get(), bytes_of(&stat))
+    })?;
+
     Ok(0)
 }
 

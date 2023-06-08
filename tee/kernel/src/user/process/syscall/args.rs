@@ -238,6 +238,7 @@ impl Pointee for Iovec {}
 impl Pointee for Sigaction {}
 impl Pointee for Sigset {}
 impl Pointee for Stack {}
+impl Pointee for Stat {}
 impl Pointee for u32 {}
 impl Pointee for u64 {}
 
@@ -492,6 +493,23 @@ bitflags! {
 
 bitflags! {
     pub struct CopyFileRangeFlags {}
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Stat {
+    pub dev: u16,
+    pub ino: u16,
+    pub mode: u16,
+    pub nlink: u16,
+    pub uid: u16,
+    pub gid: u16,
+    pub rdev: u16,
+    pub _padding: u16,
+    pub size: u32,
+    pub atime: u32,
+    pub mtime: u32,
+    pub ctime: u32,
 }
 
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
