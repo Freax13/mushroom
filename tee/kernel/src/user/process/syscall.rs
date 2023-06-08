@@ -103,6 +103,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysOpen);
     handlers.register(SysClose);
     handlers.register(SysStat);
+    handlers.register(SysFstat);
     handlers.register(SysLstat);
     handlers.register(SysPoll);
     handlers.register(SysLseek);
@@ -247,6 +248,23 @@ fn stat(
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
         let stat = node.stat();
 
+        vm.write(statbuf.get(), bytes_of(&stat))
+    })?;
+
+    Ok(0)
+}
+
+#[syscall(no = 5)]
+fn fstat(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    statbuf: Pointer<Stat>,
+) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
+    let stat = fd.stat()?;
+
+    vm_activator.activate(thread.virtual_memory(), |vm| {
         vm.write(statbuf.get(), bytes_of(&stat))
     })?;
 
