@@ -96,6 +96,7 @@ pub struct Thread {
     pub dead: bool,
     pub clear_child_tid: u64,
     pub waiters: Vec<Waiter>,
+    pub cwd: Path,
 }
 
 impl Thread {
@@ -105,6 +106,7 @@ impl Thread {
         process: Arc<Process>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
+        cwd: Path,
     ) -> Self {
         let registers = UserspaceRegisters {
             rax: 0,
@@ -138,6 +140,7 @@ impl Thread {
             clear_child_tid: 0,
             dead: false,
             waiters: Vec::new(),
+            cwd,
         }
     }
 
@@ -148,6 +151,7 @@ impl Thread {
             Arc::new(Process::new(tid)),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::new()),
+            Path::new(b"/").unwrap(),
         )
     }
 
@@ -166,7 +170,14 @@ impl Thread {
         let process = new_process.unwrap_or_else(|| self.process.clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
 
-        let mut thread = Self::new(new_tid, self_weak, process, virtual_memory, fdtable);
+        let mut thread = Self::new(
+            new_tid,
+            self_weak,
+            process,
+            virtual_memory,
+            fdtable,
+            self.cwd.clone(),
+        );
 
         if let Some(clear_child_tid) = new_clear_child_tid {
             thread.clear_child_tid = clear_child_tid.as_u64();
