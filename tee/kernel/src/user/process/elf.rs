@@ -1,33 +1,29 @@
 use core::ffi::CStr;
 
-use bytemuck::{Pod, Zeroable};
+use alloc::borrow::ToOwned;
 use goblin::{
     elf::Elf,
     elf64::{header::ET_DYN, program_header::PT_LOAD},
 };
 use x86_64::VirtAddr;
 
-use super::memory::{ActiveVirtualMemory, MemoryPermissions};
+use super::{
+    memory::{ActiveVirtualMemory, MemoryPermissions},
+    syscall::args::FileMode,
+};
 use crate::{
     error::{Error, Result},
-    fs::node::FileSnapshot,
+    fs::{
+        node::{lookup_and_resolve_node, FileSnapshot, NonLinkNode, ROOT_NODE},
+        Path,
+    },
 };
 
 impl ActiveVirtualMemory<'_, '_> {
-    pub fn load_elf(
-        &mut self,
-        elf_bytes: FileSnapshot,
-        stack: VirtAddr,
-        argv: &[impl AsRef<CStr>],
-        envp: &[impl AsRef<CStr>],
-    ) -> Result<u64> {
+    fn load_elf(&mut self, base: u64, elf_bytes: FileSnapshot) -> Result<LoadInfo> {
         let elf = Elf::parse(&elf_bytes).unwrap();
-
         assert!(elf.is_64);
         assert_eq!(elf.header.e_type, ET_DYN);
-
-        // let base = 0x5555_5555_5000;
-        let base = 0x4000_0000_0000;
 
         for ph in elf.program_headers.iter().filter(|ph| ph.p_type == PT_LOAD) {
             let addr = VirtAddr::new(base + ph.p_vaddr);
@@ -53,6 +49,43 @@ impl ActiveVirtualMemory<'_, '_> {
             }
         }
 
+        Ok(LoadInfo {
+            phdr: base + elf.header.e_phoff,
+            phentsize: elf.header.e_phentsize,
+            phnum: elf.header.e_phnum,
+            base,
+            entry: base + elf.entry,
+        })
+    }
+
+    pub fn load_executable(
+        &mut self,
+        elf_bytes: FileSnapshot,
+        stack: VirtAddr,
+        argv: &[impl AsRef<CStr>],
+        envp: &[impl AsRef<CStr>],
+    ) -> Result<u64> {
+        let elf = Elf::parse(&elf_bytes).unwrap();
+        let interpreter = elf.interpreter.map(ToOwned::to_owned);
+
+        let info = self.load_elf(0x4000_0000_0000, elf_bytes)?;
+        let mut entrypoint = info.entry;
+
+        let mut at_base = None;
+
+        if let Some(interpreter) = interpreter {
+            let path = Path::new(interpreter.as_bytes())?;
+            let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
+            let NonLinkNode::File(file) = node else { return Err(Error::is_dir(())) };
+            if !file.mode().contains(FileMode::EXECUTE) {
+                return Err(Error::acces(()));
+            }
+            let interpreter = file.read_snapshot()?;
+            let info = self.load_elf(0x5000_0000_0000, interpreter)?;
+            entrypoint = info.entry;
+            at_base = Some(info.base);
+        }
+
         self.mmap_zero(
             Some(stack),
             0x1000,
@@ -70,7 +103,7 @@ impl ActiveVirtualMemory<'_, '_> {
             let addr = str_addr;
             self.write(str_addr, value.to_bytes_with_nul())?;
             str_addr += value.to_bytes_with_nul().len();
-            Result::<_, Error>::Ok(addr)
+            Result::<_>::Ok(addr)
         };
 
         write(u64::try_from(argv.len()).unwrap()); // argc
@@ -87,25 +120,29 @@ impl ActiveVirtualMemory<'_, '_> {
         write(0);
 
         write(3); // AT_PHDR
-        write(base + elf.header.e_phoff);
+        write(info.phdr);
         write(4); // AT_PHENT
-        write(u64::from(elf.header.e_phentsize));
+        write(u64::from(info.phentsize));
         write(5); // AT_PHNUM
-        write(u64::from(elf.header.e_phnum));
-        write(7); // AT_BASE
-        write(base);
+        write(u64::from(info.phnum));
+        write(6); // AT_PAGESZ
+        write(4096);
+        if let Some(at_base) = at_base {
+            write(7); // AT_BASE
+            write(at_base);
+        }
         write(9); // AT_ENTRY
-        write(0x5555_ABAA_5000);
+        write(info.entry);
         write(0); // AT_NULL
 
-        Ok(base + elf.entry)
+        Ok(entrypoint)
     }
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-struct Rela {
-    offset: u64,
-    info: u64,
-    addend: u64,
+struct LoadInfo {
+    pub phdr: u64,
+    pub phentsize: u16,
+    pub phnum: u16,
+    pub base: u64,
+    pub entry: u64,
 }
