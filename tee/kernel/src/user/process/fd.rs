@@ -6,10 +6,14 @@ use core::{
 use alloc::{collections::BTreeMap, sync::Arc};
 use spin::Mutex;
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    fs::node::Directory,
+};
 
 use super::syscall::args::{FdNum, FileMode, Stat, Whence};
 
+pub mod dir;
 pub mod file;
 pub mod pipe;
 mod std;
@@ -139,5 +143,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn stat(&self) -> Result<Stat> {
         Err(Error::io(()))
+    }
+
+    fn as_dir(&self) -> Result<Arc<dyn Directory>> {
+        Err(Error::not_dir(()))
     }
 }

@@ -266,6 +266,8 @@ bitflags! {
         const EXCL = 1 << 7;
         const TRUNC = 1 << 9;
         const LARGEFILE = 1 << 15;
+        const DIRECTORY = 1 << 16;
+        const NOFOLLOW = 1 << 17;
         const SYNC = 1 << 19;
     }
 }
@@ -327,6 +329,8 @@ pub struct Pollfd {
 pub struct FdNum(i32);
 
 impl FdNum {
+    pub const CWD: Self = Self(-100);
+
     pub fn new(value: i32) -> Self {
         Self(value)
     }
@@ -344,8 +348,8 @@ impl Display for FdNum {
 
 impl SyscallArg for FdNum {
     fn parse(value: u64) -> Result<Self> {
-        match i32::try_from(value) {
-            Ok(fd) if fd >= 0 => Ok(Self(fd)),
+        match i32::try_from(value as i64) {
+            Ok(fd) => Ok(Self(fd)),
             _ => Err(Error::bad_f(())),
         }
     }
@@ -359,12 +363,7 @@ impl SyscallArg for FdNum {
         match Self::parse(value) {
             Ok(fd) => write!(f, "{fd}"),
             Err(_) => {
-                if let Ok(value) = u32::try_from(value) {
-                    write!(f, "{}", value as i32)?;
-                } else {
-                    write!(f, "{value}")?;
-                }
-                write!(f, " (invalid fd)")
+                write!(f, "{value} (invalid fd)")
             }
         }
     }

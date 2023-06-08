@@ -15,7 +15,7 @@ use crate::{
     error::Error,
     fs::node::{
         create_directory, create_file, create_link, lookup_and_resolve_node, lookup_node,
-        read_link, set_mode, Node, NonLinkNode, ROOT_NODE,
+        read_link, set_mode, Directory, Node, NonLinkNode, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -34,6 +34,7 @@ use self::{
 
 use super::{
     fd::{
+        dir::DirectoryFileDescription,
         file::{ReadonlyFileFileDescription, WriteonlyFileFileDescription},
         pipe,
     },
@@ -131,6 +132,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGettid);
     handlers.register(SysFutex);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysOpenat);
     handlers.register(SysExitGroup);
     handlers.register(SysFutimesat);
     handlers.register(SysPipe2);
@@ -970,6 +972,48 @@ fn exit_group(
 ) -> SyscallResult {
     let status = thread.process().exit(status as u8);
     exit(thread, vm_activator, u64::from(status))
+}
+
+#[syscall(no = 257)]
+fn openat(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    dfd: FdNum,
+    filename: Pointer<CStr>,
+    flags: OpenFlags,
+    mode: FileMode,
+) -> SyscallResult {
+    let filename =
+        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(filename.get()))?;
+
+    let fdtable = thread.fdtable();
+
+    let start_dir = if dfd == FdNum::CWD {
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
+        <Arc<dyn Directory>>::try_from(node)?
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir()?
+    };
+
+    let node = if flags.contains(OpenFlags::NOFOLLOW) {
+        lookup_node(start_dir, &filename)?
+    } else {
+        Node::from(lookup_and_resolve_node(start_dir, &filename)?)
+    };
+
+    if flags.contains(OpenFlags::DIRECTORY) {
+        match node {
+            Node::File(_) => Err(Error::not_dir(())),
+            Node::Directory(dir) => {
+                let fd = fdtable.insert(DirectoryFileDescription::new(dir));
+                Ok(fd.get() as u64)
+            }
+            Node::Link(_) => Err(Error::r#loop(())),
+        }
+    } else {
+        todo!()
+    }
 }
 
 #[syscall(no = 261)]

@@ -88,6 +88,15 @@ impl TryFrom<NonLinkNode> for Arc<dyn Directory> {
     }
 }
 
+impl From<NonLinkNode> for Node {
+    fn from(value: NonLinkNode) -> Self {
+        match value {
+            NonLinkNode::File(file) => Self::File(file),
+            NonLinkNode::Directory(dir) => Self::Directory(dir),
+        }
+    }
+}
+
 pub trait File: Send + Sync + 'static {
     fn stat(&self) -> Stat;
     fn set_mode(&self, mode: FileMode);
