@@ -56,6 +56,17 @@ pub enum PathSegment {
     FileName(FileName),
 }
 
+impl AsRef<[u8]> for PathSegment {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            PathSegment::Empty => b"",
+            PathSegment::Dot => b".",
+            PathSegment::DotDot => b"..",
+            PathSegment::FileName(filename) => &filename.0,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Path {
     is_absolute: bool,
@@ -149,5 +160,21 @@ impl Path {
         let mut parent = self.join(b"..");
         parent.canonicalize()?;
         Ok(parent)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        if self.is_absolute() {
+            bytes.push(b'/');
+        }
+        let mut segments = self.segments().iter();
+        if let Some(segment) = segments.next() {
+            bytes.extend_from_slice(segment.as_ref());
+            for segment in segments {
+                bytes.push(b'/');
+                bytes.extend_from_slice(segment.as_ref());
+            }
+        }
+        bytes
     }
 }

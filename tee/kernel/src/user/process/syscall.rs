@@ -14,7 +14,10 @@ use x86_64::VirtAddr;
 use crate::{
     error::Error,
     fs::{
-        node::{create_directory, create_file, lookup_node, Node, NonLinkNode, ROOT_NODE},
+        node::{
+            create_directory, create_file, create_link, lookup_node, read_link, Node, NonLinkNode,
+            ROOT_NODE,
+        },
         Path,
     },
     user::process::memory::MemoryPermissions,
@@ -119,6 +122,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysWait4);
     handlers.register(SysFcntl);
     handlers.register(SysMkdir);
+    handlers.register(SysSymlink);
+    handlers.register(SysReadlink);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysGettid);
@@ -715,6 +720,56 @@ fn mkdir(
     create_directory(Node::Directory(ROOT_NODE.clone()), &path)?;
 
     Ok(0)
+}
+
+#[syscall(no = 88)]
+fn symlink(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    oldname: Pointer<CStr>,
+    newname: Pointer<CStr>,
+) -> SyscallResult {
+    let (oldname, newname) = vm_activator.activate(thread.virtual_memory(), |vm| {
+        let oldname = vm.read_cstring(oldname.get(), 0x1000)?;
+        let newname = vm.read_cstring(newname.get(), 0x1000)?;
+        Result::<_, Error>::Ok((oldname, newname))
+    })?;
+
+    let oldname = Path::new(oldname.as_bytes())?;
+    let newname = Path::new(newname.as_bytes())?;
+
+    create_link(Node::Directory(ROOT_NODE.clone()), &newname, oldname)?;
+
+    Ok(0)
+}
+
+#[syscall(no = 89)]
+fn readlink(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    pathname: Pointer<CStr>,
+    buf: Pointer<[u8]>,
+    bufsiz: u64,
+) -> SyscallResult {
+    let bufsiz = usize::try_from(bufsiz)?;
+
+    let len = vm_activator.activate(thread.virtual_memory(), |vm| {
+        let pathname = vm.read_cstring(pathname.get(), 0x1000)?;
+        let path = Path::new(pathname.as_bytes())?;
+        let target = read_link(Node::Directory(ROOT_NODE.clone()), &path)?;
+
+        let bytes = target.to_bytes();
+        // Truncate to `bufsiz`.
+        let len = cmp::min(bytes.len(), bufsiz);
+        let bytes = &bytes[..len];
+
+        vm.write(buf.get(), bytes)?;
+
+        Result::<_, Error>::Ok(len)
+    })?;
+
+    let len = u64::try_from(len)?;
+    Ok(len)
 }
 
 #[syscall(no = 131)]

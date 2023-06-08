@@ -206,6 +206,21 @@ pub fn create_link(start_node: Node, path: &Path, target: Path) -> Result<()> {
     Ok(())
 }
 
+pub fn read_link(start_node: Node, path: &Path) -> Result<Path> {
+    let (dir, last) = find_parent(start_node, path)?;
+    let file_name = match last {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(file_name) => file_name,
+    };
+    let node = dir.get_node(file_name)?;
+    match node {
+        Node::Link(link) => Ok(link.target),
+        Node::File(_) | Node::Directory(_) => Err(Error::inval(())),
+    }
+}
+
 pub struct TmpFsDirectory {
     items: Mutex<BTreeMap<FileName, Node>>,
 }
