@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.69"
+tar = "0.4.38"
