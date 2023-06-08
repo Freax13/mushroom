@@ -8,7 +8,7 @@ use spin::Mutex;
 
 use crate::error::{Error, Result};
 
-use super::syscall::args::FdNum;
+use super::syscall::args::{FdNum, Whence};
 
 pub mod file;
 pub mod pipe;
@@ -106,6 +106,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
+        Err(Error::inval(()))
+    }
+
+    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
+        let _ = offset;
+        let _ = whence;
         Err(Error::inval(()))
     }
 

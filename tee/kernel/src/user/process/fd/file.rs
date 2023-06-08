@@ -1,7 +1,11 @@
 use alloc::sync::Arc;
 use spin::Mutex;
 
-use crate::{error::Result, fs::node::File};
+use crate::{
+    error::{Error, Result},
+    fs::node::File,
+    user::process::syscall::args::Whence,
+};
 
 use super::OpenFileDescription;
 
@@ -26,6 +30,18 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         let len = self.file.read(*guard, buf)?;
         *guard += len;
         Ok(len)
+    }
+
+    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        match whence {
+            Whence::Set => *guard = offset,
+            Whence::Cur => *guard = guard.checked_add(offset).ok_or_else(|| Error::inval(()))?,
+            Whence::End => todo!(),
+            Whence::Data => todo!(),
+            Whence::Hole => todo!(),
+        }
+        Ok(*guard)
     }
 }
 

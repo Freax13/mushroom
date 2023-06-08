@@ -176,6 +176,16 @@ bitflags! {
     }
 }
 
+enum_arg! {
+    pub enum Whence {
+        Set = 0,
+        Cur = 1,
+        End = 2,
+        Data = 3,
+        Hole = 4,
+    }
+}
+
 bitflags! {
     pub struct ProtFlags {
         const READ = 1 << 0;

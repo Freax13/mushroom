@@ -22,7 +22,7 @@ use self::{
     args::{
         ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
         FutexOpWithFlags, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags,
-        RtSigprocmaskHow, SyscallArg, WaitOptions,
+        RtSigprocmaskHow, SyscallArg, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -101,6 +101,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysOpen);
     handlers.register(SysClose);
     handlers.register(SysPoll);
+    handlers.register(SysLseek);
     handlers.register(SysMmap);
     handlers.register(SysMprotect);
     handlers.register(SysBrk);
@@ -243,6 +244,17 @@ fn poll(
     }
 
     Ok(0)
+}
+
+#[syscall(no = 8)]
+fn lseek(thread: &mut Thread, fd: FdNum, offset: u64, whence: Whence) -> SyscallResult {
+    let offset = usize::try_from(offset)?;
+
+    let fd = thread.fdtable().get(fd)?;
+    let offset = fd.seek(offset, whence)?;
+
+    let offset = u64::try_from(offset)?;
+    Ok(offset)
 }
 
 #[syscall(no = 9)]
