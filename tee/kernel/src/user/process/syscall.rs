@@ -13,12 +13,9 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::Error,
-    fs::{
-        node::{
-            create_directory, create_file, create_link, lookup_node, read_link, Node, NonLinkNode,
-            ROOT_NODE,
-        },
-        Path,
+    fs::node::{
+        create_directory, create_file, create_link, lookup_and_resolve_node, lookup_node,
+        read_link, Node, NonLinkNode, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -215,7 +212,7 @@ fn open(
     } else if flags.contains(OpenFlags::RDWR) {
         todo!()
     } else {
-        let node = lookup_node(ROOT_NODE.clone(), &filename)?;
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
 
         let file = match node {
             NonLinkNode::File(file) => file,
@@ -818,7 +815,7 @@ fn readlink(
 
     let len = vm_activator.activate(thread.virtual_memory(), |vm| {
         let pathname = vm.read_path(pathname.get())?;
-        let target = read_link(Node::Directory(ROOT_NODE.clone()), &pathname)?;
+        let target = read_link(ROOT_NODE.clone(), &pathname)?;
 
         let bytes = target.to_bytes();
         // Truncate to `bufsiz`.

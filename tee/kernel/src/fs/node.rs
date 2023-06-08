@@ -40,7 +40,7 @@ impl Node {
             Node::Directory(dir) => Ok(NonLinkNode::Directory(dir)),
             Node::Link(link) => {
                 *recursion = recursion.checked_sub(1).ok_or_else(|| Error::r#loop(()))?;
-                lookup_node_recursive(start_dir, &link.target, recursion)
+                lookup_and_resolve_node_recursive(start_dir, &link.target, recursion)
             }
         }
     }
@@ -115,33 +115,53 @@ pub struct Link {
     target: Path,
 }
 
-pub fn lookup_node(start_node: Arc<dyn Directory>, path: &Path) -> Result<NonLinkNode> {
-    lookup_node_recursive(start_node, path, &mut 16)
+/// Find a node.
+pub fn lookup_node(start_dir: Arc<dyn Directory>, path: &Path) -> Result<Node> {
+    lookup_node_recursive(start_dir, path, &mut 16)
 }
 
+// Find a node while taking recursion limits into account.
 fn lookup_node_recursive(
-    mut start_node: Arc<dyn Directory>,
+    mut start_dir: Arc<dyn Directory>,
     path: &Path,
     recursion: &mut u8,
-) -> Result<NonLinkNode> {
+) -> Result<Node> {
     if path.is_absolute() {
-        start_node = ROOT_NODE.clone();
+        start_dir = ROOT_NODE.clone();
     }
-    path.segments()
-        .iter()
-        .try_fold(NonLinkNode::Directory(start_node), |node, segment| {
+    let (_, node) = path.segments().iter().try_fold(
+        (start_dir.clone(), Node::Directory(start_dir)),
+        |(start_dir, node), segment| -> Result<_> {
+            let node = node.resolve_link_recursive(start_dir.clone(), recursion)?;
             let dir = <Arc<dyn Directory>>::try_from(node)?;
 
             match segment {
-                PathSegment::Empty | PathSegment::Dot => Ok(NonLinkNode::Directory(dir)),
+                PathSegment::Empty | PathSegment::Dot => Ok((start_dir, Node::Directory(dir))),
                 PathSegment::DotDot => todo!(),
                 PathSegment::FileName(file_name) => {
                     *recursion = recursion.checked_sub(1).ok_or_else(|| Error::r#loop(()))?;
                     let node = dir.get_node(file_name)?;
-                    node.resolve_link_recursive(dir, recursion)
+                    Ok((dir, node))
                 }
             }
-        })
+        },
+    )?;
+    Ok(node)
+}
+
+// Find a node and resolve links.
+pub fn lookup_and_resolve_node(start_dir: Arc<dyn Directory>, path: &Path) -> Result<NonLinkNode> {
+    lookup_and_resolve_node_recursive(start_dir, path, &mut 16)
+}
+
+// Find a node and resolve links while taking recursion limits into account.
+fn lookup_and_resolve_node_recursive(
+    start_dir: Arc<dyn Directory>,
+    path: &Path,
+    recursion: &mut u8,
+) -> Result<NonLinkNode> {
+    let node = lookup_node_recursive(start_dir.clone(), path, recursion)?;
+    node.resolve_link_recursive(start_dir, recursion)
 }
 
 fn find_parent(start_node: Node, path: &Path) -> Result<(Arc<dyn Directory>, &PathSegment)> {
@@ -206,15 +226,8 @@ pub fn create_link(start_node: Node, path: &Path, target: Path) -> Result<()> {
     Ok(())
 }
 
-pub fn read_link(start_node: Node, path: &Path) -> Result<Path> {
-    let (dir, last) = find_parent(start_node, path)?;
-    let file_name = match last {
-        PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
-        PathSegment::FileName(file_name) => file_name,
-    };
-    let node = dir.get_node(file_name)?;
+pub fn read_link(start_dir: Arc<dyn Directory>, path: &Path) -> Result<Path> {
+    let node = lookup_node(start_dir, path)?;
     match node {
         Node::Link(link) => Ok(link.target),
         Node::File(_) | Node::Directory(_) => Err(Error::inval(())),
