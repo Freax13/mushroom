@@ -14,8 +14,8 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::node::{
-        create_directory, create_file, create_link, lookup_and_resolve_node, lookup_node,
-        read_link, set_mode, Directory, Node, NonLinkNode, ROOT_NODE,
+        create_directory, create_file, create_link, hard_link, lookup_and_resolve_node,
+        lookup_node, read_link, set_mode, Directory, Node, NonLinkNode, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -23,8 +23,8 @@ use crate::{
 use self::{
     args::{
         ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
-        FutexOpWithFlags, Iovec, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd,
-        ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, WaitOptions, Whence,
+        FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags,
+        Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -136,6 +136,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysOpenat);
     handlers.register(SysExitGroup);
     handlers.register(SysFutimesat);
+    handlers.register(SysLinkat);
     handlers.register(SysPipe2);
     handlers.register(SysCopyFileRange);
 
@@ -1063,6 +1064,50 @@ fn futimesat(
     times: Pointer<c_void>, // FIXME: use correct type
 ) -> SyscallResult {
     // FIXME: Implement this.
+    Ok(0)
+}
+
+#[syscall(no = 265)]
+fn linkat(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    olddirfd: FdNum,
+    oldpath: Pointer<CStr>,
+    newdirfd: FdNum,
+    newpath: Pointer<CStr>,
+    flags: LinkOptions,
+) -> SyscallResult {
+    let (oldpath, newpath) = vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+        let oldpath = vm.read_path(oldpath.get())?;
+        let newpath = vm.read_path(newpath.get())?;
+        Result::Ok((oldpath, newpath))
+    })?;
+
+    let fdtable = thread.fdtable();
+
+    let olddir = if olddirfd == FdNum::CWD {
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
+        <Arc<dyn Directory>>::try_from(node)?
+    } else {
+        let fd = fdtable.get(olddirfd)?;
+        fd.as_dir()?
+    };
+    let newdir = if newdirfd == FdNum::CWD {
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
+        <Arc<dyn Directory>>::try_from(node)?
+    } else {
+        let fd = fdtable.get(newdirfd)?;
+        fd.as_dir()?
+    };
+
+    hard_link(
+        newdir,
+        &newpath,
+        olddir,
+        &oldpath,
+        flags.contains(LinkOptions::SYMLINK_FOLLOW),
+    )?;
+
     Ok(0)
 }
 

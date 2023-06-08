@@ -150,6 +150,7 @@ pub trait Directory: Any + Send + Sync {
     ) -> Result<Arc<dyn File>>;
     fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>>;
     fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
+    fn hard_link(&self, file_name: &FileName, node: Node) -> Result<()>;
     fn list_entries(&self) -> Vec<DirEntry>;
 
     fn mode(&self) -> FileMode {
@@ -338,6 +339,27 @@ pub fn set_mode(start_dir: Arc<dyn Directory>, path: &Path, mode: FileMode) -> R
     Ok(())
 }
 
+pub fn hard_link(
+    start_dir: Arc<dyn Directory>,
+    start_path: &Path,
+    target_dir: Arc<dyn Directory>,
+    target_path: &Path,
+    symlink_follow: bool,
+) -> Result<()> {
+    let target_node = if symlink_follow {
+        Node::from(lookup_and_resolve_node(target_dir, target_path)?)
+    } else {
+        lookup_node(target_dir, target_path)?
+    };
+    let (parent, filename) = find_parent(start_dir, start_path)?;
+    match filename {
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(filename) => parent.hard_link(filename, target_node),
+    }
+}
+
 pub struct TmpFsDirectory {
     internal: Mutex<TmpFsDirectoryInternal>,
 }
@@ -461,6 +483,12 @@ impl Directory for TmpFsDirectory {
             }
         }
     }
+
+    fn hard_link(&self, file_name: &FileName, node: Node) -> Result<()> {
+        self.internal.lock().items.insert(file_name.clone(), node);
+        Ok(())
+    }
+
     fn list_entries(&self) -> Vec<DirEntry> {
         let guard = self.internal.lock();
 

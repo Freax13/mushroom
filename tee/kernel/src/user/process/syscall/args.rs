@@ -576,3 +576,10 @@ pub struct LinuxDirent64 {
     pub name: [u8; 0],
     pub _padding: [u8; 5],
 }
+
+bitflags! {
+    pub struct LinkOptions {
+        const SYMLINK_FOLLOW = 0x400;
+        const EMPTY_PATH = 0x1000;
+    }
+}
