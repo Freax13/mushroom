@@ -1,4 +1,4 @@
-use core::{intrinsics::caller_location, panic::Location};
+use core::{intrinsics::caller_location, num::TryFromIntError, panic::Location};
 
 #[derive(Clone, Copy)]
 pub struct Error {
@@ -38,7 +38,7 @@ macro_rules! errors {
         impl Error {
             $(
                 #[track_caller]
-                pub fn $fn() -> Self {
+                pub fn $fn((): ()) -> Self {
                     Self::from_kind(ErrorKind::$variant)
                 }
             )*
@@ -60,6 +60,14 @@ errors! {
     Inval inval 22,
     NoSys no_sys 38,
     NameTooLong name_too_long 78,
+    Loop r#loop 90,
+}
+
+impl From<TryFromIntError> for Error {
+    #[track_caller]
+    fn from(_: TryFromIntError) -> Self {
+        Error::inval(())
+    }
 }
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;

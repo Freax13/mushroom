@@ -8,7 +8,10 @@ use goblin::{
 use x86_64::VirtAddr;
 
 use super::memory::{ActiveVirtualMemory, MemoryPermissions};
-use crate::{error::Result, fs::node::FileSnapshot};
+use crate::{
+    error::{Error, Result},
+    fs::node::FileSnapshot,
+};
 
 impl ActiveVirtualMemory<'_, '_> {
     pub fn load_elf(
@@ -67,7 +70,7 @@ impl ActiveVirtualMemory<'_, '_> {
             let addr = str_addr;
             self.write(str_addr, value.to_bytes_with_nul())?;
             str_addr += value.to_bytes_with_nul().len();
-            Ok(addr)
+            Result::<_, Error>::Ok(addr)
         };
 
         write(u64::try_from(argv.len()).unwrap()); // argc

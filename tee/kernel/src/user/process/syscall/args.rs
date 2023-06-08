@@ -33,7 +33,7 @@ macro_rules! bitflags {
 
         impl SyscallArg for $strukt {
             fn parse(value: u64) -> Result<Self> {
-                Self::from_bits(value).ok_or(Error::inval())
+                Self::from_bits(value).ok_or(Error::inval(()))
             }
 
             fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
@@ -76,7 +76,7 @@ macro_rules! enum_arg {
                     $(
                         value if value == Self::$variant as u64 => Ok(Self::$variant),
                     )*
-                    _ => Err(Error::inval()),
+                    _ => Err(Error::inval(())),
                 }
             }
 
@@ -225,7 +225,7 @@ impl SyscallArg for FdNum {
     fn parse(value: u64) -> Result<Self> {
         match i32::try_from(value) {
             Ok(fd) if fd >= 0 => Ok(Self(fd)),
-            _ => Err(Error::bad_f()),
+            _ => Err(Error::bad_f(())),
         }
     }
 

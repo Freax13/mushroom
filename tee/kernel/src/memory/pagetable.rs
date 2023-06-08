@@ -52,7 +52,7 @@ pub fn allocate_pml4() -> Result<PhysFrame> {
     // Allocate a frame for the new pml4.
     let frame = (&DUMB_FRAME_ALLOCATOR)
         .allocate_frame()
-        .ok_or(Error::no_mem())?;
+        .ok_or(Error::no_mem(()))?;
 
     // Copy the kernel entries into a temporary buffer.
     let pml4 = ActivePageTable::get();
@@ -883,7 +883,7 @@ impl ReservedFrameStorage {
     ) -> Result<ReservedFrameAllocation<'_>> {
         if self.frame.is_none() {
             // TODO: Use another allocator for this.
-            let frame = allocator.allocate_frame().ok_or(Error::no_mem())?;
+            let frame = allocator.allocate_frame().ok_or(Error::no_mem(()))?;
             self.frame = Some(frame);
         }
 

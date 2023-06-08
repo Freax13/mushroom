@@ -78,7 +78,7 @@ pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
         .iter()
         .try_fold(start_node, |node, segment| {
             let dir = match node {
-                Node::File(_) => return Err(Error::not_dir()),
+                Node::File(_) => return Err(Error::not_dir(())),
                 Node::Directory(dir) => dir,
             };
 
@@ -92,7 +92,7 @@ pub fn lookup_node(mut start_node: Node, path: &Path) -> Result<Node> {
 
 pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<dyn File>> {
     let mut start_node = match start_node {
-        Node::File(_) => return Err(Error::not_dir()),
+        Node::File(_) => return Err(Error::not_dir(())),
         Node::Directory(dir) => dir,
     };
     if path.is_absolute() {
@@ -108,7 +108,7 @@ pub fn create_file(start_node: Node, path: &Path, mode: FileMode) -> Result<Arc<
             PathSegment::FileName(file_name) => {
                 let dir = dir.get_node(file_name)?;
                 match dir {
-                    Node::File(_) => Err(Error::not_dir()),
+                    Node::File(_) => Err(Error::not_dir(())),
                     Node::Directory(dir) => Ok(dir),
                 }
             }
@@ -148,7 +148,7 @@ impl Directory for TmpFsDirectory {
             .lock()
             .get(path_segment)
             .cloned()
-            .ok_or(Error::no_ent())
+            .ok_or(Error::no_ent(()))
     }
 
     fn mkdir(&self, path_segment: FileName, create_new: bool) -> Result<Arc<dyn Directory>> {
@@ -162,10 +162,10 @@ impl Directory for TmpFsDirectory {
             }
             Entry::Occupied(entry) => {
                 if create_new {
-                    return Err(Error::exist());
+                    return Err(Error::exist(()));
                 }
                 match entry.get() {
-                    Node::File(_) => Err(Error::exist()),
+                    Node::File(_) => Err(Error::exist(())),
                     Node::Directory(dir) => Ok(dir.clone()),
                 }
             }
@@ -188,11 +188,11 @@ impl Directory for TmpFsDirectory {
             }
             Entry::Occupied(mut entry) => {
                 if create_new {
-                    return Err(Error::exist());
+                    return Err(Error::exist(()));
                 }
                 match entry.get_mut() {
                     Node::File(f) => Ok(f.clone()),
-                    Node::Directory(_) => Err(Error::exist()),
+                    Node::Directory(_) => Err(Error::exist(())),
                 }
             }
         }
@@ -220,7 +220,7 @@ impl File for TmpFsFile {
 
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
         let guard = self.content.lock();
-        let slice = guard.get(offset..).ok_or(Error::inval())?;
+        let slice = guard.get(offset..).ok_or(Error::inval(()))?;
         let len = cmp::min(slice.len(), buf.len());
         buf[..len].copy_from_slice(&slice[..len]);
         Ok(len)

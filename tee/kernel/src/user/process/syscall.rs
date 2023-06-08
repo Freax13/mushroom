@@ -207,7 +207,7 @@ fn open(
 
         let file = match node {
             Node::File(file) => file,
-            Node::Directory(_) => return Err(Error::is_dir()),
+            Node::Directory(_) => return Err(Error::is_dir(())),
         };
         let fd = thread
             .fdtable()
@@ -235,7 +235,7 @@ fn poll(
             let mut pollfd = Pollfd::zeroed();
             vm.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
         }
-        Result::Ok(())
+        Result::<_, Error>::Ok(())
     })?;
 
     if timeout != 0 {
@@ -284,7 +284,7 @@ fn mmap(
             todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
         }
     } else {
-        return Err(Error::inval());
+        return Err(Error::inval(()));
     }
 }
 
@@ -309,7 +309,7 @@ fn brk(brk_value: u64) -> SyscallResult {
         return Ok(0);
     }
 
-    Err(Error::no_mem())
+    Err(Error::no_mem(()))
 }
 
 #[syscall(no = 13)]
@@ -327,14 +327,14 @@ fn rt_sigaction(
     // FIXME: sigsetsize
 
     if !oldact.is_null() {
-        let sigaction = thread.sigaction.get(signum).ok_or(Error::inval())?;
+        let sigaction = thread.sigaction.get(signum).ok_or(Error::inval(()))?;
         vm_activator.activate(thread.virtual_memory(), |vm| {
             vm.write(oldact.get(), bytes_of(sigaction))
         })?;
     }
     if !act.is_null() {
         let virtual_memory = thread.virtual_memory().clone();
-        let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::inval())?;
+        let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::inval(()))?;
         vm_activator.activate(&virtual_memory, |vm| {
             vm.read(act.get(), bytes_of_mut(sigaction))
         })?;
@@ -503,7 +503,7 @@ fn execve(
             if argp == 0 {
                 break;
             }
-            let argp = VirtAddr::try_new(argp).map_err(|_| Error::fault())?;
+            let argp = VirtAddr::try_new(argp).map_err(|_| Error::fault(()))?;
             args.push(vm.read_cstring(argp, 0x1000)?);
         }
 
@@ -515,11 +515,11 @@ fn execve(
             if envp == 0 {
                 break;
             }
-            let envp = VirtAddr::try_new(envp).map_err(|_| Error::fault())?;
+            let envp = VirtAddr::try_new(envp).map_err(|_| Error::fault(()))?;
             envs.push(vm.read_cstring(envp, 0x1000)?);
         }
 
-        Result::Ok((pathname, args, envs))
+        Result::<_, Error>::Ok((pathname, args, envs))
     })?;
 
     let path = Path::new(pathname.as_bytes());
@@ -577,7 +577,7 @@ fn wait4(
         -1 => todo!(),
         0 => todo!(),
         1.. => {
-            let t = THREADS.by_id(pid as u32).ok_or_else(Error::child)?;
+            let t = THREADS.by_id(pid as u32).ok_or_else(|| Error::child(()))?;
 
             let mut guard = t.lock();
             if guard.dead {
@@ -632,7 +632,7 @@ fn sigaltstack(
 
         let allowed_flags = StackFlags::AUTODISARM;
         if !allowed_flags.contains(ss_value.flags) {
-            return Err(Error::inval());
+            return Err(Error::inval(()));
         }
 
         thread.sigaltstack = Some(ss_value);
@@ -685,16 +685,16 @@ fn futex(
             let woken = thread.process().futexes.wake(uaddr.get(), val, None);
             Ok(u64::from(woken))
         }
-        FutexOp::Fd => Err(Error::no_sys()),
-        FutexOp::Requeue => Err(Error::no_sys()),
-        FutexOp::CmpRequeue => Err(Error::no_sys()),
-        FutexOp::WakeOp => Err(Error::no_sys()),
-        FutexOp::LockPi => Err(Error::no_sys()),
-        FutexOp::UnlockPi => Err(Error::no_sys()),
-        FutexOp::TrylockPi => Err(Error::no_sys()),
+        FutexOp::Fd => Err(Error::no_sys(())),
+        FutexOp::Requeue => Err(Error::no_sys(())),
+        FutexOp::CmpRequeue => Err(Error::no_sys(())),
+        FutexOp::WakeOp => Err(Error::no_sys(())),
+        FutexOp::LockPi => Err(Error::no_sys(())),
+        FutexOp::UnlockPi => Err(Error::no_sys(())),
+        FutexOp::TrylockPi => Err(Error::no_sys(())),
         FutexOp::WaitBitset => {
             assert_eq!(utime, 0);
-            let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::inval())?;
+            let bitset = NonZeroU32::try_from(val3 as u32)?;
 
             vm_activator.activate(thread.virtual_memory(), |vm| {
                 thread
@@ -706,16 +706,16 @@ fn futex(
             Yield
         }
         FutexOp::WakeBitset => {
-            let bitset = NonZeroU32::new(val3 as u32).ok_or(Error::inval())?;
+            let bitset = NonZeroU32::try_from(val3 as u32)?;
             let woken = thread
                 .process()
                 .futexes
                 .wake(uaddr.get(), val, Some(bitset));
             Ok(u64::from(woken))
         }
-        FutexOp::WaitRequeuePi => Err(Error::no_sys()),
-        FutexOp::CmpRequeuePi => Err(Error::no_sys()),
-        FutexOp::LockPi2 => Err(Error::no_sys()),
+        FutexOp::WaitRequeuePi => Err(Error::no_sys(())),
+        FutexOp::CmpRequeuePi => Err(Error::no_sys(())),
+        FutexOp::LockPi2 => Err(Error::no_sys(())),
     }
 }
 

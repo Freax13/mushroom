@@ -249,9 +249,9 @@ impl Thread {
         vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
         let node = lookup_node(Node::Directory(ROOT_NODE.clone()), path)?;
-        let Node::File(file) = node else { return Err(Error::is_dir()) };
+        let Node::File(file) = node else { return Err(Error::is_dir(())) };
         if !file.mode().contains(FileMode::EXECUTE) {
-            return Err(Error::acces());
+            return Err(Error::acces(()));
         }
         let elf_file = file.read_snapshot()?;
 

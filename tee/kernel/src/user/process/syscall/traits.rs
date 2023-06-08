@@ -21,22 +21,26 @@ pub enum SyscallResult {
     Yield,
 }
 
-impl FromResidual<Result<Infallible, Error>> for SyscallResult {
-    fn from_residual(residual: Result<Infallible, Error>) -> Self {
+impl<E> FromResidual<Result<Infallible, E>> for SyscallResult
+where
+    E: Into<Error>,
+{
+    #[track_caller]
+    fn from_residual(residual: Result<Infallible, E>) -> Self {
         match residual {
             Ok(value) => match value {},
-            Err(err) => Self::Err(err),
+            Err(err) => Self::Err(err.into()),
         }
     }
 }
 
 impl SyscallArg for u32 {
     fn parse(value: u64) -> Result<Self> {
-        u32::try_from(value).map_err(|_| Error::inval())
+        Ok(u32::try_from(value)?)
     }
 
     fn display(f: &mut dyn fmt::Write, value: u64) -> fmt::Result {
-        if let Ok(value) = u32::try_from(value).map_err(|_| Error::inval()) {
+        if let Ok(value) = u32::try_from(value).map_err(|_| Error::inval(())) {
             write!(f, "{value}")
         } else {
             write!(f, "{value} (out of bounds)")
@@ -556,7 +560,7 @@ impl SyscallHandlers {
             .flatten()
             .ok_or_else(|| {
                 warn!("unsupported syscall: {syscall_no}");
-                Error::no_sys()
+                Error::no_sys(())
             })?;
 
         let res = (handler.exeute)(thread, vm_activator, arg0, arg1, arg2, arg3, arg4, arg5);

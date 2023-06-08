@@ -57,7 +57,7 @@ impl File for OutputFile {
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
-        Err(Error::inval())
+        Err(Error::inval(()))
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
@@ -65,7 +65,7 @@ impl File for OutputFile {
 
         // Make sure that writes always append.
         if *guard != offset {
-            return Err(Error::inval());
+            return Err(Error::inval(()));
         }
 
         supervisor::output(buf);
@@ -75,6 +75,6 @@ impl File for OutputFile {
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Err(Error::inval())
+        Err(Error::inval(()))
     }
 }
