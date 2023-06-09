@@ -167,7 +167,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             let mapping = state
                 .mappings
                 .iter()
-                .find(|mapping| mapping.contains(copy_start))
+                .find(|mapping| mapping.contains_page(page))
                 .ok_or(Error::fault(()))?;
             let ptr = unsafe { mapping.make_readable(page)? };
 
@@ -572,6 +572,10 @@ impl Mapping {
 
     pub fn contains(&self, addr: VirtAddr) -> bool {
         (self.addr..self.addr + self.len).contains(&addr)
+    }
+
+    pub fn contains_page(&self, page: Page) -> bool {
+        self.contains_range(page.start_address(), 0x1000)
     }
 
     pub fn contains_range(&self, addr: VirtAddr, size: u64) -> bool {
