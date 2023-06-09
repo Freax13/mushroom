@@ -37,7 +37,9 @@ use self::{
 use super::{
     fd::{
         dir::DirectoryFileDescription,
-        file::{ReadonlyFileFileDescription, WriteonlyFileFileDescription},
+        file::{
+            ReadWriteFileFileDescription, ReadonlyFileFileDescription, WriteonlyFileFileDescription,
+        },
         pipe,
     },
     memory::VirtualMemoryActivator,
@@ -221,7 +223,15 @@ fn open(
             todo!()
         }
     } else if flags.contains(OpenFlags::RDWR) {
-        todo!()
+        if flags.contains(OpenFlags::CREAT) {
+            let file = create_file(ROOT_NODE.clone(), &filename, mode)?;
+            let fd = thread
+                .fdtable()
+                .insert(ReadWriteFileFileDescription::new(file));
+            Ok(fd.get() as u64)
+        } else {
+            todo!()
+        }
     } else {
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
 

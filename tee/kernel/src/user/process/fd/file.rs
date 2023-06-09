@@ -86,3 +86,43 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         Ok(self.file.stat())
     }
 }
+
+/// A file description for files opened as read and write.
+pub struct ReadWriteFileFileDescription {
+    file: Arc<dyn File>,
+    cursor_idx: Mutex<usize>,
+}
+
+impl ReadWriteFileFileDescription {
+    pub fn new(file: Arc<dyn File>) -> Self {
+        Self {
+            file,
+            cursor_idx: Mutex::new(0),
+        }
+    }
+}
+
+impl OpenFileDescription for ReadWriteFileFileDescription {
+    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.read(*guard, buf)?;
+        *guard += len;
+        Ok(len)
+    }
+
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.write(*guard, buf)?;
+        *guard += len;
+        Ok(len)
+    }
+
+    fn set_mode(&self, mode: FileMode) -> Result<()> {
+        self.file.set_mode(mode);
+        Ok(())
+    }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.file.stat())
+    }
+}
