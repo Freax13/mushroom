@@ -313,6 +313,7 @@ bitflags! {
         const SHARED = 1 << 0;
         const PRIVATE = 1 << 1;
         const SHARED_VALIDATE = 1 << 0 | 1 << 1;
+        const FIXED = 1 << 4;
         const ANONYMOUS = 1 << 5;
         const STACK = 1 << 17;
     }

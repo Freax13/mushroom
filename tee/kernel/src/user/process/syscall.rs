@@ -356,32 +356,35 @@ fn mmap(
     fd: u64,
     offset: u64,
 ) -> SyscallResult {
+    let addr = if flags.contains(MmapFlags::FIXED) {
+        Some(addr.get())
+    } else {
+        None
+    };
+
     if flags.contains(MmapFlags::SHARED_VALIDATE) {
-        todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
+        todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::SHARED) {
-        todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
+        todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::STACK) {
             assert!(flags.contains(MmapFlags::ANONYMOUS));
             assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
-            assert_eq!(addr.get().as_u64(), 0);
             let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.allocate_stack(None, length)
+                vm.allocate_stack(addr, length)
             })?;
 
             Ok(addr.as_u64())
         } else if flags.contains(MmapFlags::ANONYMOUS) {
-            assert_eq!(addr.get().as_u64(), 0);
-
             let permissions = MemoryPermissions::from(prot);
             let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.mmap_zero(None, length, permissions)
+                vm.mmap_zero(addr, length, permissions)
             })?;
 
             Ok(addr.as_u64())
         } else {
-            todo!("{addr} {length} {prot:?} {flags:?} {fd} {offset}");
+            todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
         }
     } else {
         return Err(Error::inval(()));
