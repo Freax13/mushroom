@@ -593,3 +593,9 @@ bitflags! {
         const EMPTY_PATH = 0x1000;
     }
 }
+
+enum_arg! {
+    pub enum Advice {
+        Free = 8,
+    }
+}

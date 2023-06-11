@@ -23,7 +23,7 @@ use crate::{
 
 use self::{
     args::{
-        ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
+        Advice, ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
         FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags,
         Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions, WaitOptions,
         Whence,
@@ -124,6 +124,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysReadv);
     handlers.register(SysWritev);
     handlers.register(SysAccess);
+    handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
@@ -670,6 +671,16 @@ fn access(
     let _node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
     // FIXME: implement the actual access checks.
     Ok(0)
+}
+
+#[syscall(no = 28)]
+fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
+    match advice {
+        Advice::Free => {
+            // Ignore the advise.
+            Ok(0)
+        }
+    }
 }
 
 #[syscall(no = 32)]
