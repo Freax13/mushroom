@@ -167,7 +167,7 @@ fn read(
     let fd = thread.fdtable().get(fd)?;
 
     let buf = buf.get();
-    let count = usize::try_from(count).unwrap();
+    let count = usize::try_from(count)?;
 
     let mut chunk = [0u8; 128];
     let max_chunk_len = chunk.len();
@@ -179,7 +179,7 @@ fn read(
 
     vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
 
-    let len = u64::try_from(len).unwrap();
+    let len = u64::try_from(len)?;
 
     Ok(len)
 }
@@ -195,7 +195,7 @@ fn write(
     let fd = thread.fdtable().get(fd)?;
 
     let buf = buf.get();
-    let count = usize::try_from(count).unwrap();
+    let count = usize::try_from(count)?;
 
     let mut chunk = [0u8; 128];
     let max_chunk_len = chunk.len();
@@ -205,7 +205,7 @@ fn write(
 
     let len = fd.write(chunk)?;
 
-    let len = u64::try_from(len).unwrap();
+    let len = u64::try_from(len)?;
     Ok(len)
 }
 
@@ -450,7 +450,7 @@ fn rt_sigaction(
     oldact: Pointer<Sigaction>,
     sigsetsize: u64,
 ) -> SyscallResult {
-    let signum = usize::try_from(signum).unwrap();
+    let signum = usize::try_from(signum)?;
 
     // FIXME: SIGKILL and SIGSTOP are special
     // FIXME: sigsetsize
@@ -1388,7 +1388,7 @@ fn copy_file_range(
 
         // Update len and copied.
         len -= num;
-        let num = u64::try_from(num).unwrap();
+        let num = u64::try_from(num)?;
         copied += num;
     }
 
