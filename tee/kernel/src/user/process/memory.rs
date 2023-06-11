@@ -32,7 +32,7 @@ use crate::{
         frame::DUMB_FRAME_ALLOCATOR,
         pagetable::{
             add_flags, allocate_pml4, entry_for_page, map_page, remap_page, remove_flags,
-            PageTableFlags, PresentPageTableEntry,
+            unmap_page, PageTableFlags, PresentPageTableEntry,
         },
         temporary::{copy_into_frame, zero_frame},
     },
@@ -233,7 +233,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             let mapping = state
                 .mappings
                 .iter()
-                .find(|mapping| mapping.contains(copy_start))
+                .find(|mapping| mapping.contains_page(page))
                 .ok_or(Error::fault(()))?;
             let ptr = unsafe { mapping.make_writable(page)? };
 
@@ -259,8 +259,10 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         }
 
         if !addr.is_aligned(0x1000u64) || len % 0x1000 != 0 {
-            unimplemented!()
+            return Err(Error::inval(()));
         }
+        let addr = Page::from_start_address(addr).unwrap();
+        let num_pages = len / 4096;
 
         let mut state = self.state.lock();
 
@@ -268,15 +270,15 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             let mapping = state
                 .mappings
                 .iter_mut()
-                .filter(|m| m.contains_range(addr, len))
-                .min_by_key(|m| m.addr)
+                .filter(|m| m.contains_page_range(addr, num_pages))
+                .min_by_key(|m| m.start)
                 .ok_or(Error::fault(()))?;
 
-            let new_addr = cmp::max(addr, mapping.addr);
-            let len = len - (new_addr - addr);
-            let addr = new_addr;
+            let new_page = cmp::max(addr, mapping.start);
+            let len = num_pages - (new_page - addr);
+            let addr = new_page;
 
-            let start_offset = addr - mapping.addr;
+            let start_offset = addr - mapping.start;
             if start_offset > 0 {
                 let mut new_mapping = mapping.split(start_offset);
                 let new_permissions = MemoryPermissions::from(prot);
@@ -287,11 +289,9 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 let removed_permissions = !new_permissions & old_permissions;
                 let flags = PageTableFlags::from(removed_permissions);
                 if !flags.is_empty() {
-                    let start = new_mapping.addr;
-                    let end_inclusive = new_mapping.end() - 1u64;
-                    let start_page = Page::containing_address(start);
-                    let end_inclusive_page = Page::containing_address(end_inclusive);
-                    for page in start_page..=end_inclusive_page {
+                    let start = new_mapping.start;
+                    let end_inclusive = new_mapping.end();
+                    for page in start..end_inclusive {
                         unsafe {
                             remove_flags(page, flags);
                         }
@@ -303,9 +303,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 continue;
             }
 
-            assert_eq!(mapping.addr, addr);
-
-            let new_mapping = if mapping.len > len {
+            let new_mapping = if mapping.num_pages > len {
                 Some(mapping.split(len))
             } else {
                 None
@@ -318,11 +316,9 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             let removed_permissions = !new_permissions & old_permissions;
             let flags = PageTableFlags::from(removed_permissions);
             if !flags.is_empty() {
-                let start = mapping.addr;
+                let start = mapping.start;
                 let end_inclusive = mapping.end() - 1u64;
-                let start_page = Page::containing_address(start);
-                let end_inclusive_page = Page::containing_address(end_inclusive);
-                for page in start_page..=end_inclusive_page {
+                for page in start..=end_inclusive {
                     unsafe {
                         remove_flags(page, flags);
                     }
@@ -379,7 +375,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         addr: Option<VirtAddr>,
         len: u64,
         permissions: MemoryPermissions,
-        backing: Backing,
+        mut backing: Backing,
     ) -> Result<VirtAddr> {
         let mut state = self.state.lock();
 
@@ -393,122 +389,66 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             permissions
         );
 
-        let mapping = Mapping {
-            addr,
-            len,
-            permissions,
-            backing,
-        };
-
-        fn ensure_page_is_mapped(page: Page, permissions: MemoryPermissions) -> Result<(), Error> {
-            let entry = entry_for_page(page);
-            if entry.is_some() {
-                return Ok(());
-            }
-
-            let frame = (&DUMB_FRAME_ALLOCATOR)
-                .allocate_frame()
-                .ok_or(Error::no_mem(()))?;
-            unsafe {
-                zero_frame(frame)?;
-            }
-            let entry = PresentPageTableEntry::new(
-                frame,
-                PageTableFlags::USER | PageTableFlags::from(permissions),
-            );
-            unsafe { map_page(page, entry, &mut &DUMB_FRAME_ALLOCATOR) }
-        }
-
-        fn copy_unaligned_start_and_end(start: VirtAddr, end: VirtAddr, backing: &Backing) {
-            // Collect the unaligned part into a buffer.
-            let mut buffer = [0; 0x1000];
-            let start_idx = start.as_u64() as usize % 0x1000;
-            let end_idx = end.as_u64() as usize % 0x1000;
-            let buffer = &mut buffer[start_idx..end_idx];
-            backing.copy_initial_memory_to_slice(0, buffer);
-
-            // Copy the unaligned part into the page.
-            without_smap(|| {
-                without_write_protect(|| unsafe {
-                    volatile_copy_nonoverlapping_memory(
-                        start.as_mut_ptr(),
-                        buffer.as_ptr(),
-                        buffer.len(),
-                    );
-                })
-            });
-        }
-
-        fn copy_unaligned_start(start: VirtAddr, backing: &Backing) {
-            // Collect the unaligned part into a buffer.
-            let mut buffer = [0; 0x1000];
-            let start_idx = start.as_u64() as usize % 0x1000;
-            let buffer = &mut buffer[start_idx..];
-            backing.copy_initial_memory_to_slice(0, buffer);
-
-            // Copy the unaligned part into the page.
-            without_smap(|| {
-                without_write_protect(|| unsafe {
-                    volatile_copy_nonoverlapping_memory(
-                        start.as_mut_ptr(),
-                        buffer.as_ptr(),
-                        buffer.len(),
-                    );
-                })
-            });
-        }
-
-        fn copy_unaligned_end(end: VirtAddr, backing: &Backing, total_len: u64) {
-            // Collect the unaligned part into a buffer.
-            let mut buffer = [0; 0x1000];
-            let buffer_len_as_u64 = end.as_u64() % 0x1000;
-            let end_idx = buffer_len_as_u64 as usize;
-            let buffer = &mut buffer[..end_idx];
-            backing.copy_initial_memory_to_slice(total_len - buffer_len_as_u64, buffer);
-
-            // Copy the unaligned part into the page.
-            without_smap(|| {
-                without_write_protect(|| unsafe {
-                    volatile_copy_nonoverlapping_memory(
-                        end.as_mut_ptr::<u8>().sub(end_idx),
-                        buffer.as_ptr(),
-                        buffer.len(),
-                    );
-                })
-            });
-        }
+        state.unmap(addr, len);
 
         // If the mapping isn't page aligned, immediately map pages for the unaligned start and end.
         match (addr.is_aligned(0x1000u64), end.is_aligned(0x1000u64)) {
             (false, false) => {
-                let start_page = Page::containing_address(addr);
-                let end_page = Page::containing_address(end);
+                let start_page: Page = Page::containing_address(addr);
+                let end_page: Page = Page::containing_address(end);
                 if start_page == end_page {
-                    ensure_page_is_mapped(start_page, permissions)?;
-                    copy_unaligned_start_and_end(addr, end, &mapping.backing);
+                    state.map_unaligned(addr, len, &backing, 0, permissions)?;
                 } else {
-                    ensure_page_is_mapped(start_page, permissions)?;
-                    copy_unaligned_start(addr, &mapping.backing);
-                    ensure_page_is_mapped(end_page, permissions)?;
-                    copy_unaligned_end(end, &mapping.backing, len);
+                    let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
+                    state.map_unaligned(addr, unaligned_len, &backing, 0, permissions)?;
+
+                    let unaligned_len = end.as_u64() % 0x1000;
+                    state.map_unaligned(
+                        end - unaligned_len,
+                        unaligned_len,
+                        &backing,
+                        len - unaligned_len,
+                        permissions,
+                    )?;
                 }
             }
             (false, true) => {
-                let start_page = Page::containing_address(addr);
-                ensure_page_is_mapped(start_page, permissions)?;
-                copy_unaligned_start(addr, &mapping.backing);
+                let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
+                state.map_unaligned(addr, unaligned_len, &backing, 0, permissions)?;
             }
             (true, false) => {
-                let end_page = Page::containing_address(end);
-                ensure_page_is_mapped(end_page, permissions)?;
-                copy_unaligned_end(end, &mapping.backing, len);
+                let unaligned_len = end.as_u64() % 0x1000;
+                state.map_unaligned(
+                    end - unaligned_len,
+                    unaligned_len,
+                    &backing,
+                    len - unaligned_len,
+                    permissions,
+                )?;
             }
             (true, true) => {}
         }
 
-        let addr = mapping.addr;
+        let start_page = Page::containing_address(addr.align_up(0x1000u64));
+        let end_page = Page::containing_address(end);
+        if end_page > start_page {
+            let num_pages = end_page - start_page;
+            let backing = if addr.is_aligned(0x1000u64) {
+                backing
+            } else {
+                let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
+                backing.split(unaligned_len)
+            };
 
-        state.mappings.push(mapping);
+            let mapping = Mapping {
+                start: start_page,
+                num_pages,
+                permissions,
+                backing,
+            };
+
+            state.mappings.push(mapping);
+        }
 
         Ok(addr)
     }
@@ -556,48 +496,174 @@ impl VirtualMemoryState {
             })
             .unwrap()
     }
+
+    fn map_unaligned(
+        &mut self,
+        start: VirtAddr,
+        len: u64,
+        backing: &Backing,
+        offset: u64,
+        permissions: MemoryPermissions,
+    ) -> Result<()> {
+        assert!(len <= 0x1000);
+        let end = start + len;
+        let page = Page::containing_address(start);
+        assert_eq!(page, Page::containing_address(end - 1u64));
+
+        // Collect the unaligned part into a buffer.
+        let mut buffer = [0; 0x1000];
+        let start_idx = start.as_u64() as usize % 0x1000;
+        let end_idx = end.as_u64() as usize % 0x1000;
+        let end_idx = if end_idx == 0 { 0x1000 } else { end_idx };
+        let buffer = &mut buffer[start_idx..end_idx];
+        backing.copy_initial_memory_to_slice(offset, buffer);
+
+        if let Some(existing_mapping) = self.mappings.iter_mut().find(|m| m.contains_page(page)) {
+            let mapping = if existing_mapping.num_pages > 1 {
+                let mapping = existing_mapping.split(existing_mapping.num_pages - 1);
+                self.mappings.push(mapping);
+                self.mappings.last_mut().unwrap()
+            } else {
+                existing_mapping
+            };
+
+            mapping.permissions |= permissions;
+
+            unsafe {
+                mapping.remove_cow(page)?;
+            }
+        } else {
+            let mapping = Mapping {
+                start: page,
+                num_pages: 1,
+                permissions,
+                backing: Backing::Zero,
+            };
+            unsafe {
+                mapping.remove_cow(page)?;
+            }
+            self.mappings.push(mapping);
+        }
+
+        without_smap(|| {
+            without_write_protect(|| unsafe {
+                volatile_copy_nonoverlapping_memory(
+                    start.as_mut_ptr(),
+                    buffer.as_ptr(),
+                    buffer.len(),
+                );
+            })
+        });
+
+        Ok(())
+    }
+
+    fn unmap(&mut self, addr: VirtAddr, len: u64) {
+        // Page align the start.
+        let start = addr.align_up(0x1000u64);
+        let len = len.saturating_sub(start - addr);
+        // Page align the end.
+        let len = align_down(len, 0x1000);
+
+        let end = start + len;
+        let start = Page::containing_address(start);
+        let end = Page::containing_address(end);
+        if start == end {
+            return;
+        }
+
+        debug!("unmapping {addr:?}-{end:?}");
+
+        let mut i = 0;
+        while let Some(mapping) = self.mappings.get_mut(i) {
+            if !mapping.contains_page_range(start, end - start) {
+                i += 1;
+                continue;
+            }
+
+            if mapping.start >= start && mapping.start + mapping.num_pages <= end {
+                for page in mapping.start..mapping.end() {
+                    if entry_for_page(page).is_some() {
+                        unsafe {
+                            unmap_page(page);
+                        }
+                    }
+                }
+                self.mappings.swap_remove(i);
+                continue;
+            }
+
+            if start > mapping.start {
+                let offset = start - mapping.start;
+                let new_mapping = mapping.split(offset);
+                self.mappings.push(new_mapping);
+                continue;
+            }
+
+            if mapping.end() > end {
+                let offset = end - mapping.start;
+                let new_mapping = mapping.split(offset);
+                self.mappings.push(new_mapping);
+                continue;
+            }
+
+            unreachable!()
+        }
+    }
 }
 
 pub struct Mapping {
-    addr: VirtAddr,
-    len: u64,
+    start: Page,
+    num_pages: u64,
     permissions: MemoryPermissions,
     backing: Backing,
 }
 
 impl Mapping {
-    pub fn end(&self) -> VirtAddr {
-        self.addr + self.len
+    pub fn end(&self) -> Page {
+        self.start + self.num_pages
     }
 
     pub fn contains(&self, addr: VirtAddr) -> bool {
-        (self.addr..self.addr + self.len).contains(&addr)
+        self.contains_page(Page::containing_address(addr))
     }
 
     pub fn contains_page(&self, page: Page) -> bool {
-        self.contains_range(page.start_address(), 0x1000)
+        (self.start..self.start + self.num_pages).contains(&page)
     }
 
+    /// Returns true if the mapping contains any memory in the specified range.
     pub fn contains_range(&self, addr: VirtAddr, size: u64) -> bool {
         let Some(sizem1) = size.checked_sub(1) else { return false; };
         let end = addr + sizem1;
 
         self.contains(addr)
             || self.contains(end)
-            || (addr..=end).contains(&self.addr)
+            || (addr..=end).contains(&self.start.start_address())
+            || (addr..=end).contains(&(self.end().start_address() - 1u64))
+    }
+
+    /// Returns true if the mapping contains any memory in the specified range.
+    pub fn contains_page_range(&self, addr: Page, num_pages: u64) -> bool {
+        let Some(sizem1) = num_pages.checked_sub(1) else { return false; };
+        let end = addr + sizem1;
+
+        self.contains_page(addr)
+            || self.contains_page(end)
+            || (addr..=end).contains(&self.start)
             || (addr..=end).contains(&(self.end() - 1u64))
     }
 
-    /// Split the mapping into two parts. `self` will contain `[..offset)` and
-    /// the returned mapping will contain `[offset..]`
-    pub fn split(&mut self, offset: u64) -> Self {
-        assert!(self.len > offset);
-        let new_backing = self.backing.split(offset);
-        let new_len = self.len - offset;
-        self.len = offset;
+    /// Split the mapping into two parts. `self` will contain `[..offset_in_pages)` and
+    /// the returned mapping will contain `[offset_in_pages..]`
+    pub fn split(&mut self, offset_in_pages: u64) -> Self {
+        assert!(self.num_pages > offset_in_pages);
+        let new_backing = self.backing.split(offset_in_pages);
+        let new_len = self.num_pages - offset_in_pages;
+        self.num_pages = offset_in_pages;
         Self {
-            addr: self.addr + offset,
-            len: new_len,
+            start: self.start + offset_in_pages,
+            num_pages: new_len,
             permissions: self.permissions,
             backing: new_backing,
         }
@@ -707,55 +773,67 @@ impl Mapping {
         } else {
             match &self.backing {
                 Backing::File(file_backing) => {
-                    match &*file_backing.bytes {
-                        Cow::Borrowed(bytes) => {
-                            // FIXME: Get rid of as_u64
-                            let offset = usize::try_from(
-                                file_backing.offset + (page.start_address() - self.addr),
-                            )
-                            .unwrap();
-                            let backing_bytes = &bytes[offset..][..0x1000];
-                            let backing_addr =
-                                VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
-                            let backing_page =
-                                Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
-                            let backing_entry = entry_for_page(backing_page).unwrap();
-
-                            let mut flags = PageTableFlags::USER;
-                            if self.permissions.contains(MemoryPermissions::EXECUTE) {
-                                flags |= PageTableFlags::EXECUTABLE;
-                            }
-                            flags |= PageTableFlags::COW;
-                            let new_entry =
-                                PresentPageTableEntry::new(backing_entry.frame(), flags);
-                            unsafe {
-                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
-                            }
+                    let aligned_static_bytes = if let Cow::Borrowed(bytes) = &*file_backing.bytes {
+                        let offset =
+                            usize::try_from(file_backing.offset + (page - self.start) * 0x1000)
+                                .unwrap();
+                        let backing_bytes = &bytes[offset..][..0x1000];
+                        let backing_addr =
+                            VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
+                        if backing_addr.is_aligned(0x1000u64) {
+                            Some(backing_addr)
+                        } else {
+                            None
                         }
-                        Cow::Owned(bytes) => {
-                            let offset = usize::try_from(
-                                file_backing.offset + (page.start_address() - self.addr),
-                            )
-                            .unwrap();
-                            let backing_bytes = &bytes[offset..][..0x1000];
-                            let backing_bytes = <&[u8; 4096]>::try_from(backing_bytes).unwrap();
+                    } else {
+                        None
+                    };
 
-                            let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+                    if let Some(backing_addr) = aligned_static_bytes {
+                        let backing_page =
+                            Page::<Size4KiB>::from_start_address(backing_addr).unwrap();
+                        let backing_entry = entry_for_page(backing_page).unwrap();
+
+                        let mut flags = PageTableFlags::USER;
+                        if self.permissions.contains(MemoryPermissions::EXECUTE) {
+                            flags |= PageTableFlags::EXECUTABLE;
+                        }
+                        flags |= PageTableFlags::COW;
+                        let new_entry = PresentPageTableEntry::new(backing_entry.frame(), flags);
+                        unsafe {
+                            map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
+                        }
+                    } else {
+                        let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+
+                        let offset =
+                            usize::try_from(file_backing.offset + (page - self.start) * 0x1000)
+                                .unwrap();
+                        let bytes = &file_backing.bytes[offset..];
+                        if bytes.len() >= 0x1000 {
+                            let backing_bytes = &bytes[..0x1000];
+                            let backing_bytes = <&[u8; 4096]>::try_from(backing_bytes).unwrap();
                             unsafe {
                                 copy_into_frame(frame, backing_bytes)?;
                             }
-
-                            let mut flags = PageTableFlags::USER;
-                            if self.permissions.contains(MemoryPermissions::EXECUTE) {
-                                flags |= PageTableFlags::EXECUTABLE;
-                            }
-                            if self.permissions.contains(MemoryPermissions::WRITE) {
-                                flags |= PageTableFlags::WRITABLE;
-                            }
-                            let new_entry = PresentPageTableEntry::new(frame, flags);
+                        } else {
+                            let mut buf = [0; 0x1000];
+                            buf[..bytes.len()].copy_from_slice(bytes);
                             unsafe {
-                                map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
+                                copy_into_frame(frame, &buf)?;
                             }
+                        }
+
+                        let mut flags = PageTableFlags::USER;
+                        if self.permissions.contains(MemoryPermissions::EXECUTE) {
+                            flags |= PageTableFlags::EXECUTABLE;
+                        }
+                        if self.permissions.contains(MemoryPermissions::WRITE) {
+                            flags |= PageTableFlags::WRITABLE;
+                        }
+                        let new_entry = PresentPageTableEntry::new(frame, flags);
+                        unsafe {
+                            map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
                         }
                     }
                 }
@@ -813,6 +891,7 @@ impl From<MemoryPermissions> for PageTableFlags {
     }
 }
 
+#[derive(Clone)]
 enum Backing {
     File(FileBacking),
     Zero,
@@ -831,9 +910,9 @@ impl Backing {
     }
 
     /// In some situations we can't always let the backing provide the frames
-    /// for virtual memory e.g. when two mappings with different backings
-    /// overlap. In those cases a fresh frame will be allocated and the
-    /// backing's memory will be copied into it.
+    /// for virtual memory e.g. if the mapping isn't page aligned. In those
+    /// cases a fresh frame will be allocated and the backing's memory will be
+    /// copied into it.
     pub fn copy_initial_memory_to_slice(&self, offset: u64, buf: &mut [u8]) {
         match self {
             Backing::File(backing) => {
@@ -848,6 +927,7 @@ impl Backing {
     }
 }
 
+#[derive(Clone)]
 struct FileBacking {
     offset: u64,
     bytes: FileSnapshot,
