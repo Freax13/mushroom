@@ -652,7 +652,7 @@ impl SyscallHandlers {
             vm_activator: RefCell::new(vm_activator),
         };
 
-        if !matches!(syscall_no, 0 | 1) && thread.tid() != 100 {
+        if !matches!(syscall_no, 0 | 1) && thread.tid() != 1 {
             trace!(
                 "core={} tid={} @ {formatted_syscall} = {res:?}",
                 PerCpu::get().idx,
