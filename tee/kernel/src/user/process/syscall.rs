@@ -386,7 +386,14 @@ fn mmap(
 
             Ok(addr.as_u64())
         } else {
-            todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
+            let fd = FdNum::parse(fd)?;
+            let fd = thread.fdtable().get(fd)?;
+
+            let permissions = MemoryPermissions::from(prot);
+            let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
+                fd.mmap(vm, addr, offset, length, permissions)
+            })?;
+            Ok(addr.as_u64())
         }
     } else {
         return Err(Error::inval(()));

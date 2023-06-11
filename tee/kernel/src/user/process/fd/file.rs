@@ -1,10 +1,14 @@
 use alloc::sync::Arc;
 use spin::Mutex;
+use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
     fs::node::File,
-    user::process::syscall::args::{FileMode, Stat, Whence},
+    user::process::{
+        memory::{ActiveVirtualMemory, MemoryPermissions},
+        syscall::args::{FileMode, Stat, Whence},
+    },
 };
 
 use super::OpenFileDescription;
@@ -59,6 +63,18 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         Ok(self.file.stat())
+    }
+
+    fn mmap(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        addr: Option<VirtAddr>,
+        offset: u64,
+        len: u64,
+        permissions: MemoryPermissions,
+    ) -> Result<VirtAddr> {
+        let snapshot = self.file.read_snapshot()?;
+        vm.mmap_into(addr, len, offset, snapshot, permissions)
     }
 }
 

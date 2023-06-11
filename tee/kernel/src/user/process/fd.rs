@@ -5,13 +5,17 @@ use core::{
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use spin::Mutex;
+use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
     fs::node::{DirEntry, Directory},
 };
 
-use super::syscall::args::{FdNum, FileMode, Stat, Whence};
+use super::{
+    memory::{ActiveVirtualMemory, MemoryPermissions},
+    syscall::args::{FdNum, FileMode, Stat, Whence},
+};
 
 pub mod dir;
 pub mod file;
@@ -164,5 +168,21 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn getdents64(&self, capacity: usize) -> Result<Vec<DirEntry>> {
         let _ = capacity;
         Err(Error::not_dir(()))
+    }
+
+    fn mmap(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        addr: Option<VirtAddr>,
+        offset: u64,
+        len: u64,
+        permissions: MemoryPermissions,
+    ) -> Result<VirtAddr> {
+        let _ = vm;
+        let _ = addr;
+        let _ = offset;
+        let _ = len;
+        let _ = permissions;
+        Err(Error::io(()))
     }
 }
