@@ -1,0 +1,118 @@
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+[tasks.cargo]
+command = "cargo"
+cwd = "${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}"
+
+[tasks.default]
+alias = "build"
+
+[tasks.build]
+dependencies = ["build-tee"]
+
+[tasks.build-tee]
+dependencies = ["build-supervisor", "build-kernel", "build-init"]
+
+[tasks.build-supervisor]
+dependencies = ["build-supervisor-development", "build-supervisor-production"]
+
+[tasks.build-supervisor-development]
+extend = "cargo"
+condition = { profiles = ["development"] }
+args = [
+    "build",
+    "-p",
+    "supervisor",
+    "--target",
+    "supervisor/supervisor.json",
+    "--profile",
+    "supervisor",
+    "-Z",
+    "build-std=core,alloc,compiler_builtins",
+    "-Z",
+    "build-std-features=compiler-builtins-mem",
+]
+env = { RUSTFLAGS = "-Z cf-protection=return" }
+
+[tasks.build-supervisor-production]
+extend = "cargo"
+condition = { profiles = ["production"] }
+args = [
+    "build",
+    "-p",
+    "supervisor",
+    "--target",
+    "supervisor/supervisor.json",
+    "--profile",
+    "supervisor-release",
+    "-Z",
+    "build-std=core,alloc,compiler_builtins",
+    "-Z",
+    "build-std-features=compiler-builtins-mem,panic_immediate_abort",
+    "--features",
+    "harden",
+]
+env = { RUSTFLAGS = "-Z cf-protection=return" }
+
+[tasks.build-kernel]
+dependencies = ["build-kernel-development", "build-kernel-production"]
+
+[tasks.build-kernel-development]
+extend = "cargo"
+condition = { profiles = ["development"] }
+args = [
+    "build",
+    "-p",
+    "kernel",
+    "--target",
+    "x86_64-unknown-none",
+    "--profile",
+    "kernel",
+    "-Z",
+    "build-std=core,alloc",
+]
+env = { RUSTFLAGS = { unset = true } }
+
+[tasks.build-kernel-production]
+extend = "cargo"
+condition = { profiles = ["production"] }
+args = [
+    "build",
+    "-p",
+    "kernel",
+    "--target",
+    "x86_64-unknown-none",
+    "--profile",
+    "kernel",
+    "-Z",
+    "build-std=core,alloc",
+    "--features",
+    "harden",
+]
+env = { RUSTFLAGS = { unset = true } }
+
+[tasks.build-init]
+dependencies = ["build-init-development", "build-init-production"]
+
+[tasks.build-init-development]
+extend = "cargo"
+condition = { profiles = ["development"] }
+args = ["build", "-p", "init", "--target", "x86_64-unknown-linux-musl"]
+
+[tasks.build-init-production]
+extend = "cargo"
+condition = { profiles = ["production"] }
+args = [
+    "build",
+    "-p",
+    "init",
+    "--target",
+    "x86_64-unknown-linux-musl",
+    "--release",
+]
+
+[tasks.clean-tee]
+extend = "cargo"
+args = ["clean"]

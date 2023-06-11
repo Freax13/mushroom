@@ -1,0 +1,50 @@
+extend = "../tee/Makefile.toml"
+
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+[tasks.default]
+alias = "build"
+
+[tasks.build]
+dependencies = ["build-tee", "build-mushroom"]
+
+[tasks.build-mushroom]
+dependencies = ["build-mushroom-development", "build-mushroom-production"]
+
+[tasks.build-mushroom-development]
+condition = { profiles = ["development"] }
+command = "cargo"
+args = ["build", "-p", "mushroom", "--features", "bin"]
+
+[tasks.build-mushroom-production]
+condition = { profiles = ["production"] }
+command = "cargo"
+args = ["build", "-p", "mushroom", "--features", "bin", "--release"]
+
+[tasks.run]
+dependencies = ["run-development", "run-production"]
+
+[tasks.run-development]
+condition = { profiles = ["development"] }
+dependencies = ["build"]
+script = "target/debug/mushroom $@"
+[tasks.run-development.env]
+SUPERVISOR = "../tee/target/supervisor/supervisor/supervisor"
+KERNEL = "../tee/target/x86_64-unknown-none/kernel/kernel"
+INIT = "../tee/target/x86_64-unknown-linux-musl/debug/init"
+
+[tasks.run-production]
+condition = { profiles = ["production"] }
+dependencies = ["build"]
+script = "target/release/mushroom $@"
+[tasks.run-production.env]
+SUPERVISOR = "../tee/target/supervisor/supervisor-release/supervisor"
+KERNEL = "../tee/target/x86_64-unknown-none/kernel/kernel"
+INIT = "../tee/target/x86_64-unknown-linux-musl/release/init"
+
+[tasks.clean]
+dependencies = ["clean-tee"]
+command = "cargo"
+args = ["clean"]
