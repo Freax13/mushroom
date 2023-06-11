@@ -15,8 +15,7 @@ use crate::{
     error::{Error, Result},
     fs::node::{
         create_directory, create_file, create_link, hard_link, lookup_and_resolve_node,
-        lookup_node, read_link, set_mode, unlink_dir, unlink_file, Directory, Node, NonLinkNode,
-        ROOT_NODE,
+        lookup_node, read_link, set_mode, unlink_dir, unlink_file, Directory, Node, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -220,38 +219,28 @@ fn open(
     let filename =
         vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
 
-    if flags.contains(OpenFlags::WRONLY) {
-        if flags.contains(OpenFlags::CREAT) {
-            let file = create_file(ROOT_NODE.clone(), &filename, mode)?;
-            let fd = thread
-                .fdtable()
-                .insert(WriteonlyFileFileDescription::new(file));
-            Ok(fd.get() as u64)
-        } else {
-            todo!()
-        }
-    } else if flags.contains(OpenFlags::RDWR) {
-        if flags.contains(OpenFlags::CREAT) {
-            let file = create_file(ROOT_NODE.clone(), &filename, mode)?;
-            let fd = thread
-                .fdtable()
-                .insert(ReadWriteFileFileDescription::new(file));
-            Ok(fd.get() as u64)
-        } else {
-            todo!()
-        }
+    let file = if flags.contains(OpenFlags::CREAT) {
+        create_file(ROOT_NODE.clone(), &filename, mode)?
     } else {
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
+        node.try_into()?
+    };
 
-        let file = match node {
-            NonLinkNode::File(file) => file,
-            NonLinkNode::Directory(_) => return Err(Error::is_dir(())),
-        };
-        let fd = thread
+    let fd = if flags.contains(OpenFlags::WRONLY) {
+        thread
             .fdtable()
-            .insert(ReadonlyFileFileDescription::new(file));
-        Ok(fd.get() as u64)
-    }
+            .insert(WriteonlyFileFileDescription::new(file))
+    } else if flags.contains(OpenFlags::RDWR) {
+        thread
+            .fdtable()
+            .insert(ReadWriteFileFileDescription::new(file))
+    } else {
+        thread
+            .fdtable()
+            .insert(ReadonlyFileFileDescription::new(file))
+    };
+
+    Ok(fd.get() as u64)
 }
 
 #[syscall(no = 3)]

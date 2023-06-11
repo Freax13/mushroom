@@ -1,6 +1,6 @@
 use core::ffi::CStr;
 
-use alloc::borrow::ToOwned;
+use alloc::{borrow::ToOwned, sync::Arc};
 use goblin::{
     elf::Elf,
     elf64::{
@@ -17,7 +17,7 @@ use super::{
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, FileSnapshot, NonLinkNode, ROOT_NODE},
+        node::{lookup_and_resolve_node, File, FileSnapshot, ROOT_NODE},
         Path,
     },
 };
@@ -89,7 +89,7 @@ impl ActiveVirtualMemory<'_, '_> {
         if let Some(interpreter) = interpreter {
             let path = Path::new(interpreter.as_bytes())?;
             let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
-            let NonLinkNode::File(file) = node else { return Err(Error::is_dir(())) };
+            let file: Arc<dyn File> = node.try_into()?;
             if !file.mode().contains(FileMode::EXECUTE) {
                 return Err(Error::acces(()));
             }

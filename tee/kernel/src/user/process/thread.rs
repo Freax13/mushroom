@@ -22,7 +22,7 @@ use x86_64::{
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, NonLinkNode, ROOT_NODE},
+        node::{lookup_and_resolve_node, File, ROOT_NODE},
         Path,
     },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
@@ -244,7 +244,7 @@ impl Thread {
         vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), path)?;
-        let NonLinkNode::File(file) = node else { return Err(Error::is_dir(())) };
+        let file: Arc<dyn File> = node.try_into()?;
         if !file.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
