@@ -114,6 +114,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysLseek);
     handlers.register(SysMmap);
     handlers.register(SysMprotect);
+    handlers.register(SysMunmap);
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
@@ -398,6 +399,21 @@ fn mprotect(
     vm_activator.activate(thread.virtual_memory(), |vm| {
         vm.mprotect(addr.get(), len, prot)
     })?;
+    Ok(0)
+}
+
+#[syscall(no = 11)]
+fn munmap(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    addr: Pointer<c_void>,
+    length: u64,
+) -> SyscallResult {
+    let addr = addr.get();
+    if !addr.is_aligned(0x1000u64) || length % 0x1000 != 0 {
+        return Err(Error::inval(()));
+    }
+    vm_activator.activate(thread.virtual_memory(), |a| a.unmap(addr, length));
     Ok(0)
 }
 

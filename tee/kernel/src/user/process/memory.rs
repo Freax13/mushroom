@@ -452,6 +452,11 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
         Ok(addr)
     }
+
+    pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
+        let mut state = self.state.lock();
+        state.unmap(addr, len)
+    }
 }
 
 impl Deref for ActiveVirtualMemory<'_, '_> {
