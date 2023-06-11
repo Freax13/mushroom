@@ -101,7 +101,7 @@ impl ActiveVirtualMemory<'_, '_> {
 
         self.mmap_zero(
             Some(stack),
-            0x1000,
+            0x2000,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
         )?;
 
