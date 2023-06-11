@@ -372,6 +372,8 @@ impl VmContext {
                         output.extend_from_slice(output_slice);
                     }
                     FINISH_OUTPUT_MSR => {
+                        info!("finished");
+
                         let gfn =
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = (msr.data & 0xfff) as usize;
