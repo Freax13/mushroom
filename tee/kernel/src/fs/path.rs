@@ -28,7 +28,7 @@ impl AsRef<[u8]> for FileName {
 impl Debug for FileName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Ok(str) = core::str::from_utf8(&self.0) {
-            Debug::fmt(str, f)
+            write!(f, "{str}")
         } else {
             self.0.fmt(f)
         }
@@ -62,6 +62,17 @@ pub enum PathSegment {
     FileName(FileName),
 }
 
+impl Debug for PathSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, ""),
+            Self::Dot => write!(f, "."),
+            Self::DotDot => write!(f, ".."),
+            Self::FileName(filename) => filename.fmt(f),
+        }
+    }
+}
+
 impl AsRef<[u8]> for PathSegment {
     fn as_ref(&self) -> &[u8] {
         match self {
@@ -77,6 +88,24 @@ impl AsRef<[u8]> for PathSegment {
 pub struct Path {
     is_absolute: bool,
     segments: Vec<PathSegment>,
+}
+
+impl Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_absolute {
+            write!(f, "/")?;
+        }
+
+        let mut segments = self.segments().iter();
+        if let Some(segment) = segments.next() {
+            write!(f, "{segment:?}")?;
+            for segment in segments {
+                write!(f, "/{segment:?}")?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Path {
