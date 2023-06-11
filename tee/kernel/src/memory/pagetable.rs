@@ -545,6 +545,9 @@ where
     unsafe fn release_reference_count(&self) -> Option<PhysFrame> {
         let mut current_entry = self.entry.load(Ordering::SeqCst);
         loop {
+            // Sanity check that the entry is not already unmapped.
+            debug_assert_ne!(current_entry, 0, "{:?} isn't mapped", self.page());
+
             // Try to decrease the reference count.
             let reference_count = current_entry.get_bits(REFERENCE_COUNT_BITS);
             let new_reference_count = reference_count.checked_sub(1);
