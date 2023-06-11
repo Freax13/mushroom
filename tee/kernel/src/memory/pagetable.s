@@ -9,8 +9,9 @@
 pml4:
 .fill 256, 8, 0 
 .quad pdp_256 + PTE_PRESENT + PTE_WRITABLE
-.fill 254, 8, 0 
+.fill 253, 8, 0 
 .quad pml4 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
+.quad 0
 
 .align 4096
 pdp_256:

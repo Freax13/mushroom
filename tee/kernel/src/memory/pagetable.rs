@@ -32,7 +32,7 @@ use x86_64::{
 
 use super::{frame::DUMB_FRAME_ALLOCATOR, temporary::copy_into_frame};
 
-const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(511);
+const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(510);
 
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
