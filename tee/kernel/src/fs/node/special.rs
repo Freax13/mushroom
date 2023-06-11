@@ -4,7 +4,7 @@ use super::{new_ino, File, FileSnapshot};
 use crate::{
     error::{Error, Result},
     supervisor,
-    user::process::syscall::args::{FileMode, Stat},
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat},
 };
 
 pub struct NullFile {
@@ -65,7 +65,28 @@ impl OutputFile {
 
 impl File for OutputFile {
     fn stat(&self) -> Stat {
-        todo!()
+        let guard = self.internal.lock();
+        let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 0,
+            mode,
+            uid: 0,
+            gid: 0,
+            _pad0: 0,
+            rdev: 0,
+            size: guard.offset as i64,
+            blksize: 0,
+            blocks: 0,
+            atime: 0,
+            atime_nsec: 0,
+            mtime: 0,
+            mtime_nsec: 0,
+            ctime: 0,
+            ctime_nsec: 0,
+            _unused: [0; 3],
+        }
     }
 
     fn set_mode(&self, mode: FileMode) {

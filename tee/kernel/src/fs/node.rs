@@ -601,6 +601,8 @@ impl File for TmpFsFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        let size = guard.content.len() as i64;
+
         // FIXME: Fill in more values.
         Stat {
             dev: 0,
@@ -611,7 +613,7 @@ impl File for TmpFsFile {
             gid: 0,
             _pad0: 0,
             rdev: 0,
-            size: 0,
+            size,
             blksize: 0,
             blocks: 0,
             atime: 0,
