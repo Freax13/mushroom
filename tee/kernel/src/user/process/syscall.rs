@@ -118,6 +118,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysIoctl);
     handlers.register(SysPread64);
     handlers.register(SysPwrite64);
     handlers.register(SysReadv);
@@ -529,6 +530,11 @@ impl Syscall3 for SysRtSigprocmask {
         Pointer::<Sigset>::display(f, oldset, thread, vm_activator)?;
         write!(f, ")")
     }
+}
+
+#[syscall(no = 16)]
+fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
+    SyscallResult::Err(Error::no_tty(()))
 }
 
 #[syscall(no = 17)]
