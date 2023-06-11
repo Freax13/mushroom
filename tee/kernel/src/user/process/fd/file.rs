@@ -105,6 +105,22 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.write(pos, buf)
     }
 
+    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        match whence {
+            Whence::Set => *guard = offset,
+            Whence::Cur => {
+                *guard = guard
+                    .checked_add_signed(offset as isize)
+                    .ok_or_else(|| Error::inval(()))?
+            }
+            Whence::End => todo!(),
+            Whence::Data => todo!(),
+            Whence::Hole => todo!(),
+        }
+        Ok(*guard)
+    }
+
     fn set_mode(&self, mode: FileMode) -> Result<()> {
         self.file.set_mode(mode);
         Ok(())
@@ -151,6 +167,22 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
         self.file.write(pos, buf)
+    }
+
+    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        match whence {
+            Whence::Set => *guard = offset,
+            Whence::Cur => {
+                *guard = guard
+                    .checked_add_signed(offset as isize)
+                    .ok_or_else(|| Error::inval(()))?
+            }
+            Whence::End => todo!(),
+            Whence::Data => todo!(),
+            Whence::Hole => todo!(),
+        }
+        Ok(*guard)
     }
 
     fn set_mode(&self, mode: FileMode) -> Result<()> {
