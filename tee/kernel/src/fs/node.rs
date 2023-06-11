@@ -219,7 +219,8 @@ impl Link {
 
 /// Find a node.
 pub fn lookup_node(start_dir: Arc<dyn Directory>, path: &Path) -> Result<Node> {
-    lookup_node_recursive(start_dir, path, &mut 16)
+    let (_, node) = lookup_node_recursive(start_dir, path, &mut 16)?;
+    Ok(node)
 }
 
 // Find a node while taking recursion limits into account.
@@ -227,11 +228,13 @@ fn lookup_node_recursive(
     mut start_dir: Arc<dyn Directory>,
     path: &Path,
     recursion: &mut u8,
-) -> Result<Node> {
+) -> Result<(Arc<dyn Directory>, Node)> {
+    let mut path = path.clone();
+    path.canonicalize()?;
     if path.is_absolute() {
         start_dir = ROOT_NODE.clone();
     }
-    let (_, node) = path.segments().iter().try_fold(
+    path.segments().iter().try_fold(
         (start_dir.clone(), Node::Directory(start_dir)),
         |(start_dir, node), segment| -> Result<_> {
             let node = node.resolve_link_recursive(start_dir.clone(), recursion)?;
@@ -247,8 +250,7 @@ fn lookup_node_recursive(
                 }
             }
         },
-    )?;
-    Ok(node)
+    )
 }
 
 // Find a node and resolve links.
@@ -262,8 +264,8 @@ fn lookup_and_resolve_node_recursive(
     path: &Path,
     recursion: &mut u8,
 ) -> Result<NonLinkNode> {
-    let node = lookup_node_recursive(start_dir.clone(), path, recursion)?;
-    node.resolve_link_recursive(start_dir, recursion)
+    let (dir, node) = lookup_node_recursive(start_dir.clone(), path, recursion)?;
+    node.resolve_link_recursive(dir, recursion)
 }
 
 fn find_parent(
