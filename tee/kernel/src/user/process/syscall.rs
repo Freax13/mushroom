@@ -128,6 +128,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysClone);
+    handlers.register(SysVfork);
     handlers.register(SysExecve);
     handlers.register(SysExit);
     handlers.register(SysWait4);
@@ -752,6 +753,7 @@ fn clone(
             stack.get(),
             new_clear_child_tid,
             new_tls,
+            false,
         );
 
         if flags.contains(CloneFlags::PARENT_SETTID) {
@@ -770,6 +772,31 @@ fn clone(
     })?;
 
     Ok(u64::from(tid))
+}
+
+#[syscall(no = 58)]
+fn vfork(thread: &mut Thread) -> SyscallResult {
+    let tid = Thread::spawn(|self_weak| {
+        let new_tid = new_tid();
+        let new_process = Some(Arc::new(Process::new(new_tid)));
+        let new_fdtable = Arc::new((**thread.fdtable()).clone());
+
+        Result::Ok(thread.clone(
+            new_tid,
+            self_weak,
+            new_process,
+            None,
+            new_fdtable,
+            VirtAddr::zero(),
+            None,
+            None,
+            true,
+        ))
+    })?;
+
+    thread.registers.rax = u64::from(tid);
+
+    Yield
 }
 
 #[syscall(no = 59)]
@@ -813,6 +840,10 @@ fn execve(
 
     thread.execve(&pathname, &args, &envs, vm_activator)?;
 
+    if let Some(vfork_parent) = thread.vfork_parent.take() {
+        schedule_thread(vfork_parent);
+    }
+
     Ok(0)
 }
 
@@ -839,6 +870,10 @@ fn exit(
         }
 
         schedule_thread(thread);
+    }
+
+    if let Some(vfork_parent) = thread.vfork_parent.take() {
+        schedule_thread(vfork_parent);
     }
 
     THREADS.remove(thread.tid());

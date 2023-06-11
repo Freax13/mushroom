@@ -94,6 +94,7 @@ pub struct Thread {
     pub clear_child_tid: u64,
     pub waiters: Vec<Waiter>,
     pub cwd: Path,
+    pub vfork_parent: Option<WeakThread>,
 }
 
 impl Thread {
@@ -104,6 +105,7 @@ impl Thread {
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
         cwd: Path,
+        vfork_parent: Option<WeakThread>,
     ) -> Self {
         let registers = UserspaceRegisters::DEFAULT;
         Self {
@@ -120,6 +122,7 @@ impl Thread {
             dead: false,
             waiters: Vec::new(),
             cwd,
+            vfork_parent,
         }
     }
 
@@ -131,6 +134,7 @@ impl Thread {
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::new()),
             Path::new(b"/").unwrap(),
+            None,
         )
     }
 
@@ -145,6 +149,7 @@ impl Thread {
         stack: VirtAddr,
         new_clear_child_tid: Option<VirtAddr>,
         new_tls: Option<u64>,
+        vfork_parent: bool,
     ) -> Self {
         let process = new_process.unwrap_or_else(|| self.process.clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
@@ -156,6 +161,7 @@ impl Thread {
             virtual_memory,
             fdtable,
             self.cwd.clone(),
+            vfork_parent.then(|| self.self_weak.clone()),
         );
 
         if let Some(clear_child_tid) = new_clear_child_tid {
