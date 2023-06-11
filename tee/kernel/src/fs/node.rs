@@ -1,4 +1,10 @@
-use core::{any::Any, cmp, iter::repeat, ops::Deref};
+use core::{
+    any::Any,
+    cmp,
+    iter::repeat,
+    ops::Deref,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use alloc::{
     borrow::Cow,
@@ -19,6 +25,11 @@ pub mod special;
 
 pub static ROOT_NODE: Lazy<Arc<TmpFsDirectory>> =
     Lazy::new(|| Arc::new(TmpFsDirectory::new(FileMode::from_bits_truncate(0o755))));
+
+fn new_ino() -> u64 {
+    static INO_COUNTER: AtomicU64 = AtomicU64::new(1);
+    INO_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
 
 #[derive(Clone)]
 pub enum Node {
@@ -383,6 +394,7 @@ pub fn hard_link(
 }
 
 pub struct TmpFsDirectory {
+    ino: u64,
     internal: Mutex<TmpFsDirectoryInternal>,
 }
 
@@ -392,8 +404,9 @@ struct TmpFsDirectoryInternal {
 }
 
 impl TmpFsDirectory {
-    pub const fn new(mode: FileMode) -> Self {
+    pub fn new(mode: FileMode) -> Self {
         Self {
+            ino: new_ino(),
             internal: Mutex::new(TmpFsDirectoryInternal {
                 mode,
                 items: BTreeMap::new(),
@@ -415,7 +428,7 @@ impl Directory for TmpFsDirectory {
         // FIXME: Fill in more values.
         Stat {
             dev: 0,
-            ino: 0,
+            ino: self.ino,
             nlink: 1,
             mode,
             uid: 0,
@@ -561,6 +574,7 @@ impl Directory for TmpFsDirectory {
 }
 
 pub struct TmpFsFile {
+    ino: u64,
     internal: Mutex<TmpFsFileInternal>,
 }
 
@@ -572,6 +586,7 @@ struct TmpFsFileInternal {
 impl TmpFsFile {
     pub fn new(mode: FileMode, content: &'static [u8]) -> Self {
         Self {
+            ino: new_ino(),
             internal: Mutex::new(TmpFsFileInternal {
                 content: Arc::new(Cow::Borrowed(content)),
                 mode,
@@ -587,7 +602,7 @@ impl File for TmpFsFile {
         // FIXME: Fill in more values.
         Stat {
             dev: 0,
-            ino: 0,
+            ino: self.ino,
             nlink: 1,
             mode,
             uid: 0,

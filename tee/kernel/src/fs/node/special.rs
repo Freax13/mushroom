@@ -1,6 +1,6 @@
 use spin::Mutex;
 
-use super::{File, FileSnapshot};
+use super::{new_ino, File, FileSnapshot};
 use crate::{
     error::{Error, Result},
     supervisor,
@@ -42,6 +42,7 @@ impl File for NullFile {
 }
 
 pub struct OutputFile {
+    ino: u64,
     internal: Mutex<OutputFileInternal>,
 }
 
@@ -53,6 +54,7 @@ struct OutputFileInternal {
 impl OutputFile {
     pub fn new() -> Self {
         Self {
+            ino: new_ino(),
             internal: Mutex::new(OutputFileInternal {
                 mode: FileMode::OWNER_ALL,
                 offset: 0,
