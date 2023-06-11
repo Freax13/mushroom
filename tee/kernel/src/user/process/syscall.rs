@@ -168,13 +168,13 @@ fn read(
     let buf = buf.get();
     let count = usize::try_from(count)?;
 
-    let mut chunk = [0u8; 128];
+    let mut chunk = [0u8; 8192];
     let max_chunk_len = chunk.len();
     let len = cmp::min(max_chunk_len, count);
     let chunk = &mut chunk[..len];
 
     let len = fd.read(chunk)?;
-    let chunk = &mut chunk[..len];
+    let chunk = &chunk[..len];
 
     vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
 
@@ -196,7 +196,7 @@ fn write(
     let buf = buf.get();
     let count = usize::try_from(count)?;
 
-    let mut chunk = [0u8; 128];
+    let mut chunk = [0u8; 8192];
     let max_chunk_len = chunk.len();
     let len = cmp::min(max_chunk_len, count);
     let chunk = &mut chunk[..len];
