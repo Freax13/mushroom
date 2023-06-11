@@ -886,6 +886,10 @@ fn wait4(
 #[syscall(no = 72)]
 fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
     match cmd {
+        FcntlCmd::GetFd => {
+            // FIXME: implement this
+            Ok(0)
+        }
         FcntlCmd::SetFd => {
             // FIXME: implement this
             Ok(0)
