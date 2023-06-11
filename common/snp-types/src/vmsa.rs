@@ -182,7 +182,7 @@ vmsa_def! {
     pub xcr0: u64 = 1,
     reserved10: Reserved<16> = Reserved::ZERO,
     pub x87_dp: u64 = 0,
-    pub mxcsr: u32 = 0,
+    pub mxcsr: u32 = 0x1f80,
     pub x87_ftw: u16 = 0,
     pub x87_fsw: u16 = 0,
     pub x87_fcw: u16 = 0x40,

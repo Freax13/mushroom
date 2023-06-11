@@ -16,6 +16,7 @@ use x86_64::{
     registers::{
         control::{Cr0Flags, Cr4Flags},
         model_specific::EferFlags,
+        xcontrol::XCr0Flags,
     },
     structures::paging::{Page, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
@@ -79,8 +80,11 @@ impl InitializedVmsa {
         vmsa.set_cr4(
             Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
                 | Cr4Flags::PAGE_GLOBAL.bits()
+                | Cr4Flags::OSFXSR.bits()
+                | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
                 | Cr4Flags::FSGSBASE.bits()
                 | Cr4Flags::PCID.bits()
+                | Cr4Flags::OSXSAVE.bits()
                 | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
                 | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
             tweak_bitmap,
@@ -88,9 +92,14 @@ impl InitializedVmsa {
         vmsa.set_cr3(0x100_0000_0000, tweak_bitmap);
         vmsa.set_cr0(
             Cr0Flags::PROTECTED_MODE_ENABLE.bits()
+                | Cr0Flags::MONITOR_COPROCESSOR.bits()
                 | Cr0Flags::EXTENSION_TYPE.bits()
                 | Cr0Flags::WRITE_PROTECT.bits()
                 | Cr0Flags::PAGING.bits(),
+            tweak_bitmap,
+        );
+        vmsa.set_xcr0(
+            XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
             tweak_bitmap,
         );
         vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);

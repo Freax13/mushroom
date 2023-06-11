@@ -15,10 +15,7 @@ use bytemuck::{offset_of, Pod, Zeroable};
 use log::warn;
 use spin::Mutex;
 use x86_64::{
-    registers::{
-        control::{Cr4, Cr4Flags},
-        segmentation::{Segment64, FS},
-    },
+    registers::segmentation::{Segment64, FS},
     VirtAddr,
 };
 
@@ -108,25 +105,7 @@ impl Thread {
         fdtable: Arc<FileDescriptorTable>,
         cwd: Path,
     ) -> Self {
-        let registers = UserspaceRegisters {
-            rax: 0,
-            rbx: 0,
-            rdx: 0,
-            rsi: 0,
-            rdi: 0,
-            rsp: 0,
-            rbp: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
-            rip: 0,
-            rflags: 0,
-            fs_base: 0,
-        };
+        let registers = UserspaceRegisters::DEFAULT;
         Self {
             self_weak,
             process,
@@ -278,25 +257,9 @@ impl Thread {
         // Success! Commit the new state to the thread.
 
         self.virtual_memory = Arc::new(virtual_memory);
-        self.registers = UserspaceRegisters {
-            rax: 0,
-            rbx: 0,
-            rdx: 0,
-            rsi: 0,
-            rdi: 0,
-            rsp: stack.as_u64(),
-            rbp: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
-            rip: entry,
-            rflags: 0,
-            fs_base: 0,
-        };
+        self.registers = UserspaceRegisters::DEFAULT;
+        self.registers.rsp = stack.as_u64();
+        self.registers.rip = entry;
 
         Ok(())
     }
@@ -343,12 +306,12 @@ impl Thread {
         }
         macro_rules! userspace_reg_offset {
             ($ident:ident) => {{
-                let registers = UserspaceRegisters::ZERO;
+                let registers = UserspaceRegisters::DEFAULT;
                 let reference = &registers;
                 let register = &registers.$ident;
 
                 let reference = reference as *const UserspaceRegisters;
-                let register = register as *const u64;
+                let register = register as *const _ as *const ();
 
                 let offset = unsafe { register.byte_offset_from(reference) };
                 USERSPACE_REGISTERS_OFFSET + (offset as usize)
@@ -363,12 +326,6 @@ impl Thread {
 
         unsafe {
             FS::write_base(VirtAddr::new(self.registers.fs_base));
-        }
-
-        let mut cr4 = Cr4::read();
-        cr4 |= Cr4Flags::OSFXSR;
-        unsafe {
-            Cr4::write(cr4);
         }
 
         vm_activator.activate(&self.virtual_memory, |_| {
@@ -418,6 +375,23 @@ impl Thread {
                     "mov r15, gs:[{U_R15_OFFSET}]",
                     "mov rcx, gs:[{U_RIP_OFFSET}]",
                     "mov r11, gs:[{U_RFLAGS_OFFSET}]",
+                    "vmovdqa ymm0, gs:[{U_YMM_OFFSET}+32*0]",
+                    "vmovdqa ymm1, gs:[{U_YMM_OFFSET}+32*1]",
+                    "vmovdqa ymm2, gs:[{U_YMM_OFFSET}+32*2]",
+                    "vmovdqa ymm3, gs:[{U_YMM_OFFSET}+32*3]",
+                    "vmovdqa ymm4, gs:[{U_YMM_OFFSET}+32*4]",
+                    "vmovdqa ymm5, gs:[{U_YMM_OFFSET}+32*5]",
+                    "vmovdqa ymm6, gs:[{U_YMM_OFFSET}+32*6]",
+                    "vmovdqa ymm7, gs:[{U_YMM_OFFSET}+32*7]",
+                    "vmovdqa ymm8, gs:[{U_YMM_OFFSET}+32*8]",
+                    "vmovdqa ymm9, gs:[{U_YMM_OFFSET}+32*9]",
+                    "vmovdqa ymm10, gs:[{U_YMM_OFFSET}+32*10]",
+                    "vmovdqa ymm11, gs:[{U_YMM_OFFSET}+32*11]",
+                    "vmovdqa ymm12, gs:[{U_YMM_OFFSET}+32*12]",
+                    "vmovdqa ymm13, gs:[{U_YMM_OFFSET}+32*13]",
+                    "vmovdqa ymm14, gs:[{U_YMM_OFFSET}+32*14]",
+                    "vmovdqa ymm15, gs:[{U_YMM_OFFSET}+32*15]",
+                    "ldmxcsr gs:[{U_MXCSR_OFFSET}]",
                     // Swap in userspace GS.
                     "swapgs",
                     // Enter usermdoe
@@ -442,6 +416,23 @@ impl Thread {
                     "mov gs:[{U_R15_OFFSET}], r15",
                     "mov gs:[{U_RIP_OFFSET}], rcx",
                     "mov gs:[{U_RFLAGS_OFFSET}], r11",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*0], ymm0",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*1], ymm1",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*2], ymm2",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*3], ymm3",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*4], ymm4",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*5], ymm5",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*6], ymm6",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*7], ymm7",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*8], ymm8",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*9], ymm9",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*10], ymm10",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*11], ymm11",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*12], ymm12",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*13], ymm13",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*14], ymm14",
+                    "vmovdqa gs:[{U_YMM_OFFSET}+32*15], ymm15",
+                    "stmxcsr gs:[{U_MXCSR_OFFSET}]",
                     // Restore the kernel registers.
                     "mov rax, gs:[{K_RAX_OFFSET}]",
                     "mov rbx, gs:[{K_RBX_OFFSET}]",
@@ -459,7 +450,7 @@ impl Thread {
                     "mov r13, gs:[{K_R13_OFFSET}]",
                     "mov r14, gs:[{K_R14_OFFSET}]",
                     "mov r15, gs:[{K_R15_OFFSET}]",
-                    // Save RFLAGS.
+                    // Restore RFLAGS.
                     "mov rax, gs:[{K_RFLAGS_OFFSET}]",
                     "push rax",
                     "popfq",
@@ -496,6 +487,8 @@ impl Thread {
                     U_R15_OFFSET = const userspace_reg_offset!(r15),
                     U_RIP_OFFSET = const userspace_reg_offset!(rip),
                     U_RFLAGS_OFFSET = const userspace_reg_offset!(rflags),
+                    U_YMM_OFFSET = const userspace_reg_offset!(ymm),
+                    U_MXCSR_OFFSET = const userspace_reg_offset!(mxcsr),
                     out("rax") _,
                     out("rdx") _,
                     out("rcx") _,
@@ -582,10 +575,12 @@ pub struct UserspaceRegisters {
     pub rip: u64,
     pub rflags: u64,
     pub fs_base: u64,
+    ymm: [Ymm; 16],
+    mxcsr: u64,
 }
 
 impl UserspaceRegisters {
-    pub const ZERO: Self = Self {
+    pub const DEFAULT: Self = Self {
         rax: 0,
         rbx: 0,
         rdx: 0,
@@ -603,7 +598,17 @@ impl UserspaceRegisters {
         rip: 0,
         rflags: 0,
         fs_base: 0,
+        ymm: [Ymm::ZERO; 16],
+        mxcsr: 0x1f80,
     };
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C, align(32))]
+struct Ymm([u8; 32]);
+
+impl Ymm {
+    const ZERO: Self = Self([0; 32]);
 }
 
 /// Returns true if progress was made.

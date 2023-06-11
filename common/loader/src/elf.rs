@@ -97,15 +97,17 @@ pub fn load(
 }
 
 fn create_cpuid_page() -> CpuidPage {
-    fn query_function(eax: u32) -> CpuidFunction {
+    fn query_function(eax: u32, xcr0: u64) -> CpuidFunction {
         let result = cpuid!(eax);
-        CpuidFunction::new(eax, 0, 1, 0, result.eax, result.ebx, result.ecx, result.edx)
+        CpuidFunction::new(
+            eax, 0, xcr0, 0, result.eax, result.ebx, result.ecx, result.edx,
+        )
     }
     let functions = [
-        query_function(1),
-        query_function(0x8000_0001),
-        query_function(0x8000_0008),
-        query_function(0x8000_001f),
+        query_function(1, 7),
+        query_function(0x8000_0001, 7),
+        query_function(0x8000_0008, 7),
+        query_function(0x8000_001f, 1),
     ];
 
     let mut initialized = 0;

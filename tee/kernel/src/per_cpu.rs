@@ -26,7 +26,7 @@ static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
     [const { PerCpu::new() }; MAX_APS_COUNT as usize];
 
 pub const KERNEL_REGISTERS_OFFSET: usize = 16;
-pub const USERSPACE_REGISTERS_OFFSET: usize = 152;
+pub const USERSPACE_REGISTERS_OFFSET: usize = 160;
 
 #[repr(C)]
 pub struct PerCpu {
@@ -47,7 +47,7 @@ impl PerCpu {
             this: null_mut(),
             idx: 0,
             kernel_registers: Cell::new(KernelRegisters::ZERO),
-            userspace_registers: Cell::new(UserspaceRegisters::ZERO),
+            userspace_registers: Cell::new(UserspaceRegisters::DEFAULT),
             reserved_frame_storage: RefCell::new(ReservedFrameStorage::new()),
             temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
