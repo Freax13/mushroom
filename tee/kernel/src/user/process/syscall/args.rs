@@ -265,6 +265,7 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREAT = 1 << 6;
         const EXCL = 1 << 7;
+        const NOCTTY = 1 << 8;
         const TRUNC = 1 << 9;
         const LARGEFILE = 1 << 15;
         const DIRECTORY = 1 << 16;
