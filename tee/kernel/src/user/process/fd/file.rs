@@ -36,7 +36,11 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         let mut guard = self.cursor_idx.lock();
         match whence {
             Whence::Set => *guard = offset,
-            Whence::Cur => *guard = guard.checked_add(offset).ok_or_else(|| Error::inval(()))?,
+            Whence::Cur => {
+                *guard = guard
+                    .checked_add_signed(offset as isize)
+                    .ok_or_else(|| Error::inval(()))?
+            }
             Whence::End => todo!(),
             Whence::Data => todo!(),
             Whence::Hole => todo!(),
