@@ -608,10 +608,14 @@ where
     }
 
     fn as_table_ptr(&self) -> *const ActivePageTable<<L as TableLevel>::Next> {
-        let entry_ptr = self as *const ActivePageTableEntry<L>;
-        let entry_addr = entry_ptr as usize;
-        let table_addr = entry_addr << 9;
-        table_addr as *const ActivePageTable<L::Next>
+        let addr = VirtAddr::from_ptr(self);
+        let p4_index = addr.p3_index();
+        let p3_index = addr.p2_index();
+        let p2_index = addr.p1_index();
+        let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
+        let page = Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index);
+        let addr = page.start_address();
+        unsafe { &*addr.as_ptr() }
     }
 }
 
@@ -635,11 +639,12 @@ impl<L> ActivePageTableEntry<L> {
     }
 
     pub fn page(&self) -> Page<Size4KiB> {
-        let ptr = self as *const Self;
-        let addr = ptr as u64;
-        let addr = addr << 9;
-        let addr = VirtAddr::new_truncate(addr);
-        Page::from_start_address(addr).unwrap()
+        let addr = VirtAddr::from_ptr(self);
+        let p4_index = addr.p3_index();
+        let p3_index = addr.p2_index();
+        let p2_index = addr.p1_index();
+        let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
+        Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index)
     }
 }
 
