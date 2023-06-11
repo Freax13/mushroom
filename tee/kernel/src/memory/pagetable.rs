@@ -207,9 +207,6 @@ pub unsafe fn remove_flags(page: Page, flags: PageTableFlags) {
     }
 }
 
-/// # Panics
-///
-/// The page has to be mapped.
 pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     let pml4 = ActivePageTable::get();
     let pml4e = &pml4[page.p4_index()];
