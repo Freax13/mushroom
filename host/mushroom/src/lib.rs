@@ -44,11 +44,12 @@ use crate::{
 mod kvm;
 mod slot;
 
-pub fn main(init: &[u8], input: &[u8]) -> Result<MushroomResult> {
+pub fn main(supervisor: &[u8], kernel: &[u8], init: &[u8], input: &[u8]) -> Result<MushroomResult> {
     let kvm_handle = KvmHandle::new()?;
     let sev_handle = SevHandle::new()?;
 
-    let mut vm_context = VmContext::prepare_vm(init, input, &kvm_handle, &sev_handle)?;
+    let mut vm_context =
+        VmContext::prepare_vm(supervisor, kernel, init, input, &kvm_handle, &sev_handle)?;
     vm_context.run_bsp()
 }
 
@@ -62,6 +63,8 @@ struct VmContext {
 impl VmContext {
     /// Create the VM, create the BSP and execute all launch commands.
     pub fn prepare_vm(
+        supervisor: &[u8],
+        kernel: &[u8],
         init: &[u8],
         input: &[u8],
         kvm_handle: &KvmHandle,
@@ -90,7 +93,8 @@ impl VmContext {
         let policy = policy.with_allow_debugging(true);
         vm.sev_snp_launch_start(policy, sev_handle)?;
 
-        let (load_commands, host_data) = loader::generate_load_commands(init, input);
+        let (load_commands, host_data) =
+            loader::generate_load_commands(supervisor, kernel, init, input);
         let mut load_commands = load_commands.peekable();
 
         let mut num_launch_pages = 0;

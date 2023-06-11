@@ -13,9 +13,9 @@ use x86_64::{structures::paging::PhysFrame, PhysAddr};
 use crate::{LoadCommand, LoadCommandPayload};
 
 pub fn load(
-    elf_bytes: &'static [u8],
+    elf_bytes: &[u8],
     vmpl1_perms_mask: VmplPermissions,
-) -> impl Iterator<Item = LoadCommand> {
+) -> impl Iterator<Item = LoadCommand> + '_ {
     let elf = Elf::parse(elf_bytes).unwrap();
     assert!(elf.is_64);
 

@@ -49,18 +49,24 @@ impl LoadCommandPayload {
     }
 }
 
-pub fn generate_base_load_commands(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
-    let load_supervisor = supervisor::load_supervisor();
-    let load_kernel = kernel::load_kernel();
+pub fn generate_base_load_commands<'a>(
+    supervisor: &'a [u8],
+    kernel: &'a [u8],
+    init: &'a [u8],
+) -> impl Iterator<Item = LoadCommand> + 'a {
+    let load_supervisor = supervisor::load_supervisor(supervisor);
+    let load_kernel = kernel::load_kernel(kernel);
     let load_init = init::load_init(init);
     load_supervisor.chain(load_kernel).chain(load_init)
 }
 
 pub fn generate_load_commands<'a>(
+    supervisor: &'a [u8],
+    kernel: &'a [u8],
     init: &'a [u8],
     input: &'a [u8],
 ) -> (impl Iterator<Item = LoadCommand> + 'a, [u8; 32]) {
-    let base_load_commands = generate_base_load_commands(init);
+    let base_load_commands = generate_base_load_commands(supervisor, kernel, init);
     let (load_input, host_data) = input::load_input(input);
     (base_load_commands.chain(load_input), host_data)
 }

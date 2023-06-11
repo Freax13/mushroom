@@ -36,8 +36,14 @@ enum MushroomSubcommand {
 
 #[derive(Args)]
 struct RunCommand {
+    /// Path to the supervisor.
+    #[arg(long, value_name = "PATH", env = "SUPERVISOR")]
+    supervisor: PathBuf,
+    /// Path to the kernel.
+    #[arg(long, value_name = "PATH", env = "KERNEL")]
+    kernel: PathBuf,
     /// Path to the binary to run.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", env = "INIT")]
     init: PathBuf,
     /// Path to the input to process.
     #[arg(long, value_name = "PATH")]
@@ -51,10 +57,12 @@ struct RunCommand {
 }
 
 fn run(run: RunCommand) -> Result<()> {
+    let supervisor = std::fs::read(run.supervisor).context("failed to read supervisor file")?;
+    let kernel = std::fs::read(run.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.init).context("failed to read init file")?;
     let input = std::fs::read(run.input).context("failed to read input file")?;
 
-    let result = mushroom::main(&init, &input)?;
+    let result = mushroom::main(&supervisor, &kernel, &init, &input)?;
 
     std::fs::write(run.output, result.output).context("failed to write output")?;
     std::fs::write(run.attestation_report, result.attestation_report)
@@ -65,8 +73,14 @@ fn run(run: RunCommand) -> Result<()> {
 
 #[derive(Args)]
 struct VerifyCommand {
+    /// Path to the supervisor.
+    #[arg(long, value_name = "PATH", env = "SUPERVISOR")]
+    supervisor: PathBuf,
+    /// Path to the kernel.
+    #[arg(long, value_name = "PATH", env = "KERNEL")]
+    kernel: PathBuf,
     /// Path to the binary to run.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", env = "INIT")]
     init: PathBuf,
     /// Path to the input to process.
     #[arg(long, value_name = "PATH")]
@@ -83,6 +97,8 @@ struct VerifyCommand {
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
+    let supervisor = std::fs::read(run.supervisor).context("failed to read supervisor file")?;
+    let kernel = std::fs::read(run.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.init).context("failed to read init file")?;
     let input = std::fs::read(run.input).context("failed to read input file")?;
     let output = std::fs::read(run.output).context("failed to read output file")?;
@@ -121,7 +137,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         vcek_cert
     };
 
-    let configuration = Configuration::new(&init);
+    let configuration = Configuration::new(&supervisor, &kernel, &init);
     // FIXME: use proper error type and use `?` instead of unwrap.
     configuration
         .verify(input_hash, output_hash, &attestation_report, &vcek_cert)

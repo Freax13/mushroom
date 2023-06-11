@@ -19,8 +19,8 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    pub fn new(init: &[u8]) -> Self {
-        let commands = generate_base_load_commands(init);
+    pub fn new(supervisor: &[u8], kernel: &[u8], init: &[u8]) -> Self {
+        let commands = generate_base_load_commands(supervisor, kernel, init);
 
         let mut launch_digest = [0; 48];
 

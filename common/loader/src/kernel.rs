@@ -2,11 +2,9 @@ use snp_types::VmplPermissions;
 
 use crate::{elf::load, LoadCommand};
 
-const KERNEL_BYTES: &[u8] = include_bytes!(env!("CARGO_BIN_FILE_KERNEL"));
-
-pub fn load_kernel() -> impl Iterator<Item = LoadCommand> {
+pub fn load_kernel(kernel: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
     load(
-        KERNEL_BYTES,
+        kernel,
         VmplPermissions::READ | VmplPermissions::WRITE | VmplPermissions::EXECUTE_SUPERVISOR,
     )
 }
