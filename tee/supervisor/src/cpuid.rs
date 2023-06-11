@@ -3,7 +3,7 @@ use core::cell::{LazyCell, SyncUnsafeCell};
 use snp_types::cpuid::CpuidPage;
 
 use bit_field::BitField;
-use log::warn;
+use log::{trace, warn};
 
 use crate::FakeSync;
 
@@ -57,6 +57,8 @@ pub fn lookup_provided_cpuid_function(
 
 /// Simulate the CPUID instruction with the given inputs.
 pub fn get_cpuid_value(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> (u32, u32, u32, u32) {
+    trace!("simulating cpuid eax={eax:#x} ecx={ecx} xcr0={xcr0} xss={xss}");
+
     // Try to find a cpuid function.
     let index = usize::try_from(eax & !0x8000_0000).unwrap();
     let is_extended = eax.get_bit(31);
@@ -169,8 +171,8 @@ fn fn_0000_0001_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
     eax
 }
 
-fn fn_0000_0001_ebx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    let provided_value = lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_0000_0001_ebx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    let provided_value = lookup_provided_cpuid_function(eax, 0, xcr0, xss)
         .unwrap()
         .ebx;
     let provided_cl_flush = provided_value.get_bits(8..=15);
@@ -188,14 +190,14 @@ fn fn_0000_0001_ebx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
     ebx
 }
 
-fn fn_0000_0001_ecx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_0000_0001_ecx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, 0, xcr0, xss)
         .unwrap()
         .ecx
 }
 
-fn fn_0000_0001_edx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_0000_0001_edx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, 0, xcr0, xss)
         .unwrap()
         .edx
 }
