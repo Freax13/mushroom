@@ -32,6 +32,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         Ok(len)
     }
 
+    fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
+        self.file.read(pos, buf)
+    }
+
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
         let mut guard = self.cursor_idx.lock();
         match whence {
@@ -81,6 +85,10 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         Ok(len)
     }
 
+    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
+        self.file.write(pos, buf)
+    }
+
     fn set_mode(&self, mode: FileMode) -> Result<()> {
         self.file.set_mode(mode);
         Ok(())
@@ -119,6 +127,14 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         let len = self.file.write(*guard, buf)?;
         *guard += len;
         Ok(len)
+    }
+
+    fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
+        self.file.read(pos, buf)
+    }
+
+    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
+        self.file.write(pos, buf)
     }
 
     fn set_mode(&self, mode: FileMode) -> Result<()> {

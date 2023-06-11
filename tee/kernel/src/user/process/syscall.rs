@@ -117,6 +117,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysPread64);
+    handlers.register(SysPwrite64);
     handlers.register(SysReadv);
     handlers.register(SysWritev);
     handlers.register(SysDup);
@@ -508,6 +510,63 @@ impl Syscall3 for SysRtSigprocmask {
         Pointer::<Sigset>::display(f, oldset, thread, vm_activator)?;
         write!(f, ")")
     }
+}
+
+#[syscall(no = 17)]
+fn pread64(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    buf: Pointer<c_void>,
+    count: u64,
+    pos: u64,
+) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
+
+    let buf = buf.get();
+    let count = usize::try_from(count)?;
+    let pos = usize::try_from(pos)?;
+
+    let mut chunk = [0u8; 8192];
+    let max_chunk_len = chunk.len();
+    let len = cmp::min(max_chunk_len, count);
+    let chunk = &mut chunk[..len];
+
+    let len = fd.pread(pos, chunk)?;
+    let chunk = &mut chunk[..len];
+
+    vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
+
+    let len = u64::try_from(len)?;
+
+    Ok(len)
+}
+
+#[syscall(no = 18)]
+fn pwrite64(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    fd: FdNum,
+    buf: Pointer<c_void>,
+    count: u64,
+    pos: u64,
+) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
+
+    let buf = buf.get();
+    let count = usize::try_from(count)?;
+    let pos = usize::try_from(pos)?;
+
+    let mut chunk = [0u8; 8192];
+    let max_chunk_len = chunk.len();
+    let len = cmp::min(max_chunk_len, count);
+    let chunk = &mut chunk[..len];
+    vm_activator.activate(thread.virtual_memory(), |vm| vm.read(buf, chunk))?;
+
+    let len = fd.pwrite(pos, chunk)?;
+
+    let len = u64::try_from(len)?;
+    Ok(len)
 }
 
 #[syscall(no = 19)]

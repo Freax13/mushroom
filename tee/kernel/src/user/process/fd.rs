@@ -124,6 +124,18 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Err(Error::inval(()))
     }
 
+    fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
+        let _ = pos;
+        let _ = buf;
+        Err(Error::inval(()))
+    }
+
+    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
+        let _ = pos;
+        let _ = buf;
+        Err(Error::inval(()))
+    }
+
     fn close(&self) -> Result<()> {
         Ok(())
     }
