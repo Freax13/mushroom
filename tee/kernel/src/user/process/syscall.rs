@@ -119,6 +119,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigprocmask);
     handlers.register(SysReadv);
     handlers.register(SysWritev);
+    handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysClone);
@@ -563,6 +564,15 @@ fn writev(
 
     let addr = Pointer::parse(iovec.base)?;
     write(thread, vm_activator, fd, addr, iovec.len)
+}
+
+#[syscall(no = 32)]
+fn dup(thread: &mut Thread, fildes: FdNum) -> SyscallResult {
+    let fdtable = thread.fdtable();
+    let fd = fdtable.get(fildes)?;
+    let newfd = fdtable.insert(fd);
+
+    Ok(newfd.get() as u64)
 }
 
 #[syscall(no = 33)]
