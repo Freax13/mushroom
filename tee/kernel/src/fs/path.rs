@@ -176,6 +176,8 @@ impl Path {
                         idx = new_idx;
                         self.segments.remove(idx);
                         self.segments.remove(idx);
+                    } else {
+                        self.segments.remove(idx);
                     }
                 }
                 PathSegment::FileName(_) => idx += 1,
