@@ -123,6 +123,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPwrite64);
     handlers.register(SysReadv);
     handlers.register(SysWritev);
+    handlers.register(SysAccess);
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
@@ -648,6 +649,19 @@ fn writev(
 
     let addr = Pointer::parse(iovec.base)?;
     write(thread, vm_activator, fd, addr, iovec.len)
+}
+
+#[syscall(no = 21)]
+fn access(
+    thread: &mut Thread,
+    vm_activator: &mut VirtualMemoryActivator,
+    pathname: Pointer<CStr>,
+    mode: u64, // FIXME: use correct type
+) -> SyscallResult {
+    let path = vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
+    let _node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
+    // FIXME: implement the actual access checks.
+    Ok(0)
 }
 
 #[syscall(no = 32)]
