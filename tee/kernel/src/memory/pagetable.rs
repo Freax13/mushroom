@@ -768,21 +768,18 @@ impl ActivePageTableEntry<Level1> {
 }
 
 trait ParentEntry {
-    unsafe fn release(&self);
+    unsafe fn release_parent(&self);
 }
 
 impl ParentEntry for ActivePageTableEntry<Level4> {
-    unsafe fn release(&self) {
-        let frame = unsafe { self.release_reference_count() };
-        assert_eq!(frame, None);
-    }
+    unsafe fn release_parent(&self) {}
 }
 
 impl<L> ParentEntry for ActivePageTableEntry<L>
 where
     L: HasParentLevel + TableLevel,
 {
-    unsafe fn release(&self) {
+    unsafe fn release_parent(&self) {
         let frame = unsafe { self.parent_table_entry().release_reference_count() };
         assert_eq!(frame, None);
     }
@@ -832,7 +829,7 @@ where
 
             // Decrease the reference count on the parent entry.
             unsafe {
-                self.entry.release();
+                self.entry.release_parent();
             }
         }
     }
