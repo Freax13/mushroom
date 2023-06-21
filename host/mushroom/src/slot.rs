@@ -2,22 +2,17 @@ use std::{
     ffi::c_void,
     mem::size_of,
     num::NonZeroUsize,
-    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     ptr::{copy_nonoverlapping, NonNull},
 };
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{CheckedBitPattern, Pod};
-use nix::{
-    errno::Errno,
-    fcntl::{fallocate, FallocateFlags},
-    libc,
-    sys::mman::{mmap, munmap, MapFlags, ProtFlags},
-};
+use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 use volatile::VolatilePtr;
 use x86_64::{structures::paging::PhysFrame, PhysAddr};
 
-use crate::kvm::Page;
+use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
 
 pub struct Slot {
     gpa: PhysFrame,
@@ -26,13 +21,13 @@ pub struct Slot {
 }
 
 impl Slot {
-    pub fn for_launch_update(gpa: PhysFrame, pages: &[Page]) -> Result<Self> {
+    pub fn for_launch_update(vm: &VmHandle, gpa: PhysFrame, pages: &[Page]) -> Result<Self> {
         let shared_mapping = AnonymousPrivateMapping::for_private_mapping(pages)?;
 
-        let len = i64::try_from(pages.len() * 0x1000)?;
-        let restricted_fd = memfd_restricted().context("failed to create memfd")?;
-        fallocate(restricted_fd.as_raw_fd(), FallocateFlags::empty(), 0, len)
-            .context("failed to allocate private memory")?;
+        let len = u64::try_from(pages.len() * 0x1000)?;
+        let restricted_fd = vm
+            .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
+            .context("failed to create guest memfd")?;
 
         Ok(Self {
             gpa,
@@ -41,14 +36,15 @@ impl Slot {
         })
     }
 
-    pub fn new(gpa: PhysFrame) -> Result<Self> {
+    pub fn new(vm: &VmHandle, gpa: PhysFrame) -> Result<Self> {
         let len = 512 * 0x1000;
         let shared_mapping = AnonymousPrivateMapping::new(len)?;
 
-        let len = i64::try_from(len)?;
-        let restricted_fd = memfd_restricted().context("failed to create memfd")?;
-        fallocate(restricted_fd.as_raw_fd(), FallocateFlags::empty(), 0, len)
-            .context("failed to allocate private memory")?;
+        let len = u64::try_from(len)?;
+        // FIXME: We should be able to pass `HUGE_PMD`, but it currently appears to be buggy.
+        let restricted_fd = vm
+            .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
+            .context("failed to create guest memfd")?;
 
         Ok(Self {
             gpa,
@@ -159,15 +155,4 @@ impl Drop for AnonymousPrivateMapping {
         let res = unsafe { munmap(self.ptr.as_ptr(), self.len.get()) };
         res.unwrap();
     }
-}
-
-/// Create a restricted memfd.
-///
-/// This is useful for UPM in KVM.
-// FIXME: This should be moved into the `nix` crate once `SYS_MEMFD_RESTRICTED`
-// is upstreamed.
-fn memfd_restricted() -> nix::Result<OwnedFd> {
-    const SYS_MEMFD_RESTRICTED: i64 = 451;
-    let res = unsafe { libc::syscall(SYS_MEMFD_RESTRICTED, 0) };
-    Errno::result(res).map(|r| unsafe { OwnedFd::from_raw_fd(r as RawFd) })
 }

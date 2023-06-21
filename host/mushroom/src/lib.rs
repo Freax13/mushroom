@@ -37,7 +37,9 @@ use x86_64::{
 };
 
 use crate::{
-    kvm::{KvmCap, KvmExit, KvmExitUnknown, KvmMemoryAttributes, SevHandle, VmHandle},
+    kvm::{
+        KvmCap, KvmExit, KvmExitUnknown, KvmExitVmgexit, KvmMemoryAttributes, SevHandle, VmHandle,
+    },
     slot::Slot,
 };
 
@@ -128,7 +130,7 @@ impl VmContext {
                 });
             }
 
-            let slot = Slot::for_launch_update(gpa, &pages)
+            let slot = Slot::for_launch_update(&vm, gpa, &pages)
                 .context("failed to create slot for launch update")?;
 
             unsafe {
@@ -220,6 +222,8 @@ impl VmContext {
                         MEMORY_PORT => {
                             let slot_id = value.get_bits(0..15) as u16;
                             let enabled = value.get_bit(15);
+                            let gpa = DYNAMIC.start() + u64::from(slot_id) * Size2MiB::SIZE;
+                            debug!(slot_id, enabled, gpa = %format_args!("{gpa:#x}"), "updating slot status");
 
                             let base = 1 << 6;
                             let kvm_slot_id = base + slot_id;
@@ -245,8 +249,8 @@ impl VmContext {
                                     let gpa = DYNAMIC.start() + u64::from(slot_id) * Size2MiB::SIZE;
                                     let gfn =
                                         PhysFrame::from_start_address(PhysAddr::new(gpa)).unwrap();
-                                    let slot =
-                                        Slot::new(gfn).context("failed to create dynamic slot")?;
+                                    let slot = Slot::new(&self.vm, gfn)
+                                        .context("failed to create dynamic slot")?;
 
                                     unsafe {
                                         self.vm.map_encrypted_memory(kvm_slot_id, &slot)?;
@@ -283,6 +287,7 @@ impl VmContext {
                 KvmExit::Vmgexit(vmgexit) => {
                     let info = GhcbInfo::try_from(vmgexit.ghcb_msr)
                         .map_err(|_| anyhow!("invalid value in ghcb msr protocol"))?;
+                    debug!(?info, "handling vmgexit");
                     match info {
                         GhcbInfo::GhcbGuestPhysicalAddress { address } => {
                             let ghcb_slot = find_slot(address, &mut self.memory_slots)?;
@@ -304,8 +309,6 @@ impl VmContext {
 
                                     let header = psc_desc_slot
                                         .shared_ptr::<PageStateChangeHeader>(psc_desc_gpa)?;
-
-                                    dbg!(header);
 
                                     loop {
                                         let cur_entry = map_field!(header.cur_entry).read();
@@ -359,6 +362,15 @@ impl VmContext {
                             self.vm
                                 .set_memory_attributes(&mut address, &mut size, attributes)?;
                             ensure!(size == 0);
+
+                            let response =
+                                GhcbInfo::SnpPageStateChangeResponse { error_code: None };
+                            kvm_run.update(|run| {
+                                run.set_exit(KvmExit::Vmgexit(KvmExitVmgexit {
+                                    ghcb_msr: response.into(),
+                                    error: 0,
+                                }))
+                            });
                         }
                         _ => bail!("unsupported msr protocol value: {info:?}"),
                     }

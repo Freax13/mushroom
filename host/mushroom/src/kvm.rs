@@ -15,7 +15,7 @@ use std::{
 use anyhow::{anyhow, ensure, Context, Result};
 use bit_field::BitField;
 use bitflags::bitflags;
-use bytemuck::{pod_read_unaligned, Contiguous, Pod, Zeroable};
+use bytemuck::{bytes_of, pod_read_unaligned, Contiguous, Pod, Zeroable};
 use nix::{
     errno::Errno,
     ioctl_none, ioctl_read, ioctl_readwrite, ioctl_write_int_bad, ioctl_write_ptr,
@@ -588,6 +588,29 @@ impl VmHandle {
         *size = data.size;
         Ok(())
     }
+
+    pub fn create_guest_memfd(&self, size: u64, flags: KvmGuestMemFdFlags) -> Result<OwnedFd> {
+        debug!(size, ?flags, "creating guest memfd");
+
+        #[repr(C)]
+        pub struct KvmCreateGuestMemfd {
+            size: u64,
+            flags: KvmGuestMemFdFlags,
+            reserved: [u64; 6],
+        }
+
+        let mut data = KvmCreateGuestMemfd {
+            size,
+            flags,
+            reserved: [0; 6],
+        };
+
+        ioctl_readwrite!(kvm_create_guest_memfd, KVMIO, 0xd4, KvmCreateGuestMemfd);
+
+        let res = unsafe { kvm_create_guest_memfd(self.fd.as_raw_fd(), &mut data) };
+        let num = res.context("failed to create guest memory")?;
+        Ok(unsafe { OwnedFd::from_raw_fd(num) })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -1130,6 +1153,16 @@ impl KvmRun {
             exit_reason => KvmExit::Other { exit_reason },
         }
     }
+
+    pub fn set_exit(&mut self, exit: KvmExit) {
+        match exit {
+            KvmExit::Vmgexit(vmgexit) => {
+                self.exit_reason = 50;
+                self.exit_data[..size_of::<KvmExitVmgexit>()].copy_from_slice(bytes_of(&vmgexit));
+            }
+            _ => unimplemented!(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1545,6 +1578,13 @@ bitflags! {
         const WRITE = 1 << 1;
         const EXECUTE = 1 << 2;
         const PRIVATE = 1 << 3;
+    }
+}
+
+bitflags! {
+    #[repr(transparent)]
+    pub struct KvmGuestMemFdFlags: u64 {
+        const HUGE_PMD = 1 << 0;
     }
 }
 
