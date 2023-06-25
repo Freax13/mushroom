@@ -18,5 +18,5 @@ io = { workspace = true }
 log = { version = "0.4.17", default-features = false }
 sha2 = { version = "0.10.6", default-features = false }
 snp-types = { workspace = true }
-volatile = { git = "https://github.com/Freax13/volatile", rev = "d7c0373", features = ["unstable"] }
+volatile = { version = "0.5.1", features = ["unstable"] }
 x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "bae6119533f19cd5c3557d5a302524f1d72456c5" }

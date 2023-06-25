@@ -146,14 +146,14 @@ impl VmHandle {
         debug!("mapping memory");
 
         let pages = Box::leak(pages);
-        let pages = VolatilePtr::from_mut_ref(pages);
+        let pages = unsafe { VolatilePtr::new(NonNull::from(pages)) };
 
         let region = KvmUserspaceMemoryRegion {
             slot: u32::from(slot),
             flags: KvmUserspaceMemoryRegionFlags::empty(),
             guest_phys_addr,
             memory_size: u64::try_from(pages.len() * 0x1000).unwrap(),
-            userspace_addr: pages.as_ptr().as_ptr() as *mut Page as u64,
+            userspace_addr: pages.as_raw_ptr().as_ptr() as *mut Page as u64,
         };
 
         ioctl_write_ptr!(
@@ -906,7 +906,7 @@ impl VcpuHandle {
             )
         };
         let ptr = res.context("failed to map vcpu kvm_run block")?;
-        let ptr = unsafe { VolatilePtr::new_read_write(NonNull::new_unchecked(ptr.cast())) };
+        let ptr = unsafe { VolatilePtr::new(NonNull::new_unchecked(ptr.cast())) };
         Ok(ptr)
     }
 

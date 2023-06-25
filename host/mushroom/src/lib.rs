@@ -28,8 +28,8 @@ use snp_types::{
 };
 use tracing::{debug, info};
 use volatile::{
-    access::{Access, ReadOnly, SafeAccess},
-    map_field, map_field_mut, VolatilePtr,
+    access::{ReadOnly, Readable},
+    map_field, VolatilePtr,
 };
 use x86_64::{
     structures::paging::{PageSize as _, PhysFrame, Size2MiB, Size4KiB},
@@ -343,7 +343,7 @@ impl VmContext {
                                             Err(op) => bail!("unknown page operation: {op:?}"),
                                         }
 
-                                        map_field_mut!(header.cur_entry).update(|cur| *cur += 1);
+                                        map_field!(header.cur_entry).update(|cur| cur + 1);
                                     }
                                 }
                                 _ => bail!("unsupported exit code: {exit_code:#x}"),
@@ -365,11 +365,12 @@ impl VmContext {
 
                             let response =
                                 GhcbInfo::SnpPageStateChangeResponse { error_code: None };
-                            kvm_run.update(|run| {
+                            kvm_run.update(|mut run| {
                                 run.set_exit(KvmExit::Vmgexit(KvmExitVmgexit {
                                     ghcb_msr: response.into(),
                                     error: 0,
-                                }))
+                                }));
+                                run
                             });
                         }
                         _ => bail!("unsupported msr protocol value: {info:?}"),
@@ -464,13 +465,11 @@ fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot
 }
 
 /// The volatile equivalent of `bytemuck::bytes_of`.
-fn volatile_bytes_of<T, W>(
-    ptr: VolatilePtr<T, Access<SafeAccess, W>>,
-) -> VolatilePtr<[u8], ReadOnly>
+fn volatile_bytes_of<T>(ptr: VolatilePtr<T, impl Readable>) -> VolatilePtr<[u8], ReadOnly>
 where
     T: NoUninit,
 {
-    let data = ptr.as_ptr().as_ptr().cast::<u8>();
+    let data = ptr.as_raw_ptr().as_ptr().cast::<u8>();
     let ptr = core::ptr::slice_from_raw_parts_mut(data, size_of::<T>());
     let ptr = unsafe {
         // SAFETY: We got originially the pointer from a `NonNull` and only
@@ -481,7 +480,7 @@ where
         // SAFETY: `ptr` points to a valid `T` and its `NoUninit`
         // implementation promises us that it's safe to view the data as a
         // slice of bytes.
-        VolatilePtr::new_generic(ptr)
+        VolatilePtr::new_read_only(ptr)
     }
 }
 

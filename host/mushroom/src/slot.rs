@@ -101,7 +101,7 @@ impl Slot {
         unsafe {
             let ptr = self.shared_mapping.ptr.as_ptr().byte_add(offset).cast();
             let ptr = NonNull::new_unchecked(ptr);
-            Ok(VolatilePtr::new_generic(ptr))
+            Ok(VolatilePtr::new(ptr))
         }
     }
 }

@@ -489,7 +489,7 @@ dependencies = [
  "log",
  "sha2",
  "snp-types",
- "volatile 0.4.4",
+ "volatile 0.5.1",
  "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
 ]
 
@@ -556,14 +556,15 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "volatile"
-version = "0.4.4"
-source = "git+https://github.com/Freax13/volatile?rev=d7c0373#d7c037323e4334ce97f92c71395b63e16845bf68"
-
-[[package]]
-name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "volatile"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eaac9f9d9b7ae00cdd43e21b15e58ccacd903e6d29131d7536765a61969d25e"
 
 [[package]]
 name = "windows-sys"
