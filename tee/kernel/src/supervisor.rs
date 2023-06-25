@@ -9,7 +9,7 @@ use x86_64::{
     PhysAddr,
 };
 
-use crate::memory::{frame::DUMB_FRAME_ALLOCATOR, temporary::copy_into_frame};
+use crate::memory::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame};
 
 pub struct Allocator;
 
@@ -55,7 +55,7 @@ pub fn schedule_vcpu() {
 
 pub fn output(bytes: &[u8]) {
     static FRAME: Mutex<LazyCell<PhysFrame>> = Mutex::new(LazyCell::new(|| {
-        (&DUMB_FRAME_ALLOCATOR)
+        (&FRAME_ALLOCATOR)
             .allocate_frame()
             .expect("failed to allocate frame for output")
     }));

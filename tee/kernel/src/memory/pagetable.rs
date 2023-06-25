@@ -30,7 +30,7 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use super::{frame::DUMB_FRAME_ALLOCATOR, temporary::copy_into_frame};
+use super::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame};
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(510);
 
@@ -39,7 +39,7 @@ static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     for pml4e in pml4.entries[256..].iter() {
         let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
         let reserved_allocation = storage
-            .allocate(&mut &DUMB_FRAME_ALLOCATOR)
+            .allocate(&mut &FRAME_ALLOCATOR)
             .expect("failed to allocate memory for kernel pml4e");
         pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
     }
@@ -50,7 +50,7 @@ pub fn allocate_pml4() -> Result<PhysFrame> {
     Lazy::force(&INIT_KERNEL_PML4ES);
 
     // Allocate a frame for the new pml4.
-    let frame = (&DUMB_FRAME_ALLOCATOR)
+    let frame = (&FRAME_ALLOCATOR)
         .allocate_frame()
         .ok_or(Error::no_mem(()))?;
 
@@ -829,7 +829,7 @@ where
         if let Some(frame) = frame {
             // Deallocate the backing frame for the entry.
             unsafe {
-                (&DUMB_FRAME_ALLOCATOR).deallocate_frame(frame);
+                (&FRAME_ALLOCATOR).deallocate_frame(frame);
             }
 
             // Decrease the reference count on the parent entry.

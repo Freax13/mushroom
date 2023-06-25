@@ -1,68 +1,209 @@
+use core::{
+    mem::size_of,
+    ops::{Index, IndexMut},
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+use alloc::vec::Vec;
 use arrayvec::ArrayVec;
 use bit_field::BitArray;
+use log::{debug, warn};
 use spin::Mutex;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB, Size4KiB};
 
 use crate::supervisor::Allocator;
 
-const CAP: usize = 1 << 15;
+pub static FRAME_ALLOCATOR: BitmapFrameAllocator = BitmapFrameAllocator::new();
 
-pub static DUMB_FRAME_ALLOCATOR: DumbFrameAllocator = DumbFrameAllocator::new();
-
-/// This is one huge giant FIXME.
-pub struct DumbFrameAllocator {
-    metadata: Mutex<ArrayVec<Metadata, CAP>>,
+pub struct BitmapFrameAllocator {
+    is_donating: AtomicBool,
+    state: Mutex<BitmapFrameAllocatorState>,
 }
 
-impl DumbFrameAllocator {
+impl BitmapFrameAllocator {
     pub const fn new() -> Self {
         Self {
-            metadata: Mutex::new(ArrayVec::new_const()),
+            is_donating: AtomicBool::new(false),
+            state: Mutex::new(BitmapFrameAllocatorState {
+                r#static: ArrayVec::new_const(),
+                dynamic: Vec::new(),
+            }),
         }
     }
 }
 
-unsafe impl FrameAllocator<Size4KiB> for &DumbFrameAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
-        let mut guard = self.metadata.lock();
+struct BitmapFrameAllocatorState {
+    r#static: ArrayVec<Bitmap, 1>,
+    dynamic: Vec<Bitmap>,
+}
 
-        if let Some(frame) = guard.iter_mut().find_map(|metadata| metadata.allocate()) {
+impl BitmapFrameAllocatorState {
+    fn bitmaps(&mut self) -> impl Iterator<Item = &mut Bitmap> + '_ {
+        self.r#static.iter_mut().chain(self.dynamic.iter_mut())
+    }
+
+    fn add_bitmap(&mut self, bitmap: Bitmap) {
+        // Try pushing into the statically sized vector...
+        match self.r#static.try_push(bitmap) {
+            Ok(_) => {}
+            Err(err) => {
+                // ...or fall back to pushing into the dynamic vector.
+                self.dynamic.push(err.element());
+            }
+        }
+    }
+
+    fn swap_remove(&mut self, idx: usize) {
+        if idx < self.r#static.len() {
+            self.r#static.swap_remove(idx);
+        } else {
+            self.dynamic.swap_remove(idx - self.r#static.len());
+        }
+    }
+
+    /// Return's true when a donation is needed to grow the dynamic buffer.
+    fn needs_donation(&self) -> Option<usize> {
+        if self.dynamic.capacity() == 0 {
+            // Make sure to request at least a page worth of capacity.
+            return Some(4096usize.div_ceil(size_of::<Bitmap>()));
+        }
+
+        if self.dynamic.len() * 4 > self.dynamic.capacity() * 3 {
+            return Some(self.dynamic.capacity() * 2);
+        }
+
+        None
+    }
+
+    /// Donate the capacity of a vector.
+    fn donate_dynamic_vector(&mut self, dynamic: &mut Vec<Bitmap>) {
+        assert!(dynamic.is_empty());
+
+        // Check if the donated vector has more capacity.
+        if self.dynamic.capacity() >= dynamic.capacity() {
+            warn!("rejecting donation");
+            return;
+        }
+
+        // Swap the vectors and move the elements over.
+        core::mem::swap(&mut self.dynamic, dynamic);
+        self.dynamic.append(dynamic);
+    }
+}
+
+impl Index<usize> for BitmapFrameAllocatorState {
+    type Output = Bitmap;
+
+    fn index(&self, idx: usize) -> &Self::Output {
+        if idx < self.r#static.len() {
+            &self.r#static[idx]
+        } else {
+            &self.dynamic[idx - self.r#static.len()]
+        }
+    }
+}
+
+impl IndexMut<usize> for BitmapFrameAllocatorState {
+    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+        if idx < self.r#static.len() {
+            &mut self.r#static[idx]
+        } else {
+            &mut self.dynamic[idx - self.r#static.len()]
+        }
+    }
+}
+
+unsafe impl FrameAllocator<Size4KiB> for &BitmapFrameAllocator {
+    fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        let mut state = loop {
+            let mut state = self.state.lock();
+
+            if let Some(cap) = state.needs_donation() {
+                let res = self.is_donating.compare_exchange(
+                    false,
+                    true,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+                if res.is_ok() {
+                    // We acquired the rights to donate.
+                    debug!("preparing to donate with capacity {cap}");
+
+                    // Drop the mutex, so that we can allocate on the heap.
+                    drop(state);
+
+                    debug!("1");
+
+                    // Allocate a vector.
+                    let mut donation = Vec::with_capacity(cap);
+
+                    debug!("1");
+
+                    // Donate the vector.
+                    state = self.state.lock();
+                    state.donate_dynamic_vector(&mut donation);
+
+                    debug!("1");
+
+                    // Drop the mutex again to release the previous allocation.
+                    drop(state);
+                    drop(donation);
+
+                    self.is_donating.store(false, Ordering::SeqCst);
+
+                    continue;
+                } else {
+                    debug!("1");
+                }
+            }
+
+            break state;
+        };
+
+        // Try to allocate from the existing bitmaps.
+        if let Some(frame) = state.bitmaps().find_map(|bitmap| bitmap.allocate()) {
             return Some(frame);
         }
 
-        let mut metadata = Metadata::new()?;
-        let frame = metadata.allocate().unwrap();
-        guard.push(metadata);
+        // Create a new bitmap and allocate from it.
+        let mut bitmap = Bitmap::new()?;
+        let frame = bitmap.allocate().unwrap();
+        state.add_bitmap(bitmap);
+
         Some(frame)
     }
 }
 
-impl FrameDeallocator<Size4KiB> for &DumbFrameAllocator {
-    unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) {
-        let mut guard = self.metadata.lock();
-        let idx = guard
-            .iter_mut()
-            .position(|metadata| metadata.contains(frame))
-            .unwrap();
+impl FrameDeallocator<Size4KiB> for &BitmapFrameAllocator {
+    unsafe fn deallocate_frame(&mut self, frame: PhysFrame) {
+        let mut state = self.state.lock();
+        let mut i = 0;
+        loop {
+            let bitmap = &mut state[i];
+            if !bitmap.contains(frame) {
+                i += 1;
+                continue;
+            }
 
-        let metadata = &mut guard[idx];
-        unsafe {
-            metadata.deallocate(frame);
-        }
+            unsafe {
+                bitmap.deallocate(frame);
+            }
+            if bitmap.used == 0 {
+                state.swap_remove(i);
+            }
 
-        if metadata.used == 0 {
-            guard.swap_remove(idx);
+            return;
         }
     }
 }
 
-struct Metadata {
+struct Bitmap {
     base: PhysFrame<Size2MiB>,
     used: u16,
     bitmap: [u8; 64],
 }
 
-impl Metadata {
+impl Bitmap {
     pub fn new() -> Option<Self> {
         let base = Allocator.allocate_frame()?;
         Some(Self {
@@ -108,7 +249,7 @@ impl Metadata {
     }
 }
 
-impl Drop for Metadata {
+impl Drop for Bitmap {
     fn drop(&mut self) {
         assert_eq!(self.used, 0);
         unsafe {

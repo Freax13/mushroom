@@ -29,7 +29,7 @@ use crate::{
     error::{Error, Result},
     fs::{node::FileSnapshot, Path},
     memory::{
-        frame::DUMB_FRAME_ALLOCATOR,
+        frame::FRAME_ALLOCATOR,
         pagetable::{
             add_flags, allocate_pml4, entry_for_page, map_page, remap_page, remove_flags,
             unmap_page, PageTableFlags, PresentPageTableEntry,
@@ -721,7 +721,7 @@ impl Mapping {
                 core::intrinsics::volatile_copy_nonoverlapping_memory(&mut content, ptr, 1);
             });
 
-            let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+            let frame = (&FRAME_ALLOCATOR).allocate_frame().unwrap();
             unsafe {
                 copy_into_frame(frame, &content)?;
             }
@@ -734,7 +734,7 @@ impl Mapping {
                 Err(new_entry) => {
                     current_entry = new_entry;
                     unsafe {
-                        (&DUMB_FRAME_ALLOCATOR).deallocate_frame(frame);
+                        (&FRAME_ALLOCATOR).deallocate_frame(frame);
                     }
                 }
             }
@@ -806,10 +806,10 @@ impl Mapping {
                         flags |= PageTableFlags::COW;
                         let new_entry = PresentPageTableEntry::new(backing_entry.frame(), flags);
                         unsafe {
-                            map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
+                            map_page(page, new_entry, &mut &FRAME_ALLOCATOR)?;
                         }
                     } else {
-                        let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+                        let frame = (&FRAME_ALLOCATOR).allocate_frame().unwrap();
 
                         let offset =
                             usize::try_from(file_backing.offset + (page - self.start) * 0x1000)
@@ -838,13 +838,13 @@ impl Mapping {
                         }
                         let new_entry = PresentPageTableEntry::new(frame, flags);
                         unsafe {
-                            map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
+                            map_page(page, new_entry, &mut &FRAME_ALLOCATOR)?;
                         }
                     }
                 }
                 Backing::Zero | Backing::Stack => {
                     // FIXME: We could map a specific zero frame.
-                    let frame = (&DUMB_FRAME_ALLOCATOR).allocate_frame().unwrap();
+                    let frame = (&FRAME_ALLOCATOR).allocate_frame().unwrap();
                     unsafe {
                         // SAFETY: We just allocated the frame, so we can do whatever.
                         zero_frame(frame)?;
@@ -859,7 +859,7 @@ impl Mapping {
                     }
                     let new_entry = PresentPageTableEntry::new(frame, flags);
                     unsafe {
-                        map_page(page, new_entry, &mut &DUMB_FRAME_ALLOCATOR)?;
+                        map_page(page, new_entry, &mut &FRAME_ALLOCATOR)?;
                     }
                 }
             }

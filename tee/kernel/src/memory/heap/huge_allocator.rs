@@ -5,7 +5,6 @@ use core::{
 };
 
 use constants::virtual_address::HEAP;
-use spin::Mutex;
 use x86_64::{
     structures::paging::{FrameAllocator, FrameDeallocator, Page, Size4KiB},
     VirtAddr,
@@ -14,14 +13,14 @@ use x86_64::{
 use crate::memory::pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry};
 
 pub struct HugeAllocator<A> {
-    allocator: Mutex<A>,
+    allocator: A,
     bump_addr: AtomicU64,
 }
 
 impl<A> HugeAllocator<A> {
     pub const fn new(allocator: A) -> Self {
         Self {
-            allocator: Mutex::new(allocator),
+            allocator,
             bump_addr: AtomicU64::new(HEAP.start()),
         }
     }
@@ -29,7 +28,7 @@ impl<A> HugeAllocator<A> {
 
 unsafe impl<A> Allocator for HugeAllocator<A>
 where
-    A: FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>,
+    A: FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB> + Copy,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let pages = layout.size().div_ceil(0x1000);
@@ -53,17 +52,16 @@ where
         let addr = VirtAddr::new(addr);
         let base = Page::<Size4KiB>::from_start_address(addr).unwrap();
 
-        let mut allocator = self.allocator.lock();
+        let mut allocator = self.allocator;
         for page in (base..).take(pages) {
             let frame = allocator.allocate_frame().unwrap();
             let entry = PresentPageTableEntry::new(
                 frame,
                 PageTableFlags::WRITABLE | PageTableFlags::GLOBAL,
             );
-            let res = unsafe { map_page(page, entry, &mut *allocator) };
+            let res = unsafe { map_page(page, entry, &mut allocator) };
             res.unwrap();
         }
-        drop(allocator);
 
         Ok(NonNull::new(core::ptr::slice_from_raw_parts_mut(addr.as_mut_ptr(), size)).unwrap())
     }
@@ -74,7 +72,7 @@ where
         let addr = VirtAddr::from_ptr(ptr.as_ptr());
         let base = Page::<Size4KiB>::from_start_address(addr).unwrap();
 
-        let mut allocator = self.allocator.lock();
+        let mut allocator = self.allocator;
 
         for page in (base..).take(pages) {
             let entry = unsafe { unmap_page(page) };
