@@ -7,7 +7,10 @@ use paste::paste;
 
 use crate::{Reserved, Uninteresting};
 
-use core::mem::size_of;
+use core::{
+    fmt::{self, Debug},
+    mem::size_of,
+};
 
 macro_rules! vmsa_def {
     (
@@ -42,6 +45,21 @@ macro_rules! vmsa_def {
                 Self {
                     $($ident: cast::<$ty, _>($default),)*
                 }
+            }
+        }
+
+        struct DebugVmsa<'a> {
+            bitmap: &'a VmsaTweakBitmap,
+            vmsa: &'a Vmsa,
+        }
+
+        impl Debug for DebugVmsa<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut f = f.debug_struct("Vmsa");
+                $(
+                    f.field(::core::stringify!($ident), &self.vmsa.$ident(self.bitmap));
+                )*
+                f.finish()
             }
         }
     };
@@ -82,6 +100,10 @@ impl Vmsa {
                 *b ^= nonce_update_xor[i % 8];
             }
         }
+    }
+
+    pub fn debug<'a>(&'a self, bitmap: &'a VmsaTweakBitmap) -> impl Debug + 'a {
+        DebugVmsa { bitmap, vmsa: self }
     }
 }
 
@@ -275,4 +297,8 @@ bitflags! {
 #[repr(transparent)]
 pub struct VmsaTweakBitmap {
     bitmap: [u8; 0x40],
+}
+
+impl VmsaTweakBitmap {
+    pub const ZERO: Self = Self { bitmap: [0; 0x40] };
 }
