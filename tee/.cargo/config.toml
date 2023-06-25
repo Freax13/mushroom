@@ -8,4 +8,6 @@ rustflags = [
     "polyval_force_soft",
     "--cfg",
     "aes_force_soft",
+    "-C",
+    "force-frame-pointers=true",
 ]
