@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
+use snp_types::guest_policy::GuestPolicy;
 use vcek_kds::{Product, Vcek};
 
 #[tokio::main]
@@ -35,6 +36,38 @@ enum MushroomSubcommand {
 }
 
 #[derive(Args)]
+struct PolicyArgs {
+    /// Minimum required firmware major version.
+    #[arg(long, default_value_t = 1)]
+    pub abi_major: u8,
+    /// Minimum required firmware minor version.
+    #[arg(long, default_value_t = 51)]
+    pub abi_minor: u8,
+    /// Whether not to allow hyperthreading to be active.
+    #[arg(long)]
+    pub disallow_smt: bool,
+    /// Whether to allow multiple sockets.
+    #[arg(long)]
+    pub multi_socket: bool,
+    /// Whether to allow association of an migration agent.
+    #[arg(long)]
+    pub allow_migration_agent_association: bool,
+    /// Whether to allow debugging.
+    #[arg(long)]
+    pub allow_debugging: bool,
+}
+
+impl PolicyArgs {
+    fn policy(&self) -> GuestPolicy {
+        GuestPolicy::new(self.abi_major, self.abi_minor)
+            .with_allow_smt(!self.disallow_smt)
+            .with_allow_migration_agent_association(self.allow_migration_agent_association)
+            .with_allow_debugging(self.allow_debugging)
+            .with_single_socket_only(!self.multi_socket)
+    }
+}
+
+#[derive(Args)]
 struct RunCommand {
     /// Path to the supervisor.
     #[arg(long, value_name = "PATH", env = "SUPERVISOR")]
@@ -54,6 +87,8 @@ struct RunCommand {
     /// Path to store the attestation report.
     #[arg(long, value_name = "PATH")]
     attestation_report: PathBuf,
+    #[command(flatten)]
+    policy: PolicyArgs,
 }
 
 fn run(run: RunCommand) -> Result<()> {
@@ -62,7 +97,7 @@ fn run(run: RunCommand) -> Result<()> {
     let init = std::fs::read(run.init).context("failed to read init file")?;
     let input = std::fs::read(run.input).context("failed to read input file")?;
 
-    let result = mushroom::main(&supervisor, &kernel, &init, &input)?;
+    let result = mushroom::main(&supervisor, &kernel, &init, &input, run.policy.policy())?;
 
     std::fs::write(run.output, result.output).context("failed to write output")?;
     std::fs::write(run.attestation_report, result.attestation_report)
@@ -94,6 +129,8 @@ struct VerifyCommand {
     /// Path to store cached VCEKs.
     #[arg(long, value_name = "PATH")]
     vcek_cache: Option<PathBuf>,
+    #[command(flatten)]
+    policy: PolicyArgs,
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
@@ -137,7 +174,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         vcek_cert
     };
 
-    let configuration = Configuration::new(&supervisor, &kernel, &init);
+    let configuration = Configuration::new(&supervisor, &kernel, &init, run.policy.policy());
     // FIXME: use proper error type and use `?` instead of unwrap.
     configuration
         .verify(input_hash, output_hash, &attestation_report, &vcek_cert)

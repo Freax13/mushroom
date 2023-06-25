@@ -1,6 +1,6 @@
 use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit};
 
-use crate::Reserved;
+use crate::{guest_policy::GuestPolicy, Reserved};
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C)]
@@ -56,7 +56,7 @@ pub enum AttestionReport {
 #[repr(C, packed)]
 pub struct AttestionReportV2 {
     pub guest_svn: u32,
-    pub policy: u64,
+    pub policy: GuestPolicy,
     pub familiy_id: u128,
     pub image_id: u128,
     pub vmpl: u32,

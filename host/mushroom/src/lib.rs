@@ -46,12 +46,25 @@ use crate::{
 mod kvm;
 mod slot;
 
-pub fn main(supervisor: &[u8], kernel: &[u8], init: &[u8], input: &[u8]) -> Result<MushroomResult> {
+pub fn main(
+    supervisor: &[u8],
+    kernel: &[u8],
+    init: &[u8],
+    input: &[u8],
+    policy: GuestPolicy,
+) -> Result<MushroomResult> {
     let kvm_handle = KvmHandle::new()?;
     let sev_handle = SevHandle::new()?;
 
-    let mut vm_context =
-        VmContext::prepare_vm(supervisor, kernel, init, input, &kvm_handle, &sev_handle)?;
+    let mut vm_context = VmContext::prepare_vm(
+        supervisor,
+        kernel,
+        init,
+        input,
+        policy,
+        &kvm_handle,
+        &sev_handle,
+    )?;
     vm_context.run_bsp()
 }
 
@@ -69,6 +82,7 @@ impl VmContext {
         kernel: &[u8],
         init: &[u8],
         input: &[u8],
+        policy: GuestPolicy,
         kvm_handle: &KvmHandle,
         sev_handle: &SevHandle,
     ) -> Result<Self> {
@@ -90,9 +104,6 @@ impl VmContext {
 
         vm.sev_snp_init()?;
 
-        let policy = GuestPolicy::new(0, 0).with_allow_smt(true);
-        // FIXME: Debug
-        let policy = policy.with_allow_debugging(true);
         vm.sev_snp_launch_start(policy, sev_handle)?;
 
         let (load_commands, host_data) =

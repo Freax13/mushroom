@@ -1,7 +1,7 @@
 use bit_field::BitField;
 use bytemuck::CheckedBitPattern;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct GuestPolicy {
     policy: u64,
@@ -16,10 +16,26 @@ impl GuestPolicy {
         Self { policy }
     }
 
+    pub fn abi_major(&self) -> u8 {
+        self.policy.get_bits(8..=15) as u8
+    }
+
+    pub fn abi_minor(&self) -> u8 {
+        self.policy.get_bits(0..=7) as u8
+    }
+
+    pub fn allow_smt(self) -> bool {
+        self.policy.get_bit(16)
+    }
+
     pub fn with_allow_smt(self, allow: bool) -> Self {
         let mut policy = self.policy;
         policy.set_bit(16, allow);
         Self { policy }
+    }
+
+    pub fn allow_migration_agent_association(self) -> bool {
+        self.policy.get_bit(18)
     }
 
     pub fn with_allow_migration_agent_association(self, allow: bool) -> Self {
@@ -28,10 +44,18 @@ impl GuestPolicy {
         Self { policy }
     }
 
+    pub fn allow_debugging(self) -> bool {
+        self.policy.get_bit(19)
+    }
+
     pub fn with_allow_debugging(self, allow: bool) -> Self {
         let mut policy = self.policy;
         policy.set_bit(19, allow);
         Self { policy }
+    }
+
+    pub fn single_socket_only(self) -> bool {
+        self.policy.get_bit(17)
     }
 
     pub fn with_single_socket_only(self, only: bool) -> Self {
@@ -52,15 +76,15 @@ unsafe impl CheckedBitPattern for GuestPolicy {
 impl core::fmt::Debug for GuestPolicy {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GuestPolicy")
-            .field("abi_major", &self.policy.get_bits(8..=15))
-            .field("abi_minor", &self.policy.get_bits(0..=7))
-            .field("allow_smt", &self.policy.get_bit(16))
-            .field("single_socket_only", &self.policy.get_bit(17))
+            .field("abi_major", &self.abi_major())
+            .field("abi_minor", &self.abi_minor())
+            .field("allow_smt", &self.allow_smt())
+            .field("single_socket_only", &self.single_socket_only())
             .field(
                 "allow_migration_agent_association",
-                &self.policy.get_bit(18),
+                &self.allow_migration_agent_association(),
             )
-            .field("allow_debugging", &self.policy.get_bit(19))
+            .field("allow_debugging", &self.allow_debugging())
             .finish()
     }
 }

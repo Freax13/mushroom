@@ -10,16 +10,18 @@ use openssl::{bn::BigNum, ecdsa::EcdsaSig};
 use sha2::{Digest, Sha256, Sha384};
 use snp_types::{
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
+    guest_policy::GuestPolicy,
     PageType, VmplPermissions,
 };
 use vcek_kds::Vcek;
 
 pub struct Configuration {
     launch_digest: [u8; 48],
+    policy: GuestPolicy,
 }
 
 impl Configuration {
-    pub fn new(supervisor: &[u8], kernel: &[u8], init: &[u8]) -> Self {
+    pub fn new(supervisor: &[u8], kernel: &[u8], init: &[u8], policy: GuestPolicy) -> Self {
         let commands = generate_base_load_commands(supervisor, kernel, init);
 
         let mut launch_digest = [0; 48];
@@ -32,7 +34,10 @@ impl Configuration {
         let info = PageInfo::linux_vmsa(launch_digest);
         launch_digest = Sha384::digest(bytes_of(&info)).into();
 
-        Self { launch_digest }
+        Self {
+            launch_digest,
+            policy,
+        }
     }
 
     /// Verify that a input the given hash is attested to have produced a output with the given hash.
@@ -63,6 +68,7 @@ impl Configuration {
         verify_eq!(report.report_data[32..], [0; 32]);
         verify_eq!(report.measurement, self.launch_digest);
         verify_eq!(report.host_data, input_hash.0);
+        verify_eq!({ report.policy }, self.policy);
 
         verify_eq!(report.signature_algo, 1);
 
