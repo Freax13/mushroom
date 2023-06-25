@@ -1,8 +1,4 @@
-use core::{
-    arch::asm,
-    panic::PanicInfo,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::panic::PanicInfo;
 
 use x86_64::structures::idt::InterruptDescriptorTable;
 
@@ -14,6 +10,8 @@ fn panic_handler(info: &PanicInfo) -> ! {
 
     #[cfg(not(feature = "harden"))]
     {
+        use core::sync::atomic::{AtomicBool, Ordering};
+
         use log::error;
         static IS_PANICKING: AtomicBool = AtomicBool::new(false);
         let is_already_panicking = IS_PANICKING.swap(true, Ordering::SeqCst);
@@ -50,6 +48,7 @@ fn triple_fault() -> ! {
 #[cfg(not(feature = "harden"))]
 #[inline(always)]
 fn walk_frames() -> impl Iterator<Item = u64> {
+    use core::arch::asm;
     use core::iter::from_fn;
 
     let rbp: u64;
