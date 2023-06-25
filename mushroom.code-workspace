@@ -11,8 +11,6 @@
 		}
 	],
 	"settings": {
-		"rust-analyzer.checkOnSave.allTargets": false,
 		"rust-analyzer.check.allTargets": false,
-		"rust-analyzer.cargo.features": "all",
 	}
 }
