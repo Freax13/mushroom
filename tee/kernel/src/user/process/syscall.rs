@@ -983,7 +983,7 @@ fn readlink(
         let pathname = vm.read_path(pathname.get())?;
         let target = read_link(ROOT_NODE.clone(), &pathname)?;
 
-        let bytes = target.to_bytes();
+        let bytes = target.as_bytes();
         // Truncate to `bufsiz`.
         let len = cmp::min(bytes.len(), bufsiz);
         let bytes = &bytes[..len];

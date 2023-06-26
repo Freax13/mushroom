@@ -18,7 +18,7 @@ use crate::{
     error::{Error, Result},
     fs::{
         node::{lookup_and_resolve_node, File, FileSnapshot, ROOT_NODE},
-        Path,
+        path::Path,
     },
 };
 
@@ -87,7 +87,7 @@ impl ActiveVirtualMemory<'_, '_> {
         let mut at_base = None;
 
         if let Some(interpreter) = interpreter {
-            let path = Path::new(interpreter.as_bytes())?;
+            let path = Path::new(interpreter.into_bytes())?;
             let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
             let file: Arc<dyn File> = node.try_into()?;
             if !file.mode().contains(FileMode::EXECUTE) {

@@ -23,7 +23,7 @@ use crate::{
     error::{Error, Result},
     fs::{
         node::{lookup_and_resolve_node, File, ROOT_NODE},
-        Path,
+        path::Path,
     },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
     supervisor::schedule_vcpu,
@@ -133,7 +133,7 @@ impl Thread {
             Arc::new(Process::new(tid)),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::new()),
-            Path::new(b"/").unwrap(),
+            Path::new(b"/".to_vec()).unwrap(),
             None,
         )
     }

@@ -13,15 +13,16 @@ use crate::{
     user::process::syscall::args::FileMode,
 };
 
-use self::node::{
-    special::{NullFile, OutputFile},
-    Directory, TmpFsDirectory, TmpFsFile, ROOT_NODE,
+use self::{
+    node::{
+        special::{NullFile, OutputFile},
+        Directory, TmpFsDirectory, TmpFsFile, ROOT_NODE,
+    },
+    path::FileName,
 };
 
 pub mod node;
 pub mod path;
-
-pub use path::{FileName, Path, PathSegment};
 
 pub fn init() -> Result<()> {
     let bin = ROOT_NODE.create_dir(

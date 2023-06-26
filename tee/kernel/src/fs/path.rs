@@ -1,217 +1,150 @@
-use core::fmt::{self, Debug, Display};
+use core::iter::from_fn;
 
-use alloc::{borrow::ToOwned, vec::Vec};
+use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
 use crate::error::{Error, Result};
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FileName(Vec<u8>);
+#[derive(Clone)]
+pub struct Path {
+    bytes: Arc<[u8]>,
+}
 
-impl FileName {
-    pub fn new(name: &[u8]) -> Result<Self, ParseFileNameError> {
-        match name {
-            b"" => Err(ParseFileNameError::Empty),
-            b"." => Err(ParseFileNameError::Dot),
-            b".." => Err(ParseFileNameError::DotDot),
-            name if name.contains(&b'/') => Err(ParseFileNameError::Slash),
-            name => Ok(Self(name.to_owned())),
+impl Path {
+    pub fn new(path: Vec<u8>) -> Result<Self> {
+        if path.is_empty() {
+            return Err(Error::inval(()));
         }
+        Ok(Self { bytes: path.into() })
     }
-}
 
-impl AsRef<[u8]> for FileName {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
+    pub fn segments(&self) -> impl Iterator<Item = PathSegment> {
+        let mut bytes_opt = Some(&*self.bytes);
+
+        let mut first = true;
+
+        from_fn(move || {
+            let was_first = core::mem::replace(&mut first, false);
+            let bytes = bytes_opt.as_mut()?;
+            if let Some(bs) = bytes.strip_prefix(b"/") {
+                *bytes = bs;
+                if was_first {
+                    return Some(PathSegment::Root);
+                } else {
+                    return Some(PathSegment::Empty);
+                }
+            }
+
+            let next = bytes.iter().position(|&b| b == b'/');
+            let segment_bytes = if let Some(next) = next {
+                let segment_bytes = &bytes[..next];
+                bytes_opt = Some(&bytes[next + 1..]);
+                segment_bytes
+            } else {
+                let bytes = *bytes;
+                bytes_opt = None;
+                bytes
+            };
+            match segment_bytes {
+                b"" => Some(PathSegment::Empty),
+                b"." => Some(PathSegment::Dot),
+                b".." => Some(PathSegment::DotDot),
+                bytes => Some(PathSegment::FileName(FileName::new(bytes).unwrap())),
+            }
+        })
     }
-}
 
-impl Debug for FileName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Ok(str) = core::str::from_utf8(&self.0) {
-            write!(f, "{str}")
-        } else {
-            self.0.fmt(f)
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn canonicalize(&mut self) -> Result<()> {
+        // Short-circuit for paths that are already canonical.
+        if self
+            .segments()
+            .all(|segment| matches!(segment, PathSegment::Root | PathSegment::FileName(_)))
+        {
+            return Ok(());
         }
-    }
-}
 
-#[derive(Debug)]
-pub enum ParseFileNameError {
-    Empty,
-    Dot,
-    DotDot,
-    Slash,
-}
+        let capacity = self
+            .segments()
+            .scan(0usize, |count, b| {
+                match b {
+                    PathSegment::Empty | PathSegment::Dot => {}
+                    PathSegment::DotDot => *count = count.saturating_sub(1),
+                    PathSegment::Root | PathSegment::FileName(_) => *count += 1,
+                }
+                Some(*count)
+            })
+            .max()
+            .unwrap_or_default();
 
-impl Display for ParseFileNameError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseFileNameError::Empty => write!(f, "file name must not be empty"),
-            ParseFileNameError::Dot => write!(f, "dot is a valid file name"),
-            ParseFileNameError::DotDot => write!(f, "dot dot is not a valid file name"),
-            ParseFileNameError::Slash => write!(f, "file name must not contains a slash"),
+        let mut stack = Vec::with_capacity(capacity);
+        for segment in self.segments() {
+            match segment {
+                PathSegment::Empty => {}
+                PathSegment::Dot => {}
+                PathSegment::DotDot => {
+                    stack.pop();
+                }
+                segment @ (PathSegment::Root | PathSegment::FileName(_)) => {
+                    stack.push(segment);
+                }
+            }
         }
+
+        // FIXME: We can use a smaller capacity.
+        let mut path = Vec::with_capacity(self.bytes.len());
+
+        let mut iter = stack.into_iter().peekable();
+        if iter.next_if_eq(&PathSegment::Root).is_some() {
+            path.push(b'/');
+        }
+        let mut iter = iter.map(|segment| match segment {
+            PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+                unreachable!()
+            }
+            PathSegment::FileName(filename) => filename,
+        });
+        if let Some(first) = iter.next() {
+            path.extend_from_slice(first.as_bytes());
+            for rest in iter {
+                path.push(b'/');
+                path.extend_from_slice(rest.as_bytes());
+            }
+        }
+        *self = Path::new(path)?;
+        Ok(())
     }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub enum PathSegment {
+pub enum PathSegment<'a> {
+    /// The path starts at the root of the file system. Can only be the first
+    /// segment in a path.
+    Root,
     Empty,
     Dot,
     DotDot,
-    FileName(FileName),
+    FileName(FileName<'a>),
 }
 
-impl Debug for PathSegment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(f, ""),
-            Self::Dot => write!(f, "."),
-            Self::DotDot => write!(f, ".."),
-            Self::FileName(filename) => filename.fmt(f),
-        }
-    }
-}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FileName<'a>(Cow<'a, [u8]>);
 
-impl AsRef<[u8]> for PathSegment {
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            PathSegment::Empty => b"",
-            PathSegment::Dot => b".",
-            PathSegment::DotDot => b"..",
-            PathSegment::FileName(filename) => filename.as_ref(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Path {
-    is_absolute: bool,
-    segments: Vec<PathSegment>,
-}
-
-impl Debug for Path {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_absolute {
-            write!(f, "/")?;
-        }
-
-        let mut segments = self.segments().iter();
-        if let Some(segment) = segments.next() {
-            write!(f, "{segment:?}")?;
-            for segment in segments {
-                write!(f, "/{segment:?}")?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl Path {
-    pub fn new(mut path: &[u8]) -> Result<Self> {
-        if path.is_empty() {
-            return Err(Error::inval(()));
-        }
-
-        let mut is_absolute = false;
-        if let Some((head, tail)) = path.split_first() {
-            if *head == b'/' {
-                is_absolute = true;
-                path = tail;
-            }
-        }
-
-        let mut this = Path {
-            is_absolute,
-            segments: Vec::new(),
-        };
-        if !path.is_empty() {
-            for segment in path.split(|&c| c == b'/') {
-                this.join_in_place(segment);
-            }
-        }
-        Ok(this)
-    }
-
-    pub fn is_absolute(&self) -> bool {
-        self.is_absolute
-    }
-
-    pub fn segments(&self) -> &[PathSegment] {
-        &self.segments
-    }
-
-    pub fn is_root(&self) -> bool {
-        self.is_absolute && self.segments().is_empty()
-    }
-
-    fn join_in_place(&mut self, segment: &[u8]) {
-        let res = FileName::new(segment);
-        let segment = match res {
-            Ok(file_name) => PathSegment::FileName(file_name),
-            Err(ParseFileNameError::Empty) => PathSegment::Empty,
-            Err(ParseFileNameError::Dot) => PathSegment::Dot,
-            Err(ParseFileNameError::DotDot) => PathSegment::DotDot,
-            Err(ParseFileNameError::Slash) => unreachable!(),
-        };
-        self.segments.push(segment);
-    }
-
-    pub fn join(&self, segment: &[u8]) -> Self {
-        let mut this = self.clone();
-        this.join_in_place(segment);
-        this
-    }
-
-    pub fn canonicalize(&mut self) -> Result<()> {
-        let mut idx = 0;
-        while let Some(segment) = self.segments.get(idx) {
-            match segment {
-                PathSegment::Empty | PathSegment::Dot => {
-                    self.segments.remove(idx);
-                }
-                PathSegment::DotDot => {
-                    if let Some(new_idx) = idx.checked_sub(1) {
-                        idx = new_idx;
-                        self.segments.remove(idx);
-                        self.segments.remove(idx);
-                    } else {
-                        self.segments.remove(idx);
-                    }
-                }
-                PathSegment::FileName(_) => idx += 1,
-            }
-        }
-        Ok(())
-    }
-
-    pub fn filename(&self) -> Option<&FileName> {
-        match self.segments.last()? {
-            PathSegment::FileName(filename) => Some(filename),
-            _ => None,
+impl<'a> FileName<'a> {
+    pub fn new(bytes: &'a [u8]) -> Result<Self> {
+        match bytes {
+            b"" | b"." | b".." => Err(Error::inval(())),
+            _ => Ok(Self(Cow::Borrowed(bytes))),
         }
     }
 
-    pub fn parent(&self) -> Result<Path> {
-        let mut parent = self.join(b"..");
-        parent.canonicalize()?;
-        Ok(parent)
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        if self.is_absolute() {
-            bytes.push(b'/');
-        }
-        let mut segments = self.segments().iter();
-        if let Some(segment) = segments.next() {
-            bytes.extend_from_slice(segment.as_ref());
-            for segment in segments {
-                bytes.push(b'/');
-                bytes.extend_from_slice(segment.as_ref());
-            }
-        }
-        bytes
+    pub fn into_owned(self) -> FileName<'static> {
+        FileName(Cow::Owned(self.0.into_owned()))
     }
 }

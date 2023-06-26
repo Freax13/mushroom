@@ -19,7 +19,7 @@ use crate::{
     user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat},
 };
 
-use super::{path::FileName, Path, PathSegment};
+use super::path::{FileName, Path, PathSegment};
 
 pub mod special;
 
@@ -167,16 +167,25 @@ pub trait Directory: Any + Send + Sync {
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
     fn create_file(
         &self,
-        file_name: FileName,
+        file_name: FileName<'static>,
         mode: FileMode,
         create_new: bool,
     ) -> Result<Arc<dyn File>>;
-    fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>>;
-    fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()>;
-    fn hard_link(&self, file_name: &FileName, node: Node) -> Result<()>;
+    fn create_dir(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+    ) -> Result<Arc<dyn Directory>>;
+    fn create_link(
+        &self,
+        file_name: FileName<'static>,
+        target: Path,
+        create_new: bool,
+    ) -> Result<()>;
+    fn hard_link(&self, file_name: FileName<'static>, node: Node) -> Result<()>;
     fn list_entries(&self) -> Vec<DirEntry>;
-    fn delete_non_dir(&self, file_name: FileName) -> Result<()>;
-    fn delete_dir(&self, file_name: FileName) -> Result<()>;
+    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
+    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
 
     fn mode(&self) -> FileMode {
         self.stat().mode.mode()
@@ -197,7 +206,7 @@ impl DirEntry {
 }
 
 pub enum DirEntryName {
-    FileName(FileName),
+    FileName(FileName<'static>),
     Dot,
     DotDot,
 }
@@ -205,15 +214,15 @@ pub enum DirEntryName {
 impl AsRef<[u8]> for DirEntryName {
     fn as_ref(&self) -> &[u8] {
         match self {
-            DirEntryName::FileName(filename) => filename.as_ref(),
+            DirEntryName::FileName(filename) => filename.as_bytes(),
             DirEntryName::Dot => b".",
             DirEntryName::DotDot => b"..",
         }
     }
 }
 
-impl From<FileName> for DirEntryName {
-    fn from(value: FileName) -> Self {
+impl From<FileName<'static>> for DirEntryName {
+    fn from(value: FileName<'static>) -> Self {
         Self::FileName(value)
     }
 }
@@ -237,32 +246,31 @@ pub fn lookup_node(start_dir: Arc<dyn Directory>, path: &Path) -> Result<Node> {
 
 // Find a node while taking recursion limits into account.
 fn lookup_node_recursive(
-    mut start_dir: Arc<dyn Directory>,
+    start_dir: Arc<dyn Directory>,
     path: &Path,
     recursion: &mut u8,
 ) -> Result<(Arc<dyn Directory>, Node)> {
     let mut path = path.clone();
     path.canonicalize()?;
-    if path.is_absolute() {
-        start_dir = ROOT_NODE.clone();
-    }
-    path.segments().iter().try_fold(
+    let res = path.segments().try_fold(
         (start_dir.clone(), Node::Directory(start_dir)),
         |(start_dir, node), segment| -> Result<_> {
             let node = node.resolve_link_recursive(start_dir.clone(), recursion)?;
             let dir = <Arc<dyn Directory>>::try_from(node)?;
 
             match segment {
+                PathSegment::Root => Ok((ROOT_NODE.clone(), Node::Directory(ROOT_NODE.clone()))),
                 PathSegment::Empty | PathSegment::Dot => Ok((start_dir, Node::Directory(dir))),
                 PathSegment::DotDot => todo!(),
                 PathSegment::FileName(file_name) => {
                     *recursion = recursion.checked_sub(1).ok_or_else(|| Error::r#loop(()))?;
-                    let node = dir.get_node(file_name)?;
+                    let node = dir.get_node(&file_name)?;
                     Ok((dir, node))
                 }
             }
         },
-    )
+    );
+    res
 }
 
 // Find a node and resolve links.
@@ -283,29 +291,22 @@ fn lookup_and_resolve_node_recursive(
 fn find_parent(
     start_dir: Arc<dyn Directory>,
     path: &Path,
-) -> Result<(Arc<dyn Directory>, &PathSegment)> {
-    let start_dir = if path.is_absolute() {
-        ROOT_NODE.clone()
-    } else {
-        start_dir
-    };
-
-    let (last, segments) = path
-        .segments()
-        .split_last()
-        .ok_or_else(|| Error::inval(()))?;
-    let dir = segments
-        .iter()
-        .try_fold(start_dir, |dir, segment| match segment {
-            PathSegment::Empty | PathSegment::Dot => Ok(dir),
-            PathSegment::DotDot => todo!(),
+) -> Result<(Arc<dyn Directory>, PathSegment)> {
+    let mut segments = path.segments();
+    let first = segments.next().ok_or_else(|| Error::inval(()))?;
+    segments.try_fold((start_dir, first), |(dir, segment), next_segment| {
+        let dir = match segment {
+            PathSegment::Root => ROOT_NODE.clone() as Arc<dyn Directory>,
+            PathSegment::Empty | PathSegment::Dot => dir,
+            PathSegment::DotDot => unreachable!(),
             PathSegment::FileName(file_name) => {
-                let node = dir.get_node(file_name)?;
+                let node = dir.get_node(&file_name)?;
                 let node = node.resolve_link(dir.clone())?;
-                <Arc<dyn Directory>>::try_from(node)
+                <Arc<dyn Directory>>::try_from(node)?
             }
-        })?;
-    Ok((dir, last))
+        };
+        Ok((dir, next_segment))
+    })
 }
 
 pub fn create_file(
@@ -315,12 +316,13 @@ pub fn create_file(
 ) -> Result<Arc<dyn File>> {
     let (dir, last) = find_parent(start_dir, path)?;
     let file_name = match last {
+        PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let file = dir.create_file(file_name.clone(), mode, false)?;
+    let file = dir.create_file(file_name.into_owned(), mode, false)?;
     Ok(file)
 }
 
@@ -331,24 +333,26 @@ pub fn create_directory(
 ) -> Result<Arc<dyn Directory>> {
     let (dir, last) = find_parent(start_dir, path)?;
     let file_name = match last {
+        PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let file = dir.create_dir(file_name.clone(), mode)?;
+    let file = dir.create_dir(file_name.into_owned(), mode)?;
     Ok(file)
 }
 
 pub fn create_link(start_dir: Arc<dyn Directory>, path: &Path, target: Path) -> Result<()> {
     let (dir, last) = find_parent(start_dir, path)?;
     let file_name = match last {
+        PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    dir.create_link(file_name.clone(), target, true)?;
+    dir.create_link(file_name.into_owned(), target, true)?;
     Ok(())
 }
 
@@ -369,20 +373,22 @@ pub fn set_mode(start_dir: Arc<dyn Directory>, path: &Path, mode: FileMode) -> R
 pub fn unlink_file(start_dir: Arc<dyn Directory>, path: &Path) -> Result<()> {
     let (parent, segment) = find_parent(start_dir, path)?;
     match segment {
+        PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
-        PathSegment::FileName(filename) => parent.delete_non_dir(filename.clone()),
+        PathSegment::FileName(filename) => parent.delete_non_dir(filename.into_owned()),
     }
 }
 
 pub fn unlink_dir(start_dir: Arc<dyn Directory>, path: &Path) -> Result<()> {
     let (parent, segment) = find_parent(start_dir, path)?;
     match segment {
+        PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
-        PathSegment::FileName(filename) => parent.delete_dir(filename.clone()),
+        PathSegment::FileName(filename) => parent.delete_dir(filename.into_owned()),
     }
 }
 
@@ -400,10 +406,11 @@ pub fn hard_link(
     };
     let (parent, filename) = find_parent(start_dir, start_path)?;
     match filename {
+        PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
-        PathSegment::FileName(filename) => parent.hard_link(filename, target_node),
+        PathSegment::FileName(filename) => parent.hard_link(filename.into_owned(), target_node),
     }
 }
 
@@ -414,7 +421,7 @@ pub struct TmpFsDirectory {
 
 struct TmpFsDirectoryInternal {
     mode: FileMode,
-    items: BTreeMap<FileName, Node>,
+    items: BTreeMap<FileName<'static>, Node>,
 }
 
 impl TmpFsDirectory {
@@ -429,7 +436,7 @@ impl TmpFsDirectory {
     }
 
     /// Mount a special file into the tmpfs directory.
-    pub fn mount(&self, path_segment: FileName, file: impl File) {
+    pub fn mount(&self, path_segment: FileName<'static>, file: impl File) {
         let mut guard = self.internal.lock();
         guard.items.insert(path_segment, Node::File(Arc::new(file)));
     }
@@ -475,7 +482,11 @@ impl Directory for TmpFsDirectory {
             .ok_or(Error::no_ent(()))
     }
 
-    fn create_dir(&self, file_name: FileName, mode: FileMode) -> Result<Arc<dyn Directory>> {
+    fn create_dir(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+    ) -> Result<Arc<dyn Directory>> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(file_name);
         match entry {
@@ -490,7 +501,7 @@ impl Directory for TmpFsDirectory {
 
     fn create_file(
         &self,
-        path_segment: FileName,
+        path_segment: FileName<'static>,
         mode: FileMode,
         create_new: bool,
     ) -> Result<Arc<dyn File>> {
@@ -515,7 +526,12 @@ impl Directory for TmpFsDirectory {
         }
     }
 
-    fn create_link(&self, file_name: FileName, target: Path, create_new: bool) -> Result<()> {
+    fn create_link(
+        &self,
+        file_name: FileName<'static>,
+        target: Path,
+        create_new: bool,
+    ) -> Result<()> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(file_name);
         match entry {
@@ -533,7 +549,7 @@ impl Directory for TmpFsDirectory {
         }
     }
 
-    fn hard_link(&self, file_name: &FileName, node: Node) -> Result<()> {
+    fn hard_link(&self, file_name: FileName<'static>, node: Node) -> Result<()> {
         self.internal.lock().items.insert(file_name.clone(), node);
         Ok(())
     }
@@ -564,7 +580,7 @@ impl Directory for TmpFsDirectory {
         entries
     }
 
-    fn delete_non_dir(&self, file_name: FileName) -> Result<()> {
+    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else { return Err(Error::no_ent(())) };
@@ -575,7 +591,7 @@ impl Directory for TmpFsDirectory {
         Ok(())
     }
 
-    fn delete_dir(&self, file_name: FileName) -> Result<()> {
+    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else { return Err(Error::no_ent(())) };

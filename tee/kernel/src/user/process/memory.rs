@@ -27,7 +27,7 @@ use x86_64::{
 
 use crate::{
     error::{Error, Result},
-    fs::{node::FileSnapshot, Path},
+    fs::{node::FileSnapshot, path::Path},
     memory::{
         frame::FRAME_ALLOCATOR,
         pagetable::{
@@ -210,7 +210,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
     pub fn read_path(&self, addr: VirtAddr) -> Result<Path> {
         const PATH_MAX: usize = 0x1000;
         let pathname = self.read_cstring(addr, PATH_MAX)?;
-        Path::new(pathname.as_bytes())
+        Path::new(pathname.into_bytes())
     }
 
     pub fn write(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
