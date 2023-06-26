@@ -65,7 +65,7 @@ impl BitmapFrameAllocatorState {
     fn needs_donation(&self) -> Option<usize> {
         if self.dynamic.capacity() == 0 {
             // Make sure to request at least a page worth of capacity.
-            return Some(4096usize.div_ceil(size_of::<Bitmap>()));
+            return Some(4096usize.div_ceil(size_of::<Bitmap>()).next_power_of_two());
         }
 
         if self.dynamic.len() * 4 > self.dynamic.capacity() * 3 {
