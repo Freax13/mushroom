@@ -49,6 +49,7 @@ macro_rules! errors {
 errors! {
     NoEnt no_ent 2,
     Io io 5,
+    NoExec no_exec 8,
     BadF bad_f 9,
     Child child 10,
     Again again 11,

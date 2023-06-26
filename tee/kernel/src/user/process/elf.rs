@@ -71,14 +71,27 @@ impl ActiveVirtualMemory<'_, '_> {
         })
     }
 
-    pub fn load_executable(
+    pub fn start_executable(
         &mut self,
         elf_bytes: FileSnapshot,
         stack: VirtAddr,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
     ) -> Result<u64> {
-        let elf = Elf::parse(&elf_bytes).unwrap();
+        match &**elf_bytes {
+            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(elf_bytes, stack, argv, envp),
+            _ => Err(Error::no_exec(())),
+        }
+    }
+
+    fn start_elf(
+        &mut self,
+        elf_bytes: FileSnapshot,
+        stack: VirtAddr,
+        argv: &[impl AsRef<CStr>],
+        envp: &[impl AsRef<CStr>],
+    ) -> Result<u64> {
+        let elf = Elf::parse(&elf_bytes).map_err(|_| Error::inval(()))?;
         let interpreter = elf.interpreter.map(ToOwned::to_owned);
 
         let info = self.load_elf(0x4000_0000_0000, elf_bytes)?;
