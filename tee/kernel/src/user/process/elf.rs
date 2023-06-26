@@ -1,6 +1,6 @@
-use core::ffi::CStr;
+use core::{ffi::CStr, iter::from_fn};
 
-use alloc::{borrow::ToOwned, sync::Arc};
+use alloc::{borrow::ToOwned, ffi::CString, sync::Arc, vec};
 use goblin::{
     elf::Elf,
     elf64::{
@@ -73,13 +73,14 @@ impl ActiveVirtualMemory<'_, '_> {
 
     pub fn start_executable(
         &mut self,
-        elf_bytes: FileSnapshot,
+        bytes: FileSnapshot,
         stack: VirtAddr,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
     ) -> Result<u64> {
-        match &**elf_bytes {
-            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(elf_bytes, stack, argv, envp),
+        match &**bytes {
+            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, stack, argv, envp),
+            [b'#', b'!', ..] => self.start_shebang(bytes, stack, argv, envp),
             _ => Err(Error::no_exec(())),
         }
     }
@@ -164,6 +165,59 @@ impl ActiveVirtualMemory<'_, '_> {
         write(0); // AT_NULL
 
         Ok(entrypoint)
+    }
+
+    fn start_shebang(
+        &mut self,
+        bytes: FileSnapshot,
+        stack: VirtAddr,
+        argv: &[impl AsRef<CStr>],
+        envp: &[impl AsRef<CStr>],
+    ) -> Result<u64> {
+        // Strip shebang.
+        let bytes = bytes.strip_prefix(b"#!").ok_or_else(|| Error::inval(()))?;
+
+        // Strip leading whitespaces.
+        let mut bytes = bytes;
+        while let Some(bs) = bytes.strip_prefix(b" ") {
+            bytes = bs;
+        }
+
+        let mut bytes = Some(bytes);
+        let mut args = from_fn(|| {
+            let bs = bytes.as_mut()?;
+
+            let position_res = bs.iter().position(|&b| matches!(b, b' ' | b'\n'));
+            let Some(position) = position_res else { return Some(Err(Error::inval(()))); };
+            let delimiter = bs[position];
+
+            let arg = &bs[..position];
+            let arg = CString::new(arg.to_vec()).unwrap();
+
+            *bs = &bs[position..];
+            if delimiter == b'\n' {
+                bytes = None;
+            }
+
+            Some(Ok(arg))
+        });
+
+        let interpreter_path = args.next().ok_or_else(|| Error::inval(()))??;
+        let path = Path::new(interpreter_path.as_bytes().to_vec())?;
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
+        let file: Arc<dyn File> = node.try_into()?;
+        if !file.mode().contains(FileMode::EXECUTE) {
+            return Err(Error::acces(()));
+        }
+        let interpreter = file.read_snapshot()?;
+
+        let mut new_argv = vec![interpreter_path];
+        for arg in args {
+            new_argv.push(arg?);
+        }
+        new_argv.extend(argv.iter().map(AsRef::as_ref).map(CStr::to_owned));
+
+        self.start_executable(interpreter, stack, &new_argv, envp)
     }
 }
 
