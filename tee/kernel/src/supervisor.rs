@@ -1,5 +1,6 @@
 use core::cell::LazyCell;
 
+use arrayvec::ArrayVec;
 use constants::{FINISH_OUTPUT_MSR, HALT_PORT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR};
 use spin::Mutex;
 use x86_64::{
@@ -11,10 +12,44 @@ use x86_64::{
 
 use crate::memory::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame};
 
-pub struct Allocator;
+pub static ALLOCATOR: Allocator = Allocator::new();
 
-unsafe impl FrameAllocator<Size2MiB> for Allocator {
+pub struct Allocator {
+    state: Mutex<AllocatorState>,
+}
+
+impl Allocator {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(AllocatorState::new()),
+        }
+    }
+}
+
+struct AllocatorState {
+    /// A cache for frames. Instead of always freeing, we store a limited
+    /// amount of frames for rapid reuse.
+    cached: ArrayVec<PhysFrame<Size2MiB>, 8>,
+}
+
+impl AllocatorState {
+    const fn new() -> Self {
+        Self {
+            cached: ArrayVec::new_const(),
+        }
+    }
+}
+
+unsafe impl FrameAllocator<Size2MiB> for &'_ Allocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size2MiB>> {
+        // Try to reused a cached frame.
+        let mut state = self.state.lock();
+        if let Some(cached) = state.cached.pop() {
+            return Some(cached);
+        }
+        drop(state);
+
+        // Fall back to allocating a frame.
         let memory_msr = Msr::new(MEMORY_MSR);
         let addr = unsafe { memory_msr.read() };
 
@@ -28,10 +63,19 @@ unsafe impl FrameAllocator<Size2MiB> for Allocator {
     }
 }
 
-impl FrameDeallocator<Size2MiB> for Allocator {
+impl FrameDeallocator<Size2MiB> for &'_ Allocator {
     unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size2MiB>) {
-        let addr = frame.start_address().as_u64();
+        // Try to put the frame in the cache.
+        let mut state = self.state.lock();
+        let res = state.cached.try_push(frame);
+        if res.is_ok() {
+            // Success
+            return;
+        }
+        drop(state);
 
+        // Fall back to deallocating the frame.
+        let addr = frame.start_address().as_u64();
         let mut memory_msr = Msr::new(MEMORY_MSR);
         unsafe {
             memory_msr.write(addr);

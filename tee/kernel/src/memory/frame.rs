@@ -11,7 +11,7 @@ use log::{debug, warn};
 use spin::Mutex;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB, Size4KiB};
 
-use crate::supervisor::Allocator;
+use crate::supervisor;
 
 pub static FRAME_ALLOCATOR: BitmapFrameAllocator = BitmapFrameAllocator::new();
 
@@ -197,7 +197,7 @@ struct Bitmap {
 
 impl Bitmap {
     pub fn new() -> Option<Self> {
-        let base = Allocator.allocate_frame()?;
+        let base = (&supervisor::ALLOCATOR).allocate_frame()?;
         Some(Self {
             base,
             used: 0,
@@ -245,7 +245,7 @@ impl Drop for Bitmap {
     fn drop(&mut self) {
         assert_eq!(self.used, 0);
         unsafe {
-            Allocator.deallocate_frame(self.base);
+            (&supervisor::ALLOCATOR).deallocate_frame(self.base);
         }
     }
 }
