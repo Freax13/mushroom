@@ -132,18 +132,12 @@ unsafe impl FrameAllocator<Size4KiB> for &BitmapFrameAllocator {
                     // Drop the mutex, so that we can allocate on the heap.
                     drop(state);
 
-                    debug!("1");
-
                     // Allocate a vector.
                     let mut donation = Vec::with_capacity(cap);
-
-                    debug!("1");
 
                     // Donate the vector.
                     state = self.state.lock();
                     state.donate_dynamic_vector(&mut donation);
-
-                    debug!("1");
 
                     // Drop the mutex again to release the previous allocation.
                     drop(state);
@@ -152,8 +146,6 @@ unsafe impl FrameAllocator<Size4KiB> for &BitmapFrameAllocator {
                     self.is_donating.store(false, Ordering::SeqCst);
 
                     continue;
-                } else {
-                    debug!("1");
                 }
             }
 
