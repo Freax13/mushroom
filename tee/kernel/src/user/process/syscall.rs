@@ -128,6 +128,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysClone);
+    handlers.register(SysFork);
     handlers.register(SysVfork);
     handlers.register(SysExecve);
     handlers.register(SysExit);
@@ -769,6 +770,31 @@ fn clone(
         }
 
         Result::Ok(new_thread)
+    })?;
+
+    Ok(u64::from(tid))
+}
+
+#[syscall(no = 57)]
+fn fork(thread: &mut Thread, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
+    let tid = Thread::spawn(|self_weak| {
+        let new_tid = new_tid();
+        let new_process = Some(Arc::new(Process::new(new_tid)));
+        let virtual_memory = (**thread.virtual_memory()).clone(vm_activator)?;
+        let new_virtual_memory = Some(Arc::new(virtual_memory));
+        let new_fdtable = Arc::new((**thread.fdtable()).clone());
+
+        Result::Ok(thread.clone(
+            new_tid,
+            self_weak,
+            new_process,
+            new_virtual_memory,
+            new_fdtable,
+            VirtAddr::zero(),
+            None,
+            None,
+            true,
+        ))
     })?;
 
     Ok(u64::from(tid))

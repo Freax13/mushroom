@@ -5,6 +5,7 @@ global_asm!(include_str!("pagetable.s"));
 use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
+    user::process::memory::without_write_protect,
 };
 
 use core::{
@@ -219,6 +220,86 @@ pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     pte.entry()
 }
 
+/// Call the closure for all dirty userspace pages.
+///
+/// # Safety
+///
+/// The caller must ensure that the closure doesn't modify the active page table.
+pub unsafe fn find_dirty_userspace_pages(mut f: impl FnMut(Page) -> Result<()>) -> Result<()> {
+    freeze_userspace(|| {
+        let pml4 = ActivePageTable::get();
+
+        for p4_index in (0..256).map(PageTableIndex::new) {
+            let pml4e = &pml4[p4_index];
+            if !pml4e.is_dirty() {
+                continue;
+            }
+            let Some(pdp) = pml4e.acquire_existing() else { continue; };
+
+            for p3_index in (0..512).map(PageTableIndex::new) {
+                let pdpe = &pdp[p3_index];
+                if !pdpe.is_dirty() {
+                    continue;
+                }
+                let Some(pd) = pdpe.acquire_existing() else { continue; };
+
+                for p2_index in (0..512).map(PageTableIndex::new) {
+                    let pde = &pd[p2_index];
+                    if !pde.is_dirty() {
+                        continue;
+                    }
+                    let Some(pt) = pde.acquire_existing() else { continue; };
+
+                    for p1_index in (0..512).map(PageTableIndex::new) {
+                        let pte = &pt[p1_index];
+                        if !pte.is_dirty() {
+                            continue;
+                        }
+
+                        let page = pte.page();
+
+                        f(page)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    })
+}
+
+/// Prevent userspace from modifying memory during the runtime of the closure.
+fn freeze_userspace<R>(f: impl FnOnce() -> R) -> R {
+    let pml4 = ActivePageTable::get();
+
+    for p4_index in (0..256).map(PageTableIndex::new) {
+        let pml4e = &pml4[p4_index];
+        pml4e.freeze(true);
+    }
+
+    flush_current_pcid();
+
+    let res = without_write_protect(f);
+
+    for p4_index in (0..256).map(PageTableIndex::new) {
+        let pml4e = &pml4[p4_index];
+        pml4e.freeze(false);
+    }
+
+    res
+}
+
+fn flush_current_pcid() {
+    static INVLPGB: Lazy<Invlpgb> = Lazy::new(|| Invlpgb::new().expect("invlpgb not supported"));
+
+    let (_, pcid) = Cr3::read_pcid();
+    unsafe {
+        INVLPGB.build().pcid(pcid).flush();
+    }
+
+    INVLPGB.tlbsync();
+}
+
 struct Level4;
 
 struct Level3;
@@ -359,6 +440,14 @@ impl ActivePageTableEntry<Level4> {
     pub fn acquire_existing(&self) -> Option<ActivePageTableEntryGuard<'_, Level4>> {
         self.increase_reference_count().ok()?;
         Some(ActivePageTableEntryGuard { entry: self })
+    }
+
+    pub fn freeze(&self, frozen: bool) {
+        if frozen {
+            self.entry.fetch_and(!(1 << WRITE_BIT), Ordering::SeqCst);
+        } else {
+            self.entry.fetch_or(1 << WRITE_BIT, Ordering::SeqCst);
+        }
     }
 }
 
@@ -646,6 +735,10 @@ impl<L> ActivePageTableEntry<L> {
         let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
         Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index)
     }
+
+    pub fn is_dirty(&self) -> bool {
+        self.entry.load(Ordering::SeqCst).get_bit(DIRTY_BIT)
+    }
 }
 
 impl ActivePageTableEntry<Level1> {
@@ -843,6 +936,7 @@ where
 const PRESENT_BIT: usize = 0;
 const WRITE_BIT: usize = 1;
 const USER_BIT: usize = 2;
+const DIRTY_BIT: usize = 6;
 const GLOBAL_BIT: usize = 8;
 const DISABLE_EXECUTE_BIT: usize = 63;
 

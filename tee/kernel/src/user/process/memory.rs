@@ -31,8 +31,8 @@ use crate::{
     memory::{
         frame::FRAME_ALLOCATOR,
         pagetable::{
-            add_flags, allocate_pml4, entry_for_page, map_page, remap_page, remove_flags,
-            unmap_page, PageTableFlags, PresentPageTableEntry,
+            add_flags, allocate_pml4, entry_for_page, find_dirty_userspace_pages, map_page,
+            remap_page, remove_flags, unmap_page, PageTableFlags, PresentPageTableEntry,
         },
         temporary::{copy_into_frame, zero_frame},
     },
@@ -59,7 +59,7 @@ impl VirtualMemoryActivator {
             Cr3::write_pcid(virtual_memory.pml4, virtual_memory.pcid);
         }
         let mut active_virtual_memory = ActiveVirtualMemory {
-            _activator: self,
+            activator: self,
             virtual_memory,
         };
 
@@ -139,14 +139,32 @@ impl VirtualMemory {
             error_code => todo!("{addr:#018x} {error_code:?}"),
         }
     }
+
+    /// Create a deep copy of the memory.
+    pub fn clone(&self, vm_activator: &mut VirtualMemoryActivator) -> Result<Self> {
+        let mut this = Self::new();
+        *this.state.get_mut() = self.state.lock().clone();
+
+        vm_activator.activate(self, |vm| {
+            vm.find_dirty_userspace_pages(|page, content, vm_activator| {
+                vm_activator.activate(&this, |vm| vm.force_write(page, content))
+            })
+        })?;
+
+        Ok(this)
+    }
 }
 
 pub struct ActiveVirtualMemory<'a, 'b> {
-    _activator: &'a mut VirtualMemoryActivator,
+    activator: &'a mut VirtualMemoryActivator,
     virtual_memory: &'b VirtualMemory,
 }
 
 impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
+    pub fn vm_activator(&mut self) -> &mut VirtualMemoryActivator {
+        self.activator
+    }
+
     pub fn read(&self, addr: VirtAddr, bytes: &mut [u8]) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
@@ -248,6 +266,38 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 let src = bytes.as_ptr().add(src_offset);
                 core::intrinsics::volatile_copy_nonoverlapping_memory(dst, src, len);
             });
+        }
+
+        Ok(())
+    }
+
+    pub fn force_write(&self, page: Page, bytes: &[u8; 0x1000]) -> Result<()> {
+        let mut state = self.state.lock();
+
+        let mapping = state
+            .mappings
+            .iter_mut()
+            .find(|mapping| mapping.contains_page(page))
+            .ok_or(Error::fault(()))?;
+
+        let writeable = mapping.permissions.contains(MemoryPermissions::WRITE);
+        if !writeable {
+            mapping.permissions |= MemoryPermissions::WRITE;
+        }
+
+        let ptr = unsafe { mapping.make_writable(page)? };
+
+        without_smap(|| unsafe {
+            let dst = ptr.cast::<u8>();
+            let src = bytes.as_ptr();
+            core::intrinsics::volatile_copy_nonoverlapping_memory(dst, src, bytes.len());
+        });
+
+        if !writeable {
+            mapping.permissions.remove(MemoryPermissions::WRITE);
+            unsafe {
+                remove_flags(page, PageTableFlags::WRITABLE | PageTableFlags::USER);
+            }
         }
 
         Ok(())
@@ -457,6 +507,20 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let mut state = self.state.lock();
         state.unmap(addr, len)
     }
+
+    pub fn find_dirty_userspace_pages(
+        &mut self,
+        mut f: impl FnMut(Page, &[u8; 0x1000], &mut VirtualMemoryActivator) -> Result<()>,
+    ) -> Result<()> {
+        unsafe {
+            find_dirty_userspace_pages(|page| {
+                let bytes = &mut [0; 0x1000];
+                let addr = page.start_address();
+                self.read(addr, bytes)?;
+                f(page, bytes, self.vm_activator())
+            })
+        }
+    }
 }
 
 impl Deref for ActiveVirtualMemory<'_, '_> {
@@ -467,6 +531,7 @@ impl Deref for ActiveVirtualMemory<'_, '_> {
     }
 }
 
+#[derive(Clone)]
 struct VirtualMemoryState {
     mappings: Vec<Mapping>,
 }
@@ -617,6 +682,7 @@ impl VirtualMemoryState {
     }
 }
 
+#[derive(Clone)]
 pub struct Mapping {
     start: Page,
     num_pages: u64,
