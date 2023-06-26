@@ -4,7 +4,6 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use bit_field::BitField;
 use constants::{physical_address::DYNAMIC, MEMORY_PORT};
-use snp_types::VmplPermissions;
 use x86_64::{
     structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB},
     PhysAddr,
@@ -102,13 +101,6 @@ impl FrameDeallocator<Size2MiB> for &'_ HostAllocator {
         // Create a temporary mapping.
         let mut mapper = TEMPORARY_MAPPER.borrow_mut();
         let mapping = mapper.create_temporary_mapping_2mib(frame, false);
-
-        // Reset the VMPL permissions.
-        unsafe {
-            mapping.rmpadjust(1, VmplPermissions::empty(), false);
-            mapping.rmpadjust(2, VmplPermissions::empty(), false);
-            mapping.rmpadjust(3, VmplPermissions::empty(), false);
-        }
 
         // Validate the memory.
         unsafe {
