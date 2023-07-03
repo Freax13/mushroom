@@ -22,7 +22,7 @@ use x86_64::{
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, File, ROOT_NODE},
+        node::{lookup_and_resolve_node, File, FileSnapshot, ROOT_NODE},
         path::Path,
     },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
@@ -338,8 +338,18 @@ impl ThreadGuard<'_> {
         if !file.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
-        let elf_file = file.read_snapshot()?;
+        let bytes = file.read_snapshot()?;
 
+        self.start_executable(bytes, argv, envp, vm_activator)
+    }
+
+    pub fn start_executable(
+        &mut self,
+        bytes: FileSnapshot,
+        argv: &[impl AsRef<CStr>],
+        envp: &[impl AsRef<CStr>],
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> Result<()> {
         let virtual_memory = VirtualMemory::new();
         // Create stack.
         let len = 0x2_0000;
@@ -347,7 +357,7 @@ impl ThreadGuard<'_> {
             vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(None, len))? + len;
         // Load the elf.
         let entry = vm_activator.activate(&virtual_memory, |vm| {
-            vm.start_executable(elf_file, stack, argv, envp)
+            vm.start_executable(bytes, stack, argv, envp)
         })?;
 
         // Success! Commit the new state to the thread.

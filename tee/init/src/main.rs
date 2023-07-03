@@ -12,8 +12,6 @@ const BYTES: &[u8] = include_bytes!("../../gcc.tar.gz");
 fn main() -> Result<()> {
     let root = "/";
 
-    std::fs::remove_dir_all("/bin")?;
-
     // Unpack tar archive.
     let file = Cursor::new(BYTES);
     let buf_reader = BufReader::new(file);

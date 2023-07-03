@@ -3,9 +3,13 @@ use core::{
     sync::atomic::{AtomicU16, Ordering},
 };
 
+use alloc::{borrow::Cow, sync::Arc};
 use bit_field::BitField;
 
-use crate::{fs::path::Path, supervisor};
+use crate::{
+    fs::{node::FileSnapshot, INIT},
+    supervisor,
+};
 
 use self::{
     futex::Futexes,
@@ -79,11 +83,14 @@ pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
     let res = Thread::spawn(|self_weak| {
         let thread = Thread::empty(self_weak, new_tid());
 
-        // Load the init process.
-        let path = Path::new(b"/bin/init".to_vec())?;
         let mut guard = thread.lock();
-        guard.execve(
-            &path,
+
+        let bytes = Cow::Borrowed(*INIT);
+        let bytes = Arc::new(bytes);
+        let bytes = FileSnapshot::from(bytes);
+
+        guard.start_executable(
+            bytes,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
             vm_activator,

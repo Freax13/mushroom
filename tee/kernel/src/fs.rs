@@ -52,13 +52,13 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
-static INIT: Lazy<&'static [u8]> = Lazy::new(|| {
+pub static INIT: Lazy<&'static [u8]> = Lazy::new(|| {
     let pages = virtual_address::INIT.into_iter();
     let frames = physical_address::INIT.into_iter();
     load_static_file(pages, frames)
 });
 
-static INPUT: Lazy<&'static [u8]> = Lazy::new(|| {
+pub static INPUT: Lazy<&'static [u8]> = Lazy::new(|| {
     let pages = virtual_address::INPUT.into_iter();
     let frames = physical_address::INPUT.into_iter();
     load_static_file(pages, frames)
