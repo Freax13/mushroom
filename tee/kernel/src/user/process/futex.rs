@@ -1,13 +1,13 @@
 use core::num::NonZeroU32;
 
-use alloc::{collections::BTreeMap, sync::Weak, vec::Vec};
+use alloc::{collections::BTreeMap, vec::Vec};
 use bytemuck::bytes_of_mut;
 use spin::Mutex;
 use x86_64::VirtAddr;
 
 use super::{
     memory::ActiveVirtualMemory,
-    thread::{schedule_thread, Thread, WeakThread},
+    thread::{schedule_thread, WeakThread},
 };
 use crate::error::{Error, Result};
 
@@ -94,7 +94,7 @@ impl Futexes {
 }
 
 struct FutexWaiter {
-    weak_thread: Weak<Mutex<Thread>>,
+    weak_thread: WeakThread,
     bitset: Option<NonZeroU32>,
 }
 

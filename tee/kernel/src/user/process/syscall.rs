@@ -44,7 +44,7 @@ use super::{
     memory::VirtualMemoryActivator,
     thread::{
         new_tid, schedule_thread, Sigaction, Sigset, Stack, StackFlags, Thread, UserspaceRegisters,
-        Waiter, THREADS,
+        Waiter, THREADS, ThreadGuard,
     },
     Process,
 };
@@ -52,7 +52,7 @@ use super::{
 pub mod args;
 mod traits;
 
-impl Thread {
+impl ThreadGuard<'_> {
     /// Returns true if the thread should continue to run.
     pub fn execute_syscall(&mut self, vm_activator: &mut VirtualMemoryActivator) -> bool {
         let UserspaceRegisters {
@@ -158,7 +158,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 
 #[syscall(no = 0)]
 fn read(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     buf: Pointer<[u8]>,
@@ -186,7 +186,7 @@ fn read(
 
 #[syscall(no = 1)]
 fn write(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     buf: Pointer<[u8]>,
@@ -211,7 +211,7 @@ fn write(
 
 #[syscall(no = 2)]
 fn open(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     flags: OpenFlags,
@@ -245,14 +245,14 @@ fn open(
 }
 
 #[syscall(no = 3)]
-fn close(thread: &mut Thread, fd: FdNum) -> SyscallResult {
+fn close(thread: &mut ThreadGuard, fd: FdNum) -> SyscallResult {
     thread.fdtable().close(fd)?;
     Ok(0)
 }
 
 #[syscall(no = 4)]
 fn stat(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     filename: Pointer<CStr>,
     statbuf: Pointer<Stat>,
@@ -271,7 +271,7 @@ fn stat(
 
 #[syscall(no = 5)]
 fn fstat(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     statbuf: Pointer<Stat>,
@@ -288,7 +288,7 @@ fn fstat(
 
 #[syscall(no = 6)]
 fn lstat(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     filename: Pointer<CStr>,
     statbuf: Pointer<Stat>,
@@ -307,7 +307,7 @@ fn lstat(
 
 #[syscall(no = 7)]
 fn poll(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fds: Pointer<FdNum>,
     nfds: u64,
@@ -329,7 +329,7 @@ fn poll(
 }
 
 #[syscall(no = 8)]
-fn lseek(thread: &mut Thread, fd: FdNum, offset: u64, whence: Whence) -> SyscallResult {
+fn lseek(thread: &mut ThreadGuard, fd: FdNum, offset: u64, whence: Whence) -> SyscallResult {
     let offset = usize::try_from(offset)?;
 
     let fd = thread.fdtable().get(fd)?;
@@ -341,7 +341,7 @@ fn lseek(thread: &mut Thread, fd: FdNum, offset: u64, whence: Whence) -> Syscall
 
 #[syscall(no = 9)]
 fn mmap(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     addr: Pointer<c_void>,
     length: u64,
@@ -394,7 +394,7 @@ fn mmap(
 
 #[syscall(no = 10)]
 fn mprotect(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     addr: Pointer<c_void>,
     len: u64,
@@ -408,7 +408,7 @@ fn mprotect(
 
 #[syscall(no = 11)]
 fn munmap(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     addr: Pointer<c_void>,
     length: u64,
@@ -433,7 +433,7 @@ fn brk(brk_value: u64) -> SyscallResult {
 
 #[syscall(no = 13)]
 fn rt_sigaction(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     signum: u64,
     act: Pointer<Sigaction>,
@@ -476,7 +476,7 @@ impl Syscall3 for SysRtSigprocmask {
     const ARG2_NAME: &'static str = "oldset";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         how: u64,
         set: Pointer<Sigset>,
@@ -510,7 +510,7 @@ impl Syscall3 for SysRtSigprocmask {
         how: u64,
         set: u64,
         oldset: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(
@@ -539,7 +539,7 @@ fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
 
 #[syscall(no = 17)]
 fn pread64(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     buf: Pointer<c_void>,
@@ -569,7 +569,7 @@ fn pread64(
 
 #[syscall(no = 18)]
 fn pwrite64(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     buf: Pointer<c_void>,
@@ -596,7 +596,7 @@ fn pwrite64(
 
 #[syscall(no = 19)]
 fn readv(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     vec: Pointer<Iovec>,
@@ -624,7 +624,7 @@ fn readv(
 
 #[syscall(no = 20)]
 fn writev(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     vec: Pointer<Iovec>,
@@ -652,7 +652,7 @@ fn writev(
 
 #[syscall(no = 21)]
 fn access(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     mode: u64, // FIXME: use correct type
@@ -674,7 +674,7 @@ fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
 }
 
 #[syscall(no = 32)]
-fn dup(thread: &mut Thread, fildes: FdNum) -> SyscallResult {
+fn dup(thread: &mut ThreadGuard, fildes: FdNum) -> SyscallResult {
     let fdtable = thread.fdtable();
     let fd = fdtable.get(fildes)?;
     let newfd = fdtable.insert(fd);
@@ -683,7 +683,7 @@ fn dup(thread: &mut Thread, fildes: FdNum) -> SyscallResult {
 }
 
 #[syscall(no = 33)]
-fn dup2(thread: &mut Thread, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
+fn dup2(thread: &mut ThreadGuard, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
     let fdtable = thread.fdtable();
     let fd = fdtable.get(oldfd)?;
 
@@ -695,14 +695,14 @@ fn dup2(thread: &mut Thread, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
 }
 
 #[syscall(no = 39)]
-fn getpid(thread: &mut Thread) -> SyscallResult {
+fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
     let pid = thread.process().pid;
     Ok(u64::from(pid))
 }
 
 #[syscall(no = 56)]
 fn clone(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     flags: CloneFlags,
     stack: Pointer<c_void>,
@@ -764,7 +764,8 @@ fn clone(
         }
 
         if flags.contains(CloneFlags::CHILD_SETTID) {
-            vm_activator.activate(new_thread.virtual_memory(), |vm| {
+            let guard = new_thread.lock();
+            vm_activator.activate(guard.virtual_memory(), |vm| {
                 vm.write(child_tid.get(), &new_tid.to_ne_bytes())
             })?;
         }
@@ -776,7 +777,7 @@ fn clone(
 }
 
 #[syscall(no = 57)]
-fn fork(thread: &mut Thread, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
+fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
@@ -801,7 +802,7 @@ fn fork(thread: &mut Thread, vm_activator: &mut VirtualMemoryActivator) -> Sysca
 }
 
 #[syscall(no = 58)]
-fn vfork(thread: &mut Thread) -> SyscallResult {
+fn vfork(thread: &mut ThreadGuard) -> SyscallResult {
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
@@ -827,7 +828,7 @@ fn vfork(thread: &mut Thread) -> SyscallResult {
 
 #[syscall(no = 59)]
 fn execve(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     argv: Pointer<[&'static CStr]>,
@@ -875,7 +876,7 @@ fn execve(
 
 #[syscall(no = 60)]
 fn exit(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     status: u64,
 ) -> SyscallResult {
@@ -913,7 +914,7 @@ fn exit(
 
 #[syscall(no = 61)]
 fn wait4(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     pid: u64,
     wstatus: Pointer<c_void>, // FIXME: use correct type
     options: WaitOptions,
@@ -966,7 +967,7 @@ fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
 
 #[syscall(no = 83)]
 fn mkdir(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     mode: FileMode,
@@ -981,7 +982,7 @@ fn mkdir(
 
 #[syscall(no = 88)]
 fn symlink(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     oldname: Pointer<CStr>,
     newname: Pointer<CStr>,
@@ -999,7 +1000,7 @@ fn symlink(
 
 #[syscall(no = 89)]
 fn readlink(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     buf: Pointer<[u8]>,
@@ -1027,7 +1028,7 @@ fn readlink(
 
 #[syscall(no = 90)]
 fn chmod(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     filename: Pointer<CStr>,
     mode: FileMode,
@@ -1040,7 +1041,7 @@ fn chmod(
 }
 
 #[syscall(no = 91)]
-fn fchmod(thread: &mut Thread, fd: FdNum, mode: FileMode) -> SyscallResult {
+fn fchmod(thread: &mut ThreadGuard, fd: FdNum, mode: FileMode) -> SyscallResult {
     let fd = thread.fdtable().get(fd)?;
     fd.set_mode(mode)?;
     Ok(0)
@@ -1048,7 +1049,7 @@ fn fchmod(thread: &mut Thread, fd: FdNum, mode: FileMode) -> SyscallResult {
 
 #[syscall(no = 131)]
 fn sigaltstack(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     ss: Pointer<Stack>,
     old_ss: Pointer<Stack>,
@@ -1083,7 +1084,11 @@ fn sigaltstack(
 }
 
 #[syscall(no = 158)]
-fn arch_prctl(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer<c_void>) -> SyscallResult {
+fn arch_prctl(
+    thread: &mut ThreadGuard,
+    code: ArchPrctlCode,
+    addr: Pointer<c_void>,
+) -> SyscallResult {
     match code {
         ArchPrctlCode::SetFs => {
             thread.registers.fs_base = addr.get().as_u64();
@@ -1093,14 +1098,14 @@ fn arch_prctl(thread: &mut Thread, code: ArchPrctlCode, addr: Pointer<c_void>) -
 }
 
 #[syscall(no = 186)]
-fn gettid(thread: &mut Thread) -> SyscallResult {
+fn gettid(thread: &mut ThreadGuard) -> SyscallResult {
     let tid = thread.tid();
     Ok(u64::from(tid))
 }
 
 #[syscall(no = 202)]
 fn futex(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     uaddr: Pointer<c_void>,
     op: FutexOpWithFlags,
@@ -1162,7 +1167,7 @@ fn futex(
 
 #[syscall(no = 217)]
 fn getdents64(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     fd: FdNum,
     dirent: Pointer<LinuxDirent64>,
@@ -1199,14 +1204,14 @@ fn getdents64(
 }
 
 #[syscall(no = 218)]
-fn set_tid_address(thread: &mut Thread, tidptr: Pointer<u32>) -> SyscallResult {
+fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallResult {
     thread.clear_child_tid = tidptr.get().as_u64();
     Ok(u64::from(thread.tid()))
 }
 
 #[syscall(no = 231)]
 fn exit_group(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     status: u64,
 ) -> SyscallResult {
@@ -1216,7 +1221,7 @@ fn exit_group(
 
 #[syscall(no = 257)]
 fn openat(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     dfd: FdNum,
     filename: Pointer<CStr>,
@@ -1268,7 +1273,7 @@ fn futimesat(
 
 #[syscall(no = 263)]
 fn unlinkat(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     dfd: FdNum,
     pathname: Pointer<CStr>,
@@ -1298,7 +1303,7 @@ fn unlinkat(
 
 #[syscall(no = 265)]
 fn linkat(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     olddirfd: FdNum,
     oldpath: Pointer<CStr>,
@@ -1342,7 +1347,7 @@ fn linkat(
 
 #[syscall(no = 293)]
 fn pipe2(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
@@ -1367,7 +1372,7 @@ fn pipe2(
 
 #[syscall(no = 326)]
 fn copy_file_range(
-    thread: &mut Thread,
+    thread: &mut ThreadGuard,
     fd_in: FdNum,
     off_in: Pointer<u64>,
     fd_out: FdNum,

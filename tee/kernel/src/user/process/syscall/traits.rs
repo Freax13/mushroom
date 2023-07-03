@@ -10,7 +10,7 @@ use log::{trace, warn};
 use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
-    user::process::{memory::VirtualMemoryActivator, thread::Thread},
+    user::process::{memory::VirtualMemoryActivator, thread::ThreadGuard},
 };
 
 use super::args::{Ignored, SyscallArg};
@@ -43,7 +43,7 @@ impl SyscallArg for u32 {
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        _thread: &Thread,
+        _thread: &ThreadGuard<'_>,
         _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         if let Ok(value) = u32::try_from(value) {
@@ -58,11 +58,14 @@ pub trait Syscall0 {
     const NO: usize;
     const NAME: &'static str;
 
-    fn execute(thread: &mut Thread, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult;
+    fn execute(
+        thread: &mut ThreadGuard,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) -> SyscallResult;
 
     fn display(
         f: &mut dyn fmt::Write,
-        _thread: &Thread,
+        _thread: &ThreadGuard<'_>,
         _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}()", Self::NAME)
@@ -77,7 +80,7 @@ pub trait Syscall1 {
     const ARG0_NAME: &'static str;
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
     ) -> SyscallResult;
@@ -85,7 +88,7 @@ pub trait Syscall1 {
     fn display(
         f: &mut dyn fmt::Write,
         arg0: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
@@ -104,7 +107,7 @@ pub trait Syscall2 {
     const ARG1_NAME: &'static str;
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -114,7 +117,7 @@ pub trait Syscall2 {
         f: &mut dyn fmt::Write,
         arg0: u64,
         arg1: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
@@ -137,7 +140,7 @@ pub trait Syscall3 {
     const ARG2_NAME: &'static str;
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -149,7 +152,7 @@ pub trait Syscall3 {
         arg0: u64,
         arg1: u64,
         arg2: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
@@ -176,7 +179,7 @@ pub trait Syscall4 {
     const ARG3_NAME: &'static str;
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -190,7 +193,7 @@ pub trait Syscall4 {
         arg1: u64,
         arg2: u64,
         arg3: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
@@ -221,7 +224,7 @@ pub trait Syscall5 {
     const ARG4_NAME: &'static str;
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -238,7 +241,7 @@ pub trait Syscall5 {
         arg2: u64,
         arg3: u64,
         arg4: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
@@ -274,7 +277,7 @@ pub trait Syscall6 {
 
     #[allow(clippy::too_many_arguments)]
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -293,7 +296,7 @@ pub trait Syscall6 {
         arg3: u64,
         arg4: u64,
         arg5: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}({}=", Self::NAME, Self::ARG0_NAME)?;
@@ -323,7 +326,7 @@ where
     const ARG0_NAME: &'static str = "ignored";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         _arg0: Self::Arg0,
     ) -> SyscallResult {
@@ -333,7 +336,7 @@ where
     fn display(
         f: &mut dyn fmt::Write,
         _arg0: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         <T as Syscall0>::display(f, thread, vm_activator)
@@ -353,7 +356,7 @@ where
     const ARG1_NAME: &'static str = "ignored";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         _arg1: Self::Arg1,
@@ -365,7 +368,7 @@ where
         f: &mut dyn fmt::Write,
         arg0: u64,
         _arg1: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         <T as Syscall1>::display(f, arg0, thread, vm_activator)
@@ -387,7 +390,7 @@ where
     const ARG2_NAME: &'static str = "ignored";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -401,7 +404,7 @@ where
         arg0: u64,
         arg1: u64,
         _arg2: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         <T as Syscall2>::display(f, arg0, arg1, thread, vm_activator)
@@ -425,7 +428,7 @@ where
     const ARG3_NAME: &'static str = "ignored";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -441,7 +444,7 @@ where
         arg1: u64,
         arg2: u64,
         _arg3: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         <T as Syscall3>::display(f, arg0, arg1, arg2, thread, vm_activator)
@@ -467,7 +470,7 @@ where
     const ARG4_NAME: &'static str = "ignored";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -485,7 +488,7 @@ where
         arg2: u64,
         arg3: u64,
         _arg4: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         <T as Syscall4>::display(f, arg0, arg1, arg2, arg3, thread, vm_activator)
@@ -513,7 +516,7 @@ where
     const ARG5_NAME: &'static str = "ignored";
 
     fn execute(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: Self::Arg0,
         arg1: Self::Arg1,
@@ -533,7 +536,7 @@ where
         arg3: u64,
         arg4: u64,
         _arg5: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         <T as Syscall5>::display(f, arg0, arg1, arg2, arg3, arg4, thread, vm_activator)
@@ -545,7 +548,7 @@ const MAX_SYSCALL_HANDLER: usize = 327;
 #[derive(Clone, Copy)]
 struct SyscallHandler {
     exeute: fn(
-        thread: &mut Thread,
+        thread: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         arg0: u64,
         arg1: u64,
@@ -563,7 +566,7 @@ struct SyscallHandler {
         arg3: u64,
         arg4: u64,
         arg5: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result,
 }
@@ -574,7 +577,7 @@ impl SyscallHandler {
         T: Syscall6,
     {
         Self {
-            exeute: |thread: &mut Thread,
+            exeute: |thread: &mut ThreadGuard,
                      vm_activator: &mut VirtualMemoryActivator,
                      arg0: u64,
                      arg1: u64,
@@ -617,7 +620,7 @@ impl SyscallHandlers {
     #[allow(clippy::too_many_arguments)]
     pub fn execute(
         &self,
-        thread: &mut Thread,
+        guard: &mut ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
         syscall_no: u64,
         arg0: u64,
@@ -638,7 +641,7 @@ impl SyscallHandlers {
                 Error::no_sys(())
             })?;
 
-        let res = (handler.exeute)(thread, vm_activator, arg0, arg1, arg2, arg3, arg4, arg5);
+        let res = (handler.exeute)(guard, vm_activator, arg0, arg1, arg2, arg3, arg4, arg5);
 
         let formatted_syscall = FormattedSyscall {
             handler,
@@ -648,15 +651,15 @@ impl SyscallHandlers {
             arg3,
             arg4,
             arg5,
-            thread,
+            thread: guard,
             vm_activator: RefCell::new(vm_activator),
         };
 
-        if !matches!(syscall_no, 0 | 1) && thread.tid() != 1 {
+        if !matches!(syscall_no, 0 | 1) && guard.tid() != 1 {
             trace!(
                 "core={} tid={} @ {formatted_syscall} = {res:?}",
                 PerCpu::get().idx,
-                thread.tid()
+                guard.tid()
             );
         }
 
@@ -672,7 +675,7 @@ struct FormattedSyscall<'a> {
     arg3: u64,
     arg4: u64,
     arg5: u64,
-    thread: &'a Thread,
+    thread: &'a ThreadGuard<'a>,
     vm_activator: RefCell<&'a mut VirtualMemoryActivator>,
 }
 

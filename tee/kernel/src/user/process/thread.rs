@@ -1,7 +1,7 @@
 use core::{
     arch::asm,
     ffi::CStr,
-    ops::{BitAndAssign, BitOrAssign, Not},
+    ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -13,7 +13,7 @@ use alloc::{
 use bitflags::bitflags;
 use bytemuck::{offset_of, Pod, Zeroable};
 use log::warn;
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
 use x86_64::{
     registers::segmentation::{Segment64, FS},
     VirtAddr,
@@ -50,7 +50,7 @@ pub fn schedule_thread(thread: WeakThread) {
 }
 
 pub struct Threads {
-    map: Mutex<BTreeMap<u32, Arc<Mutex<Thread>>>>,
+    map: Mutex<BTreeMap<u32, Arc<Thread>>>,
 }
 
 impl Threads {
@@ -60,13 +60,13 @@ impl Threads {
         }
     }
 
-    pub fn add(&self, thread: Arc<Mutex<Thread>>) -> u32 {
-        let tid = { thread.lock().tid };
+    pub fn add(&self, thread: Arc<Thread>) -> u32 {
+        let tid = thread.tid;
         self.map.lock().insert(tid, thread);
         tid
     }
 
-    pub fn by_id(&self, tid: u32) -> Option<Arc<Mutex<Thread>>> {
+    pub fn by_id(&self, tid: u32) -> Option<Arc<Thread>> {
         self.map.lock().get(&tid).cloned()
     }
 
@@ -75,17 +75,24 @@ impl Threads {
     }
 }
 
-pub type WeakThread = Weak<Mutex<Thread>>;
+pub type WeakThread = Weak<Thread>;
 
 pub struct Thread {
+    // Immutable state.
+    tid: u32,
     self_weak: WeakThread,
+    parent: WeakThread,
     process: Arc<Process>,
-    virtual_memory: Arc<VirtualMemory>,
     fdtable: Arc<FileDescriptorTable>,
 
-    pub registers: UserspaceRegisters,
+    // Mutable state.
+    state: Mutex<ThreadState>,
+}
 
-    tid: u32,
+pub struct ThreadState {
+    virtual_memory: Arc<VirtualMemory>,
+
+    pub registers: UserspaceRegisters,
 
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
@@ -98,9 +105,11 @@ pub struct Thread {
 }
 
 impl Thread {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         tid: u32,
         self_weak: WeakThread,
+        parent: WeakThread,
         process: Arc<Process>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
@@ -109,97 +118,39 @@ impl Thread {
     ) -> Self {
         let registers = UserspaceRegisters::DEFAULT;
         Self {
-            self_weak,
-            process,
-            virtual_memory,
-            fdtable,
-            registers,
-            tid,
-            sigmask: Sigset(0),
-            sigaction: [Sigaction::DEFAULT; 64],
-            sigaltstack: None,
-            clear_child_tid: 0,
-            dead: false,
-            waiters: Vec::new(),
-            cwd,
-            vfork_parent,
-        }
-    }
-
-    pub fn empty(self_weak: WeakThread, tid: u32) -> Self {
-        Self::new(
             tid,
             self_weak,
-            Arc::new(Process::new(tid)),
-            Arc::new(VirtualMemory::new()),
-            Arc::new(FileDescriptorTable::new()),
-            Path::new(b"/".to_vec()).unwrap(),
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn clone(
-        &self,
-        new_tid: u32,
-        self_weak: WeakThread,
-        new_process: Option<Arc<Process>>,
-        new_virtual_memory: Option<Arc<VirtualMemory>>,
-        fdtable: Arc<FileDescriptorTable>,
-        stack: VirtAddr,
-        new_clear_child_tid: Option<VirtAddr>,
-        new_tls: Option<u64>,
-        vfork_parent: bool,
-    ) -> Self {
-        let process = new_process.unwrap_or_else(|| self.process.clone());
-        let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory.clone());
-
-        let mut thread = Self::new(
-            new_tid,
-            self_weak,
+            parent,
             process,
-            virtual_memory,
             fdtable,
-            self.cwd.clone(),
-            vfork_parent.then(|| self.self_weak.clone()),
-        );
-
-        if let Some(clear_child_tid) = new_clear_child_tid {
-            thread.clear_child_tid = clear_child_tid.as_u64();
+            state: Mutex::new(ThreadState {
+                virtual_memory,
+                registers,
+                sigmask: Sigset(0),
+                sigaction: [Sigaction::DEFAULT; 64],
+                sigaltstack: None,
+                clear_child_tid: 0,
+                dead: false,
+                waiters: Vec::new(),
+                cwd,
+                vfork_parent,
+            }),
         }
-
-        // Copy all registers.
-        thread.registers = self.registers;
-
-        // Set the return value to 0 for the new thread.
-        thread.registers.rax = 0;
-
-        // Switch to a new stack if one is provided.
-        if !stack.is_null() {
-            thread.registers.rsp = stack.as_u64();
-        }
-
-        if let Some(tls) = new_tls {
-            thread.registers.fs_base = tls;
-        }
-
-        thread
     }
 
-    pub fn spawn(create_thread: impl FnOnce(WeakThread) -> Result<Self>) -> Result<u32> {
+    pub fn spawn(create_thread: impl FnOnce(WeakThread) -> Result<Thread>) -> Result<u32> {
         let mut error = None;
 
         // Create the thread.
         let arc = Arc::new_cyclic(|self_weak| {
             let res = create_thread(self_weak.clone());
-            let thread = res.unwrap_or_else(|err| {
+            res.unwrap_or_else(|err| {
                 error = Some(err);
 
                 // Create a temporary fake thread.
                 // FIXME: Why isn't try_new_cyclic a thing?
                 Thread::empty(self_weak.clone(), new_tid())
-            });
-            Mutex::new(thread)
+            })
         });
 
         if let Some(error) = error {
@@ -216,16 +167,111 @@ impl Thread {
         Ok(tid)
     }
 
-    pub fn weak(&self) -> &WeakThread {
-        &self.self_weak
+    pub fn empty(self_weak: WeakThread, tid: u32) -> Self {
+        Self::new(
+            tid,
+            self_weak,
+            Weak::new(),
+            Arc::new(Process::new(tid)),
+            Arc::new(VirtualMemory::new()),
+            Arc::new(FileDescriptorTable::new()),
+            Path::new(b"/".to_vec()).unwrap(),
+            None,
+        )
+    }
+
+    pub fn lock(&self) -> ThreadGuard {
+        ThreadGuard {
+            thread: self,
+            state: self.state.lock(),
+        }
+    }
+
+    pub fn try_lock(&self) -> Option<ThreadGuard> {
+        Some(ThreadGuard {
+            thread: self,
+            state: self.state.try_lock()?,
+        })
     }
 
     pub fn tid(&self) -> u32 {
         self.tid
     }
+}
+
+pub struct ThreadGuard<'a> {
+    thread: &'a Thread,
+    state: MutexGuard<'a, ThreadState>,
+}
+
+impl ThreadGuard<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn clone(
+        &self,
+        new_tid: u32,
+        self_weak: WeakThread,
+        new_process: Option<Arc<Process>>,
+        new_virtual_memory: Option<Arc<VirtualMemory>>,
+        fdtable: Arc<FileDescriptorTable>,
+        stack: VirtAddr,
+        new_clear_child_tid: Option<VirtAddr>,
+        new_tls: Option<u64>,
+        vfork_parent: bool,
+    ) -> Thread {
+        let process = new_process.unwrap_or_else(|| self.process().clone());
+        let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory().clone());
+
+        let thread = Thread::new(
+            new_tid,
+            self_weak,
+            self.weak().clone(),
+            process,
+            virtual_memory,
+            fdtable,
+            self.cwd.clone(),
+            vfork_parent.then(|| self.weak().clone()),
+        );
+
+        let mut guard = thread.lock();
+
+        if let Some(clear_child_tid) = new_clear_child_tid {
+            guard.clear_child_tid = clear_child_tid.as_u64();
+        }
+
+        // Copy all registers.
+        guard.registers = self.registers;
+
+        // Set the return value to 0 for the new thread.
+        guard.registers.rax = 0;
+
+        // Switch to a new stack if one is provided.
+        if !stack.is_null() {
+            guard.registers.rsp = stack.as_u64();
+        }
+
+        if let Some(tls) = new_tls {
+            guard.registers.fs_base = tls;
+        }
+
+        drop(guard);
+
+        thread
+    }
+
+    pub fn weak(&self) -> &WeakThread {
+        &self.thread.self_weak
+    }
+
+    pub fn parent(&self) -> &WeakThread {
+        &self.thread.parent
+    }
+
+    pub fn tid(&self) -> u32 {
+        self.thread.tid
+    }
 
     pub fn process(&self) -> &Arc<Process> {
-        &self.process
+        &self.thread.process
     }
 
     pub fn virtual_memory(&self) -> &Arc<VirtualMemory> {
@@ -233,7 +279,7 @@ impl Thread {
     }
 
     pub fn fdtable(&self) -> &Arc<FileDescriptorTable> {
-        &self.fdtable
+        &self.thread.fdtable
     }
 
     pub fn execve(
@@ -328,13 +374,13 @@ impl Thread {
         per_cpu.userspace_registers.set(self.registers);
         per_cpu
             .current_virtual_memory
-            .set(Some(self.virtual_memory.clone()));
+            .set(Some(self.virtual_memory().clone()));
 
         unsafe {
             FS::write_base(VirtAddr::new(self.registers.fs_base));
         }
 
-        vm_activator.activate(&self.virtual_memory, |_| {
+        vm_activator.activate(self.virtual_memory(), |_| {
             unsafe {
                 asm!(
                     // Set LSTAR
@@ -507,13 +553,29 @@ impl Thread {
     }
 }
 
+impl Deref for ThreadGuard<'_> {
+    type Target = ThreadState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl DerefMut for ThreadGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
 impl Drop for Thread {
     fn drop(&mut self) {
-        if !self.waiters.is_empty() {
+        let guard = self.lock();
+
+        if !guard.waiters.is_empty() {
             warn!(
                 "thread {} exited with {} waiter(s)",
                 self.tid,
-                self.waiters.len(),
+                guard.waiters.len(),
             );
         }
     }

@@ -12,7 +12,7 @@ use crate::{
     error::{Error, Result},
     user::process::{
         memory::VirtualMemoryActivator,
-        thread::{Sigaction, Sigset, Stack, Thread},
+        thread::{Sigaction, Sigset, Stack, ThreadGuard},
     },
 };
 
@@ -22,7 +22,7 @@ pub trait SyscallArg: Display + Copy {
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result;
 }
@@ -55,7 +55,7 @@ macro_rules! bitflags {
             fn display(
                 f: &mut dyn fmt::Write,
                 value: u64,
-                _thread: &Thread,
+                _thread: &ThreadGuard<'_>,
                 _vm_activator: &mut VirtualMemoryActivator,
             ) -> fmt::Result {
                 let valid_bits = Self::from_bits_truncate(value);
@@ -104,7 +104,7 @@ macro_rules! enum_arg {
             fn display(
                 f: &mut dyn fmt::Write,
                 value: u64,
-                _thread: &Thread,
+                _thread: &ThreadGuard<'_>,
                 _vm_activator: &mut VirtualMemoryActivator,
             ) -> fmt::Result {
                 match Self::parse(value) {
@@ -133,7 +133,7 @@ impl SyscallArg for Ignored {
     fn display(
         f: &mut dyn fmt::Write,
         _value: u64,
-        _thread: &Thread,
+        _thread: &ThreadGuard<'_>,
         _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "ignored")
@@ -195,7 +195,7 @@ where
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         T::display(f, VirtAddr::new(value), thread, vm_activator)
@@ -206,7 +206,7 @@ pub trait Pointee {
     fn display(
         f: &mut dyn fmt::Write,
         addr: VirtAddr,
-        thread: &Thread,
+        thread: &ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         let _ = thread;
@@ -219,7 +219,7 @@ impl Pointee for CStr {
     fn display(
         f: &mut dyn fmt::Write,
         addr: VirtAddr,
-        thread: &Thread,
+        thread: &ThreadGuard,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         let res = vm_activator.activate(thread.virtual_memory(), |vm| vm.read_cstring(addr, 128));
@@ -252,7 +252,7 @@ impl SyscallArg for u64 {
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        _thread: &Thread,
+        _thread: &ThreadGuard<'_>,
         _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{value}")
@@ -360,7 +360,7 @@ impl SyscallArg for FdNum {
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        _thread: &Thread,
+        _thread: &ThreadGuard<'_>,
         _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         match Self::parse(value) {
@@ -472,7 +472,7 @@ impl SyscallArg for FutexOpWithFlags {
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        thread: &Thread,
+        thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         FutexOp::display(f, value & 0x7f, thread, vm_activator)?;

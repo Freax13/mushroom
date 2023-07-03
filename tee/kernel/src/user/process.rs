@@ -77,16 +77,18 @@ impl Process {
 
 pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
     let res = Thread::spawn(|self_weak| {
-        let mut thread = Thread::empty(self_weak, new_tid());
+        let thread = Thread::empty(self_weak, new_tid());
 
         // Load the init process.
         let path = Path::new(b"/bin/init".to_vec())?;
-        thread.execve(
+        let mut guard = thread.lock();
+        guard.execve(
             &path,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
             vm_activator,
         )?;
+        drop(guard);
 
         Ok(thread)
     });

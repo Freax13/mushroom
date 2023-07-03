@@ -82,7 +82,7 @@ fn expand_syscall(
             #(#arg_associated_items)*
 
             fn execute(
-                thread: &mut Thread,
+                thread: &mut ThreadGuard,
                 vm_activator: &mut VirtualMemoryActivator,
                 #(#function_decl_params,)*
             ) -> SyscallResult {
