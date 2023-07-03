@@ -24,8 +24,8 @@ use self::{
     args::{
         Advice, ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
         FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags,
-        Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions, WaitOptions,
-        Whence,
+        Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions, WStatus,
+        WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -43,8 +43,8 @@ use super::{
     },
     memory::VirtualMemoryActivator,
     thread::{
-        new_tid, schedule_thread, Sigaction, Sigset, Stack, StackFlags, Thread, UserspaceRegisters,
-        Waiter, THREADS, ThreadGuard,
+        new_tid, schedule_thread, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard,
+        UserspaceRegisters, Waiter, CHILD_DEATHS, THREADS,
     },
     Process,
 };
@@ -923,13 +923,24 @@ fn exit(
         thread.process().futexes.wake(clear_child_tid, 1, None);
     }
 
-    for Waiter { thread, wstatus: _ } in core::mem::take(&mut thread.waiters) {
+    for Waiter {
+        thread,
+        wstatus: addr,
+    } in core::mem::take(&mut thread.waiters)
+    {
         {
             let Some(thread) = thread.upgrade() else {
                 continue;
             };
             let mut guard = thread.lock();
-            guard.registers.rax = 0;
+            guard.registers.rax = u64::from(thread.tid());
+
+            if !addr.is_null() {
+                let wstatus = WStatus::exit(status as u8);
+                vm_activator.activate(guard.virtual_memory(), |vm| {
+                    vm.write(addr, bytes_of(&wstatus))
+                })?;
+            }
         }
 
         schedule_thread(thread);
@@ -939,9 +950,9 @@ fn exit(
         schedule_thread(vfork_parent);
     }
 
-    THREADS.remove(thread.tid());
+    CHILD_DEATHS.add(thread.parent().clone(), thread.tid(), status as u8);
 
-    thread.dead = true;
+    thread.exit_status = Some(status as u8);
 
     Yield
 }
@@ -949,8 +960,9 @@ fn exit(
 #[syscall(no = 61)]
 fn wait4(
     thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
     pid: u64,
-    wstatus: Pointer<c_void>, // FIXME: use correct type
+    wstatus: Pointer<WStatus>, // FIXME: use correct type
     options: WaitOptions,
     rusage: Pointer<c_void>, // FIXME: use correct type
 ) -> SyscallResult {
@@ -960,15 +972,44 @@ fn wait4(
 
     match pid as i64 {
         ..=-2 => todo!(),
-        -1 => todo!(),
+        -1 => {
+            if let Some((dead_child, status)) = thread.dead_children.pop_front() {
+                if !wstatus.is_null() {
+                    let addr = wstatus.get();
+                    let wstatus = WStatus::exit(status);
+                    vm_activator.activate(thread.virtual_memory(), |vm| {
+                        vm.write(addr, bytes_of(&wstatus))
+                    })?;
+                }
+
+                THREADS.remove(dead_child);
+                return Ok(u64::from(dead_child));
+            }
+
+            if options.contains(WaitOptions::NOHANG) {
+                return Ok(0);
+            }
+
+            thread.waiting_for_child_death = Some(wstatus.get());
+            Yield
+        }
         0 => todo!(),
         1.. => {
             let t = THREADS.by_id(pid as u32).ok_or_else(|| Error::child(()))?;
 
             let mut guard = t.lock();
-            if guard.dead {
-                // Return immediatly for dead tasks.
-                return Ok(0);
+            if let Some(status) = guard.exit_status {
+                if !wstatus.is_null() {
+                    let addr = wstatus.get();
+                    let wstatus = WStatus::exit(status);
+                    vm_activator.activate(thread.virtual_memory(), |vm| {
+                        vm.write(addr, bytes_of(&wstatus))
+                    })?;
+                }
+
+                // Return immediately for dead tasks.
+                THREADS.remove(t.tid());
+                return Ok(u64::from(t.tid()));
             }
 
             guard.waiters.push(Waiter {

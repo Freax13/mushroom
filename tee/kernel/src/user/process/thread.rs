@@ -11,7 +11,7 @@ use alloc::{
     vec::Vec,
 };
 use bitflags::bitflags;
-use bytemuck::{offset_of, Pod, Zeroable};
+use bytemuck::{bytes_of, offset_of, Pod, Zeroable};
 use log::warn;
 use spin::{Mutex, MutexGuard};
 use x86_64::{
@@ -32,12 +32,13 @@ use crate::{
 use super::{
     fd::FileDescriptorTable,
     memory::{VirtualMemory, VirtualMemoryActivator},
-    syscall::args::FileMode,
+    syscall::args::{FileMode, WStatus},
     Process,
 };
 
 pub static THREADS: Threads = Threads::new();
 static RUNNABLE_THREADS: Mutex<VecDeque<WeakThread>> = Mutex::new(VecDeque::new());
+pub static CHILD_DEATHS: ProcessDeaths = ProcessDeaths::new();
 
 pub fn new_tid() -> u32 {
     static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
@@ -75,6 +76,44 @@ impl Threads {
     }
 }
 
+/// A queue for processing the deaths of processes.
+///
+/// We want to handle deaths outside of a syscall handler to avoid dead-locks.
+pub struct ProcessDeaths {
+    child_deaths: Mutex<Vec<(WeakThread, u32, u8)>>,
+}
+
+impl ProcessDeaths {
+    pub const fn new() -> Self {
+        Self {
+            child_deaths: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Record the death of a process.
+    pub fn add(&self, parent: WeakThread, child: u32, status: u8) {
+        self.child_deaths.lock().push((parent, child, status));
+    }
+
+    /// Returns true when there is no more work to be done.
+    pub fn process(&self, vm_activator: &mut VirtualMemoryActivator) -> bool {
+        let Some(mut guard) = self.child_deaths.try_lock() else {
+            return false;
+        };
+        guard.retain(|(parent, child, status)| {
+            let Some(parent) = parent.upgrade() else {
+                return false;
+            };
+            let Some(mut guard) = parent.try_lock() else {
+                return true;
+            };
+            guard.process_child_death(*child, *status, vm_activator);
+            false
+        });
+        guard.is_empty()
+    }
+}
+
 pub type WeakThread = Weak<Thread>;
 
 pub struct Thread {
@@ -97,11 +136,14 @@ pub struct ThreadState {
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
-    pub dead: bool,
+    pub exit_status: Option<u8>,
     pub clear_child_tid: u64,
     pub waiters: Vec<Waiter>,
     pub cwd: Path,
     pub vfork_parent: Option<WeakThread>,
+
+    pub waiting_for_child_death: Option<VirtAddr>,
+    pub dead_children: VecDeque<(u32, u8)>,
 }
 
 impl Thread {
@@ -130,10 +172,12 @@ impl Thread {
                 sigaction: [Sigaction::DEFAULT; 64],
                 sigaltstack: None,
                 clear_child_tid: 0,
-                dead: false,
+                exit_status: None,
                 waiters: Vec::new(),
                 cwd,
                 vfork_parent,
+                waiting_for_child_death: None,
+                dead_children: VecDeque::new(),
             }),
         }
     }
@@ -550,6 +594,31 @@ impl ThreadGuard<'_> {
         });
 
         self.registers = per_cpu.userspace_registers.get();
+    }
+
+    pub fn process_child_death(
+        &mut self,
+        tid: u32,
+        status: u8,
+        vm_activator: &mut VirtualMemoryActivator,
+    ) {
+        if let Some(addr) = core::mem::take(&mut self.waiting_for_child_death) {
+            if !addr.is_null() {
+                let wstatus = WStatus::exit(status);
+                vm_activator
+                    .activate(self.virtual_memory(), |vm| {
+                        vm.write(addr, bytes_of(&wstatus))
+                    })
+                    .unwrap(); // TODO: Properly handle errors here.
+            }
+
+            THREADS.remove(tid);
+            self.registers.rax = u64::from(tid);
+            schedule_thread(self.weak().clone());
+            return;
+        }
+
+        self.dead_children.push_back((tid, status));
     }
 }
 

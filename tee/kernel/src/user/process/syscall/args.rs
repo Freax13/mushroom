@@ -243,6 +243,7 @@ impl Pointee for Stack {}
 impl Pointee for Stat {}
 impl Pointee for u32 {}
 impl Pointee for u64 {}
+impl Pointee for WStatus {}
 
 impl SyscallArg for u64 {
     fn parse(value: u64) -> Result<Self> {
@@ -597,5 +598,15 @@ bitflags! {
 enum_arg! {
     pub enum Advice {
         Free = 8,
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct WStatus(u32);
+
+impl WStatus {
+    pub fn exit(status: u8) -> Self {
+        Self(u32::from(status) << 8)
     }
 }
