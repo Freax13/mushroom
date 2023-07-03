@@ -257,7 +257,7 @@ impl Thread {
             vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(None, len))? + len;
         // Load the elf.
         let entry = vm_activator.activate(&virtual_memory, |vm| {
-            vm.load_executable(elf_file, stack, argv, envp)
+            vm.start_executable(elf_file, stack, argv, envp)
         })?;
 
         // Success! Commit the new state to the thread.
