@@ -216,8 +216,9 @@ fn open(
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     flags: OpenFlags,
-    mode: FileMode,
+    mode: u64,
 ) -> SyscallResult {
+    let mode = FileMode::from_bits_truncate(mode);
     let filename =
         vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
 
@@ -1303,7 +1304,7 @@ fn openat(
     dfd: FdNum,
     filename: Pointer<CStr>,
     flags: OpenFlags,
-    mode: FileMode,
+    mode: u64,
 ) -> SyscallResult {
     let filename =
         vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(filename.get()))?;
