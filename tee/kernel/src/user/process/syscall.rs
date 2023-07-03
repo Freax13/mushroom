@@ -127,6 +127,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
+    handlers.register(SysSendfile);
     handlers.register(SysClone);
     handlers.register(SysFork);
     handlers.register(SysVfork);
@@ -698,6 +699,39 @@ fn dup2(thread: &mut ThreadGuard, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
 fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
     let pid = thread.process().pid;
     Ok(u64::from(pid))
+}
+
+#[syscall(no = 40)]
+fn sendfile(
+    thread: &mut ThreadGuard,
+    out: FdNum,
+    r#in: FdNum,
+    offset: Pointer<u64>,
+    count: u64,
+) -> SyscallResult {
+    let fdtable = thread.fdtable();
+    let out = fdtable.get(out)?;
+    let r#in = fdtable.get(r#in)?;
+
+    if !offset.is_null() {
+        todo!();
+    }
+
+    let buffer = &mut [0; 8192];
+    let mut total_len = 0;
+    loop {
+        let len = r#in.read(buffer)?;
+        let buffer = &buffer[..len];
+        if buffer.is_empty() {
+            break;
+        }
+        total_len += buffer.len();
+
+        out.write_all(buffer)?;
+    }
+
+    let len = u64::try_from(total_len)?;
+    Ok(len)
 }
 
 #[syscall(no = 56)]
