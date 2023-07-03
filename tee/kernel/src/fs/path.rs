@@ -1,4 +1,7 @@
-use core::iter::from_fn;
+use core::{
+    fmt::{Debug, Display},
+    iter::from_fn,
+};
 
 use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
@@ -115,6 +118,12 @@ impl Path {
         }
         *self = Path::new(path)?;
         Ok(())
+    }
+}
+
+impl Debug for Path {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Display::fmt(&self.as_bytes().escape_ascii(), f)
     }
 }
 
