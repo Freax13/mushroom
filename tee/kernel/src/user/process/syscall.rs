@@ -899,6 +899,8 @@ fn execve(
             Result::Ok((pathname, args, envs))
         })?;
 
+    log::info!("execve({pathname:?}, {args:?}, {envs:?})");
+
     thread.execve(&pathname, &args, &envs, vm_activator)?;
 
     if let Some(vfork_parent) = thread.vfork_parent.take() {
