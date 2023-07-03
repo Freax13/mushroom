@@ -342,7 +342,7 @@ impl ThreadGuard<'_> {
 
         let virtual_memory = VirtualMemory::new();
         // Create stack.
-        let len = 0x1_0000;
+        let len = 0x2_0000;
         let stack =
             vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(None, len))? + len;
         // Load the elf.
