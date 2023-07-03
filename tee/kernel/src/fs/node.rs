@@ -583,7 +583,9 @@ impl Directory for TmpFsDirectory {
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
-        let Entry::Occupied(entry) = node else { return Err(Error::no_ent(())) };
+        let Entry::Occupied(entry) = node else {
+            return Err(Error::no_ent(()));
+        };
         if matches!(entry.get(), Node::Directory(_)) {
             return Err(Error::is_dir(()));
         }
@@ -594,7 +596,9 @@ impl Directory for TmpFsDirectory {
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
-        let Entry::Occupied(entry) = node else { return Err(Error::no_ent(())) };
+        let Entry::Occupied(entry) = node else {
+            return Err(Error::no_ent(()));
+        };
         if !matches!(entry.get(), Node::Directory(_)) {
             return Err(Error::is_dir(()));
         }

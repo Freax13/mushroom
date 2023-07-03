@@ -72,7 +72,9 @@ impl Futexes {
             {
                 // Write the result to the thread.
                 {
-                    let Some(thread) = waiter.weak_thread.upgrade() else { continue; };
+                    let Some(thread) = waiter.weak_thread.upgrade() else {
+                        continue;
+                    };
                     let mut guard = thread.lock();
                     guard.registers.rax = 0;
                 }

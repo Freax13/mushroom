@@ -135,7 +135,9 @@ impl VmContext {
                         && next_load_segment.payload.page_type() == first_page_type
                         && next_load_segment.vmpl1_perms == first_vmpl1_perms
                 });
-                let Some(following_load_command) = following_load_command else { break; };
+                let Some(following_load_command) = following_load_command else {
+                    break;
+                };
                 pages.push(Page {
                     bytes: following_load_command.payload.bytes(),
                 });

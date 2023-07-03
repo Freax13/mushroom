@@ -63,7 +63,9 @@ impl Ap {
 
         *self = Self::Initialized(Initialized::new(apic_id));
 
-        let Self::Initialized(initialized) = self else { unreachable!(); };
+        let Self::Initialized(initialized) = self else {
+            unreachable!();
+        };
         initialized.boot();
     }
 }

@@ -890,7 +890,9 @@ fn exit(
 
     for Waiter { thread, wstatus: _ } in core::mem::take(&mut thread.waiters) {
         {
-            let Some(thread) = thread.upgrade() else { continue; };
+            let Some(thread) = thread.upgrade() else {
+                continue;
+            };
             let mut guard = thread.lock();
             guard.registers.rax = 0;
         }

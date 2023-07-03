@@ -188,7 +188,9 @@ impl ActiveVirtualMemory<'_, '_> {
             let bs = bytes.as_mut()?;
 
             let position_res = bs.iter().position(|&b| matches!(b, b' ' | b'\n'));
-            let Some(position) = position_res else { return Some(Err(Error::inval(()))); };
+            let Some(position) = position_res else {
+                return Some(Err(Error::inval(())));
+            };
             let delimiter = bs[position];
 
             let arg = &bs[..position];

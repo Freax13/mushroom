@@ -619,9 +619,13 @@ impl Ymm {
 
 /// Returns true if progress was made.
 pub fn run_thread(vm_activator: &mut VirtualMemoryActivator) -> bool {
-    let Some(weak_thread) = RUNNABLE_THREADS.lock().pop_front() else { return false; };
+    let Some(weak_thread) = RUNNABLE_THREADS.lock().pop_front() else {
+        return false;
+    };
 
-    let Some(thread) = weak_thread.upgrade() else { return true; };
+    let Some(thread) = weak_thread.upgrade() else {
+        return true;
+    };
 
     let mut guard = thread.lock();
     guard.run(vm_activator);

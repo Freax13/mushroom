@@ -91,7 +91,12 @@ fn register_ghcb(request_address: PhysFrame) {
     let response = GhcbInfo::try_from(unsafe { msr.read() }).unwrap();
 
     // Verify the response.
-    let GhcbInfo::RegisterGhcbGpaResponse { address: response_address } = response else { panic!("unexpected response: {response:?}") };
+    let GhcbInfo::RegisterGhcbGpaResponse {
+        address: response_address,
+    } = response
+    else {
+        panic!("unexpected response: {response:?}")
+    };
     assert_eq!(Some(request_address), response_address);
 }
 
@@ -155,7 +160,9 @@ pub fn page_state_change(address: PhysFrame, operation: PageOperation) {
     }
 
     // Verify the response.
-    let GhcbInfo::SnpPageStateChangeResponse { error_code } = response else { panic!("unexpected response: {response:?}") };
+    let GhcbInfo::SnpPageStateChangeResponse { error_code } = response else {
+        panic!("unexpected response: {response:?}")
+    };
     assert_eq!(error_code, None);
 }
 

@@ -114,9 +114,7 @@ impl VirtualMemory {
         let state = self.state.lock();
 
         let mapping_opt = state.mappings.iter().find(|mapping| mapping.contains(addr));
-        let mapping = if let Some(mapping) = mapping_opt {
-            mapping
-        } else {
+        let Some(mapping) = mapping_opt else {
             panic!("page fault: {addr:#x} at {rip:?}");
         };
 
@@ -705,7 +703,9 @@ impl Mapping {
 
     /// Returns true if the mapping contains any memory in the specified range.
     pub fn contains_range(&self, addr: VirtAddr, size: u64) -> bool {
-        let Some(sizem1) = size.checked_sub(1) else { return false; };
+        let Some(sizem1) = size.checked_sub(1) else {
+            return false;
+        };
         let end = addr + sizem1;
 
         self.contains(addr)
@@ -716,7 +716,9 @@ impl Mapping {
 
     /// Returns true if the mapping contains any memory in the specified range.
     pub fn contains_page_range(&self, addr: Page, num_pages: u64) -> bool {
-        let Some(sizem1) = num_pages.checked_sub(1) else { return false; };
+        let Some(sizem1) = num_pages.checked_sub(1) else {
+            return false;
+        };
         let end = addr + sizem1;
 
         self.contains_page(addr)

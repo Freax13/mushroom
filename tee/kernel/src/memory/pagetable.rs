@@ -191,15 +191,21 @@ pub unsafe fn remove_flags(page: Page, flags: PageTableFlags) {
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let Some(level3_guard) = level4_entry.acquire_existing() else { return; };
+    let Some(level3_guard) = level4_entry.acquire_existing() else {
+        return;
+    };
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let Some(level2_guard) = level3_entry.acquire_existing() else { return; };
+    let Some(level2_guard) = level3_entry.acquire_existing() else {
+        return;
+    };
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let Some(level1_guard) = level2_entry.acquire_existing() else { return; };
+    let Some(level1_guard) = level2_entry.acquire_existing() else {
+        return;
+    };
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -234,21 +240,27 @@ pub unsafe fn find_dirty_userspace_pages(mut f: impl FnMut(Page) -> Result<()>) 
             if !pml4e.is_dirty() {
                 continue;
             }
-            let Some(pdp) = pml4e.acquire_existing() else { continue; };
+            let Some(pdp) = pml4e.acquire_existing() else {
+                continue;
+            };
 
             for p3_index in (0..512).map(PageTableIndex::new) {
                 let pdpe = &pdp[p3_index];
                 if !pdpe.is_dirty() {
                     continue;
                 }
-                let Some(pd) = pdpe.acquire_existing() else { continue; };
+                let Some(pd) = pdpe.acquire_existing() else {
+                    continue;
+                };
 
                 for p2_index in (0..512).map(PageTableIndex::new) {
                     let pde = &pd[p2_index];
                     if !pde.is_dirty() {
                         continue;
                     }
-                    let Some(pt) = pde.acquire_existing() else { continue; };
+                    let Some(pt) = pde.acquire_existing() else {
+                        continue;
+                    };
 
                     for p1_index in (0..512).map(PageTableIndex::new) {
                         let pte = &pt[p1_index];

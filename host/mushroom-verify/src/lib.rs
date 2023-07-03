@@ -27,7 +27,9 @@ impl Configuration {
         let mut launch_digest = [0; 48];
 
         for command in commands {
-            let Some(info) = PageInfo::new(launch_digest, &command) else { continue; };
+            let Some(info) = PageInfo::new(launch_digest, &command) else {
+                continue;
+            };
             launch_digest = Sha384::digest(bytes_of(&info)).into();
         }
 
