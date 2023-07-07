@@ -1,18 +1,43 @@
+use alloc::sync::Arc;
 use spin::Mutex;
 
-use super::{new_ino, File, FileSnapshot};
 use crate::{
     error::{Error, Result},
+    fs::{path::FileName, INPUT},
     supervisor,
     user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat},
 };
 
-pub struct NullFile {
+use super::{
+    new_ino,
+    tmpfs::{TmpFsDir, TmpFsFile},
+    Directory, File, FileSnapshot, Node,
+};
+
+pub fn new() -> Result<impl Directory> {
+    let tmp_fs_dir = TmpFsDir::new(FileMode::from_bits_truncate(0o755));
+
+    let input_name = FileName::new(b"input").unwrap();
+    let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444), *INPUT);
+    tmp_fs_dir.mount(input_name, Node::File(Arc::new(input_file)))?;
+
+    let output_name = FileName::new(b"output").unwrap();
+    let output_file = OutputFile::new();
+    tmp_fs_dir.mount(output_name, Node::File(Arc::new(output_file)))?;
+
+    let null_name = FileName::new(b"null").unwrap();
+    let null_file = NullFile::new();
+    tmp_fs_dir.mount(null_name, Node::File(Arc::new(null_file)))?;
+
+    Ok(tmp_fs_dir)
+}
+
+struct NullFile {
     mode: Mutex<FileMode>,
 }
 
 impl NullFile {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             mode: Mutex::new(FileMode::from_bits_truncate(0o666)),
         }
@@ -41,7 +66,7 @@ impl File for NullFile {
     }
 }
 
-pub struct OutputFile {
+struct OutputFile {
     ino: u64,
     internal: Mutex<OutputFileInternal>,
 }
@@ -52,7 +77,7 @@ struct OutputFileInternal {
 }
 
 impl OutputFile {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             ino: new_ino(),
             internal: Mutex::new(OutputFileInternal {

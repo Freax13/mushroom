@@ -14,8 +14,9 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::node::{
-        create_directory, create_file, create_link, hard_link, lookup_and_resolve_node,
-        lookup_node, read_link, set_mode, unlink_dir, unlink_file, Directory, Node, ROOT_NODE,
+        self, create_directory, create_file, create_link, devtmpfs, hard_link,
+        lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir, unlink_file,
+        Directory, Node, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -23,9 +24,9 @@ use crate::{
 use self::{
     args::{
         Advice, ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
-        FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, OpenFlags, Pipe2Flags,
-        Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions, WStatus,
-        WaitOptions, Whence,
+        FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags, OpenFlags,
+        Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions,
+        WStatus, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -142,6 +143,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchmod);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
+    handlers.register(SysMount);
     handlers.register(SysGettid);
     handlers.register(SysFutex);
     handlers.register(SysGetdents64);
@@ -1173,6 +1175,34 @@ fn arch_prctl(
             Ok(0)
         }
     }
+}
+
+#[syscall(no = 165)]
+fn mount(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    dev_name: Pointer<CStr>,
+    dir_name: Pointer<CStr>,
+    r#type: Pointer<CStr>,
+    mode: MountFlags,
+    data: Pointer<c_void>,
+) -> SyscallResult {
+    let (_dev_name, dir_name, r#type) =
+        vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+            let dev_name = vm.read_path(dev_name.get())?;
+            let dir_name = vm.read_path(dir_name.get())?;
+            let r#type = vm.read_cstring(r#type.get(), 0x10)?;
+            Result::Ok((dev_name, dir_name, r#type))
+        })?;
+
+    let node = match r#type.as_bytes() {
+        b"devtmpfs" => Node::Directory(Arc::new(devtmpfs::new()?)),
+        _ => return Err(Error::no_dev(())),
+    };
+
+    node::mount(&dir_name, node)?;
+
+    Ok(0)
 }
 
 #[syscall(no = 186)]

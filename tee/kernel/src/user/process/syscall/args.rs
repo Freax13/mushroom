@@ -610,3 +610,7 @@ impl WStatus {
         Self(u32::from(status) << 8)
     }
 }
+
+bitflags! {
+    pub struct MountFlags {}
+}

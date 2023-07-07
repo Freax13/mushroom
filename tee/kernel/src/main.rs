@@ -65,7 +65,6 @@ extern "C" fn init() -> ! {
 
     // The first AP does some extract initialization work.
     if PerCpu::get().idx == 0 {
-        fs::init().expect("failed to load input files");
         user::process::start_init_process(&mut vm_activator);
     }
 

@@ -1,56 +1,14 @@
-use core::any::Any;
-
 use constants::{physical_address, virtual_address};
 use spin::Lazy;
 use x86_64::structures::paging::{frame::PhysFrameRangeInclusive, page::PageRangeInclusive};
 
-use crate::{
-    error::Result,
-    memory::{
-        frame::FRAME_ALLOCATOR,
-        pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
-    },
-    user::process::syscall::args::FileMode,
-};
-
-use self::{
-    node::{
-        special::{NullFile, OutputFile},
-        Directory, TmpFsDirectory, TmpFsFile, ROOT_NODE,
-    },
-    path::FileName,
+use crate::memory::{
+    frame::FRAME_ALLOCATOR,
+    pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
 };
 
 pub mod node;
 pub mod path;
-
-pub fn init() -> Result<()> {
-    let bin = ROOT_NODE.create_dir(
-        FileName::new(b"bin").unwrap(),
-        FileMode::from_bits_truncate(0o755),
-    )?;
-    let bin =
-        <dyn Any>::downcast_ref::<TmpFsDirectory>(&*bin as &dyn Any).expect("/bin/ is not a tmpfs");
-    bin.mount(
-        FileName::new(b"init").unwrap(),
-        TmpFsFile::new(FileMode::from_bits_truncate(0o755), &INIT),
-    );
-
-    let dev = ROOT_NODE.create_dir(
-        FileName::new(b"dev").unwrap(),
-        FileMode::from_bits_truncate(0o755),
-    )?;
-    let dev =
-        <dyn Any>::downcast_ref::<TmpFsDirectory>(&*dev as &dyn Any).expect("/dev/ is not a tmpfs");
-    dev.mount(
-        FileName::new(b"input").unwrap(),
-        TmpFsFile::new(FileMode::from_bits_truncate(0o444), &INPUT),
-    );
-    dev.mount(FileName::new(b"output").unwrap(), OutputFile::new());
-    dev.mount(FileName::new(b"null").unwrap(), NullFile::new());
-
-    Ok(())
-}
 
 pub static INIT: Lazy<&'static [u8]> = Lazy::new(|| {
     let pages = virtual_address::INIT.into_iter();

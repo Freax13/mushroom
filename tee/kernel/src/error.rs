@@ -57,6 +57,7 @@ errors! {
     Acces acces 13,
     Fault fault 14,
     Exist exist 17,
+    NoDev no_dev 19,
     NotDir not_dir 20,
     IsDir is_dir 21,
     Inval inval 22,

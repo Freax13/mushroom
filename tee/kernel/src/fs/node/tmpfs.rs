@@ -1,0 +1,294 @@
+use core::{cmp, iter::repeat};
+
+use alloc::{
+    borrow::Cow,
+    collections::{btree_map::Entry, BTreeMap},
+    sync::Arc,
+    vec::Vec,
+};
+use spin::mutex::Mutex;
+
+use super::{new_ino, DirEntry, DirEntryName, Directory, File, FileSnapshot, Link, Node};
+use crate::{
+    error::{Error, Result},
+    fs::path::{FileName, Path},
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat},
+};
+
+pub struct TmpFsDir {
+    ino: u64,
+    internal: Mutex<DevTmpFsDirInternal>,
+}
+
+struct DevTmpFsDirInternal {
+    mode: FileMode,
+    items: BTreeMap<FileName<'static>, Node>,
+}
+
+impl TmpFsDir {
+    pub fn new(mode: FileMode) -> Self {
+        Self {
+            ino: new_ino(),
+            internal: Mutex::new(DevTmpFsDirInternal {
+                mode,
+                items: BTreeMap::new(),
+            }),
+        }
+    }
+}
+
+impl Directory for TmpFsDir {
+    fn stat(&self) -> Stat {
+        let guard = self.internal.lock();
+        let mode = FileTypeAndMode::new(FileType::Dir, guard.mode);
+        // FIXME: Fill in more values.
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode,
+            uid: 0,
+            gid: 0,
+            _pad0: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: 0,
+            atime_nsec: 0,
+            mtime: 0,
+            mtime_nsec: 0,
+            ctime: 0,
+            ctime_nsec: 0,
+            _unused: [0; 3],
+        }
+    }
+
+    fn set_mode(&self, mode: FileMode) {
+        self.internal.lock().mode = mode;
+    }
+
+    fn get_node(&self, path_segment: &FileName) -> Result<Node> {
+        self.internal
+            .lock()
+            .items
+            .get(path_segment)
+            .cloned()
+            .ok_or(Error::no_ent(()))
+    }
+
+    fn create_dir(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+    ) -> Result<Arc<dyn Directory>> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
+        match entry {
+            Entry::Vacant(entry) => {
+                let dir = Arc::new(TmpFsDir::new(mode));
+                entry.insert(Node::Directory(dir.clone()));
+                Ok(dir)
+            }
+            Entry::Occupied(_) => Err(Error::exist(())),
+        }
+    }
+
+    fn create_file(
+        &self,
+        path_segment: FileName<'static>,
+        mode: FileMode,
+        create_new: bool,
+    ) -> Result<Arc<dyn File>> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(path_segment);
+        match entry {
+            Entry::Vacant(entry) => {
+                let file = Arc::new(TmpFsFile::new(mode, &[]));
+                entry.insert(Node::File(file.clone()));
+                Ok(file)
+            }
+            Entry::Occupied(mut entry) => {
+                if create_new {
+                    return Err(Error::exist(()));
+                }
+                match entry.get_mut() {
+                    Node::File(f) => Ok(f.clone()),
+                    Node::Link(_) => Err(Error::exist(())),
+                    Node::Directory(_) => Err(Error::exist(())),
+                }
+            }
+        }
+    }
+
+    fn create_link(
+        &self,
+        file_name: FileName<'static>,
+        target: Path,
+        create_new: bool,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
+        match entry {
+            Entry::Vacant(entry) => {
+                entry.insert(Node::Link(Link { target }));
+                Ok(())
+            }
+            Entry::Occupied(mut entry) => {
+                if create_new {
+                    return Err(Error::exist(()));
+                }
+                entry.insert(Node::Link(Link { target }));
+                Ok(())
+            }
+        }
+    }
+
+    fn hard_link(&self, file_name: FileName<'static>, node: Node) -> Result<()> {
+        self.internal.lock().items.insert(file_name.clone(), node);
+        Ok(())
+    }
+
+    fn mount(&self, file_name: FileName<'static>, node: Node) -> Result<()> {
+        self.internal.lock().items.insert(file_name.clone(), node);
+        Ok(())
+    }
+
+    fn list_entries(&self) -> Vec<DirEntry> {
+        let guard = self.internal.lock();
+
+        let mut entries = Vec::with_capacity(2 + guard.items.len());
+        entries.push(DirEntry {
+            ino: 0,
+            ty: FileType::Dir,
+            name: DirEntryName::Dot,
+        });
+        entries.push(DirEntry {
+            ino: 0,
+            ty: FileType::Dir,
+            name: DirEntryName::DotDot,
+        });
+        for (name, node) in guard.items.iter() {
+            let stat = node.stat();
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: stat.mode.ty(),
+                name: DirEntryName::from(name.clone()),
+            })
+        }
+
+        entries
+    }
+
+    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let node = guard.items.entry(file_name);
+        let Entry::Occupied(entry) = node else {
+            return Err(Error::no_ent(()));
+        };
+        if matches!(entry.get(), Node::Directory(_)) {
+            return Err(Error::is_dir(()));
+        }
+        entry.remove();
+        Ok(())
+    }
+
+    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let node = guard.items.entry(file_name);
+        let Entry::Occupied(entry) = node else {
+            return Err(Error::no_ent(()));
+        };
+        if !matches!(entry.get(), Node::Directory(_)) {
+            return Err(Error::is_dir(()));
+        }
+        entry.remove();
+        Ok(())
+    }
+}
+
+pub struct TmpFsFile {
+    ino: u64,
+    internal: Mutex<TmpFsFileInternal>,
+}
+
+struct TmpFsFileInternal {
+    content: Arc<Cow<'static, [u8]>>,
+    mode: FileMode,
+}
+
+impl TmpFsFile {
+    pub fn new(mode: FileMode, content: &'static [u8]) -> Self {
+        Self {
+            ino: new_ino(),
+            internal: Mutex::new(TmpFsFileInternal {
+                content: Arc::new(Cow::Borrowed(content)),
+                mode,
+            }),
+        }
+    }
+}
+
+impl File for TmpFsFile {
+    fn stat(&self) -> Stat {
+        let guard = self.internal.lock();
+        let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        let size = guard.content.len() as i64;
+
+        // FIXME: Fill in more values.
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode,
+            uid: 0,
+            gid: 0,
+            _pad0: 0,
+            rdev: 0,
+            size,
+            blksize: 0,
+            blocks: 0,
+            atime: 0,
+            atime_nsec: 0,
+            mtime: 0,
+            mtime_nsec: 0,
+            ctime: 0,
+            ctime_nsec: 0,
+            _unused: [0; 3],
+        }
+    }
+
+    fn set_mode(&self, mode: FileMode) {
+        self.internal.lock().mode = mode;
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+        let guard = self.internal.lock();
+        let slice = guard.content.get(offset..).ok_or(Error::inval(()))?;
+        let len = cmp::min(slice.len(), buf.len());
+        buf[..len].copy_from_slice(&slice[..len]);
+        Ok(len)
+    }
+
+    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        let bytes = Arc::make_mut(&mut guard.content);
+        let bytes = bytes.to_mut();
+
+        // Grow the file to be able to hold at least `offset+buf.len()` bytes.
+        let new_min_len = offset + buf.len();
+        if let Some(diff) = new_min_len.checked_sub(bytes.len()) {
+            bytes.extend(repeat(0).take(diff));
+        }
+
+        // Copy the buffer into the file.
+        bytes[offset..][..buf.len()].copy_from_slice(buf);
+
+        Ok(buf.len())
+    }
+
+    fn read_snapshot(&self) -> Result<FileSnapshot> {
+        let content = self.internal.lock().content.clone();
+        Ok(FileSnapshot(content))
+    }
+}
