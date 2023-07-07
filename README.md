@@ -21,7 +21,9 @@ This kernel runs at VMPL 0. It mediates between the communication between the wo
 ### Reduce Attack Surface
 
 The code running in the VM has been split up into two parts, the workload kernel and the supervisor kernel, to reduce the amount security relevant code. It should be sufficient to audit the supervisor kernel as the the workload kernel should never come into contact with untrusted data.
+
 The supervisor kernel is the only component directly talking to the host. The supervisor kernel is intentionally kept small and is hardended against exploits. It is entirely single-threaded.
+
 The workload kernel cannot access host shared memory and even though it's in theory not impossible for it to communicate to the host through some side-channels, it should be very unlikely that the host can influence the code running in the workload kernel.
 
 ### Tell, Don't Ask
@@ -55,6 +57,7 @@ mushroom could be the basis of a secure remote build system: mushroom could be u
 KVM host support for SEV-SNP has no yet been upstreamed into the Linux kernel. Until then a [custom host kernel](https://github.com/Freax13/linux/tree/snp-host-v9-rfc-with-my-patches) is required.
 
 The host folder contains cargo-make files to simplify the process of running a workload.
+
 To execute a workload use:
 ```shell
 freax13@workstation:~/mushroom/host$ cargo make --profile production run run --input input-file --output output.bin --attestation-report report.bin
@@ -62,7 +65,7 @@ freax13@workstation:~/mushroom/host$ cargo make --profile production run run --i
 2023-07-07T20:45:00.670741Z  INFO mushroom: launched num_launch_pages=16102 num_data_pages=16100 total_launch_duration=16.47807905s
 2023-07-07T20:45:02.570740Z  INFO mushroom: finished
 ```
-The verify the output with attestation report simply swap out the `run` subcommand with `verify`:
+To verify the output with attestation report simply swap out the `run` subcommand with `verify`:
 ```shell
 freax13@workstation:~/mushroom/host$ cargo make --profile production run verify --input input-file --output output.bin --attestation-report report.bin
 [...]
