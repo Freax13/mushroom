@@ -71,3 +71,5 @@ freax13@workstation:~/mushroom/host$ cargo make --profile production run verify 
 [...]
 Ok
 ```
+
+See [tee/init/README.md](./tee/init/README.md) for an example workload.
