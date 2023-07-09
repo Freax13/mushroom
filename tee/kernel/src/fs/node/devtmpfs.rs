@@ -1,5 +1,8 @@
+use core::iter::from_fn;
+
 use alloc::sync::Arc;
-use spin::Mutex;
+use spin::{Lazy, Mutex};
+use x86_64::instructions::random::RdRand;
 
 use crate::{
     error::{Error, Result},
@@ -28,6 +31,13 @@ pub fn new() -> Result<impl Directory> {
     let null_name = FileName::new(b"null").unwrap();
     let null_file = NullFile::new();
     tmp_fs_dir.mount(null_name, Node::File(Arc::new(null_file)))?;
+
+    let random_file = RandomFile::new();
+    let random_file = Arc::new(random_file);
+    let random_name = FileName::new(b"random").unwrap();
+    tmp_fs_dir.mount(random_name, Node::File(random_file.clone()))?;
+    let urandom_name = FileName::new(b"urandom").unwrap();
+    tmp_fs_dir.mount(urandom_name, Node::File(random_file))?;
 
     Ok(tmp_fs_dir)
 }
@@ -133,6 +143,79 @@ impl File for OutputFile {
         supervisor::output(buf);
         guard.offset += buf.len();
 
+        Ok(buf.len())
+    }
+
+    fn read_snapshot(&self) -> Result<FileSnapshot> {
+        Err(Error::inval(()))
+    }
+}
+
+struct RandomFile {
+    ino: u64,
+    internal: Mutex<RandomFileInternal>,
+}
+
+struct RandomFileInternal {
+    mode: FileMode,
+}
+
+impl RandomFile {
+    fn new() -> Self {
+        Self {
+            ino: new_ino(),
+            internal: Mutex::new(RandomFileInternal {
+                mode: FileMode::from_bits_truncate(0o666),
+            }),
+        }
+    }
+}
+
+impl File for RandomFile {
+    fn stat(&self) -> Stat {
+        let guard = self.internal.lock();
+        let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 0,
+            mode,
+            uid: 0,
+            gid: 0,
+            _pad0: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: 0,
+            atime_nsec: 0,
+            mtime: 0,
+            mtime_nsec: 0,
+            ctime: 0,
+            ctime_nsec: 0,
+            _unused: [0; 3],
+        }
+    }
+
+    fn set_mode(&self, mode: FileMode) {
+        self.internal.lock().mode = mode;
+    }
+
+    fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize> {
+        static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
+
+        let random_bytes = from_fn(|| RD_RAND.get_u64()).flat_map(u64::to_ne_bytes);
+
+        let mut len = 0;
+        for (buf, random) in buf.iter_mut().zip(random_bytes) {
+            *buf = random;
+            len += 1;
+        }
+
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize> {
         Ok(buf.len())
     }
 
