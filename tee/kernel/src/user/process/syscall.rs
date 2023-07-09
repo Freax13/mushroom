@@ -14,9 +14,10 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::node::{
-        self, create_directory, create_file, create_link, devtmpfs, hard_link,
-        lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir, unlink_file,
-        Directory, Node, ROOT_NODE,
+        self, create_directory, create_file, create_link,
+        devtmpfs::{self, RandomFile},
+        hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
+        unlink_file, Directory, Node, ROOT_NODE,
     },
     user::process::memory::MemoryPermissions,
 };
@@ -24,9 +25,9 @@ use crate::{
 use self::{
     args::{
         Advice, ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
-        FutexOpWithFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags, OpenFlags,
-        Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, UnlinkOptions,
-        WStatus, WaitOptions, Whence,
+        FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags,
+        OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg,
+        UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -154,6 +155,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
     handlers.register(SysPipe2);
+    handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
 
     handlers
@@ -1476,6 +1478,24 @@ fn pipe2(
     vm_activator.activate(thread.virtual_memory(), |vm| vm.write(pipefd.get(), &bytes))?;
 
     Ok(0)
+}
+
+#[syscall(no = 318)]
+fn getrandom(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    buf: Pointer<c_void>,
+    buflen: u64,
+    flags: GetRandomFlags,
+) -> SyscallResult {
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        let mut len = 0;
+        for (i, random) in (0..buflen).zip(RandomFile::random_bytes()) {
+            vm.write(buf.get() + i, &[random])?;
+            len += 1;
+        }
+        Ok(len)
+    })
 }
 
 #[syscall(no = 326)]

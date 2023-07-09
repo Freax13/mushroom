@@ -614,3 +614,11 @@ impl WStatus {
 bitflags! {
     pub struct MountFlags {}
 }
+
+bitflags! {
+    pub struct GetRandomFlags {
+        const NON_BLOCK = 0x0001;
+        const RANDOM = 0x0002;
+        const INSECURE = 0x0004;
+    }
+}

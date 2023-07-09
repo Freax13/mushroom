@@ -151,7 +151,7 @@ impl File for OutputFile {
     }
 }
 
-struct RandomFile {
+pub struct RandomFile {
     ino: u64,
     internal: Mutex<RandomFileInternal>,
 }
@@ -168,6 +168,11 @@ impl RandomFile {
                 mode: FileMode::from_bits_truncate(0o666),
             }),
         }
+    }
+
+    pub fn random_bytes() -> impl Iterator<Item = u8> {
+        static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
+        from_fn(|| RD_RAND.get_u64()).flat_map(u64::to_ne_bytes)
     }
 }
 
@@ -202,12 +207,8 @@ impl File for RandomFile {
     }
 
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize> {
-        static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
-
-        let random_bytes = from_fn(|| RD_RAND.get_u64()).flat_map(u64::to_ne_bytes);
-
         let mut len = 0;
-        for (buf, random) in buf.iter_mut().zip(random_bytes) {
+        for (buf, random) in buf.iter_mut().zip(Self::random_bytes()) {
             *buf = random;
             len += 1;
         }
