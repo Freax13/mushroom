@@ -19,15 +19,16 @@ use crate::{
         hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
         unlink_file, Directory, Node, ROOT_NODE,
     },
+    time,
     user::process::memory::MemoryPermissions,
 };
 
 use self::{
     args::{
-        Advice, ArchPrctlCode, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode, FutexOp,
-        FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags,
-        OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg,
-        UnlinkOptions, WStatus, WaitOptions, Whence,
+        Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode,
+        FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags,
+        MountFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat,
+        SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -149,6 +150,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFutex);
     handlers.register(SysGetdents64);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysClockGettime);
     handlers.register(SysOpenat);
     handlers.register(SysExitGroup);
     handlers.register(SysFutimesat);
@@ -1317,6 +1319,24 @@ fn getdents64(
 fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallResult {
     thread.clear_child_tid = tidptr.get().as_u64();
     Ok(u64::from(thread.tid()))
+}
+
+#[syscall(no = 228)]
+fn clock_gettime(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    clock_id: ClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    let time = match clock_id {
+        ClockId::Monotonic => time::now(),
+    };
+
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm.write(tp.get(), bytes_of(&time))
+    })?;
+
+    Ok(0)
 }
 
 #[syscall(no = 231)]

@@ -38,6 +38,7 @@ mod panic;
 mod per_cpu;
 mod reset_vector;
 mod supervisor;
+mod time;
 mod user;
 
 /// # Safety

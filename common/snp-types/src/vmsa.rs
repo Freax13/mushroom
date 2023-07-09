@@ -4,6 +4,7 @@ use bit_field::BitArray;
 use bitflags::bitflags;
 use bytemuck::{bytes_of, bytes_of_mut, cast, offset_of, CheckedBitPattern, Pod, Zeroable};
 use paste::paste;
+use x86_64::registers::control::Cr4Flags;
 
 use crate::{Reserved, Uninteresting};
 
@@ -130,7 +131,7 @@ vmsa_def! {
     pub efer: u64 = 0,
     reserved3: Reserved<104> = Reserved::ZERO,
     pub xss: u64 = 0,
-    pub cr4: u64 = 0,
+    pub cr4: u64 = Cr4Flags::TIMESTAMP_DISABLE.bits(),
     pub cr3: u64 = 0,
     pub cr0: u64 = 0,
     pub dr7: u64 = 0x400,

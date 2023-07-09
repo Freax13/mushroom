@@ -241,6 +241,7 @@ impl Pointee for Sigaction {}
 impl Pointee for Sigset {}
 impl Pointee for Stack {}
 impl Pointee for Stat {}
+impl Pointee for Timespec {}
 impl Pointee for u32 {}
 impl Pointee for u64 {}
 impl Pointee for WStatus {}
@@ -621,4 +622,17 @@ bitflags! {
         const RANDOM = 0x0002;
         const INSECURE = 0x0004;
     }
+}
+
+enum_arg! {
+    pub enum ClockId {
+        Monotonic = 1,
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Timespec {
+    pub tv_sec: u64,
+    pub tv_nsec: u64,
 }
