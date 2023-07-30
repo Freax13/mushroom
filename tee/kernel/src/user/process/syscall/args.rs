@@ -626,11 +626,12 @@ bitflags! {
 
 enum_arg! {
     pub enum ClockId {
+        Realtime = 0,
         Monotonic = 1,
     }
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Timespec {
     pub tv_sec: u64,

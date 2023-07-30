@@ -1,7 +1,13 @@
-use core::cell::LazyCell;
+use core::{
+    cell::LazyCell,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use arrayvec::ArrayVec;
-use constants::{FINISH_OUTPUT_MSR, HALT_PORT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR};
+use constants::{
+    FINISH_OUTPUT_MSR, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
+    UPDATE_OUTPUT_MSR,
+};
 use spin::Mutex;
 use x86_64::{
     instructions::port::PortWriteOnly,
@@ -10,7 +16,10 @@ use x86_64::{
     PhysAddr,
 };
 
-use crate::memory::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame};
+use crate::{
+    memory::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame},
+    per_cpu::PerCpu,
+};
 
 pub static ALLOCATOR: Allocator = Allocator::new();
 
@@ -83,17 +92,61 @@ impl FrameDeallocator<Size2MiB> for &'_ Allocator {
     }
 }
 
+static RUNNING_VCPUS: AtomicU64 = AtomicU64::new(1);
+
 /// Halt this vcpu.
-pub fn halt() {
+pub fn halt() -> Result<(), LastRunningVcpuError> {
+    // Ensure that this vCPU isn't the last one running.
+    let mut running_vcpus = RUNNING_VCPUS.load(Ordering::SeqCst);
+    loop {
+        debug_assert_ne!(running_vcpus, 0);
+        if running_vcpus == 1 {
+            return Err(LastRunningVcpuError);
+        }
+        let res = RUNNING_VCPUS.compare_exchange(
+            running_vcpus,
+            running_vcpus - 1,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        match res {
+            Ok(_) => break,
+            Err(new_running_vcpus) => running_vcpus = new_running_vcpus,
+        }
+    }
+
     unsafe {
         PortWriteOnly::new(HALT_PORT).write(0u32);
     }
+
+    Ok(())
 }
+
+/// An error that is returned when the last running vCPU request to be halted.
+#[derive(Debug, Clone, Copy)]
+pub struct LastRunningVcpuError;
 
 /// Tell the supervisor to schedule another vcpu.
 pub fn schedule_vcpu() {
+    RUNNING_VCPUS.fetch_add(1, Ordering::SeqCst);
+
     unsafe {
         PortWriteOnly::new(SCHEDULE_PORT).write(1u32);
+    }
+}
+
+pub fn launch_next_ap() {
+    let idx = PerCpu::get().idx;
+
+    // Check if there are more APs to start.
+    let next_idx = idx + 1;
+    if next_idx < usize::from(MAX_APS_COUNT) {
+        RUNNING_VCPUS.fetch_add(1, Ordering::SeqCst);
+
+        let next_idx = u32::try_from(next_idx).unwrap();
+        unsafe {
+            PortWriteOnly::new(KICK_AP_PORT).write(next_idx);
+        }
     }
 }
 

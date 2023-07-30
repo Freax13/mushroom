@@ -1,6 +1,7 @@
 use core::{
     arch::asm,
     ffi::CStr,
+    mem::replace,
     ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -142,8 +143,9 @@ pub struct ThreadState {
     pub cwd: Path,
     pub vfork_parent: Option<WeakThread>,
 
-    pub waiting_for_child_death: Option<VirtAddr>,
     pub dead_children: VecDeque<(u32, u8)>,
+
+    pub status: ThreadStatus,
 }
 
 impl Thread {
@@ -176,8 +178,8 @@ impl Thread {
                 waiters: Vec::new(),
                 cwd,
                 vfork_parent,
-                waiting_for_child_death: None,
                 dead_children: VecDeque::new(),
+                status: ThreadStatus::Running,
             }),
         }
     }
@@ -377,9 +379,16 @@ impl ThreadGuard<'_> {
                 break;
             }
 
+            assert!(
+                matches!(self.status, ThreadStatus::Running),
+                "thread is not running: {:?}",
+                self.status
+            );
+
             self.run_userspace(vm_activator);
 
-            if !self.execute_syscall(vm_activator) {
+            self.execute_syscall(vm_activator);
+            if !matches!(self.status, ThreadStatus::Running) {
                 break;
             }
         }
@@ -612,7 +621,7 @@ impl ThreadGuard<'_> {
         status: u8,
         vm_activator: &mut VirtualMemoryActivator,
     ) {
-        if let Some(addr) = core::mem::take(&mut self.waiting_for_child_death) {
+        if let ThreadStatus::WaitingForChildDeath { wstatus: addr } = self.status {
             if !addr.is_null() {
                 let wstatus = WStatus::exit(status);
                 vm_activator
@@ -623,12 +632,30 @@ impl ThreadGuard<'_> {
             }
 
             THREADS.remove(tid);
-            self.registers.rax = u64::from(tid);
-            schedule_thread(self.weak().clone());
+            self.complete(Result::Ok(u64::from(tid)));
             return;
         }
 
         self.dead_children.push_back((tid, status));
+    }
+
+    /// Complete a syscall that yielded and schedule the thread.
+    pub fn complete(&mut self, res: Result<u64>) {
+        let old_status = replace(&mut self.status, ThreadStatus::Running);
+        assert!(!matches!(old_status, ThreadStatus::Running));
+
+        match res {
+            Ok(result) => {
+                let is_error = (-4095..=-1).contains(&(result as i64));
+                assert!(!is_error);
+                self.registers.rax = result;
+            }
+            Err(err) => {
+                self.registers.rax = (-(err.kind() as i64)) as u64;
+            }
+        }
+
+        schedule_thread(self.weak().clone());
     }
 }
 
@@ -838,4 +865,15 @@ bitflags! {
 pub struct Waiter {
     pub thread: WeakThread,
     pub wstatus: VirtAddr,
+}
+
+#[derive(Debug)]
+pub enum ThreadStatus {
+    Running,
+    VFork { child: u32 },
+    Exit,
+    WaitingForChildDeath { wstatus: VirtAddr },
+    WaitingForThread,
+    FutexWait,
+    FutexWaitBitset,
 }

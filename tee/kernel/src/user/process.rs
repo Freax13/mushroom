@@ -77,6 +77,10 @@ impl Process {
         let exit_status = self.exit_status.load(Ordering::SeqCst);
         exit_status.get_bit(15).then_some(exit_status as u8)
     }
+
+    pub fn futexes(&self) -> &Futexes {
+        &self.futexes
+    }
 }
 
 pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {

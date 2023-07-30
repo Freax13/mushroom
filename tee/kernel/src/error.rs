@@ -65,6 +65,7 @@ errors! {
     NoSys no_sys 38,
     NameTooLong name_too_long 78,
     Loop r#loop 90,
+    TimedOut timed_out 110,
 }
 
 impl From<TryFromIntError> for Error {

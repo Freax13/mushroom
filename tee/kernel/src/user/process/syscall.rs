@@ -46,7 +46,7 @@ use super::{
     },
     memory::VirtualMemoryActivator,
     thread::{
-        new_tid, schedule_thread, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard,
+        new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, ThreadStatus,
         UserspaceRegisters, Waiter, CHILD_DEATHS, THREADS,
     },
     Process,
@@ -57,7 +57,7 @@ mod traits;
 
 impl ThreadGuard<'_> {
     /// Returns true if the thread should continue to run.
-    pub fn execute_syscall(&mut self, vm_activator: &mut VirtualMemoryActivator) -> bool {
+    pub fn execute_syscall(&mut self, vm_activator: &mut VirtualMemoryActivator) {
         let UserspaceRegisters {
             rax: syscall_no,
             rdi: arg0,
@@ -86,13 +86,13 @@ impl ThreadGuard<'_> {
                 let is_error = (-4095..=-1).contains(&(result as i64));
                 assert!(!is_error);
                 self.registers.rax = result;
-                true
             }
             Err(err) => {
                 self.registers.rax = (-(err.kind() as i64)) as u64;
-                true
             }
-            Yield => false,
+            Yield(status) => {
+                self.status = status;
+            }
         }
     }
 
@@ -363,6 +363,10 @@ fn mmap(
     } else {
         None
     };
+
+    if length > (1 << 47) {
+        return Err(Error::no_mem(()));
+    }
 
     if flags.contains(MmapFlags::SHARED_VALIDATE) {
         todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
@@ -862,9 +866,7 @@ fn vfork(thread: &mut ThreadGuard) -> SyscallResult {
         ))
     })?;
 
-    thread.registers.rax = u64::from(tid);
-
-    Yield
+    Yield(ThreadStatus::VFork { child: tid })
 }
 
 #[syscall(no = 59)]
@@ -911,7 +913,13 @@ fn execve(
     thread.execve(&pathname, &args, &envs, vm_activator)?;
 
     if let Some(vfork_parent) = thread.vfork_parent.take() {
-        schedule_thread(vfork_parent);
+        if let Some(thread) = vfork_parent.upgrade() {
+            let mut guard = thread.lock();
+            let ThreadStatus::VFork { child } = guard.status else {
+                unreachable!();
+            };
+            guard.complete(Result::Ok(u64::from(child)));
+        }
     }
 
     Ok(0)
@@ -942,7 +950,6 @@ fn exit(
                 continue;
             };
             let mut guard = thread.lock();
-            guard.registers.rax = u64::from(thread.tid());
 
             if !addr.is_null() {
                 let wstatus = WStatus::exit(status as u8);
@@ -950,20 +957,26 @@ fn exit(
                     vm.write(addr, bytes_of(&wstatus))
                 })?;
             }
-        }
 
-        schedule_thread(thread);
+            guard.complete(Result::Ok(u64::from(thread.tid())));
+        }
     }
 
     if let Some(vfork_parent) = thread.vfork_parent.take() {
-        schedule_thread(vfork_parent);
+        if let Some(thread) = vfork_parent.upgrade() {
+            let mut guard = thread.lock();
+            let ThreadStatus::VFork { child } = guard.status else {
+                unreachable!();
+            };
+            guard.complete(Result::Ok(u64::from(child)));
+        }
     }
 
     CHILD_DEATHS.add(thread.parent().clone(), thread.tid(), status as u8);
 
     thread.exit_status = Some(status as u8);
 
-    Yield
+    Yield(ThreadStatus::Exit)
 }
 
 #[syscall(no = 61)]
@@ -999,8 +1012,9 @@ fn wait4(
                 return Ok(0);
             }
 
-            thread.waiting_for_child_death = Some(wstatus.get());
-            Yield
+            Yield(ThreadStatus::WaitingForChildDeath {
+                wstatus: wstatus.get(),
+            })
         }
         0 => todo!(),
         1.. => {
@@ -1026,7 +1040,7 @@ fn wait4(
                 wstatus: wstatus.get(),
             });
 
-            Yield
+            Yield(ThreadStatus::WaitingForThread)
         }
     }
 }
@@ -1231,13 +1245,18 @@ fn futex(
             assert_eq!(utime, 0);
 
             vm_activator.activate(thread.virtual_memory(), |vm| {
-                thread
-                    .process()
-                    .futexes
-                    .wait(thread.weak(), uaddr.get(), val, None, vm)
+                thread.process().futexes.wait(
+                    thread.weak(),
+                    thread.process(),
+                    uaddr.get(),
+                    val,
+                    None,
+                    None,
+                    vm,
+                )
             })?;
 
-            Yield
+            Yield(ThreadStatus::FutexWait)
         }
         FutexOp::Wake => {
             let woken = thread.process().futexes.wake(uaddr.get(), val, None);
@@ -1251,17 +1270,31 @@ fn futex(
         FutexOp::UnlockPi => Err(Error::no_sys(())),
         FutexOp::TrylockPi => Err(Error::no_sys(())),
         FutexOp::WaitBitset => {
-            assert_eq!(utime, 0);
             let bitset = NonZeroU32::try_from(val3 as u32)?;
 
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                thread
-                    .process()
-                    .futexes
-                    .wait(thread.weak(), uaddr.get(), val, Some(bitset), vm)
+            vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+                let deadline = if utime != 0 {
+                    let mut time = Timespec::zeroed();
+                    vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
+                    Some(time)
+                } else {
+                    None
+                };
+
+                thread.process().futexes.wait(
+                    thread.weak(),
+                    thread.process(),
+                    uaddr.get(),
+                    val,
+                    Some(bitset),
+                    deadline,
+                    vm,
+                )?;
+
+                Result::Ok(())
             })?;
 
-            Yield
+            Yield(ThreadStatus::FutexWaitBitset)
         }
         FutexOp::WakeBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
@@ -1329,7 +1362,7 @@ fn clock_gettime(
     tp: Pointer<Timespec>,
 ) -> SyscallResult {
     let time = match clock_id {
-        ClockId::Monotonic => time::now(),
+        ClockId::Realtime | ClockId::Monotonic => time::now(),
     };
 
     vm_activator.activate(thread.virtual_memory(), |vm| {

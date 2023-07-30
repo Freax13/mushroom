@@ -10,7 +10,10 @@ use log::{trace, warn};
 use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
-    user::process::{memory::VirtualMemoryActivator, thread::ThreadGuard},
+    user::process::{
+        memory::VirtualMemoryActivator,
+        thread::{ThreadGuard, ThreadStatus},
+    },
 };
 
 use super::args::{Ignored, SyscallArg};
@@ -19,7 +22,7 @@ use super::args::{Ignored, SyscallArg};
 pub enum SyscallResult {
     Ok(u64),
     Err(Error),
-    Yield,
+    Yield(ThreadStatus),
 }
 
 impl<E> FromResidual<Result<Infallible, E>> for SyscallResult

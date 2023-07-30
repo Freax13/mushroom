@@ -425,6 +425,8 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         permissions: MemoryPermissions,
         mut backing: Backing,
     ) -> Result<VirtAddr> {
+        assert!(len < (1 << 47), "mapping of size {len:#x} can never exist");
+
         let mut state = self.state.lock();
 
         let addr = addr.unwrap_or_else(|| state.find_free_address(len));
@@ -542,6 +544,11 @@ impl VirtualMemoryState {
     }
 
     fn find_free_address(&self, size: u64) -> VirtAddr {
+        assert!(
+            size < (1 << 47),
+            "mapping of size {size:#x} can never exist"
+        );
+
         let rdrand = RdRand::new().unwrap();
         const MAX_ATTEMPTS: usize = 64;
         (0..MAX_ATTEMPTS)

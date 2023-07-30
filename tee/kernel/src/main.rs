@@ -13,6 +13,7 @@
     inline_const,
     int_roundings,
     lazy_cell,
+    linked_list_cursors,
     pointer_byte_offsets,
     step_trait,
     trait_upcasting,
@@ -22,10 +23,9 @@
 
 extern crate alloc;
 
-use constants::{KICK_AP_PORT, MAX_APS_COUNT};
 use exception::switch_stack;
 use serial_log::SerialLogger;
-use x86_64::instructions::port::PortWriteOnly;
+use supervisor::launch_next_ap;
 
 use crate::{per_cpu::PerCpu, user::process::memory::VirtualMemoryActivator};
 
@@ -72,17 +72,4 @@ extern "C" fn init() -> ! {
     launch_next_ap();
 
     user::run(&mut vm_activator)
-}
-
-fn launch_next_ap() {
-    let idx = PerCpu::get().idx;
-
-    // Check if there are more APs to start.
-    let next_idx = idx + 1;
-    if next_idx < usize::from(MAX_APS_COUNT) {
-        let next_idx = u32::try_from(next_idx).unwrap();
-        unsafe {
-            PortWriteOnly::new(KICK_AP_PORT).write(next_idx);
-        }
-    }
 }

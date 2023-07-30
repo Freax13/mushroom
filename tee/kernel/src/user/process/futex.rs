@@ -1,15 +1,15 @@
 use core::num::NonZeroU32;
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use bytemuck::bytes_of_mut;
 use spin::Mutex;
 use x86_64::VirtAddr;
 
-use super::{
-    memory::ActiveVirtualMemory,
-    thread::{schedule_thread, WeakThread},
+use super::{memory::ActiveVirtualMemory, syscall::args::Timespec, thread::WeakThread, Process};
+use crate::{
+    error::{Error, Result},
+    time,
 };
-use crate::error::{Error, Result};
 
 pub struct Futexes {
     futexes: Mutex<BTreeMap<VirtAddr, Vec<FutexWaiter>>>,
@@ -22,12 +22,15 @@ impl Futexes {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn wait(
         &self,
         weak_thread: &WeakThread,
+        process: &Arc<Process>,
         uaddr: VirtAddr,
         val: u32,
         bitset: Option<NonZeroU32>,
+        deadline: Option<Timespec>,
         vm: &mut ActiveVirtualMemory,
     ) -> Result<()> {
         let mut current_value = 0;
@@ -50,7 +53,12 @@ impl Futexes {
         guard.entry(uaddr).or_default().push(FutexWaiter {
             weak_thread,
             bitset,
+            deadline,
         });
+
+        if let Some(deadline) = deadline {
+            time::register_futex_timeout(deadline, Arc::downgrade(process));
+        }
 
         Ok(())
     }
@@ -76,11 +84,8 @@ impl Futexes {
                         continue;
                     };
                     let mut guard = thread.lock();
-                    guard.registers.rax = 0;
+                    guard.complete(Ok(0));
                 }
-
-                // Schedule the thread.
-                schedule_thread(waiter.weak_thread.clone());
 
                 // Record that the thread was woken up.
                 woken += 1;
@@ -91,11 +96,26 @@ impl Futexes {
 
         woken
     }
+
+    pub fn fire_timeouts(&self, clock: Timespec) {
+        let mut guard = self.futexes.lock();
+
+        for waiters in guard.values_mut() {
+            for waiter in waiters.drain_filter(|waiter| waiter.expired(clock)) {
+                let Some(thread) = waiter.weak_thread.upgrade() else {
+                    continue;
+                };
+                let mut guard = thread.lock();
+                guard.complete(Err(Error::timed_out(())));
+            }
+        }
+    }
 }
 
 struct FutexWaiter {
     weak_thread: WeakThread,
     bitset: Option<NonZeroU32>,
+    deadline: Option<Timespec>,
 }
 
 impl FutexWaiter {
@@ -104,5 +124,12 @@ impl FutexWaiter {
             (None, None) | (None, Some(_)) | (Some(_), None) => true,
             (Some(lhs), Some(rhs)) => lhs.get() & rhs.get() != 0,
         }
+    }
+
+    pub fn expired(&self, clock: Timespec) -> bool {
+        let Some(deadline) = self.deadline else {
+            return false;
+        };
+        deadline <= clock
     }
 }
