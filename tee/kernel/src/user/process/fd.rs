@@ -1,7 +1,4 @@
-use core::{
-    ops::Deref,
-    sync::atomic::{AtomicI32, Ordering},
-};
+use core::{cmp, ops::Deref};
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use spin::Mutex;
@@ -43,34 +40,50 @@ impl Deref for FileDescriptor {
 }
 
 pub struct FileDescriptorTable {
-    fd_counter: AtomicI32,
     table: Mutex<BTreeMap<i32, FileDescriptor>>,
 }
 
 impl FileDescriptorTable {
     pub fn new() -> Self {
         let this = Self {
-            fd_counter: AtomicI32::new(0),
             table: Mutex::new(BTreeMap::new()),
         };
 
-        let stdin = this.insert(std::Stdin);
+        let stdin = this.insert(std::Stdin).unwrap();
         assert_eq!(stdin.get(), 0);
-        let stdout = this.insert(std::Stdout);
+        let stdout = this.insert(std::Stdout).unwrap();
         assert_eq!(stdout.get(), 1);
-        let stderr = this.insert(std::Stderr);
+        let stderr = this.insert(std::Stderr).unwrap();
         assert_eq!(stderr.get(), 2);
 
         this
     }
 
-    pub fn insert(&self, fd: impl Into<FileDescriptor>) -> FdNum {
-        let fd_num = self.fd_counter.fetch_add(1, Ordering::SeqCst);
-        assert!(fd_num >= 0);
+    pub fn insert(&self, fd: impl Into<FileDescriptor>) -> Result<FdNum> {
+        self.insert_after(0, fd)
+    }
 
-        self.table.lock().insert(fd_num, fd.into());
+    fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptor>, min: i32) -> Result<i32> {
+        const MAX_FD: i32 = i32::MAX;
 
-        FdNum::new(fd_num)
+        let min = cmp::max(0, min);
+
+        let fd_iter = table.keys().copied().skip_while(|i| *i < min);
+        let mut counter_iter = min..MAX_FD;
+
+        fd_iter
+            .zip(counter_iter.by_ref())
+            .find(|(fd, counter)| counter < fd)
+            .map(|(_, counter)| counter)
+            .or_else(|| counter_iter.next())
+            .ok_or_else(|| Error::mfile(()))
+    }
+
+    pub fn insert_after(&self, min: i32, fd: impl Into<FileDescriptor>) -> Result<FdNum> {
+        let mut guard = self.table.lock();
+        let fd_num = Self::find_free_fd_num(&guard, min)?;
+        guard.insert(fd_num, fd.into());
+        Ok(FdNum::new(fd_num))
     }
 
     pub fn replace(&self, fd_num: FdNum, fd: impl Into<FileDescriptor>) {
@@ -101,11 +114,7 @@ impl Clone for FileDescriptorTable {
         // Copy the table.
         let table = self.table.lock().clone();
 
-        // Read the counter. We intentionally do this after copying the table.
-        let fd_counter = self.fd_counter.load(Ordering::SeqCst);
-
         Self {
-            fd_counter: AtomicI32::new(fd_counter),
             table: Mutex::new(table),
         }
     }

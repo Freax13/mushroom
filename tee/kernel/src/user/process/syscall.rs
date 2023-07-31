@@ -233,15 +233,15 @@ fn open(
     let fd = if flags.contains(OpenFlags::WRONLY) {
         thread
             .fdtable()
-            .insert(WriteonlyFileFileDescription::new(file))
+            .insert(WriteonlyFileFileDescription::new(file))?
     } else if flags.contains(OpenFlags::RDWR) {
         thread
             .fdtable()
-            .insert(ReadWriteFileFileDescription::new(file))
+            .insert(ReadWriteFileFileDescription::new(file))?
     } else {
         thread
             .fdtable()
-            .insert(ReadonlyFileFileDescription::new(file))
+            .insert(ReadonlyFileFileDescription::new(file))?
     };
 
     Ok(fd.get() as u64)
@@ -688,7 +688,7 @@ fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
 fn dup(thread: &mut ThreadGuard, fildes: FdNum) -> SyscallResult {
     let fdtable = thread.fdtable();
     let fd = fdtable.get(fildes)?;
-    let newfd = fdtable.insert(fd);
+    let newfd = fdtable.insert(fd)?;
 
     Ok(newfd.get() as u64)
 }
@@ -1375,7 +1375,7 @@ fn openat(
         match node {
             Node::File(_) => Err(Error::not_dir(())),
             Node::Directory(dir) => {
-                let fd = fdtable.insert(DirectoryFileDescription::new(dir));
+                let fd = fdtable.insert(DirectoryFileDescription::new(dir))?;
                 Ok(fd.get() as u64)
             }
             Node::Link(_) => Err(Error::r#loop(())),
@@ -1483,8 +1483,15 @@ fn pipe2(
     let (read_half, write_half) = pipe::new();
 
     let fdtable = thread.fdtable();
-    let read_half = fdtable.insert(read_half);
-    let write_half = fdtable.insert(write_half);
+    // Insert the first read half.
+    let read_half = fdtable.insert(read_half)?;
+    // Insert the second write half.
+    let res = fdtable.insert(write_half);
+    // Ensure that we close the first fd, if inserting the second failed.
+    if res.is_err() {
+        let _ = fdtable.close(read_half);
+    }
+    let write_half = res?;
 
     let mut bytes = [0; 8];
     bytes[0..4].copy_from_slice(&read_half.get().to_ne_bytes());

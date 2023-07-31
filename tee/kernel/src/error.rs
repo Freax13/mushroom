@@ -61,6 +61,7 @@ errors! {
     NotDir not_dir 20,
     IsDir is_dir 21,
     Inval inval 22,
+    Mfile mfile 24,
     NoTty no_tty 25,
     NoSys no_sys 38,
     NameTooLong name_too_long 78,
