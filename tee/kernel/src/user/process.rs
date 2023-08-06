@@ -26,7 +26,7 @@ pub mod thread;
 
 pub struct Process {
     pid: u32,
-    futexes: Futexes,
+    futexes: Arc<Futexes>,
     exit_status: AtomicU16,
 }
 
@@ -34,7 +34,7 @@ impl Process {
     fn new(first_tid: u32) -> Self {
         Self {
             pid: first_tid,
-            futexes: Futexes::new(),
+            futexes: Arc::new(Futexes::new()),
             exit_status: AtomicU16::new(0),
         }
     }
@@ -76,10 +76,6 @@ impl Process {
     pub fn exit_status(&self) -> Option<u8> {
         let exit_status = self.exit_status.load(Ordering::SeqCst);
         exit_status.get_bit(15).then_some(exit_status as u8)
-    }
-
-    pub fn futexes(&self) -> &Futexes {
-        &self.futexes
     }
 }
 

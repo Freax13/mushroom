@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-pub trait SyscallArg: Display + Copy {
+pub trait SyscallArg: Display + Send + Copy {
     fn parse(value: u64) -> Result<Self>;
 
     fn display(
@@ -183,7 +183,7 @@ where
 
 impl<T> SyscallArg for Pointer<T>
 where
-    T: Pointee + ?Sized,
+    T: Pointee + Send + ?Sized,
 {
     fn parse(value: u64) -> Result<Self> {
         Ok(Self {
@@ -258,6 +258,21 @@ impl SyscallArg for u64 {
         _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{value}")
+    }
+}
+
+impl SyscallArg for i64 {
+    fn parse(value: u64) -> Result<Self> {
+        Ok(value as i64)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        _thread: &ThreadGuard<'_>,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        write!(f, "{}", value as i64)
     }
 }
 

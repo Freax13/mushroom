@@ -5,6 +5,7 @@
     alloc_error_handler,
     allocator_api,
     asm_const,
+    async_fn_in_trait,
     const_mut_refs,
     const_pointer_byte_offsets,
     core_intrinsics,
@@ -14,12 +15,15 @@
     int_roundings,
     lazy_cell,
     linked_list_cursors,
+    noop_waker,
     pointer_byte_offsets,
+    return_type_notation,
     step_trait,
     trait_upcasting,
     try_trait_v2
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![allow(incomplete_features)]
 
 extern crate alloc;
 
@@ -37,6 +41,7 @@ mod memory;
 mod panic;
 mod per_cpu;
 mod reset_vector;
+mod rt;
 mod supervisor;
 mod time;
 mod user;

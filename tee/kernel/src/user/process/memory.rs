@@ -7,8 +7,9 @@ use core::{
     sync::atomic::{AtomicU16, Ordering},
 };
 
-use alloc::{borrow::Cow, ffi::CString, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, ffi::CString, vec::Vec};
 use bitflags::bitflags;
+use crossbeam_queue::SegQueue;
 use log::debug;
 use spin::Mutex;
 use x86_64::{
@@ -36,13 +37,40 @@ use crate::{
         },
         temporary::{copy_into_frame, zero_frame},
     },
+    rt::oneshot,
 };
 
 use super::syscall::args::ProtFlags;
 
+type DynVirtualMemoryOp = Box<dyn FnOnce(&mut VirtualMemoryActivator) + Send>;
+static PENDING_VIRTUAL_MEMORY_OPERATIONS: SegQueue<DynVirtualMemoryOp> = SegQueue::new();
+
+/// Returns true if a virtual memory op was executed.
+pub fn do_virtual_memory_op(virtual_memory_activator: &mut VirtualMemoryActivator) -> bool {
+    let Some(op) = PENDING_VIRTUAL_MEMORY_OPERATIONS.pop() else {
+        return false;
+    };
+    op(virtual_memory_activator);
+    true
+}
+
 pub struct VirtualMemoryActivator(());
 
 impl VirtualMemoryActivator {
+    pub async fn r#do<R>(f: impl FnOnce(&mut VirtualMemoryActivator) -> R + Send + 'static) -> R
+    where
+        R: Send + 'static,
+    {
+        let (sender, receiver) = oneshot::new();
+
+        PENDING_VIRTUAL_MEMORY_OPERATIONS.push(Box::new(|virtual_memory_activator| {
+            let result = f(virtual_memory_activator);
+            let _ = sender.send(result);
+        }));
+
+        receiver.recv().await.unwrap()
+    }
+
     pub unsafe fn new() -> Self {
         Self(())
     }

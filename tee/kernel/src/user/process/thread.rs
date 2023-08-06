@@ -1,18 +1,18 @@
 use core::{
     arch::asm,
     ffi::CStr,
-    mem::replace,
+    future::Future,
     ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use alloc::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     sync::{Arc, Weak},
     vec::Vec,
 };
 use bitflags::bitflags;
-use bytemuck::{bytes_of, offset_of, Pod, Zeroable};
+use bytemuck::{offset_of, Pod, Zeroable};
 use log::warn;
 use spin::{Mutex, MutexGuard};
 use x86_64::{
@@ -27,28 +27,21 @@ use crate::{
         path::Path,
     },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
-    supervisor::schedule_vcpu,
+    rt::{mpmc, oneshot, spawn},
 };
 
 use super::{
     fd::FileDescriptorTable,
     memory::{VirtualMemory, VirtualMemoryActivator},
-    syscall::args::{FileMode, WStatus},
+    syscall::args::FileMode,
     Process,
 };
 
 pub static THREADS: Threads = Threads::new();
-static RUNNABLE_THREADS: Mutex<VecDeque<WeakThread>> = Mutex::new(VecDeque::new());
-pub static CHILD_DEATHS: ProcessDeaths = ProcessDeaths::new();
 
 pub fn new_tid() -> u32 {
     static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
     PID_COUNTER.fetch_add(1, Ordering::SeqCst)
-}
-
-pub fn schedule_thread(thread: WeakThread) {
-    RUNNABLE_THREADS.lock().push_back(thread);
-    schedule_vcpu();
 }
 
 pub struct Threads {
@@ -77,44 +70,6 @@ impl Threads {
     }
 }
 
-/// A queue for processing the deaths of processes.
-///
-/// We want to handle deaths outside of a syscall handler to avoid dead-locks.
-pub struct ProcessDeaths {
-    child_deaths: Mutex<Vec<(WeakThread, u32, u8)>>,
-}
-
-impl ProcessDeaths {
-    pub const fn new() -> Self {
-        Self {
-            child_deaths: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// Record the death of a process.
-    pub fn add(&self, parent: WeakThread, child: u32, status: u8) {
-        self.child_deaths.lock().push((parent, child, status));
-    }
-
-    /// Returns true when there is no more work to be done.
-    pub fn process(&self, vm_activator: &mut VirtualMemoryActivator) -> bool {
-        let Some(mut guard) = self.child_deaths.try_lock() else {
-            return false;
-        };
-        guard.retain(|(parent, child, status)| {
-            let Some(parent) = parent.upgrade() else {
-                return false;
-            };
-            let Some(mut guard) = parent.try_lock() else {
-                return true;
-            };
-            guard.process_child_death(*child, *status, vm_activator);
-            false
-        });
-        guard.is_empty()
-    }
-}
-
 pub type WeakThread = Weak<Thread>;
 
 pub struct Thread {
@@ -124,6 +79,7 @@ pub struct Thread {
     parent: WeakThread,
     process: Arc<Process>,
     fdtable: Arc<FileDescriptorTable>,
+    dead_children: mpmc::Receiver<(u32, u8)>,
 
     // Mutable state.
     state: Mutex<ThreadState>,
@@ -141,11 +97,7 @@ pub struct ThreadState {
     pub clear_child_tid: u64,
     pub waiters: Vec<Waiter>,
     pub cwd: Path,
-    pub vfork_parent: Option<WeakThread>,
-
-    pub dead_children: VecDeque<(u32, u8)>,
-
-    pub status: ThreadStatus,
+    pub vfork_done: Option<oneshot::Sender<()>>,
 }
 
 impl Thread {
@@ -158,7 +110,7 @@ impl Thread {
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
         cwd: Path,
-        vfork_parent: Option<WeakThread>,
+        vfork_done: Option<oneshot::Sender<()>>,
     ) -> Self {
         let registers = UserspaceRegisters::DEFAULT;
         Self {
@@ -167,6 +119,7 @@ impl Thread {
             parent,
             process,
             fdtable,
+            dead_children: mpmc::Receiver::new(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
                 registers,
@@ -177,9 +130,7 @@ impl Thread {
                 exit_status: None,
                 waiters: Vec::new(),
                 cwd,
-                vfork_parent,
-                dead_children: VecDeque::new(),
-                status: ThreadStatus::Running,
+                vfork_done,
             }),
         }
     }
@@ -206,9 +157,7 @@ impl Thread {
         // Register the thread.
         let tid = THREADS.add(arc.clone());
 
-        // Schedule the thread.
-        let weak = Arc::downgrade(&arc);
-        schedule_thread(weak);
+        spawn(arc.run());
 
         Ok(tid)
     }
@@ -233,15 +182,47 @@ impl Thread {
         }
     }
 
-    pub fn try_lock(&self) -> Option<ThreadGuard> {
-        Some(ThreadGuard {
-            thread: self,
-            state: self.state.try_lock()?,
-        })
-    }
-
     pub fn tid(&self) -> u32 {
         self.tid
+    }
+
+    pub fn process(&self) -> &Arc<Process> {
+        &self.process
+    }
+
+    pub async fn run(self: Arc<Self>) {
+        loop {
+            if let Some(status) = self.process.exit_status() {
+                let clone = self.clone();
+                VirtualMemoryActivator::r#do(move |vm_activator| {
+                    let mut guard = clone.lock();
+                    guard.exit(vm_activator, status);
+                })
+                .await;
+                break;
+            }
+
+            let clone = self.clone();
+            VirtualMemoryActivator::r#do(move |vm_activator| {
+                let mut guard = clone.lock();
+                guard.run_userspace(vm_activator);
+            })
+            .await;
+
+            self.clone().execute_syscall().await;
+        }
+    }
+
+    pub fn try_wait_for_child_death(&self) -> Option<(u32, u8)> {
+        self.dead_children.try_recv()
+    }
+
+    pub async fn wait_for_child_death(&self) -> (u32, u8) {
+        self.dead_children.recv().await
+    }
+
+    pub fn add_child_death(&self, tid: u32, status: u8) {
+        let _ = self.dead_children.sender().send((tid, status));
     }
 }
 
@@ -262,7 +243,7 @@ impl ThreadGuard<'_> {
         stack: VirtAddr,
         new_clear_child_tid: Option<VirtAddr>,
         new_tls: Option<u64>,
-        vfork_parent: bool,
+        vfork_done: Option<oneshot::Sender<()>>,
     ) -> Thread {
         let process = new_process.unwrap_or_else(|| self.process().clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory().clone());
@@ -275,7 +256,7 @@ impl ThreadGuard<'_> {
             virtual_memory,
             fdtable,
             self.cwd.clone(),
-            vfork_parent.then(|| self.weak().clone()),
+            vfork_done,
         );
 
         let mut guard = thread.lock();
@@ -370,28 +351,6 @@ impl ThreadGuard<'_> {
         self.registers.rip = entry;
 
         Ok(())
-    }
-
-    fn run(&mut self, vm_activator: &mut VirtualMemoryActivator) {
-        loop {
-            if let Some(status) = self.process().exit_status() {
-                self.exit(vm_activator, status);
-                break;
-            }
-
-            assert!(
-                matches!(self.status, ThreadStatus::Running),
-                "thread is not running: {:?}",
-                self.status
-            );
-
-            self.run_userspace(vm_activator);
-
-            self.execute_syscall(vm_activator);
-            if !matches!(self.status, ThreadStatus::Running) {
-                break;
-            }
-        }
     }
 
     fn run_userspace(&mut self, vm_activator: &mut VirtualMemoryActivator) {
@@ -615,47 +574,16 @@ impl ThreadGuard<'_> {
         self.registers = per_cpu.userspace_registers.get();
     }
 
-    pub fn process_child_death(
-        &mut self,
-        tid: u32,
-        status: u8,
-        vm_activator: &mut VirtualMemoryActivator,
-    ) {
-        if let ThreadStatus::WaitingForChildDeath { wstatus: addr } = self.status {
-            if !addr.is_null() {
-                let wstatus = WStatus::exit(status);
-                vm_activator
-                    .activate(self.virtual_memory(), |vm| {
-                        vm.write(addr, bytes_of(&wstatus))
-                    })
-                    .unwrap(); // TODO: Properly handle errors here.
-            }
+    pub fn wait_for_exit(&mut self) -> impl Future<Output = u8> {
+        let (sender, receiver) = oneshot::new();
 
-            THREADS.remove(tid);
-            self.complete(Result::Ok(u64::from(tid)));
-            return;
+        if let Some(exit_status) = self.exit_status {
+            let _ = sender.send(exit_status);
+        } else {
+            self.waiters.push(Waiter { sender });
         }
 
-        self.dead_children.push_back((tid, status));
-    }
-
-    /// Complete a syscall that yielded and schedule the thread.
-    pub fn complete(&mut self, res: Result<u64>) {
-        let old_status = replace(&mut self.status, ThreadStatus::Running);
-        assert!(!matches!(old_status, ThreadStatus::Running));
-
-        match res {
-            Ok(result) => {
-                let is_error = (-4095..=-1).contains(&(result as i64));
-                assert!(!is_error);
-                self.registers.rax = result;
-            }
-            Err(err) => {
-                self.registers.rax = (-(err.kind() as i64)) as u64;
-            }
-        }
-
-        schedule_thread(self.weak().clone());
+        async move { receiver.recv().await.unwrap() }
     }
 }
 
@@ -785,22 +713,6 @@ impl Ymm {
     const ZERO: Self = Self([0; 32]);
 }
 
-/// Returns true if progress was made.
-pub fn run_thread(vm_activator: &mut VirtualMemoryActivator) -> bool {
-    let Some(weak_thread) = RUNNABLE_THREADS.lock().pop_front() else {
-        return false;
-    };
-
-    let Some(thread) = weak_thread.upgrade() else {
-        return true;
-    };
-
-    let mut guard = thread.lock();
-    guard.run(vm_activator);
-
-    true
-}
-
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Sigaction {
@@ -863,17 +775,5 @@ bitflags! {
 }
 
 pub struct Waiter {
-    pub thread: WeakThread,
-    pub wstatus: VirtAddr,
-}
-
-#[derive(Debug)]
-pub enum ThreadStatus {
-    Running,
-    VFork { child: u32 },
-    Exit,
-    WaitingForChildDeath { wstatus: VirtAddr },
-    WaitingForThread,
-    FutexWait,
-    FutexWaitBitset,
+    pub sender: oneshot::Sender<u8>,
 }

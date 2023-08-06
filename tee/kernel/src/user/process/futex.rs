@@ -2,13 +2,18 @@ use core::num::NonZeroU32;
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use bytemuck::bytes_of_mut;
+use futures::{select_biased, FutureExt};
 use spin::Mutex;
 use x86_64::VirtAddr;
 
-use super::{memory::ActiveVirtualMemory, syscall::args::Timespec, thread::WeakThread, Process};
+use super::{
+    memory::{VirtualMemory, VirtualMemoryActivator},
+    syscall::args::Timespec,
+};
 use crate::{
     error::{Error, Result},
-    time,
+    rt::oneshot,
+    time::sleep_until,
 };
 
 pub struct Futexes {
@@ -22,45 +27,56 @@ impl Futexes {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn wait(
-        &self,
-        weak_thread: &WeakThread,
-        process: &Arc<Process>,
+    pub async fn wait(
+        self: Arc<Self>,
         uaddr: VirtAddr,
         val: u32,
         bitset: Option<NonZeroU32>,
         deadline: Option<Timespec>,
-        vm: &mut ActiveVirtualMemory,
+        vm: Arc<VirtualMemory>,
     ) -> Result<()> {
         let mut current_value = 0;
 
-        // Check if the value already changed. This can help avoid taking the lock.
-        vm.read(uaddr, bytes_of_mut(&mut current_value))?;
-        if current_value != val {
-            return Err(Error::again(()));
-        }
+        let receiver = VirtualMemoryActivator::r#do(move |vm_activator| {
+            vm_activator.activate(&vm, |vm| {
+                // Check if the value already changed. This can help avoid taking the lock.
+                vm.read(uaddr, bytes_of_mut(&mut current_value))?;
+                if current_value != val {
+                    return Err(Error::again(()));
+                }
 
-        let mut guard = self.futexes.lock();
+                let mut guard = self.futexes.lock();
 
-        // Now that we've taken the lock, we need to check again.
-        vm.read(uaddr, bytes_of_mut(&mut current_value))?;
-        if current_value != val {
-            return Err(Error::again(()));
-        }
+                // Now that we've taken the lock, we need to check again.
+                vm.read(uaddr, bytes_of_mut(&mut current_value))?;
+                if current_value != val {
+                    return Err(Error::again(()));
+                }
 
-        let weak_thread = weak_thread.clone();
-        guard.entry(uaddr).or_default().push(FutexWaiter {
-            weak_thread,
-            bitset,
-            deadline,
-        });
+                let (sender, receiver) = oneshot::new();
+                guard
+                    .entry(uaddr)
+                    .or_default()
+                    .push(FutexWaiter { sender, bitset });
+
+                Ok(receiver)
+            })
+        })
+        .await?;
 
         if let Some(deadline) = deadline {
-            time::register_futex_timeout(deadline, Arc::downgrade(process));
+            select_biased! {
+                res = receiver.recv().fuse() => {
+                    res.unwrap();
+                    Ok(())
+                }
+                _ = sleep_until(deadline).fuse() => Err(Error::timed_out(())),
+            }
+        } else {
+            let res = receiver.recv().await;
+            res.unwrap();
+            Ok(())
         }
-
-        Ok(())
     }
 
     pub fn wake(&self, uaddr: VirtAddr, num_waiters: u32, bitset: Option<NonZeroU32>) -> u32 {
@@ -74,21 +90,17 @@ impl Futexes {
         if let Some(waiters) = guard.get_mut(&uaddr) {
             let mut drain_iter = waiters.drain_filter(|waiter| waiter.matches_bitset(bitset));
 
-            for waiter in drain_iter
-                .by_ref()
-                .take(usize::try_from(num_waiters).unwrap())
-            {
-                // Write the result to the thread.
-                {
-                    let Some(thread) = waiter.weak_thread.upgrade() else {
-                        continue;
-                    };
-                    let mut guard = thread.lock();
-                    guard.complete(Ok(0));
+            for waiter in drain_iter.by_ref() {
+                // Wake up the thread.
+                if waiter.sender.send(()).is_err() {
+                    // The thread has already canceled the operation.
+                    continue;
                 }
-
                 // Record that the thread was woken up.
                 woken += 1;
+                if woken >= num_waiters {
+                    break;
+                }
             }
 
             drain_iter.keep_rest();
@@ -96,26 +108,11 @@ impl Futexes {
 
         woken
     }
-
-    pub fn fire_timeouts(&self, clock: Timespec) {
-        let mut guard = self.futexes.lock();
-
-        for waiters in guard.values_mut() {
-            for waiter in waiters.drain_filter(|waiter| waiter.expired(clock)) {
-                let Some(thread) = waiter.weak_thread.upgrade() else {
-                    continue;
-                };
-                let mut guard = thread.lock();
-                guard.complete(Err(Error::timed_out(())));
-            }
-        }
-    }
 }
 
 struct FutexWaiter {
-    weak_thread: WeakThread,
+    sender: oneshot::Sender<()>,
     bitset: Option<NonZeroU32>,
-    deadline: Option<Timespec>,
 }
 
 impl FutexWaiter {
@@ -124,12 +121,5 @@ impl FutexWaiter {
             (None, None) | (None, Some(_)) | (Some(_), None) => true,
             (Some(lhs), Some(rhs)) => lhs.get() & rhs.get() != 0,
         }
-    }
-
-    pub fn expired(&self, clock: Timespec) -> bool {
-        let Some(deadline) = self.deadline else {
-            return false;
-        };
-        deadline <= clock
     }
 }

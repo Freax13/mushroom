@@ -70,6 +70,20 @@ fn expand_syscall(
         .attrs
         .push(parse_quote! {#[allow(clippy::too_many_arguments)]});
 
+    let future = if input.sig.asyncness.is_some() {
+        quote! {
+            #syscall_ident(#(#function_invocation_args),*)
+        }
+    } else {
+        quote! {
+            VirtualMemoryActivator::r#do(move |vm_activator| {
+                let mut thread = thread.lock();
+                let thread = &mut thread;
+                #syscall_ident(#(#function_invocation_args),*)
+            })
+        }
+    };
+
     Ok(quote! {
         #input
 
@@ -81,12 +95,12 @@ fn expand_syscall(
 
             #(#arg_associated_items)*
 
-            fn execute(
-                thread: &mut ThreadGuard,
-                vm_activator: &mut VirtualMemoryActivator,
+            async fn execute(
+                thread: Arc<Thread>,
                 #(#function_decl_params,)*
             ) -> SyscallResult {
-                #syscall_ident(#(#function_invocation_args),*)
+                let future = #future;
+                future.await
             }
         }
     })

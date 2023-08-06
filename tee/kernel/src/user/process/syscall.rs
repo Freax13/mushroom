@@ -1,7 +1,7 @@
 use core::{
     cmp,
     ffi::{c_void, CStr},
-    fmt::{self},
+    fmt,
     mem::size_of,
     num::NonZeroU32,
 };
@@ -19,6 +19,7 @@ use crate::{
         hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
         unlink_file, Directory, Node, ROOT_NODE,
     },
+    rt::oneshot,
     time,
     user::process::memory::MemoryPermissions,
 };
@@ -32,7 +33,7 @@ use self::{
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
-        SyscallResult, SyscallResult::*,
+        SyscallResult,
     },
 };
 
@@ -46,8 +47,8 @@ use super::{
     },
     memory::VirtualMemoryActivator,
     thread::{
-        new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, ThreadStatus,
-        UserspaceRegisters, Waiter, CHILD_DEATHS, THREADS,
+        new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, UserspaceRegisters,
+        Waiter, THREADS,
     },
     Process,
 };
@@ -55,9 +56,10 @@ use super::{
 pub mod args;
 mod traits;
 
-impl ThreadGuard<'_> {
+impl Thread {
     /// Returns true if the thread should continue to run.
-    pub fn execute_syscall(&mut self, vm_activator: &mut VirtualMemoryActivator) {
+    pub async fn execute_syscall(self: Arc<Self>) {
+        let guard = self.lock();
         let UserspaceRegisters {
             rax: syscall_no,
             rdi: arg0,
@@ -67,38 +69,31 @@ impl ThreadGuard<'_> {
             r8: arg4,
             r9: arg5,
             ..
-        } = self.registers;
+        } = guard.registers;
+        drop(guard);
 
-        let result = SYSCALL_HANDLERS.execute(
-            self,
-            vm_activator,
-            syscall_no,
-            arg0,
-            arg1,
-            arg2,
-            arg3,
-            arg4,
-            arg5,
-        );
+        let result = SYSCALL_HANDLERS
+            .execute(self.clone(), syscall_no, arg0, arg1, arg2, arg3, arg4, arg5)
+            .await;
 
-        match result {
+        let result = match result {
             Ok(result) => {
                 let is_error = (-4095..=-1).contains(&(result as i64));
                 assert!(!is_error);
-                self.registers.rax = result;
+                result
             }
-            Err(err) => {
-                self.registers.rax = (-(err.kind() as i64)) as u64;
-            }
-            Yield(status) => {
-                self.status = status;
-            }
-        }
-    }
+            Err(err) => (-(err.kind() as i64)) as u64,
+        };
 
+        let mut guard = self.lock();
+        guard.registers.rax = result;
+    }
+}
+
+impl ThreadGuard<'_> {
     /// Execute the exit syscall.
     pub fn exit(&mut self, vm_activator: &mut VirtualMemoryActivator, status: u8) {
-        exit(self, vm_activator, u64::from(status));
+        let _ = exit(self, vm_activator, u64::from(status));
     }
 }
 
@@ -487,34 +482,38 @@ impl Syscall3 for SysRtSigprocmask {
     type Arg2 = Pointer<Sigset>;
     const ARG2_NAME: &'static str = "oldset";
 
-    fn execute(
-        thread: &mut ThreadGuard,
-        vm_activator: &mut VirtualMemoryActivator,
+    async fn execute(
+        thread: Arc<Thread>,
         how: u64,
         set: Pointer<Sigset>,
         oldset: Pointer<Sigset>,
     ) -> SyscallResult {
-        if !oldset.is_null() {
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.write(oldset.get(), bytes_of(&thread.sigmask))
-            })?;
-        }
+        VirtualMemoryActivator::r#do(move |vm_activator| {
+            let mut thread = thread.lock();
 
-        if !set.is_null() {
-            let mut set_value = Sigset::zeroed();
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.read(set.get(), bytes_of_mut(&mut set_value))
-            })?;
-
-            let how = RtSigprocmaskHow::parse(how)?;
-            match how {
-                RtSigprocmaskHow::Block => thread.sigmask |= set_value,
-                RtSigprocmaskHow::Unblock => thread.sigmask &= !set_value,
-                RtSigprocmaskHow::SetMask => thread.sigmask = set_value,
+            if !oldset.is_null() {
+                vm_activator.activate(thread.virtual_memory(), |vm| {
+                    vm.write(oldset.get(), bytes_of(&thread.sigmask))
+                })?;
             }
-        }
 
-        Ok(0)
+            if !set.is_null() {
+                let mut set_value = Sigset::zeroed();
+                vm_activator.activate(thread.virtual_memory(), |vm| {
+                    vm.read(set.get(), bytes_of_mut(&mut set_value))
+                })?;
+
+                let how = RtSigprocmaskHow::parse(how)?;
+                match how {
+                    RtSigprocmaskHow::Block => thread.sigmask |= set_value,
+                    RtSigprocmaskHow::Unblock => thread.sigmask &= !set_value,
+                    RtSigprocmaskHow::SetMask => thread.sigmask = set_value,
+                }
+            }
+
+            Ok(0)
+        })
+        .await
     }
 
     fn display(
@@ -799,7 +798,7 @@ fn clone(
             stack.get(),
             new_clear_child_tid,
             new_tls,
-            false,
+            None,
         );
 
         if flags.contains(CloneFlags::PARENT_SETTID) {
@@ -839,7 +838,7 @@ fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> 
             VirtAddr::zero(),
             None,
             None,
-            true,
+            None,
         ))
     })?;
 
@@ -847,13 +846,16 @@ fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> 
 }
 
 #[syscall(no = 58)]
-fn vfork(thread: &mut ThreadGuard) -> SyscallResult {
+async fn vfork(thread: Arc<Thread>) -> SyscallResult {
+    let (sender, receiver) = oneshot::new();
+
+    let guard = thread.lock();
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
-        let new_fdtable = Arc::new((**thread.fdtable()).clone());
+        let new_fdtable = Arc::new((**guard.fdtable()).clone());
 
-        Result::Ok(thread.clone(
+        Result::Ok(guard.clone(
             new_tid,
             self_weak,
             new_process,
@@ -862,11 +864,14 @@ fn vfork(thread: &mut ThreadGuard) -> SyscallResult {
             VirtAddr::zero(),
             None,
             None,
-            true,
+            Some(sender),
         ))
     })?;
+    drop(guard);
 
-    Yield(ThreadStatus::VFork { child: tid })
+    let _ = receiver.recv().await;
+
+    Ok(u64::from(tid))
 }
 
 #[syscall(no = 59)]
@@ -912,14 +917,8 @@ fn execve(
 
     thread.execve(&pathname, &args, &envs, vm_activator)?;
 
-    if let Some(vfork_parent) = thread.vfork_parent.take() {
-        if let Some(thread) = vfork_parent.upgrade() {
-            let mut guard = thread.lock();
-            let ThreadStatus::VFork { child } = guard.status else {
-                unreachable!();
-            };
-            guard.complete(Result::Ok(u64::from(child)));
-        }
+    if let Some(vfork_parent) = thread.vfork_done.take() {
+        let _ = vfork_parent.send(());
     }
 
     Ok(0)
@@ -931,6 +930,8 @@ fn exit(
     vm_activator: &mut VirtualMemoryActivator,
     status: u64,
 ) -> SyscallResult {
+    let status = status as u8;
+
     if thread.clear_child_tid != 0 {
         let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
         vm_activator.activate(thread.virtual_memory(), |vm| {
@@ -940,50 +941,22 @@ fn exit(
         thread.process().futexes.wake(clear_child_tid, 1, None);
     }
 
-    for Waiter {
-        thread,
-        wstatus: addr,
-    } in core::mem::take(&mut thread.waiters)
-    {
-        {
-            let Some(thread) = thread.upgrade() else {
-                continue;
-            };
-            let mut guard = thread.lock();
-
-            if !addr.is_null() {
-                let wstatus = WStatus::exit(status as u8);
-                vm_activator.activate(guard.virtual_memory(), |vm| {
-                    vm.write(addr, bytes_of(&wstatus))
-                })?;
-            }
-
-            guard.complete(Result::Ok(u64::from(thread.tid())));
-        }
+    for Waiter { sender } in core::mem::take(&mut thread.waiters) {
+        let _ = sender.send(status);
     }
 
-    if let Some(vfork_parent) = thread.vfork_parent.take() {
-        if let Some(thread) = vfork_parent.upgrade() {
-            let mut guard = thread.lock();
-            let ThreadStatus::VFork { child } = guard.status else {
-                unreachable!();
-            };
-            guard.complete(Result::Ok(u64::from(child)));
-        }
+    if let Some(parent) = thread.parent().upgrade() {
+        parent.add_child_death(thread.tid(), status);
     }
+    thread.exit_status = Some(status);
 
-    CHILD_DEATHS.add(thread.parent().clone(), thread.tid(), status as u8);
-
-    thread.exit_status = Some(status as u8);
-
-    Yield(ThreadStatus::Exit)
+    Ok(0)
 }
 
 #[syscall(no = 61)]
-fn wait4(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
-    pid: u64,
+async fn wait4(
+    thread: Arc<Thread>,
+    pid: i64,
     wstatus: Pointer<WStatus>, // FIXME: use correct type
     options: WaitOptions,
     rusage: Pointer<c_void>, // FIXME: use correct type
@@ -992,57 +965,47 @@ fn wait4(
         todo!()
     }
 
-    match pid as i64 {
+    let (tid, status) = match pid {
         ..=-2 => todo!(),
         -1 => {
-            if let Some((dead_child, status)) = thread.dead_children.pop_front() {
-                if !wstatus.is_null() {
-                    let addr = wstatus.get();
-                    let wstatus = WStatus::exit(status);
-                    vm_activator.activate(thread.virtual_memory(), |vm| {
-                        vm.write(addr, bytes_of(&wstatus))
-                    })?;
-                }
-
-                THREADS.remove(dead_child);
-                return Ok(u64::from(dead_child));
-            }
-
             if options.contains(WaitOptions::NOHANG) {
-                return Ok(0);
+                let Some((tid, status)) = thread.try_wait_for_child_death() else {
+                    return Ok(0);
+                };
+                (tid, status)
+            } else {
+                thread.wait_for_child_death().await
             }
-
-            Yield(ThreadStatus::WaitingForChildDeath {
-                wstatus: wstatus.get(),
-            })
         }
         0 => todo!(),
         1.. => {
             let t = THREADS.by_id(pid as u32).ok_or_else(|| Error::child(()))?;
 
             let mut guard = t.lock();
-            if let Some(status) = guard.exit_status {
-                if !wstatus.is_null() {
-                    let addr = wstatus.get();
-                    let wstatus = WStatus::exit(status);
-                    vm_activator.activate(thread.virtual_memory(), |vm| {
-                        vm.write(addr, bytes_of(&wstatus))
-                    })?;
-                }
+            let fut = guard.wait_for_exit();
+            drop(guard);
 
-                // Return immediately for dead tasks.
-                THREADS.remove(t.tid());
-                return Ok(u64::from(t.tid()));
-            }
-
-            guard.waiters.push(Waiter {
-                thread: thread.weak().clone(),
-                wstatus: wstatus.get(),
-            });
-
-            Yield(ThreadStatus::WaitingForThread)
+            let status = fut.await;
+            (t.tid(), status)
         }
+    };
+
+    if !wstatus.is_null() {
+        let addr = wstatus.get();
+        let wstatus = WStatus::exit(status);
+
+        VirtualMemoryActivator::r#do(move |vm_activator| {
+            let guard = thread.lock();
+            vm_activator.activate(guard.virtual_memory(), |vm| {
+                vm.write(addr, bytes_of(&wstatus))
+            })
+        })
+        .await?;
     }
+
+    THREADS.remove(tid);
+
+    Ok(u64::from(tid))
 }
 
 #[syscall(no = 72)]
@@ -1230,9 +1193,8 @@ fn gettid(thread: &mut ThreadGuard) -> SyscallResult {
 }
 
 #[syscall(no = 202)]
-fn futex(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
+async fn futex(
+    thread: Arc<Thread>,
     uaddr: Pointer<c_void>,
     op: FutexOpWithFlags,
     val: u32,
@@ -1244,19 +1206,16 @@ fn futex(
         FutexOp::Wait => {
             assert_eq!(utime, 0);
 
-            vm_activator.activate(thread.virtual_memory(), |vm| {
-                thread.process().futexes.wait(
-                    thread.weak(),
-                    thread.process(),
-                    uaddr.get(),
-                    val,
-                    None,
-                    None,
-                    vm,
-                )
-            })?;
+            let vm = thread.lock().virtual_memory().clone();
 
-            Yield(ThreadStatus::FutexWait)
+            thread
+                .process()
+                .futexes
+                .clone()
+                .wait(uaddr.get(), val, None, None, vm)
+                .await?;
+
+            Ok(0)
         }
         FutexOp::Wake => {
             let woken = thread.process().futexes.wake(uaddr.get(), val, None);
@@ -1272,29 +1231,31 @@ fn futex(
         FutexOp::WaitBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
 
-            vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
-                let deadline = if utime != 0 {
-                    let mut time = Timespec::zeroed();
-                    vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
-                    Some(time)
-                } else {
-                    None
-                };
+            let vm = thread.lock().virtual_memory().clone();
 
-                thread.process().futexes.wait(
-                    thread.weak(),
-                    thread.process(),
-                    uaddr.get(),
-                    val,
-                    Some(bitset),
-                    deadline,
-                    vm,
-                )?;
+            let deadline = if utime != 0 {
+                let vm = vm.clone();
+                let deadline = VirtualMemoryActivator::r#do(move |vm_activator| {
+                    vm_activator.activate(&vm, |vm| -> Result<_> {
+                        let mut time = Timespec::zeroed();
+                        vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
+                        Ok(time)
+                    })
+                })
+                .await?;
+                Some(deadline)
+            } else {
+                None
+            };
 
-                Result::Ok(())
-            })?;
+            thread
+                .process()
+                .futexes
+                .clone()
+                .wait(uaddr.get(), val, Some(bitset), deadline, vm)
+                .await?;
 
-            Yield(ThreadStatus::FutexWaitBitset)
+            Ok(0)
         }
         FutexOp::WakeBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;

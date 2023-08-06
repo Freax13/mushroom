@@ -1,28 +1,12 @@
 //! We don't expose the real time to userspace, we simulate it.
 
-use alloc::{collections::LinkedList, sync::Weak};
+use alloc::collections::BinaryHeap;
 use log::debug;
-use spin::Mutex;
+use spin::{Lazy, Mutex};
 
-use crate::user::process::{syscall::args::Timespec, Process};
+use crate::{rt::oneshot, user::process::syscall::args::Timespec};
 
-static STATE: Mutex<State> = Mutex::new(State::new());
-static EXPIRED_TIMEOUTS: Mutex<LinkedList<Timeout>> = Mutex::new(LinkedList::new());
-
-/// Returns true if a timeout was fired.
-pub fn fire_expired_timeout() -> bool {
-    // Try to pop a expired timeout.
-    let mut guard = EXPIRED_TIMEOUTS.lock();
-    let Some(timeout) = guard.pop_front() else {
-        return false;
-    };
-    drop(guard);
-
-    // Fire the timeout.
-    timeout.fire();
-
-    true
-}
+static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::new()));
 
 pub fn advance_time() -> Result<(), NoTimeoutScheduledError> {
     debug!("advancing simulated time");
@@ -37,15 +21,15 @@ pub struct NoTimeoutScheduledError;
 /// The global state of the simulated time.
 struct State {
     clock: u64,
-    timeouts: LinkedList<Timeout>,
+    timeouts: BinaryHeap<Timeout>,
 }
 
 impl State {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             // Start at 1 second.
             clock: 1000,
-            timeouts: LinkedList::new(),
+            timeouts: BinaryHeap::new(),
         }
     }
 
@@ -56,23 +40,13 @@ impl State {
     fn advance_to(&mut self, clock: u64) {
         self.clock = clock;
 
-        let mut cursor = self.timeouts.cursor_front_mut();
-        // Go forward to the first timeout that has not expired.
-        while let Some(current) = cursor.current() {
-            if !current.has_expired(self.clock) {
+        while let Some(first) = self.timeouts.peek() {
+            if !first.has_expired(clock) {
                 break;
-            }
-            cursor.move_next();
+            };
+            let first = self.timeouts.pop().unwrap();
+            first.fire();
         }
-
-        // Split off the chunk that contains timeouts that have expired.
-        let mut before = cursor.split_before();
-        if before.is_empty() {
-            return;
-        }
-
-        let mut guard = EXPIRED_TIMEOUTS.lock();
-        guard.append(&mut before);
     }
 
     pub fn now(&mut self) -> Timespec {
@@ -82,7 +56,7 @@ impl State {
     }
 
     fn advance_to_next_timeout(&mut self) -> Result<(), NoTimeoutScheduledError> {
-        let timeout = self.timeouts.front().ok_or(NoTimeoutScheduledError)?;
+        let timeout = self.timeouts.peek().ok_or(NoTimeoutScheduledError)?;
         self.advance_to(timeout.time);
         Ok(())
     }
@@ -90,21 +64,11 @@ impl State {
     fn add_timeout(&mut self, timeout: Timeout) {
         // Immediatly queue expired timeouts.
         if timeout.has_expired(self.clock) {
-            let mut guard = EXPIRED_TIMEOUTS.lock();
-            guard.push_back(timeout);
+            timeout.fire();
             return;
         }
 
-        // Go forward to the first timeout not before `timeout`.
-        let mut cursor = self.timeouts.cursor_front_mut();
-        while let Some(current) = cursor.current() {
-            if current.time >= timeout.time {
-                break;
-            }
-            cursor.move_next();
-        }
-
-        cursor.insert_before(timeout);
+        self.timeouts.push(timeout);
     }
 }
 
@@ -114,7 +78,7 @@ pub fn now() -> Timespec {
 
 struct Timeout {
     time: u64,
-    action: Action,
+    sender: oneshot::Sender<()>,
 }
 
 impl Timeout {
@@ -123,22 +87,27 @@ impl Timeout {
     }
 
     pub fn fire(self) {
-        let time = Timespec::from_ms(self.time);
-
-        match self.action {
-            Action::WakeFutex { process } => {
-                let Some(process) = process.upgrade() else {
-                    return;
-                };
-
-                process.futexes().fire_timeouts(time);
-            }
-        }
+        let _ = self.sender.send(());
     }
 }
 
-enum Action {
-    WakeFutex { process: Weak<Process> },
+impl PartialEq for Timeout {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time
+    }
+}
+impl Eq for Timeout {}
+
+impl PartialOrd for Timeout {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Timeout {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.time.cmp(&other.time).reverse()
+    }
 }
 
 impl Timespec {
@@ -154,10 +123,15 @@ impl Timespec {
     }
 }
 
-pub fn register_futex_timeout(time: Timespec, process: Weak<Process>) {
+pub async fn sleep_until(deadline: Timespec) {
+    let (sender, receiver) = oneshot::new();
+
     let mut guard = STATE.lock();
     guard.add_timeout(Timeout {
-        time: time.into_ms(),
-        action: Action::WakeFutex { process },
+        time: deadline.into_ms(),
+        sender,
     });
+    drop(guard);
+
+    receiver.recv().await.unwrap();
 }
