@@ -1,7 +1,6 @@
 use core::{
     arch::asm,
     ffi::CStr,
-    future::Future,
     ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -9,11 +8,10 @@ use core::{
 use alloc::{
     collections::BTreeMap,
     sync::{Arc, Weak},
-    vec::Vec,
 };
 use bitflags::bitflags;
 use bytemuck::{offset_of, Pod, Zeroable};
-use log::warn;
+use futures::{select_biased, FutureExt};
 use spin::{Mutex, MutexGuard};
 use x86_64::{
     registers::segmentation::{Segment64, FS},
@@ -27,7 +25,7 @@ use crate::{
         path::Path,
     },
     per_cpu::{PerCpu, KERNEL_REGISTERS_OFFSET, USERSPACE_REGISTERS_OFFSET},
-    rt::{mpmc, oneshot, spawn},
+    rt::{mpmc, once::OnceCell, oneshot, spawn},
 };
 
 use super::{
@@ -80,6 +78,7 @@ pub struct Thread {
     process: Arc<Process>,
     fdtable: Arc<FileDescriptorTable>,
     dead_children: mpmc::Receiver<(u32, u8)>,
+    exit_status: OnceCell<u8>,
 
     // Mutable state.
     state: Mutex<ThreadState>,
@@ -93,9 +92,7 @@ pub struct ThreadState {
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
-    pub exit_status: Option<u8>,
     pub clear_child_tid: u64,
-    pub waiters: Vec<Waiter>,
     pub cwd: Path,
     pub vfork_done: Option<oneshot::Sender<()>>,
 }
@@ -120,6 +117,7 @@ impl Thread {
             process,
             fdtable,
             dead_children: mpmc::Receiver::new(),
+            exit_status: OnceCell::new(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
                 registers,
@@ -127,8 +125,6 @@ impl Thread {
                 sigaction: [Sigaction::DEFAULT; 64],
                 sigaltstack: None,
                 clear_child_tid: 0,
-                exit_status: None,
-                waiters: Vec::new(),
                 cwd,
                 vfork_done,
             }),
@@ -191,26 +187,38 @@ impl Thread {
     }
 
     pub async fn run(self: Arc<Self>) {
-        loop {
-            if let Some(status) = self.process.exit_status() {
+        let thread_exit_future = self.exit_status.get();
+        let process_exit_future = self.process.exit_status();
+        let run_future = async {
+            loop {
                 let clone = self.clone();
                 VirtualMemoryActivator::r#do(move |vm_activator| {
                     let mut guard = clone.lock();
-                    guard.exit(vm_activator, status);
+                    guard.run_userspace(vm_activator);
                 })
                 .await;
-                break;
+
+                self.clone().execute_syscall().await;
             }
+        };
 
-            let clone = self.clone();
-            VirtualMemoryActivator::r#do(move |vm_activator| {
-                let mut guard = clone.lock();
-                guard.run_userspace(vm_activator);
-            })
-            .await;
-
-            self.clone().execute_syscall().await;
+        select_biased! {
+            _ = thread_exit_future.fuse() => {}
+            status = process_exit_future.fuse() => self.clone().exit(status).await,
+            _ = run_future.fuse() => unreachable!(),
         }
+    }
+
+    async fn exit(self: Arc<Self>, status: u8) {
+        VirtualMemoryActivator::r#do(move |vm_activator| {
+            let mut guard = self.lock();
+            guard.exit(vm_activator, status)
+        })
+        .await
+    }
+
+    pub async fn wait_for_exit(&self) -> u8 {
+        *self.exit_status.get().await
     }
 
     pub fn try_wait_for_child_death(&self) -> Option<(u32, u8)> {
@@ -574,16 +582,8 @@ impl ThreadGuard<'_> {
         self.registers = per_cpu.userspace_registers.get();
     }
 
-    pub fn wait_for_exit(&mut self) -> impl Future<Output = u8> {
-        let (sender, receiver) = oneshot::new();
-
-        if let Some(exit_status) = self.exit_status {
-            let _ = sender.send(exit_status);
-        } else {
-            self.waiters.push(Waiter { sender });
-        }
-
-        async move { receiver.recv().await.unwrap() }
+    pub fn set_exit_status(&self, status: u8) {
+        self.thread.exit_status.set(status);
     }
 }
 
@@ -598,20 +598,6 @@ impl Deref for ThreadGuard<'_> {
 impl DerefMut for ThreadGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
-    }
-}
-
-impl Drop for Thread {
-    fn drop(&mut self) {
-        let guard = self.lock();
-
-        if !guard.waiters.is_empty() {
-            warn!(
-                "thread {} exited with {} waiter(s)",
-                self.tid,
-                guard.waiters.len(),
-            );
-        }
     }
 }
 
@@ -772,8 +758,4 @@ bitflags! {
         const DISABLE = 1 << 1;
         const AUTODISARM = 1 << 31;
     }
-}
-
-pub struct Waiter {
-    pub sender: oneshot::Sender<u8>,
 }

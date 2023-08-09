@@ -48,7 +48,7 @@ use super::{
     memory::VirtualMemoryActivator,
     thread::{
         new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, UserspaceRegisters,
-        Waiter, THREADS,
+        THREADS,
     },
     Process,
 };
@@ -941,14 +941,10 @@ fn exit(
         thread.process().futexes.wake(clear_child_tid, 1, None);
     }
 
-    for Waiter { sender } in core::mem::take(&mut thread.waiters) {
-        let _ = sender.send(status);
-    }
-
     if let Some(parent) = thread.parent().upgrade() {
         parent.add_child_death(thread.tid(), status);
     }
-    thread.exit_status = Some(status);
+    thread.set_exit_status(status);
 
     Ok(0)
 }
@@ -980,12 +976,7 @@ async fn wait4(
         0 => todo!(),
         1.. => {
             let t = THREADS.by_id(pid as u32).ok_or_else(|| Error::child(()))?;
-
-            let mut guard = t.lock();
-            let fut = guard.wait_for_exit();
-            drop(guard);
-
-            let status = fut.await;
+            let status = t.wait_for_exit().await;
             (t.tid(), status)
         }
     };
@@ -1334,13 +1325,10 @@ fn clock_gettime(
 }
 
 #[syscall(no = 231)]
-fn exit_group(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
-    status: u64,
-) -> SyscallResult {
-    let status = thread.process().exit(status as u8);
-    exit(thread, vm_activator, u64::from(status))
+async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
+    let process = thread.process().clone();
+    process.exit(status as u8);
+    core::future::pending().await
 }
 
 #[syscall(no = 257)]

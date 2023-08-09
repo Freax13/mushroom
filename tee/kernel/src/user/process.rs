@@ -1,13 +1,10 @@
-use core::{
-    ffi::CStr,
-    sync::atomic::{AtomicU16, Ordering},
-};
+use core::ffi::CStr;
 
 use alloc::{borrow::Cow, sync::Arc};
-use bit_field::BitField;
 
 use crate::{
     fs::{node::FileSnapshot, INIT},
+    rt::once::OnceCell,
     supervisor,
 };
 
@@ -27,7 +24,7 @@ pub mod thread;
 pub struct Process {
     pid: u32,
     futexes: Arc<Futexes>,
-    exit_status: AtomicU16,
+    exit_status: OnceCell<u8>,
 }
 
 impl Process {
@@ -35,7 +32,7 @@ impl Process {
         Self {
             pid: first_tid,
             futexes: Arc::new(Futexes::new()),
-            exit_status: AtomicU16::new(0),
+            exit_status: OnceCell::new(),
         }
     }
 
@@ -54,28 +51,11 @@ impl Process {
             }
         }
 
-        let mut encoded_exit_status = u16::from(exit_status);
-        encoded_exit_status.set_bit(15, true);
-
-        let res = self.exit_status.compare_exchange(
-            0,
-            encoded_exit_status,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-
-        match res {
-            Ok(_) => exit_status,
-            Err(exit_status) => {
-                assert!(exit_status.get_bit(15));
-                exit_status as u8
-            }
-        }
+        *self.exit_status.set(exit_status)
     }
 
-    pub fn exit_status(&self) -> Option<u8> {
-        let exit_status = self.exit_status.load(Ordering::SeqCst);
-        exit_status.get_bit(15).then_some(exit_status as u8)
+    pub async fn exit_status(&self) -> u8 {
+        *self.exit_status.get().await
     }
 }
 
