@@ -599,7 +599,7 @@ impl SyscallHandlers {
             })?;
 
         // Whether the syscall should occur in the debug logs.
-        let enable_log = !matches!(syscall_no, 0 | 1) && thread.tid() != 1;
+        let enable_log = !matches!(syscall_no, 0 | 1 | 202 | 228) && thread.tid() != 1;
 
         let res = (handler.execute)(thread.clone(), arg0, arg1, arg2, arg3, arg4, arg5).await;
 
