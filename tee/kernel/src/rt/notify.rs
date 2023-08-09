@@ -4,11 +4,12 @@
 
 use core::{
     future::Future,
+    ops::Deref,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 use spin::mutex::SpinMutex;
 
 pub struct Notify {
@@ -75,5 +76,22 @@ impl Notify {
         for waker in guard.wakers.drain(..) {
             waker.wake();
         }
+    }
+}
+
+/// A wrapper around `Arc<Notify>` that sends a notification when it's dropped.
+pub struct NotifyOnDrop(pub Arc<Notify>);
+
+impl Deref for NotifyOnDrop {
+    type Target = Notify;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        self.0.notify();
     }
 }
