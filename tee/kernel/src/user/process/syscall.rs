@@ -27,11 +27,11 @@ use crate::{
 
 use self::{
     args::{
-        Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, EpollCreate1Flags,
+        Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, Domain, EpollCreate1Flags,
         EpollCtlOp, EpollEvent, EventFdFlags, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags,
         GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags, OpenFlags,
-        Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, Timespec,
-        UnlinkOptions, WStatus, WaitOptions, Whence,
+        Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SocketPairType, Stat, SyscallArg,
+        Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -48,7 +48,9 @@ use super::{
         file::{
             ReadWriteFileFileDescription, ReadonlyFileFileDescription, WriteonlyFileFileDescription,
         },
-        pipe, Events,
+        pipe,
+        unix_socket::UnixSocket,
+        Events,
     },
     memory::VirtualMemoryActivator,
     thread::{
@@ -131,6 +133,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
+    handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysFork);
     handlers.register(SysVfork);
@@ -749,6 +752,47 @@ async fn sendfile(
 
     let len = u64::try_from(total_len)?;
     Ok(len)
+}
+
+#[syscall(no = 53)]
+fn socketpair(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    domain: Domain,
+    r#type: SocketPairType,
+    protocol: i32,
+    sv: Pointer<[FdNum; 2]>,
+) -> SyscallResult {
+    let res1;
+    let res2;
+
+    match domain {
+        Domain::Unix => {
+            if protocol != 0 {
+                return Err(Error::inval(()));
+            }
+
+            let (half1, half2) = UnixSocket::new_pair();
+            res1 = thread.fdtable().insert(half1);
+            res2 = thread.fdtable().insert(half2);
+        }
+    }
+
+    // Make sure we don't leak a file descriptor if inserting the other one failed.
+    let (fd1, fd2) = match (res1, res2) {
+        (Result::Ok(fd1), Result::Ok(fd2)) => (fd1, fd2),
+        (Result::Ok(fd), Result::Err(err)) | (Result::Err(err), Result::Ok(fd)) => {
+            let _ = thread.fdtable().close(fd);
+            return Err(err);
+        }
+        (Result::Err(err), Result::Err(_)) => return Err(err),
+    };
+
+    vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm.write(sv.get(), bytes_of(&[fd1.get(), fd2.get()]))
+    })?;
+
+    Ok(0)
 }
 
 #[syscall(no = 56)]

@@ -22,6 +22,7 @@ pub mod eventfd;
 pub mod file;
 pub mod pipe;
 mod std;
+pub mod unix_socket;
 
 #[derive(Clone)]
 pub struct FileDescriptor(Arc<dyn OpenFileDescription>);

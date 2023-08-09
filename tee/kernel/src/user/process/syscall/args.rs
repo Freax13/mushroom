@@ -673,6 +673,21 @@ pub struct Timespec {
 }
 
 enum_arg! {
+    pub enum Domain {
+        Unix = 1,
+    }
+}
+
+bitflags! {
+    pub struct SocketPairType {
+        const STREAM = 1;
+
+        const NON_BLOCK = 0x800;
+        const CLOEXEC = 0x8_0000;
+    }
+}
+
+enum_arg! {
     pub enum EpollCtlOp {
         Add = 1,
     }
