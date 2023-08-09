@@ -6,9 +6,10 @@ use core::{
     num::NonZeroU32,
 };
 
-use alloc::{sync::Arc, vec::Vec};
-use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
+use alloc::{sync::Arc, vec, vec::Vec};
+use bytemuck::{bytes_of, bytes_of_mut, checked::try_pod_read_unaligned, Zeroable};
 use kernel_macros::syscall;
+use log::debug;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -26,10 +27,11 @@ use crate::{
 
 use self::{
     args::{
-        Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, FcntlCmd, FdNum, FileMode,
-        FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags,
-        MountFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat,
-        SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, EpollCreate1Flags,
+        EpollCtlOp, EpollEvent, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags,
+        GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags, OpenFlags,
+        Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, Timespec,
+        UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{
         Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
@@ -40,10 +42,12 @@ use self::{
 use super::{
     fd::{
         dir::DirectoryFileDescription,
+        do_io,
+        epoll::Epoll,
         file::{
             ReadWriteFileFileDescription, ReadonlyFileFileDescription, WriteonlyFileFileDescription,
         },
-        pipe,
+        pipe, Events,
     },
     memory::VirtualMemoryActivator,
     thread::{
@@ -148,9 +152,12 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysClockGettime);
     handlers.register(SysOpenat);
     handlers.register(SysExitGroup);
+    handlers.register(SysEpollWait);
+    handlers.register(SysEpollCtl);
     handlers.register(SysFutimesat);
     handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
+    handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
@@ -159,53 +166,47 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 };
 
 #[syscall(no = 0)]
-fn read(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
-    fd: FdNum,
-    buf: Pointer<[u8]>,
-    count: u64,
-) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+async fn read(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -> SyscallResult {
+    let guard = thread.lock();
+    let fd = guard.fdtable().get(fd)?;
+    let virtual_memory = guard.virtual_memory().clone();
+    drop(guard);
 
     let buf = buf.get();
     let count = usize::try_from(count)?;
 
-    let mut chunk = [0u8; 8192];
-    let max_chunk_len = chunk.len();
-    let len = cmp::min(max_chunk_len, count);
-    let chunk = &mut chunk[..len];
+    let len = cmp::min(count, 8192);
+    let mut buffer = vec![0; len];
+    let len = do_io(&*fd, Events::READ, || fd.read(&mut buffer)).await?;
+    buffer.truncate(len);
 
-    let len = fd.read(chunk)?;
-    let chunk = &chunk[..len];
+    VirtualMemoryActivator::r#do(move |vm_activator| {
+        vm_activator.activate(&virtual_memory, |vm| vm.write(buf, &buffer))
+    })
+    .await?;
 
-    vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
-
-    let len = u64::try_from(len)?;
-
-    Ok(len)
+    Ok(len.try_into()?)
 }
 
 #[syscall(no = 1)]
-fn write(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
-    fd: FdNum,
-    buf: Pointer<[u8]>,
-    count: u64,
-) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+async fn write(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -> SyscallResult {
+    let guard = thread.lock();
+    let fd = guard.fdtable().get(fd)?;
+    let virtual_memory = guard.virtual_memory().clone();
+    drop(guard);
 
     let buf = buf.get();
     let count = usize::try_from(count)?;
+    let len = cmp::min(8192, count);
+    let mut chunk = vec![0u8; len];
 
-    let mut chunk = [0u8; 8192];
-    let max_chunk_len = chunk.len();
-    let len = cmp::min(max_chunk_len, count);
-    let chunk = &mut chunk[..len];
-    vm_activator.activate(thread.virtual_memory(), |vm| vm.read(buf, chunk))?;
+    let chunk = VirtualMemoryActivator::r#do(move |vm_activator| -> Result<_> {
+        vm_activator.activate(&virtual_memory, |vm| vm.read(buf, &mut chunk))?;
+        Ok(chunk)
+    })
+    .await?;
 
-    let len = fd.write(chunk)?;
+    let len = do_io(&*fd, Events::WRITE, || fd.write(&chunk)).await?;
 
     let len = u64::try_from(len)?;
     Ok(len)
@@ -606,59 +607,61 @@ fn pwrite64(
 }
 
 #[syscall(no = 19)]
-fn readv(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
-    fd: FdNum,
-    vec: Pointer<Iovec>,
-    vlen: u64,
-) -> SyscallResult {
+async fn readv(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -> SyscallResult {
     if vlen == 0 {
         return SyscallResult::Ok(0);
     }
     let vlen = usize::try_from(vlen)?;
 
-    let iovec = vm_activator.activate(thread.virtual_memory(), |vm| {
-        let mut iovec = Iovec::zeroed();
-        for i in 0..vlen {
-            vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
-            if iovec.len != 0 {
-                break;
+    let guard = thread.lock();
+    let virtual_memory = guard.virtual_memory().clone();
+    drop(guard);
+
+    let iovec = VirtualMemoryActivator::r#do(move |vm_activator| {
+        vm_activator.activate(&virtual_memory, |vm| {
+            let mut iovec = Iovec::zeroed();
+            for i in 0..vlen {
+                vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
+                if iovec.len != 0 {
+                    break;
+                }
             }
-        }
-        Result::<_>::Ok(iovec)
-    })?;
+            Result::<_>::Ok(iovec)
+        })
+    })
+    .await?;
 
     let addr = Pointer::parse(iovec.base)?;
-    read(thread, vm_activator, fd, addr, iovec.len)
+    read(thread, fd, addr, iovec.len).await
 }
 
 #[syscall(no = 20)]
-fn writev(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
-    fd: FdNum,
-    vec: Pointer<Iovec>,
-    vlen: u64,
-) -> SyscallResult {
+async fn writev(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -> SyscallResult {
     if vlen == 0 {
         return SyscallResult::Ok(0);
     }
     let vlen = usize::try_from(vlen)?;
 
-    let iovec = vm_activator.activate(thread.virtual_memory(), |vm| {
-        let mut iovec = Iovec::zeroed();
-        for i in 0..vlen {
-            vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
-            if iovec.len != 0 {
-                break;
+    let guard = thread.lock();
+    let virtual_memory = guard.virtual_memory().clone();
+    drop(guard);
+
+    let iovec = VirtualMemoryActivator::r#do(move |vm_activator| {
+        vm_activator.activate(&virtual_memory, |vm| {
+            let mut iovec = Iovec::zeroed();
+            for i in 0..vlen {
+                vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
+                if iovec.len != 0 {
+                    break;
+                }
             }
-        }
-        Result::<_>::Ok(iovec)
-    })?;
+            Result::<_>::Ok(iovec)
+        })
+    })
+    .await?;
 
     let addr = Pointer::parse(iovec.base)?;
-    write(thread, vm_activator, fd, addr, iovec.len)
+    write(thread, fd, addr, iovec.len).await
 }
 
 #[syscall(no = 21)]
@@ -712,16 +715,18 @@ fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
 }
 
 #[syscall(no = 40)]
-fn sendfile(
-    thread: &mut ThreadGuard,
+async fn sendfile(
+    thread: Arc<Thread>,
     out: FdNum,
     r#in: FdNum,
     offset: Pointer<u64>,
     count: u64,
 ) -> SyscallResult {
-    let fdtable = thread.fdtable();
+    let guard = thread.lock();
+    let fdtable = guard.fdtable();
     let out = fdtable.get(out)?;
     let r#in = fdtable.get(r#in)?;
+    drop(guard);
 
     if !offset.is_null() {
         todo!();
@@ -730,14 +735,14 @@ fn sendfile(
     let buffer = &mut [0; 8192];
     let mut total_len = 0;
     loop {
-        let len = r#in.read(buffer)?;
+        let len = do_io(&*r#in, Events::READ, || r#in.read(buffer)).await?;
         let buffer = &buffer[..len];
         if buffer.is_empty() {
             break;
         }
         total_len += buffer.len();
 
-        out.write_all(buffer)?;
+        out.write_all(buffer).await?;
     }
 
     let len = u64::try_from(total_len)?;
@@ -1336,6 +1341,78 @@ async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
     core::future::pending().await
 }
 
+#[syscall(no = 232)]
+async fn epoll_wait(
+    thread: Arc<Thread>,
+    epfd: FdNum,
+    event: Pointer<EpollEvent>,
+    maxevents: i32,
+    timeout: i32,
+) -> SyscallResult {
+    let maxevents = usize::try_from(maxevents)?;
+
+    let guard = thread.lock();
+    let fdtable = guard.fdtable().clone();
+    let virtual_memory = guard.virtual_memory().clone();
+    drop(guard);
+    let epoll = fdtable.get(epfd)?;
+    let events = epoll.epoll_wait(maxevents).await?;
+    assert!(events.len() <= maxevents);
+
+    let len = events.len();
+
+    VirtualMemoryActivator::r#do(move |vm_activator| {
+        vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
+            for (i, e) in events.iter().enumerate() {
+                let ptr = event.get() + i * size_of::<EpollEvent>();
+                vm.write(ptr, bytes_of(e))?;
+            }
+            Result::Ok(())
+        })
+    })
+    .await?;
+
+    Ok(len.try_into()?)
+}
+
+#[syscall(no = 233)]
+fn epoll_ctl(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    epfd: FdNum,
+    op: EpollCtlOp,
+    fd: FdNum,
+    event: Pointer<EpollEvent>,
+) -> SyscallResult {
+    let event = if !event.is_null() {
+        vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+            let mut bytes = [0; size_of::<EpollEvent>()];
+            vm.read(event.get(), &mut bytes)?;
+            let event = try_pod_read_unaligned::<EpollEvent>(&bytes)?;
+            Result::Ok(Some(event))
+        })?
+    } else {
+        None
+    };
+
+    debug!("epoll_ctl");
+
+    let epoll = thread.fdtable().get(epfd)?;
+    let fd = thread.fdtable().get(fd)?;
+
+    match op {
+        EpollCtlOp::Add => {
+            // Poll the fd once to check if it supports epoll.
+            let _ = fd.poll_ready(Events::empty())?;
+
+            let event = event.ok_or_else(|| Error::inval(()))?;
+            epoll.epoll_add(fd, event)?
+        }
+    }
+
+    Ok(0)
+}
+
 #[syscall(no = 257)]
 fn openat(
     thread: &mut ThreadGuard,
@@ -1462,6 +1539,12 @@ fn linkat(
     Ok(0)
 }
 
+#[syscall(no = 291)]
+fn epoll_create1(thread: &mut ThreadGuard, flags: EpollCreate1Flags) -> SyscallResult {
+    let fd_num = thread.fdtable().insert(Epoll::new())?;
+    Ok(fd_num.get().try_into().unwrap())
+}
+
 #[syscall(no = 293)]
 fn pipe2(
     thread: &mut ThreadGuard,
@@ -1513,8 +1596,8 @@ fn getrandom(
 }
 
 #[syscall(no = 326)]
-fn copy_file_range(
-    thread: &mut ThreadGuard,
+async fn copy_file_range(
+    thread: Arc<Thread>,
     fd_in: FdNum,
     off_in: Pointer<u64>,
     fd_out: FdNum,
@@ -1522,9 +1605,11 @@ fn copy_file_range(
     len: u64,
     flags: CopyFileRangeFlags,
 ) -> SyscallResult {
-    let fdtable = thread.fdtable();
+    let guard = thread.lock();
+    let fdtable = guard.fdtable();
     let fd_in = fdtable.get(fd_in)?;
     let fd_out = fdtable.get(fd_out)?;
+    drop(guard);
 
     if !off_in.is_null() || !off_out.is_null() {
         todo!()
@@ -1541,14 +1626,14 @@ fn copy_file_range(
         let buffer = &mut buffer[..chunk_len];
 
         // Read from fd_in.
-        let num = fd_in.read(buffer)?;
+        let num = do_io(&*fd_in, Events::READ, || fd_in.read(buffer)).await?;
         if num == 0 {
             break;
         }
 
         // Write to fd_out.
         let buffer = &buffer[..num];
-        fd_out.write_all(buffer)?;
+        fd_out.write_all(buffer).await?;
 
         // Update len and copied.
         len -= num;

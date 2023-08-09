@@ -1,5 +1,7 @@
 use core::{intrinsics::caller_location, num::TryFromIntError, panic::Location};
 
+use bytemuck::checked::CheckedCastError;
+
 #[derive(Clone, Copy)]
 pub struct Error {
     kind: ErrorKind,
@@ -30,7 +32,7 @@ macro_rules! errors {
     (
         $($variant:ident $fn:ident $expr:expr,)*
     ) => {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum ErrorKind {
             $($variant = $expr,)*
         }
@@ -47,6 +49,7 @@ macro_rules! errors {
 }
 
 errors! {
+    Perm perm 1,
     NoEnt no_ent 2,
     Io io 5,
     NoExec no_exec 8,
@@ -72,6 +75,13 @@ errors! {
 impl From<TryFromIntError> for Error {
     #[track_caller]
     fn from(_: TryFromIntError) -> Self {
+        Error::inval(())
+    }
+}
+
+impl From<CheckedCastError> for Error {
+    #[track_caller]
+    fn from(_: CheckedCastError) -> Self {
         Error::inval(())
     }
 }

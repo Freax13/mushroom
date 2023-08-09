@@ -5,12 +5,14 @@ use core::{
 };
 
 use bit_field::BitField;
+use bitflags::bitflags;
 use bytemuck::{checked, CheckedBitPattern, NoUninit, Pod, Zeroable};
 use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
     user::process::{
+        fd::Events,
         memory::VirtualMemoryActivator,
         thread::{Sigaction, Sigset, Stack, ThreadGuard},
     },
@@ -234,6 +236,7 @@ impl Pointee for [&'static CStr] {}
 impl Pointee for [FdNum; 2] {}
 impl Pointee for [u8] {}
 impl Pointee for c_void {}
+impl Pointee for EpollEvent {}
 impl Pointee for FdNum {}
 impl Pointee for Iovec {}
 impl Pointee for LinuxDirent64 {}
@@ -264,6 +267,21 @@ impl SyscallArg for u64 {
 impl SyscallArg for i64 {
     fn parse(value: u64) -> Result<Self> {
         Ok(value as i64)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        _thread: &ThreadGuard<'_>,
+        _vm_activator: &mut VirtualMemoryActivator,
+    ) -> fmt::Result {
+        write!(f, "{}", value as i64)
+    }
+}
+
+impl SyscallArg for i32 {
+    fn parse(value: u64) -> Result<Self> {
+        (value as i64).try_into().map_err(Into::into)
     }
 
     fn display(
@@ -651,4 +669,84 @@ enum_arg! {
 pub struct Timespec {
     pub tv_sec: u64,
     pub tv_nsec: u64,
+}
+
+enum_arg! {
+    pub enum EpollCtlOp {
+        Add = 1,
+    }
+}
+
+#[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern)]
+#[repr(C)]
+pub struct EpollEvent {
+    pub events: EpollEvents,
+    _padding: u32,
+    pub data: u64,
+}
+
+impl EpollEvent {
+    pub fn new(events: EpollEvents, data: u64) -> Self {
+        Self {
+            events,
+            _padding: 0,
+            data,
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(NoUninit)]
+    #[repr(transparent)]
+    pub struct EpollEvents: u32 {
+        const IN = 0x00000001;
+        const PRI = 0x00000002;
+        const OUT = 0x00000004;
+        const ERR = 0x00000008;
+        const HUP = 0x00000010;
+        const NVAL = 0x00000020;
+        const RDNORM = 0x00000040;
+        const RDBAND = 0x00000080;
+        const WRNORM = 0x00000100;
+        const WRBAND = 0x00000200;
+        const MSG = 0x00000400;
+        const RDHUP = 0x00002000;
+
+        const EXCLUSIVE = 1 << 28;
+        const WAKEUP = 1 << 29;
+        const ONESHOT = 1 << 30;
+        const LET = 1 << 31;
+    }
+}
+
+unsafe impl CheckedBitPattern for EpollEvents {
+    type Bits = u32;
+
+    fn is_valid_bit_pattern(bits: &Self::Bits) -> bool {
+        EpollEvents::from_bits(*bits).is_some()
+    }
+}
+
+impl From<EpollEvents> for Events {
+    fn from(value: EpollEvents) -> Self {
+        let mut events = Events::empty();
+        events.set(Events::READ, value.contains(EpollEvents::IN));
+        events.set(Events::WRITE, value.contains(EpollEvents::OUT));
+        events
+    }
+}
+
+impl From<Events> for EpollEvents {
+    fn from(value: Events) -> Self {
+        let mut events = EpollEvents::empty();
+        events.set(EpollEvents::IN, value.contains(Events::READ));
+        events.set(EpollEvents::OUT, value.contains(Events::WRITE));
+        events
+    }
+}
+
+bitflags! {
+    pub struct EpollCreate1Flags {
+        const CLOEXEC = 0x8_0000;
+    }
 }

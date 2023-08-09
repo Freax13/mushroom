@@ -1,20 +1,23 @@
 use core::{cmp, ops::Deref};
 
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use async_trait::async_trait;
+use bitflags::bitflags;
 use spin::Mutex;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{Error, ErrorKind, Result},
     fs::node::{DirEntry, Directory},
 };
 
 use super::{
     memory::{ActiveVirtualMemory, MemoryPermissions},
-    syscall::args::{FdNum, FileMode, Stat, Whence},
+    syscall::args::{EpollEvent, FdNum, FileMode, Stat, Whence},
 };
 
 pub mod dir;
+pub mod epoll;
 pub mod file;
 pub mod pipe;
 mod std;
@@ -124,6 +127,7 @@ impl Clone for FileDescriptorTable {
     }
 }
 
+#[async_trait]
 pub trait OpenFileDescription: Send + Sync + 'static {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
@@ -157,9 +161,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Ok(())
     }
 
-    fn write_all(&self, mut buf: &[u8]) -> Result<()> {
+    async fn write_all(&self, mut buf: &[u8]) -> Result<()> {
         while !buf.is_empty() {
-            let len = self.write(buf)?;
+            let len = do_io(self, Events::WRITE, || self.write(buf)).await?;
             buf = &buf[len..];
         }
         Ok(())
@@ -197,5 +201,52 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = len;
         let _ = permissions;
         Err(Error::io(()))
+    }
+
+    async fn epoll_wait(&self, max_events: usize) -> Result<Vec<EpollEvent>> {
+        let _ = max_events;
+        Err(Error::inval(()))
+    }
+
+    fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
+        let _ = fd;
+        let _ = event;
+        Err(Error::inval(()))
+    }
+
+    fn poll_ready(&self, events: Events) -> Result<Events> {
+        let _ = events;
+        Err(Error::perm(()))
+    }
+
+    async fn ready(&self, events: Events) -> Result<Events> {
+        let _ = events;
+        Err(Error::perm(()))
+    }
+}
+
+bitflags! {
+    pub struct Events: u8 {
+        const READ = 1 << 0;
+        const WRITE = 1 << 1;
+    }
+}
+
+pub async fn do_io<R>(
+    fd: &(impl OpenFileDescription + ?Sized),
+    events: Events,
+    mut callback: impl FnMut() -> Result<R>,
+) -> Result<R> {
+    loop {
+        // Try to execute the closure.
+        let res = callback();
+        match res {
+            Ok(value) => return Ok(value),
+            Err(err) if err.kind() == ErrorKind::Again => {
+                // Wait for the fd to be ready, then try again.
+                fd.ready(events).await?;
+            }
+            Err(err) => return Err(err),
+        }
     }
 }
