@@ -1012,8 +1012,15 @@ async fn wait4(
 }
 
 #[syscall(no = 72)]
-fn fcntl(fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
+fn fcntl(thread: &mut ThreadGuard, fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
+    let fd = thread.fdtable().get(fd)?;
+
     match cmd {
+        FcntlCmd::DupFd => {
+            let min = i32::try_from(arg)?;
+            let fd_num = thread.fdtable().insert_after(min, fd)?;
+            Ok(fd_num.get().try_into()?)
+        }
         FcntlCmd::GetFd => {
             // FIXME: implement this
             Ok(0)

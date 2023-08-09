@@ -415,6 +415,7 @@ enum_arg! {
 
 enum_arg! {
     pub enum FcntlCmd {
+        DupFd = 0,
         GetFd = 1,
         SetFd = 2,
         GetFl = 3,
