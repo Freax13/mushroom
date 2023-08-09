@@ -28,7 +28,7 @@ use crate::{
 use self::{
     args::{
         Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, EpollCreate1Flags,
-        EpollCtlOp, EpollEvent, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags,
+        EpollCtlOp, EpollEvent, EventFdFlags, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags,
         GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags, OpenFlags,
         Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, Stat, SyscallArg, Timespec,
         UnlinkOptions, WStatus, WaitOptions, Whence,
@@ -44,6 +44,7 @@ use super::{
         dir::DirectoryFileDescription,
         do_io,
         epoll::Epoll,
+        eventfd::EventFd,
         file::{
             ReadWriteFileFileDescription, ReadonlyFileFileDescription, WriteonlyFileFileDescription,
         },
@@ -157,6 +158,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFutimesat);
     handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
+    handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
     handlers.register(SysGetrandom);
@@ -1537,6 +1539,12 @@ fn linkat(
     )?;
 
     Ok(0)
+}
+
+#[syscall(no = 290)]
+fn eventfd(thread: &mut ThreadGuard, initval: u32, flags: EventFdFlags) -> SyscallResult {
+    let fd_num = thread.fdtable().insert(EventFd::new(initval))?;
+    Ok(fd_num.get().try_into().unwrap())
 }
 
 #[syscall(no = 291)]

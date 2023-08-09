@@ -750,3 +750,10 @@ bitflags! {
         const CLOEXEC = 0x8_0000;
     }
 }
+
+bitflags! {
+    pub struct EventFdFlags {
+        const NON_BLOCK = 0x800;
+        const CLOEXEC = 0x8_0000;
+    }
+}
