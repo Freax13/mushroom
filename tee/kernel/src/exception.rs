@@ -80,8 +80,6 @@ pub fn load_gdt() {
     debug!("loading global descriptor table");
     gdt.load();
 
-    Star::write(user_cs, user_ds, kernel_cs, kernel_ds).unwrap();
-
     debug!("loading tss");
     unsafe {
         load_tss(tss_seg);
