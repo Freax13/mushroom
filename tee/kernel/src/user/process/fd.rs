@@ -44,10 +44,14 @@ pub struct FileDescriptorTable {
 }
 
 impl FileDescriptorTable {
-    pub fn new() -> Self {
-        let this = Self {
+    pub const fn empty() -> Self {
+        Self {
             table: Mutex::new(BTreeMap::new()),
-        };
+        }
+    }
+
+    pub fn with_standard_io() -> Self {
+        let this = Self::empty();
 
         let stdin = this.insert(std::Stdin).unwrap();
         assert_eq!(stdin.get(), 0);

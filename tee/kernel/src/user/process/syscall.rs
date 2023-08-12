@@ -932,18 +932,23 @@ fn exit(
 ) -> SyscallResult {
     let status = status as u8;
 
-    if thread.clear_child_tid != 0 {
+    thread.close_all_fds();
+
+    if core::mem::take(&mut thread.clear_child_tid) != 0 {
         let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
-        vm_activator.activate(thread.virtual_memory(), |vm| {
+        let _ = vm_activator.activate(thread.virtual_memory(), |vm| {
             vm.write(clear_child_tid, &0u32.to_ne_bytes())
-        })?;
+        });
 
         thread.process().futexes.wake(clear_child_tid, 1, None);
     }
 
-    if let Some(parent) = thread.parent().upgrade() {
-        parent.add_child_death(thread.tid(), status);
+    if !core::mem::replace(&mut thread.notified_parent_about_exit, true) {
+        if let Some(parent) = thread.parent().upgrade() {
+            parent.add_child_death(thread.tid(), status);
+        }
     }
+
     thread.set_exit_status(status);
 
     Ok(0)

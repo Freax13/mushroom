@@ -76,7 +76,6 @@ pub struct Thread {
     self_weak: WeakThread,
     parent: WeakThread,
     process: Arc<Process>,
-    fdtable: Arc<FileDescriptorTable>,
     dead_children: mpmc::Receiver<(u32, u8)>,
     exit_status: OnceCell<u8>,
 
@@ -93,8 +92,10 @@ pub struct ThreadState {
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
     pub clear_child_tid: u64,
+    pub notified_parent_about_exit: bool,
     pub cwd: Path,
     pub vfork_done: Option<oneshot::Sender<()>>,
+    fdtable: Arc<FileDescriptorTable>,
 }
 
 impl Thread {
@@ -115,7 +116,6 @@ impl Thread {
             self_weak,
             parent,
             process,
-            fdtable,
             dead_children: mpmc::Receiver::new(),
             exit_status: OnceCell::new(),
             state: Mutex::new(ThreadState {
@@ -125,8 +125,10 @@ impl Thread {
                 sigaction: [Sigaction::DEFAULT; 64],
                 sigaltstack: None,
                 clear_child_tid: 0,
+                notified_parent_about_exit: false,
                 cwd,
                 vfork_done,
+                fdtable,
             }),
         }
     }
@@ -165,7 +167,7 @@ impl Thread {
             Weak::new(),
             Arc::new(Process::new(tid)),
             Arc::new(VirtualMemory::new()),
-            Arc::new(FileDescriptorTable::new()),
+            Arc::new(FileDescriptorTable::with_standard_io()),
             Path::new(b"/".to_vec()).unwrap(),
             None,
         )
@@ -314,7 +316,12 @@ impl ThreadGuard<'_> {
     }
 
     pub fn fdtable(&self) -> &Arc<FileDescriptorTable> {
-        &self.thread.fdtable
+        &self.fdtable
+    }
+
+    /// Replaces the file descriptor table with an emtpy one.
+    pub fn close_all_fds(&mut self) {
+        self.fdtable = Arc::new(FileDescriptorTable::empty());
     }
 
     pub fn execve(
@@ -357,6 +364,7 @@ impl ThreadGuard<'_> {
         self.registers = UserspaceRegisters::DEFAULT;
         self.registers.rsp = stack.as_u64();
         self.registers.rip = entry;
+        self.clear_child_tid = 0;
 
         Ok(())
     }
