@@ -185,10 +185,8 @@ async fn read(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) ->
     let len = do_io(&*fd, Events::READ, || fd.read(&mut buffer)).await?;
     buffer.truncate(len);
 
-    VirtualMemoryActivator::r#do(move |vm_activator| {
-        vm_activator.activate(&virtual_memory, |vm| vm.write(buf, &buffer))
-    })
-    .await?;
+    VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| vm.write(buf, &buffer))
+        .await?;
 
     Ok(len.try_into()?)
 }
@@ -205,8 +203,8 @@ async fn write(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -
     let len = cmp::min(8192, count);
     let mut chunk = vec![0u8; len];
 
-    let chunk = VirtualMemoryActivator::r#do(move |vm_activator| -> Result<_> {
-        vm_activator.activate(&virtual_memory, |vm| vm.read(buf, &mut chunk))?;
+    let chunk = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| -> Result<_> {
+        vm.read(buf, &mut chunk)?;
         Ok(chunk)
     })
     .await?;
@@ -622,17 +620,15 @@ async fn readv(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -
     let virtual_memory = guard.virtual_memory().clone();
     drop(guard);
 
-    let iovec = VirtualMemoryActivator::r#do(move |vm_activator| {
-        vm_activator.activate(&virtual_memory, |vm| {
-            let mut iovec = Iovec::zeroed();
-            for i in 0..vlen {
-                vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
-                if iovec.len != 0 {
-                    break;
-                }
+    let iovec = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+        let mut iovec = Iovec::zeroed();
+        for i in 0..vlen {
+            vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
+            if iovec.len != 0 {
+                break;
             }
-            Result::<_>::Ok(iovec)
-        })
+        }
+        Result::<_>::Ok(iovec)
     })
     .await?;
 
@@ -651,17 +647,15 @@ async fn writev(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) 
     let virtual_memory = guard.virtual_memory().clone();
     drop(guard);
 
-    let iovec = VirtualMemoryActivator::r#do(move |vm_activator| {
-        vm_activator.activate(&virtual_memory, |vm| {
-            let mut iovec = Iovec::zeroed();
-            for i in 0..vlen {
-                vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
-                if iovec.len != 0 {
-                    break;
-                }
+    let iovec = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+        let mut iovec = Iovec::zeroed();
+        for i in 0..vlen {
+            vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
+            if iovec.len != 0 {
+                break;
             }
-            Result::<_>::Ok(iovec)
-        })
+        }
+        Result::<_>::Ok(iovec)
     })
     .await?;
 
@@ -1041,11 +1035,9 @@ async fn wait4(
         let addr = wstatus.get();
         let wstatus = WStatus::exit(status);
 
-        VirtualMemoryActivator::r#do(move |vm_activator| {
-            let guard = thread.lock();
-            vm_activator.activate(guard.virtual_memory(), |vm| {
-                vm.write(addr, bytes_of(&wstatus))
-            })
+        let virtual_memory = thread.lock().virtual_memory().clone();
+        VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+            vm.write(addr, bytes_of(&wstatus))
         })
         .await?;
     }
@@ -1289,12 +1281,10 @@ async fn futex(
 
             let deadline = if utime != 0 {
                 let vm = vm.clone();
-                let deadline = VirtualMemoryActivator::r#do(move |vm_activator| {
-                    vm_activator.activate(&vm, |vm| -> Result<_> {
-                        let mut time = Timespec::zeroed();
-                        vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
-                        Ok(time)
-                    })
+                let deadline = VirtualMemoryActivator::use_from_async(vm, move |vm| -> Result<_> {
+                    let mut time = Timespec::zeroed();
+                    vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
+                    Ok(time)
                 })
                 .await?;
                 Some(deadline)
@@ -1414,14 +1404,12 @@ async fn epoll_wait(
 
     let len = events.len();
 
-    VirtualMemoryActivator::r#do(move |vm_activator| {
-        vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
-            for (i, e) in events.iter().enumerate() {
-                let ptr = event.get() + i * size_of::<EpollEvent>();
-                vm.write(ptr, bytes_of(e))?;
-            }
-            Result::Ok(())
-        })
+    VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| -> Result<_> {
+        for (i, e) in events.iter().enumerate() {
+            let ptr = event.get() + i * size_of::<EpollEvent>();
+            vm.write(ptr, bytes_of(e))?;
+        }
+        Result::Ok(())
     })
     .await?;
 

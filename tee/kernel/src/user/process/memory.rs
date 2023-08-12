@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{AtomicU16, Ordering},
 };
 
-use alloc::{borrow::Cow, boxed::Box, ffi::CString, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
 use crossbeam_queue::SegQueue;
 use log::debug;
@@ -69,6 +69,17 @@ impl VirtualMemoryActivator {
         }));
 
         receiver.recv().await.unwrap()
+    }
+
+    /// A function that allows an async function to activate a virtual memory.
+    pub async fn use_from_async<R>(
+        virtual_memory: Arc<VirtualMemory>,
+        f: impl FnOnce(&mut ActiveVirtualMemory) -> R + Send + 'static,
+    ) -> R
+    where
+        R: Send + 'static,
+    {
+        Self::r#do(move |vm_activator| vm_activator.activate(&virtual_memory, f)).await
     }
 
     pub unsafe fn new() -> Self {

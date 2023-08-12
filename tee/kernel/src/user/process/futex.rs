@@ -37,30 +37,28 @@ impl Futexes {
     ) -> Result<()> {
         let mut current_value = 0;
 
-        let receiver = VirtualMemoryActivator::r#do(move |vm_activator| {
-            vm_activator.activate(&vm, |vm| {
-                // Check if the value already changed. This can help avoid taking the lock.
-                vm.read(uaddr, bytes_of_mut(&mut current_value))?;
-                if current_value != val {
-                    return Err(Error::again(()));
-                }
+        let receiver = VirtualMemoryActivator::use_from_async(vm, move |vm| {
+            // Check if the value already changed. This can help avoid taking the lock.
+            vm.read(uaddr, bytes_of_mut(&mut current_value))?;
+            if current_value != val {
+                return Err(Error::again(()));
+            }
 
-                let mut guard = self.futexes.lock();
+            let mut guard = self.futexes.lock();
 
-                // Now that we've taken the lock, we need to check again.
-                vm.read(uaddr, bytes_of_mut(&mut current_value))?;
-                if current_value != val {
-                    return Err(Error::again(()));
-                }
+            // Now that we've taken the lock, we need to check again.
+            vm.read(uaddr, bytes_of_mut(&mut current_value))?;
+            if current_value != val {
+                return Err(Error::again(()));
+            }
 
-                let (sender, receiver) = oneshot::new();
-                guard
-                    .entry(uaddr)
-                    .or_default()
-                    .push(FutexWaiter { sender, bitset });
+            let (sender, receiver) = oneshot::new();
+            guard
+                .entry(uaddr)
+                .or_default()
+                .push(FutexWaiter { sender, bitset });
 
-                Ok(receiver)
-            })
+            Ok(receiver)
         })
         .await?;
 
