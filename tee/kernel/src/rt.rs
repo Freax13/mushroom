@@ -20,6 +20,7 @@ use crate::{
 pub mod mpmc;
 pub mod mpsc;
 pub mod notify;
+pub mod once;
 pub mod oneshot;
 
 static SCHEDULED_THREADS: SegQueue<Arc<Task>> = SegQueue::new();
