@@ -17,7 +17,7 @@ pub fn syscall(attrs: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 fn expand_syscall(
-    SyscallAttr { no }: SyscallAttr,
+    SyscallAttr { i386, amd64 }: SyscallAttr,
     mut input: ItemFn,
 ) -> Result<impl Into<TokenStream>> {
     let syscall_args = collect_syscall_args(input.clone())?;
@@ -90,7 +90,8 @@ fn expand_syscall(
         struct #struct_ident;
 
         impl #trait_name for #struct_ident {
-            const NO: usize = #no;
+            const NO_I386: usize = #i386;
+            const NO_AMD64: usize = #amd64;
             const NAME: &'static str = #syscall_name;
 
             #(#arg_associated_items)*
@@ -107,29 +108,37 @@ fn expand_syscall(
 }
 
 struct SyscallAttr {
-    no: Expr,
+    i386: Expr,
+    amd64: Expr,
 }
 
 impl Parse for SyscallAttr {
     fn parse(input: ParseStream) -> Result<Self> {
         let vars = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
-        let mut no = None;
+        let mut i386 = None;
+        let mut amd64 = None;
         for var in vars.iter() {
             let name_value = var.require_name_value()?;
-            if name_value.path.is_ident("no") {
-                if no.is_some() {
-                    return Err(Error::new_spanned(name_value, "duplicate no"));
+            if name_value.path.is_ident("amd64") {
+                if amd64.is_some() {
+                    return Err(Error::new_spanned(name_value, "duplicate amd64"));
                 }
-                no = Some(name_value.value.clone());
+                amd64 = Some(name_value.value.clone());
+            } else if name_value.path.is_ident("i386") {
+                if i386.is_some() {
+                    return Err(Error::new_spanned(name_value, "duplicate i386"));
+                }
+                i386 = Some(name_value.value.clone());
             } else {
                 return Err(Error::new_spanned(&name_value.path, "invalid attribute"));
             }
         }
 
-        let no = no.ok_or_else(|| Error::new_spanned(&vars, "missing `no` attribute"))?;
+        let i386 = i386.ok_or_else(|| Error::new_spanned(&vars, "missing `i386` attribute"))?;
+        let amd64 = amd64.ok_or_else(|| Error::new_spanned(&vars, "missing `amd64` attribute"))?;
 
-        Ok(Self { no })
+        Ok(Self { i386, amd64 })
     }
 }
 

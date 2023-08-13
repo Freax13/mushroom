@@ -53,47 +53,25 @@ use super::{
         Events,
     },
     memory::VirtualMemoryActivator,
-    thread::{
-        new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, UserspaceRegisters,
-        THREADS,
-    },
+    thread::{new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
     Process,
 };
 
 pub mod args;
+pub mod cpu_state;
 mod traits;
 
 impl Thread {
     /// Returns true if the thread should continue to run.
     pub async fn execute_syscall(self: Arc<Self>) {
-        let guard = self.lock();
-        let UserspaceRegisters {
-            rax: syscall_no,
-            rdi: arg0,
-            rsi: arg1,
-            rdx: arg2,
-            r10: arg3,
-            r8: arg4,
-            r9: arg5,
-            ..
-        } = guard.registers;
+        let guard = self.cpu_state.lock();
+        let args = guard.syscall_args().unwrap();
         drop(guard);
 
-        let result = SYSCALL_HANDLERS
-            .execute(self.clone(), syscall_no, arg0, arg1, arg2, arg3, arg4, arg5)
-            .await;
+        let result = SYSCALL_HANDLERS.execute(self.clone(), args).await;
 
-        let result = match result {
-            Ok(result) => {
-                let is_error = (-4095..=-1).contains(&(result as i64));
-                assert!(!is_error);
-                result
-            }
-            Err(err) => (-(err.kind() as i64)) as u64,
-        };
-
-        let mut guard = self.lock();
-        guard.registers.rax = result;
+        let mut guard = self.cpu_state.lock();
+        guard.set_syscall_result(result).unwrap();
     }
 }
 
@@ -170,7 +148,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers
 };
 
-#[syscall(no = 0)]
+#[syscall(i386 = 3, amd64 = 0)]
 async fn read(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -> SyscallResult {
     let guard = thread.lock();
     let fd = guard.fdtable().get(fd)?;
@@ -191,7 +169,7 @@ async fn read(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) ->
     Ok(len.try_into()?)
 }
 
-#[syscall(no = 1)]
+#[syscall(i386 = 4, amd64 = 1)]
 async fn write(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -> SyscallResult {
     let guard = thread.lock();
     let fd = guard.fdtable().get(fd)?;
@@ -215,7 +193,7 @@ async fn write(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -
     Ok(len)
 }
 
-#[syscall(no = 2)]
+#[syscall(i386 = 5, amd64 = 2)]
 fn open(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -251,13 +229,13 @@ fn open(
     Ok(fd.get() as u64)
 }
 
-#[syscall(no = 3)]
+#[syscall(i386 = 6, amd64 = 3)]
 fn close(thread: &mut ThreadGuard, fd: FdNum) -> SyscallResult {
     thread.fdtable().close(fd)?;
     Ok(0)
 }
 
-#[syscall(no = 4)]
+#[syscall(i386 = 106, amd64 = 4)]
 fn stat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -276,7 +254,7 @@ fn stat(
     Ok(0)
 }
 
-#[syscall(no = 5)]
+#[syscall(i386 = 108, amd64 = 5)]
 fn fstat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -293,7 +271,7 @@ fn fstat(
     Ok(0)
 }
 
-#[syscall(no = 6)]
+#[syscall(i386 = 107, amd64 = 6)]
 fn lstat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -312,7 +290,7 @@ fn lstat(
     Ok(0)
 }
 
-#[syscall(no = 7)]
+#[syscall(i386 = 168, amd64 = 7)]
 fn poll(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -335,7 +313,7 @@ fn poll(
     Ok(0)
 }
 
-#[syscall(no = 8)]
+#[syscall(i386 = 19, amd64 = 8)]
 fn lseek(thread: &mut ThreadGuard, fd: FdNum, offset: u64, whence: Whence) -> SyscallResult {
     let offset = usize::try_from(offset)?;
 
@@ -346,7 +324,7 @@ fn lseek(thread: &mut ThreadGuard, fd: FdNum, offset: u64, whence: Whence) -> Sy
     Ok(offset)
 }
 
-#[syscall(no = 9)]
+#[syscall(i386 = 90, amd64 = 9)]
 fn mmap(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -403,7 +381,7 @@ fn mmap(
     }
 }
 
-#[syscall(no = 10)]
+#[syscall(i386 = 125, amd64 = 10)]
 fn mprotect(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -417,7 +395,7 @@ fn mprotect(
     Ok(0)
 }
 
-#[syscall(no = 11)]
+#[syscall(i386 = 91, amd64 = 11)]
 fn munmap(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -433,7 +411,7 @@ fn munmap(
 }
 
 // FIXME: use correct name for brk_value
-#[syscall(no = 12)]
+#[syscall(i386 = 45, amd64 = 12)]
 fn brk(brk_value: u64) -> SyscallResult {
     if brk_value == 0 || brk_value == 0x1000 {
         return Ok(0);
@@ -442,7 +420,7 @@ fn brk(brk_value: u64) -> SyscallResult {
     Err(Error::no_mem(()))
 }
 
-#[syscall(no = 13)]
+#[syscall(i386 = 174, amd64 = 13)]
 fn rt_sigaction(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -476,7 +454,8 @@ fn rt_sigaction(
 struct SysRtSigprocmask;
 
 impl Syscall3 for SysRtSigprocmask {
-    const NO: usize = 14;
+    const NO_I386: usize = 175;
+    const NO_AMD64: usize = 14;
     const NAME: &'static str = "rt_sigprocmask";
 
     type Arg0 = u64;
@@ -547,12 +526,12 @@ impl Syscall3 for SysRtSigprocmask {
     }
 }
 
-#[syscall(no = 16)]
+#[syscall(i386 = 54, amd64 = 16)]
 fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
     SyscallResult::Err(Error::no_tty(()))
 }
 
-#[syscall(no = 17)]
+#[syscall(i386 = 180, amd64 = 17)]
 fn pread64(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -582,7 +561,7 @@ fn pread64(
     Ok(len)
 }
 
-#[syscall(no = 18)]
+#[syscall(i386 = 181, amd64 = 18)]
 fn pwrite64(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -609,7 +588,7 @@ fn pwrite64(
     Ok(len)
 }
 
-#[syscall(no = 19)]
+#[syscall(i386 = 145, amd64 = 19)]
 async fn readv(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -> SyscallResult {
     if vlen == 0 {
         return SyscallResult::Ok(0);
@@ -636,7 +615,7 @@ async fn readv(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -
     read(thread, fd, addr, iovec.len).await
 }
 
-#[syscall(no = 20)]
+#[syscall(i386 = 146, amd64 = 20)]
 async fn writev(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -> SyscallResult {
     if vlen == 0 {
         return SyscallResult::Ok(0);
@@ -663,7 +642,7 @@ async fn writev(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) 
     write(thread, fd, addr, iovec.len).await
 }
 
-#[syscall(no = 21)]
+#[syscall(i386 = 33, amd64 = 21)]
 fn access(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -676,7 +655,7 @@ fn access(
     Ok(0)
 }
 
-#[syscall(no = 28)]
+#[syscall(i386 = 219, amd64 = 28)]
 fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
     match advice {
         Advice::Free => {
@@ -686,7 +665,7 @@ fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
     }
 }
 
-#[syscall(no = 32)]
+#[syscall(i386 = 41, amd64 = 32)]
 fn dup(thread: &mut ThreadGuard, fildes: FdNum) -> SyscallResult {
     let fdtable = thread.fdtable();
     let fd = fdtable.get(fildes)?;
@@ -695,7 +674,7 @@ fn dup(thread: &mut ThreadGuard, fildes: FdNum) -> SyscallResult {
     Ok(newfd.get() as u64)
 }
 
-#[syscall(no = 33)]
+#[syscall(i386 = 63, amd64 = 33)]
 fn dup2(thread: &mut ThreadGuard, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
     let fdtable = thread.fdtable();
     let fd = fdtable.get(oldfd)?;
@@ -707,13 +686,13 @@ fn dup2(thread: &mut ThreadGuard, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
     Ok(newfd.get() as u64)
 }
 
-#[syscall(no = 39)]
+#[syscall(i386 = 20, amd64 = 39)]
 fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
     let pid = thread.process().pid;
     Ok(u64::from(pid))
 }
 
-#[syscall(no = 40)]
+#[syscall(i386 = 187, amd64 = 40)]
 async fn sendfile(
     thread: Arc<Thread>,
     out: FdNum,
@@ -748,7 +727,7 @@ async fn sendfile(
     Ok(len)
 }
 
-#[syscall(no = 53)]
+#[syscall(i386 = 360, amd64 = 53)]
 fn socketpair(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -789,7 +768,7 @@ fn socketpair(
     Ok(0)
 }
 
-#[syscall(no = 56)]
+#[syscall(i386 = 120, amd64 = 56)]
 fn clone(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -865,7 +844,7 @@ fn clone(
     Ok(u64::from(tid))
 }
 
-#[syscall(no = 57)]
+#[syscall(i386 = 2, amd64 = 57)]
 fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
@@ -890,7 +869,7 @@ fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> 
     Ok(u64::from(tid))
 }
 
-#[syscall(no = 58)]
+#[syscall(i386 = 190, amd64 = 58)]
 async fn vfork(thread: Arc<Thread>) -> SyscallResult {
     let (sender, receiver) = oneshot::new();
 
@@ -919,7 +898,7 @@ async fn vfork(thread: Arc<Thread>) -> SyscallResult {
     Ok(u64::from(tid))
 }
 
-#[syscall(no = 59)]
+#[syscall(i386 = 11, amd64 = 59)]
 fn execve(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -969,7 +948,7 @@ fn execve(
     Ok(0)
 }
 
-#[syscall(no = 60)]
+#[syscall(i386 = 1, amd64 = 60)]
 fn exit(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -999,7 +978,7 @@ fn exit(
     Ok(0)
 }
 
-#[syscall(no = 61)]
+#[syscall(i386 = 114, amd64 = 61)]
 async fn wait4(
     thread: Arc<Thread>,
     pid: i64,
@@ -1047,7 +1026,7 @@ async fn wait4(
     Ok(u64::from(tid))
 }
 
-#[syscall(no = 72)]
+#[syscall(i386 = 55, amd64 = 72)]
 fn fcntl(thread: &mut ThreadGuard, fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
     let fd = thread.fdtable().get(fd)?;
 
@@ -1072,7 +1051,7 @@ fn fcntl(thread: &mut ThreadGuard, fd: FdNum, cmd: FcntlCmd, arg: u64) -> Syscal
     }
 }
 
-#[syscall(no = 83)]
+#[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1087,7 +1066,7 @@ fn mkdir(
     Ok(0)
 }
 
-#[syscall(no = 88)]
+#[syscall(i386 = 83, amd64 = 88)]
 fn symlink(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1105,7 +1084,7 @@ fn symlink(
     Ok(0)
 }
 
-#[syscall(no = 89)]
+#[syscall(i386 = 85, amd64 = 89)]
 fn readlink(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1133,7 +1112,7 @@ fn readlink(
     Ok(len)
 }
 
-#[syscall(no = 90)]
+#[syscall(i386 = 15, amd64 = 90)]
 fn chmod(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1147,14 +1126,14 @@ fn chmod(
     Ok(0)
 }
 
-#[syscall(no = 91)]
+#[syscall(i386 = 94, amd64 = 91)]
 fn fchmod(thread: &mut ThreadGuard, fd: FdNum, mode: FileMode) -> SyscallResult {
     let fd = thread.fdtable().get(fd)?;
     fd.set_mode(mode)?;
     Ok(0)
 }
 
-#[syscall(no = 131)]
+#[syscall(i386 = 186, amd64 = 131)]
 fn sigaltstack(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1190,7 +1169,7 @@ fn sigaltstack(
     Ok(0)
 }
 
-#[syscall(no = 158)]
+#[syscall(i386 = 384, amd64 = 158)]
 fn arch_prctl(
     thread: &mut ThreadGuard,
     code: ArchPrctlCode,
@@ -1198,13 +1177,17 @@ fn arch_prctl(
 ) -> SyscallResult {
     match code {
         ArchPrctlCode::SetFs => {
-            thread.registers.fs_base = addr.get().as_u64();
+            thread
+                .thread
+                .cpu_state
+                .lock()
+                .set_tls(addr.get().as_u64())?;
             Ok(0)
         }
     }
 }
 
-#[syscall(no = 165)]
+#[syscall(i386 = 21, amd64 = 165)]
 fn mount(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1232,13 +1215,13 @@ fn mount(
     Ok(0)
 }
 
-#[syscall(no = 186)]
+#[syscall(i386 = 224, amd64 = 186)]
 fn gettid(thread: &mut ThreadGuard) -> SyscallResult {
     let tid = thread.tid();
     Ok(u64::from(tid))
 }
 
-#[syscall(no = 202)]
+#[syscall(i386 = 240, amd64 = 202)]
 async fn futex(
     thread: Arc<Thread>,
     uaddr: Pointer<c_void>,
@@ -1315,7 +1298,7 @@ async fn futex(
     }
 }
 
-#[syscall(no = 217)]
+#[syscall(i386 = 220, amd64 = 217)]
 fn getdents64(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1353,13 +1336,13 @@ fn getdents64(
     Ok(len)
 }
 
-#[syscall(no = 218)]
+#[syscall(i386 = 258, amd64 = 218)]
 fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallResult {
     thread.clear_child_tid = tidptr.get().as_u64();
     Ok(u64::from(thread.tid()))
 }
 
-#[syscall(no = 228)]
+#[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1377,14 +1360,14 @@ fn clock_gettime(
     Ok(0)
 }
 
-#[syscall(no = 231)]
+#[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
     let process = thread.process().clone();
     process.exit(status as u8);
     core::future::pending().await
 }
 
-#[syscall(no = 232)]
+#[syscall(i386 = 256, amd64 = 232)]
 async fn epoll_wait(
     thread: Arc<Thread>,
     epfd: FdNum,
@@ -1416,7 +1399,7 @@ async fn epoll_wait(
     Ok(len.try_into()?)
 }
 
-#[syscall(no = 233)]
+#[syscall(i386 = 255, amd64 = 233)]
 fn epoll_ctl(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1454,7 +1437,7 @@ fn epoll_ctl(
     Ok(0)
 }
 
-#[syscall(no = 257)]
+#[syscall(i386 = 295, amd64 = 257)]
 fn openat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1496,7 +1479,7 @@ fn openat(
     }
 }
 
-#[syscall(no = 261)]
+#[syscall(i386 = 299, amd64 = 261)]
 fn futimesat(
     dirfd: FdNum,
     pathname: Pointer<CStr>,
@@ -1506,7 +1489,7 @@ fn futimesat(
     Ok(0)
 }
 
-#[syscall(no = 263)]
+#[syscall(i386 = 301, amd64 = 263)]
 fn unlinkat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1536,7 +1519,7 @@ fn unlinkat(
     Ok(0)
 }
 
-#[syscall(no = 265)]
+#[syscall(i386 = 303, amd64 = 265)]
 fn linkat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1580,19 +1563,19 @@ fn linkat(
     Ok(0)
 }
 
-#[syscall(no = 290)]
+#[syscall(i386 = 323, amd64 = 290)]
 fn eventfd(thread: &mut ThreadGuard, initval: u32, flags: EventFdFlags) -> SyscallResult {
     let fd_num = thread.fdtable().insert(EventFd::new(initval))?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
-#[syscall(no = 291)]
+#[syscall(i386 = 329, amd64 = 291)]
 fn epoll_create1(thread: &mut ThreadGuard, flags: EpollCreate1Flags) -> SyscallResult {
     let fd_num = thread.fdtable().insert(Epoll::new())?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
-#[syscall(no = 293)]
+#[syscall(i386 = 331, amd64 = 293)]
 fn pipe2(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1624,7 +1607,7 @@ fn pipe2(
     Ok(0)
 }
 
-#[syscall(no = 318)]
+#[syscall(i386 = 355, amd64 = 318)]
 fn getrandom(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1642,7 +1625,7 @@ fn getrandom(
     })
 }
 
-#[syscall(no = 326)]
+#[syscall(i386 = 377, amd64 = 326)]
 async fn copy_file_range(
     thread: Arc<Thread>,
     fd_in: FdNum,

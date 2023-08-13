@@ -151,6 +151,7 @@ impl VirtualMemory {
         debug!(target: "kernel::exception", "{addr:?} {error_code:?}");
 
         let state = self.state.lock();
+        let state = state.initialized();
 
         let mapping_opt = state.mappings.iter().find(|mapping| mapping.contains(addr));
         let Some(mapping) = mapping_opt else {
@@ -202,12 +203,17 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         self.activator
     }
 
+    pub fn init(&mut self, vm_size: VmSize) {
+        self.state.lock().init(vm_size)
+    }
+
     pub fn read(&self, addr: VirtAddr, bytes: &mut [u8]) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
 
         let state = self.state.lock();
+        let state = state.initialized();
 
         let start = addr;
         let end_inclusive = addr + (bytes.len() - 1);
@@ -274,6 +280,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         }
 
         let state = self.state.lock();
+        let state = state.initialized();
 
         let start = addr;
         let end_inclusive = addr + (bytes.len() - 1);
@@ -310,6 +317,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
     pub fn force_write(&self, page: Page, bytes: &[u8; 0x1000]) -> Result<()> {
         let mut state = self.state.lock();
+        let state = state.initialized_mut();
 
         let mapping = state
             .mappings
@@ -352,6 +360,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let num_pages = len / 4096;
 
         let mut state = self.state.lock();
+        let state = state.initialized_mut();
 
         loop {
             let mapping = state
@@ -467,6 +476,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         assert!(len < (1 << 47), "mapping of size {len:#x} can never exist");
 
         let mut state = self.state.lock();
+        let state = state.initialized_mut();
 
         let addr = addr.unwrap_or_else(|| state.find_free_address(len));
         let end = addr + len;
@@ -544,6 +554,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
     pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
         let mut state = self.state.lock();
+        let state = state.initialized_mut();
         state.unmap(addr, len)
     }
 
@@ -571,17 +582,50 @@ impl Deref for ActiveVirtualMemory<'_, '_> {
 }
 
 #[derive(Clone)]
-struct VirtualMemoryState {
+enum VirtualMemoryState {
+    Uninitialized,
+    Initialized(InitializedVirtualMemoryState),
+}
+
+#[derive(Clone)]
+struct InitializedVirtualMemoryState {
+    vm_size: VmSize,
     mappings: Vec<Mapping>,
 }
 
 impl VirtualMemoryState {
     pub fn new() -> Self {
-        Self {
+        Self::Uninitialized
+    }
+
+    pub fn init(&mut self, vm_size: VmSize) {
+        assert!(matches!(self, Self::Uninitialized));
+        *self = Self::Initialized(InitializedVirtualMemoryState {
+            vm_size,
             mappings: Vec::new(),
+        });
+    }
+
+    pub fn initialized(&self) -> &InitializedVirtualMemoryState {
+        match self {
+            VirtualMemoryState::Uninitialized => {
+                panic!("virtual memory state hasn't been initialized")
+            }
+            VirtualMemoryState::Initialized(i) => i,
         }
     }
 
+    pub fn initialized_mut(&mut self) -> &mut InitializedVirtualMemoryState {
+        match self {
+            VirtualMemoryState::Uninitialized => {
+                panic!("virtual memory state hasn't been initialized")
+            }
+            VirtualMemoryState::Initialized(i) => i,
+        }
+    }
+}
+
+impl InitializedVirtualMemoryState {
     fn find_free_address(&self, size: u64) -> VirtAddr {
         assert!(
             size < (1 << 47),
@@ -593,7 +637,7 @@ impl VirtualMemoryState {
         (0..MAX_ATTEMPTS)
             .find_map(|_| {
                 let candidate = rdrand.get_u64()?;
-                let candidate = candidate & 0x7fff_ffff_ffff;
+                let candidate = candidate & ((1 << self.vm_size as usize) - 1);
                 let candidate = align_down(candidate, 0x1000);
 
                 let candidate = VirtAddr::new(candidate);
@@ -1109,4 +1153,10 @@ where
 
         result
     })
+}
+
+#[derive(Clone, Copy)]
+pub enum VmSize {
+    ThirtyTwo = 32,
+    FourtySeven = 47,
 }

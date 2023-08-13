@@ -1,5 +1,6 @@
 //! This module is responsible for handling CPU exceptions.
 
+use core::mem::offset_of;
 use core::{alloc::Layout, arch::asm, ptr::null_mut};
 
 use alloc::alloc::alloc;
@@ -18,7 +19,7 @@ use x86_64::{
         paging::Page,
         tss::TaskStateSegment,
     },
-    VirtAddr,
+    PrivilegeLevel, VirtAddr,
 };
 
 use crate::{memory::pagetable::entry_for_page, per_cpu::PerCpu};
@@ -106,6 +107,9 @@ pub fn load_idt() {
         let mut idt = InterruptDescriptorTable::new();
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt.double_fault.set_handler_fn(double_fault_handler);
+        idt[0x80]
+            .set_handler_fn(int0x80_handler)
+            .set_privilege_level(PrivilegeLevel::Ring3);
         idt
     });
 
@@ -158,6 +162,20 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
     let _guard = SwapGsGuard::new(&frame);
 
     panic!("double fault {frame:x?} {code:x?}");
+}
+
+#[naked]
+extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
+    // The code that entered userspace stored addresses where execution should
+    // continue when userspace exits.
+    unsafe {
+        asm!(
+            "swapgs",
+            "jmp gs:[{HANDLER_OFFSET}]",
+            HANDLER_OFFSET = const offset_of!(PerCpu, int0x80_handler),
+            options(noreturn)
+        );
+    }
 }
 
 struct SwapGsGuard(());

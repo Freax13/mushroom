@@ -17,7 +17,16 @@ use crate::{
     },
 };
 
-use super::args::{Ignored, SyscallArg};
+use super::{
+    args::{Ignored, SyscallArg},
+    cpu_state::Abi,
+};
+
+pub struct SyscallArgs {
+    pub abi: Abi,
+    pub no: u64,
+    pub args: [u64; 6],
+}
 
 pub type SyscallResult = Result<u64>;
 
@@ -41,7 +50,8 @@ impl SyscallArg for u32 {
 }
 
 pub trait Syscall0 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     async fn execute(thread: Arc<Thread>) -> SyscallResult;
@@ -56,7 +66,8 @@ pub trait Syscall0 {
 }
 
 pub trait Syscall1 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
@@ -77,7 +88,8 @@ pub trait Syscall1 {
 }
 
 pub trait Syscall2 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
@@ -103,7 +115,8 @@ pub trait Syscall2 {
 }
 
 pub trait Syscall3 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
@@ -139,7 +152,8 @@ pub trait Syscall3 {
 }
 
 pub trait Syscall4 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
@@ -181,7 +195,8 @@ pub trait Syscall4 {
 }
 
 pub trait Syscall5 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
@@ -230,7 +245,8 @@ pub trait Syscall5 {
 }
 
 pub trait Syscall6 {
-    const NO: usize;
+    const NO_I386: usize;
+    const NO_AMD64: usize;
     const NAME: &'static str;
 
     type Arg0: SyscallArg;
@@ -289,7 +305,8 @@ impl<T> Syscall1 for T
 where
     T: Syscall0,
 {
-    const NO: usize = <T as Syscall0>::NO;
+    const NO_I386: usize = <T as Syscall0>::NO_I386;
+    const NO_AMD64: usize = <T as Syscall0>::NO_AMD64;
     const NAME: &'static str = <T as Syscall0>::NAME;
 
     type Arg0 = Ignored;
@@ -313,7 +330,8 @@ impl<T> Syscall2 for T
 where
     T: Syscall1,
 {
-    const NO: usize = <T as Syscall1>::NO;
+    const NO_I386: usize = <T as Syscall1>::NO_I386;
+    const NO_AMD64: usize = <T as Syscall1>::NO_AMD64;
     const NAME: &'static str = <T as Syscall1>::NAME;
 
     type Arg0 = <T as Syscall1>::Arg0;
@@ -340,7 +358,8 @@ impl<T> Syscall3 for T
 where
     T: Syscall2,
 {
-    const NO: usize = <T as Syscall2>::NO;
+    const NO_I386: usize = <T as Syscall2>::NO_I386;
+    const NO_AMD64: usize = <T as Syscall2>::NO_AMD64;
     const NAME: &'static str = <T as Syscall2>::NAME;
 
     type Arg0 = <T as Syscall2>::Arg0;
@@ -375,7 +394,8 @@ impl<T> Syscall4 for T
 where
     T: Syscall3,
 {
-    const NO: usize = <T as Syscall3>::NO;
+    const NO_I386: usize = <T as Syscall3>::NO_I386;
+    const NO_AMD64: usize = <T as Syscall3>::NO_AMD64;
     const NAME: &'static str = <T as Syscall3>::NAME;
 
     type Arg0 = <T as Syscall3>::Arg0;
@@ -414,7 +434,8 @@ impl<T> Syscall5 for T
 where
     T: Syscall4,
 {
-    const NO: usize = <T as Syscall4>::NO;
+    const NO_I386: usize = <T as Syscall4>::NO_I386;
+    const NO_AMD64: usize = <T as Syscall4>::NO_AMD64;
     const NAME: &'static str = <T as Syscall4>::NAME;
 
     type Arg0 = <T as Syscall4>::Arg0;
@@ -457,7 +478,8 @@ impl<T> Syscall6 for T
 where
     T: Syscall5,
 {
-    const NO: usize = <T as Syscall5>::NO;
+    const NO_I386: usize = <T as Syscall5>::NO_I386;
+    const NO_AMD64: usize = <T as Syscall5>::NO_AMD64;
     const NAME: &'static str = <T as Syscall5>::NAME;
 
     type Arg0 = <T as Syscall5>::Arg0;
@@ -500,7 +522,8 @@ where
     }
 }
 
-const MAX_SYSCALL_HANDLER: usize = 327;
+const MAX_SYSCALL_I386_HANDLER: usize = 385;
+const MAX_SYSCALL_AMD64_HANDLER: usize = 327;
 
 #[derive(Clone, Copy)]
 struct SyscallHandler {
@@ -557,13 +580,15 @@ impl SyscallHandler {
 }
 
 pub struct SyscallHandlers {
-    handlers: [Option<SyscallHandler>; MAX_SYSCALL_HANDLER],
+    i386_handlers: [Option<SyscallHandler>; MAX_SYSCALL_I386_HANDLER],
+    amd64_handlers: [Option<SyscallHandler>; MAX_SYSCALL_AMD64_HANDLER],
 }
 
 impl SyscallHandlers {
     pub const fn new() -> Self {
         Self {
-            handlers: [None; MAX_SYSCALL_HANDLER],
+            i386_handlers: [None; MAX_SYSCALL_I386_HANDLER],
+            amd64_handlers: [None; MAX_SYSCALL_AMD64_HANDLER],
         }
     }
 
@@ -571,57 +596,59 @@ impl SyscallHandlers {
     where
         T: Syscall6<execute(): Send>,
     {
-        self.handlers[T::NO] = Some(SyscallHandler::new::<T>());
+        self.i386_handlers[T::NO_I386] = Some(SyscallHandler::new::<T>());
+        self.amd64_handlers[T::NO_AMD64] = Some(SyscallHandler::new::<T>());
         core::mem::forget(val);
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute(
-        &self,
-        thread: Arc<Thread>,
-        syscall_no: u64,
-        arg0: u64,
-        arg1: u64,
-        arg2: u64,
-        arg3: u64,
-        arg4: u64,
-        arg5: u64,
-    ) -> SyscallResult {
-        let syscall_no = usize::try_from(syscall_no).unwrap();
-        let handler = self
-            .handlers
-            .get(syscall_no)
-            .copied()
-            .flatten()
-            .ok_or_else(|| {
-                warn!("unsupported syscall: {syscall_no}");
-                Error::no_sys(())
-            })?;
+    pub async fn execute(&self, thread: Arc<Thread>, args: SyscallArgs) -> SyscallResult {
+        let syscall_no = usize::try_from(args.no).unwrap();
+
+        let handlers: &[_] = match args.abi {
+            Abi::I386 => &self.i386_handlers,
+            Abi::Amd64 => &self.amd64_handlers,
+        };
+
+        let handler = handlers.get(syscall_no).copied().flatten().ok_or_else(|| {
+            warn!("unsupported syscall: no={syscall_no}, abi={:?}", args.abi);
+            Error::no_sys(())
+        })?;
 
         // Whether the syscall should occur in the debug logs.
         let enable_log = !matches!(syscall_no, 0 | 1 | 202 | 228) && thread.tid() != 1;
 
-        let res = (handler.execute)(thread.clone(), arg0, arg1, arg2, arg3, arg4, arg5).await;
+        let res = (handler.execute)(
+            thread.clone(),
+            args.args[0],
+            args.args[1],
+            args.args[2],
+            args.args[3],
+            args.args[4],
+            args.args[5],
+        )
+        .await;
 
         if enable_log {
             VirtualMemoryActivator::r#do(move |vm_activator| {
                 let guard = thread.lock();
                 let formatted_syscall = FormattedSyscall {
                     handler,
-                    arg0,
-                    arg1,
-                    arg2,
-                    arg3,
-                    arg4,
-                    arg5,
+                    arg0: args.args[0],
+                    arg1: args.args[1],
+                    arg2: args.args[2],
+                    arg3: args.args[3],
+                    arg4: args.args[4],
+                    arg5: args.args[5],
                     thread: &guard,
                     vm_activator: RefCell::new(vm_activator),
                 };
 
                 trace!(
-                    "core={} tid={} @ {formatted_syscall} = {res:?}",
+                    "core={} tid={} abi={:?} @ {formatted_syscall} = {res:?}",
                     PerCpu::get().idx,
-                    guard.tid()
+                    guard.tid(),
+                    args.abi,
                 );
             })
             .await;

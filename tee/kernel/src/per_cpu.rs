@@ -17,7 +17,8 @@ use crate::{
     memory::pagetable::ReservedFrameStorage,
     user::process::{
         memory::VirtualMemory,
-        thread::{KernelRegisters, UserspaceRegisters},
+        syscall::cpu_state::{amd64, i386},
+        thread::KernelRegisters,
     },
 };
 
@@ -25,20 +26,19 @@ static COUNT: AtomicUsize = AtomicUsize::new(0);
 static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
     [const { PerCpu::new() }; MAX_APS_COUNT as usize];
 
-pub const KERNEL_REGISTERS_OFFSET: usize = 16;
-pub const USERSPACE_REGISTERS_OFFSET: usize = 160;
-
 #[repr(C)]
 pub struct PerCpu {
     this: *mut PerCpu,
     pub idx: usize,
     pub kernel_registers: Cell<KernelRegisters>,
-    pub userspace_registers: Cell<UserspaceRegisters>,
+    pub userspace32_registers: Cell<i386::UserspaceRegisters>,
+    pub userspace64_registers: Cell<amd64::UserspaceRegisters>,
     pub reserved_frame_storage: RefCell<ReservedFrameStorage>,
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
     pub current_virtual_memory: Cell<Option<Arc<VirtualMemory>>>,
+    pub int0x80_handler: Cell<u64>,
 }
 
 impl PerCpu {
@@ -47,12 +47,14 @@ impl PerCpu {
             this: null_mut(),
             idx: 0,
             kernel_registers: Cell::new(KernelRegisters::ZERO),
-            userspace_registers: Cell::new(UserspaceRegisters::DEFAULT),
+            userspace32_registers: Cell::new(i386::UserspaceRegisters::ZERO),
+            userspace64_registers: Cell::new(amd64::UserspaceRegisters::ZERO),
             reserved_frame_storage: RefCell::new(ReservedFrameStorage::new()),
             temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
             current_virtual_memory: Cell::new(None),
+            int0x80_handler: Cell::new(0),
         }
     }
 

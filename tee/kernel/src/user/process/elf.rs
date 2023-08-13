@@ -11,8 +11,11 @@ use goblin::{
 use x86_64::VirtAddr;
 
 use super::{
-    memory::{ActiveVirtualMemory, MemoryPermissions},
-    syscall::args::FileMode,
+    memory::{ActiveVirtualMemory, MemoryPermissions, VmSize},
+    syscall::{
+        args::FileMode,
+        cpu_state::{amd64::Amd64, i386::I386, CpuState},
+    },
 };
 use crate::{
     error::{Error, Result},
@@ -25,7 +28,6 @@ use crate::{
 impl ActiveVirtualMemory<'_, '_> {
     fn load_elf(&mut self, mut base: u64, elf_bytes: FileSnapshot) -> Result<LoadInfo> {
         let elf = Elf::parse(&elf_bytes).unwrap();
-        assert!(elf.is_64);
         match elf.header.e_type {
             ET_DYN => {}
             ET_EXEC => base = 0,
@@ -68,19 +70,23 @@ impl ActiveVirtualMemory<'_, '_> {
             phnum: elf.header.e_phnum,
             base,
             entry: base + elf.entry,
+            bits: if elf.is_64 {
+                Bits::SixtyFour
+            } else {
+                Bits::ThirtyTwo
+            },
         })
     }
 
     pub fn start_executable(
         &mut self,
         bytes: FileSnapshot,
-        stack: VirtAddr,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
-    ) -> Result<u64> {
+    ) -> Result<CpuState> {
         match &**bytes {
-            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, stack, argv, envp),
-            [b'#', b'!', ..] => self.start_shebang(bytes, stack, argv, envp),
+            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, argv, envp),
+            [b'#', b'!', ..] => self.start_shebang(bytes, argv, envp),
             _ => Err(Error::no_exec(())),
         }
     }
@@ -88,12 +94,18 @@ impl ActiveVirtualMemory<'_, '_> {
     fn start_elf(
         &mut self,
         elf_bytes: FileSnapshot,
-        stack: VirtAddr,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
-    ) -> Result<u64> {
+    ) -> Result<CpuState> {
         let elf = Elf::parse(&elf_bytes).map_err(|_| Error::inval(()))?;
         let interpreter = elf.interpreter.map(ToOwned::to_owned);
+
+        let vm_size = if elf.is_64 {
+            VmSize::FourtySeven
+        } else {
+            VmSize::ThirtyTwo
+        };
+        self.init(vm_size);
 
         let info = self.load_elf(0x4000_0000_0000, elf_bytes)?;
         let mut entrypoint = info.entry;
@@ -108,10 +120,15 @@ impl ActiveVirtualMemory<'_, '_> {
                 return Err(Error::acces(()));
             }
             let interpreter = file.read_snapshot()?;
-            let info = self.load_elf(0x5000_0000_0000, interpreter)?;
-            entrypoint = info.entry;
-            at_base = Some(info.base);
+            let loader_info = self.load_elf(0x5000_0000_0000, interpreter)?;
+            assert_eq!(loader_info.bits, info.bits);
+            entrypoint = loader_info.entry;
+            at_base = Some(loader_info.base);
         }
+
+        // Create stack.
+        let len = 0x2_0000;
+        let stack = self.allocate_stack(None, len)? + len;
 
         self.mmap_zero(
             Some(stack),
@@ -120,9 +137,16 @@ impl ActiveVirtualMemory<'_, '_> {
         )?;
 
         let mut addr = stack;
-        let mut write = |value: u64| {
-            self.write(addr, &value.to_ne_bytes()).unwrap();
-            addr += 8u64;
+        let mut write = |value: u64| match vm_size {
+            VmSize::ThirtyTwo => {
+                let value = u32::try_from(value).unwrap();
+                self.write(addr, &value.to_ne_bytes()).unwrap();
+                addr += 4u64;
+            }
+            VmSize::FourtySeven => {
+                self.write(addr, &value.to_ne_bytes()).unwrap();
+                addr += 8u64;
+            }
         };
 
         let mut str_addr = stack + 0x800u64;
@@ -164,16 +188,22 @@ impl ActiveVirtualMemory<'_, '_> {
         write(info.entry);
         write(0); // AT_NULL
 
-        Ok(entrypoint)
+        let cpu_state = match vm_size {
+            VmSize::ThirtyTwo => CpuState::I386(I386::new(
+                entrypoint.try_into().unwrap(),
+                stack.as_u64().try_into().unwrap(),
+            )),
+            VmSize::FourtySeven => CpuState::Amd64(Amd64::new(entrypoint, stack.as_u64())),
+        };
+        Ok(cpu_state)
     }
 
     fn start_shebang(
         &mut self,
         bytes: FileSnapshot,
-        stack: VirtAddr,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
-    ) -> Result<u64> {
+    ) -> Result<CpuState> {
         // Strip shebang.
         let bytes = bytes.strip_prefix(b"#!").ok_or_else(|| Error::inval(()))?;
 
@@ -219,7 +249,7 @@ impl ActiveVirtualMemory<'_, '_> {
         }
         new_argv.extend(argv.iter().map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(interpreter, stack, &new_argv, envp)
+        self.start_executable(interpreter, &new_argv, envp)
     }
 }
 
@@ -230,4 +260,11 @@ struct LoadInfo {
     pub phnum: u16,
     pub base: u64,
     pub entry: u64,
+    pub bits: Bits,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bits {
+    ThirtyTwo,
+    SixtyFour,
 }
