@@ -1,9 +1,12 @@
 use core::arch::asm;
 use core::mem::offset_of;
 
+use alloc::vec::Vec;
 use log::debug;
 use x86_64::{
+    instructions::tables::{lgdt, sgdt},
     registers::segmentation::{Segment64, FS},
+    structures::DescriptorTablePointer,
     VirtAddr,
 };
 
@@ -16,11 +19,14 @@ use super::Abi;
 #[derive(Clone)]
 pub struct I386 {
     registers: UserspaceRegisters,
+    gdt: Vec<u64>,
 }
 
 impl I386 {
     pub fn new(eip: u32, esp: u32) -> Self {
         debug!("start abi32 eip={eip:#x} esp={esp:#x}");
+
+        let gdt = PerCpu::get().gdt.get().unwrap().as_raw_slice().to_vec();
 
         Self {
             registers: UserspaceRegisters {
@@ -28,6 +34,7 @@ impl I386 {
                 esp,
                 ..UserspaceRegisters::DEFAULT
             },
+            gdt,
         }
     }
 
@@ -48,6 +55,18 @@ impl I386 {
 
         unsafe {
             FS::write_base(VirtAddr::new(self.registers.fs_base));
+        }
+
+        // Save the current GDT.
+        let prev_pointer = sgdt();
+
+        // Load the thread's GDT.
+        let pointer = DescriptorTablePointer {
+            limit: u16::try_from(self.gdt.len() * 8 - 1)?,
+            base: VirtAddr::from_ptr(self.gdt.as_ptr()),
+        };
+        unsafe {
+            lgdt(&pointer);
         }
 
         unsafe {
@@ -198,6 +217,11 @@ impl I386 {
             );
         }
 
+        // Restore the old GDT.
+        unsafe {
+            lgdt(&prev_pointer);
+        }
+
         self.registers = per_cpu.userspace32_registers.get();
 
         Ok(())
@@ -253,6 +277,12 @@ impl I386 {
     pub fn set_tls(&mut self, tls: u64) -> Result<()> {
         self.registers.fs_base = tls;
         Ok(())
+    }
+
+    pub fn add_gd(&mut self, desc: u64) -> Result<u16> {
+        self.gdt.push(desc);
+        let num = u16::try_from(self.gdt.len() - 1)?;
+        Ok(num)
     }
 }
 

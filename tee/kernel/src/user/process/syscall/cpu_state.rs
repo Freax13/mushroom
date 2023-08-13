@@ -53,6 +53,14 @@ impl CpuState {
             CpuState::Amd64(amd64) => amd64.set_tls(tls),
         }
     }
+
+    pub fn add_gd(&mut self, desc: u64) -> Result<u16> {
+        match self {
+            CpuState::None => Err(Error::no_sys(())),
+            CpuState::I386(i386) => i386.add_gd(desc),
+            CpuState::Amd64(_) => Err(Error::no_sys(())),
+        }
+    }
 }
 
 /// The ABI used during a syscall.

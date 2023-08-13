@@ -7,6 +7,7 @@ use core::{
 };
 
 use alloc::{sync::Arc, vec, vec::Vec};
+use bit_field::BitField;
 use bytemuck::{bytes_of, bytes_of_mut, checked::try_pod_read_unaligned, Zeroable};
 use kernel_macros::syscall;
 use x86_64::VirtAddr;
@@ -21,7 +22,10 @@ use crate::{
     },
     rt::oneshot,
     time,
-    user::process::memory::MemoryPermissions,
+    user::process::{
+        memory::MemoryPermissions,
+        syscall::args::{UserDesc, UserDescFlags},
+    },
 };
 
 use self::{
@@ -130,6 +134,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysMount);
     handlers.register(SysGettid);
     handlers.register(SysFutex);
+    handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockGettime);
@@ -1302,6 +1307,58 @@ async fn futex(
         FutexOp::CmpRequeuePi => Err(Error::no_sys(())),
         FutexOp::LockPi2 => Err(Error::no_sys(())),
     }
+}
+
+#[syscall(i386 = 243, amd64 = 205)]
+fn set_thread_area(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    u_info: Pointer<UserDesc>,
+) -> SyscallResult {
+    let u_info_addr = u_info.get();
+    let mut bytes = [0; size_of::<UserDesc>()];
+    vm_activator.activate(&virtual_memory, |vm| vm.read(u_info_addr, &mut bytes))?;
+    let u_info = try_pod_read_unaligned::<UserDesc>(&bytes)?;
+
+    let mut access_byte = 0u8;
+    access_byte.set_bit(7, !u_info.flags.contains(UserDescFlags::SEG_NOT_PRESENT)); // present bit
+    access_byte.set_bits(5..=6, 3); // DPL
+    access_byte.set_bit(4, true); // descriptor type bit
+    access_byte.set_bit(3, u_info.flags.contains(UserDescFlags::READ_EXEC_ONLY)); // executable bit
+    access_byte.set_bit(2, false); // DC bit
+    access_byte.set_bit(1, true); // RW bit
+    access_byte.set_bit(0, true); // accessed bit
+
+    let mut flags = 0u8;
+    flags.set_bit(0, false); // reserved
+    flags.set_bit(1, u_info.flags.contains(UserDescFlags::LM)); // L bit
+    flags.set_bit(2, u_info.flags.contains(UserDescFlags::SEG_32BIT)); // DB bit
+    flags.set_bit(3, u_info.flags.contains(UserDescFlags::LIMIT_IN_PAGES)); // DB bit
+
+    let mut desc = 0;
+    desc.set_bits(0..=15, u64::from(u_info.limit.get_bits(0..=15)));
+    desc.set_bits(48..=51, u64::from(u_info.limit.get_bits(16..=19)));
+    desc.set_bits(16..=39, u64::from(u_info.base_addr.get_bits(0..=23)));
+    desc.set_bits(56..=63, u64::from(u_info.base_addr.get_bits(24..=31)));
+    desc.set_bits(40..=47, u64::from(access_byte));
+    desc.set_bits(52..=55, u64::from(flags));
+
+    assert_eq!(
+        u_info.entry_number, !0,
+        "we only support adding entries for now"
+    );
+
+    let mut cpu_state = thread.thread.cpu_state.lock();
+    let entry = cpu_state.add_gd(desc)?;
+    drop(cpu_state);
+
+    let entry = u32::from(entry);
+    vm_activator.activate(&virtual_memory, |vm| {
+        vm.write(u_info_addr, &entry.to_ne_bytes())
+    })?;
+
+    Ok(0)
 }
 
 #[syscall(i386 = 220, amd64 = 217)]

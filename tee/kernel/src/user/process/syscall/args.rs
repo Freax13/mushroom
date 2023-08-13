@@ -267,6 +267,7 @@ impl Pointee for Stat {}
 impl Pointee for Timespec {}
 impl Pointee for u32 {}
 impl Pointee for u64 {}
+impl Pointee for UserDesc {}
 impl Pointee for WStatus {}
 
 impl SyscallArg for u64 {
@@ -791,5 +792,36 @@ bitflags! {
     pub struct EventFdFlags {
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
+    }
+}
+
+#[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C)]
+pub struct UserDesc {
+    pub entry_number: u32,
+    pub base_addr: u32,
+    pub limit: u32,
+    pub flags: UserDescFlags,
+}
+
+bitflags::bitflags! {
+    #[derive(NoUninit)]
+    #[repr(transparent)]
+    pub struct UserDescFlags: u32 {
+        const SEG_32BIT = 1 << 0;
+        const CONTENTS = 3 << 1;
+        const READ_EXEC_ONLY = 1 << 3;
+        const LIMIT_IN_PAGES = 1 << 4;
+        const SEG_NOT_PRESENT = 1 << 5;
+        const USEABLE = 1 << 6;
+        const LM = 1 << 7;
+    }
+}
+
+unsafe impl CheckedBitPattern for UserDescFlags {
+    type Bits = u32;
+
+    fn is_valid_bit_pattern(bits: &Self::Bits) -> bool {
+        Self::from_bits(*bits).is_some()
     }
 }
