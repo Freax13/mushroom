@@ -1,6 +1,6 @@
 use heck::AsUpperCamelCase;
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
@@ -26,19 +26,21 @@ fn expand_syscall(
     let syscall_name = syscall_ident.to_string();
     let struct_name = format!("Sys{}", AsUpperCamelCase(&syscall_name));
     let struct_ident = Ident::new(&struct_name, input.sig.ident.span());
-    let trait_name = format_ident!("Syscall{}", syscall_args.len());
-    let arg_associated_items = syscall_args.iter().enumerate().map(|(i, (pat, ty))| {
-        let arg_name = pat.ident.to_string();
-        let assoc_type_ident = format_ident!("Arg{i}");
-        let assoc_const_ident = format_ident!("ARG{i}_NAME");
+    let bindings = syscall_args.iter().enumerate().map(|(idx, (pat, ty))| {
         quote! {
-            type #assoc_type_ident = #ty;
-            const #assoc_const_ident: &'static str = #arg_name;
+            let #pat = <#ty as SyscallArg>::parse(syscall_args.args[#idx])?;
         }
     });
-    let function_decl_params = syscall_args.iter().map(|(pat, ty)| {
+    let print_statements = syscall_args.iter().enumerate().map(|(idx, (pat, ty))| {
+        let arg_name = &pat.ident;
+        let format_string = if idx == 0 {
+            format!("{arg_name}=")
+        } else {
+            format!(", {arg_name}=")
+        };
         quote! {
-            #pat: #ty
+            write!(f, #format_string)?;
+            <#ty as SyscallArg>::display(f, syscall_args.args[#idx], thread, vm_activator)?;
         }
     });
     let function_invocation_args = input
@@ -89,19 +91,28 @@ fn expand_syscall(
 
         struct #struct_ident;
 
-        impl #trait_name for #struct_ident {
+        impl Syscall for #struct_ident {
             const NO_I386: usize = #i386;
             const NO_AMD64: usize = #amd64;
             const NAME: &'static str = #syscall_name;
 
-            #(#arg_associated_items)*
-
             async fn execute(
                 thread: Arc<Thread>,
-                #(#function_decl_params,)*
+                syscall_args: SyscallArgs,
             ) -> SyscallResult {
+                #(#bindings)*
                 let future = #future;
                 future.await
+            }
+            fn display(
+                f: &mut dyn fmt::Write,
+                syscall_args: SyscallArgs,
+                thread: &ThreadGuard<'_>,
+                vm_activator: &mut VirtualMemoryActivator,
+            ) -> fmt::Result {
+                write!(f, "{}(", #syscall_name)?;
+                #(#print_statements)*
+                write!(f, ")")
             }
         }
     })

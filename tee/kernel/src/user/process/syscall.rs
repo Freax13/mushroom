@@ -33,10 +33,7 @@ use self::{
         Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SocketPairType, Stat, SyscallArg,
         Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
-    traits::{
-        Syscall0, Syscall1, Syscall2, Syscall3, Syscall4, Syscall5, Syscall6, SyscallHandlers,
-        SyscallResult,
-    },
+    traits::{Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
 
 use super::{
@@ -453,24 +450,16 @@ fn rt_sigaction(
 
 struct SysRtSigprocmask;
 
-impl Syscall3 for SysRtSigprocmask {
+impl Syscall for SysRtSigprocmask {
     const NO_I386: usize = 175;
     const NO_AMD64: usize = 14;
     const NAME: &'static str = "rt_sigprocmask";
 
-    type Arg0 = u64;
-    const ARG0_NAME: &'static str = "how";
-    type Arg1 = Pointer<Sigset>;
-    const ARG1_NAME: &'static str = "set";
-    type Arg2 = Pointer<Sigset>;
-    const ARG2_NAME: &'static str = "oldset";
+    async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {
+        let how = <u64 as SyscallArg>::parse(syscall_args.args[0])?;
+        let set = <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[1])?;
+        let oldset = <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[2])?;
 
-    async fn execute(
-        thread: Arc<Thread>,
-        how: u64,
-        set: Pointer<Sigset>,
-        oldset: Pointer<Sigset>,
-    ) -> SyscallResult {
         VirtualMemoryActivator::r#do(move |vm_activator| {
             let mut thread = thread.lock();
 
@@ -501,26 +490,23 @@ impl Syscall3 for SysRtSigprocmask {
 
     fn display(
         f: &mut dyn fmt::Write,
-        how: u64,
-        set: u64,
-        oldset: u64,
+        syscall_args: SyscallArgs,
         thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
-        write!(
-            f,
-            "{}({}=",
-            <Self as Syscall3>::NAME,
-            <Self as Syscall3>::ARG0_NAME
-        )?;
+        let how = syscall_args.args[0];
+        let set = syscall_args.args[1];
+        let oldset = syscall_args.args[2];
+
+        write!(f, "rt_sigprocmask(set=")?;
         if set == 0 {
             write!(f, "ignored")?;
         } else {
             RtSigprocmaskHow::display(f, how, thread, vm_activator)?;
         }
-        write!(f, ", {}=", <Self as Syscall3>::ARG1_NAME)?;
+        write!(f, ", set=")?;
         Pointer::<Sigset>::display(f, set, thread, vm_activator)?;
-        write!(f, ", {}=", <Self as Syscall3>::ARG2_NAME)?;
+        write!(f, ", oldset=")?;
         Pointer::<Sigset>::display(f, oldset, thread, vm_activator)?;
         write!(f, ")")
     }
