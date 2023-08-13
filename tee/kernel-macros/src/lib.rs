@@ -5,7 +5,7 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    Error, Expr, FnArg, Ident, ItemFn, Meta, Pat, PatIdent, Result, Token, Type,
+    Attribute, Error, Expr, FnArg, Ident, ItemFn, Meta, Pat, PatIdent, Result, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -20,29 +20,50 @@ fn expand_syscall(
     SyscallAttr { i386, amd64 }: SyscallAttr,
     mut input: ItemFn,
 ) -> Result<impl Into<TokenStream>> {
-    let syscall_args = collect_syscall_args(input.clone())?;
+    let syscall_inputs = collect_syscall_inputs(input.clone())?;
+
+    // Remove `#[state]` attribute for parameters.
+    input.sig.inputs.iter_mut().for_each(|input| {
+        let FnArg::Typed(t) = input else {
+            return;
+        };
+        t.attrs.retain(|a| !is_state_attr(a));
+    });
 
     let syscall_ident = &input.sig.ident;
     let syscall_name = syscall_ident.to_string();
     let struct_name = format!("Sys{}", AsUpperCamelCase(&syscall_name));
     let struct_ident = Ident::new(&struct_name, input.sig.ident.span());
-    let bindings = syscall_args.iter().enumerate().map(|(idx, (pat, ty))| {
+    let state_bindings = syscall_inputs.states.iter().map(|(pat, ty)| {
         quote! {
-            let #pat = <#ty as SyscallArg>::parse(syscall_args.args[#idx])?;
+            let #pat = <#ty as ExtractableThreadState>::extract_from_thread(&guard);
         }
     });
-    let print_statements = syscall_args.iter().enumerate().map(|(idx, (pat, ty))| {
-        let arg_name = &pat.ident;
-        let format_string = if idx == 0 {
-            format!("{arg_name}=")
-        } else {
-            format!(", {arg_name}=")
-        };
-        quote! {
-            write!(f, #format_string)?;
-            <#ty as SyscallArg>::display(f, syscall_args.args[#idx], thread, vm_activator)?;
-        }
-    });
+    let arg_bindings = syscall_inputs
+        .args
+        .iter()
+        .enumerate()
+        .map(|(idx, (pat, ty))| {
+            quote! {
+                let #pat = <#ty as SyscallArg>::parse(syscall_args.args[#idx])?;
+            }
+        });
+    let print_statements = syscall_inputs
+        .args
+        .iter()
+        .enumerate()
+        .map(|(idx, (pat, ty))| {
+            let arg_name = &pat.ident;
+            let format_string = if idx == 0 {
+                format!("{arg_name}=")
+            } else {
+                format!(", {arg_name}=")
+            };
+            quote! {
+                write!(f, #format_string)?;
+                <#ty as SyscallArg>::display(f, syscall_args.args[#idx], thread, vm_activator)?;
+            }
+        });
     let function_invocation_args = input
         .sig
         .inputs
@@ -59,7 +80,7 @@ fn expand_syscall(
         });
 
     // Make sure that syscall arguments don't get marked as unused.
-    for (i, (ident, _)) in syscall_args.iter().enumerate() {
+    for (i, (ident, _)) in syscall_inputs.args.iter().enumerate() {
         input.block.stmts.insert(
             i,
             parse_quote! {
@@ -100,7 +121,12 @@ fn expand_syscall(
                 thread: Arc<Thread>,
                 syscall_args: SyscallArgs,
             ) -> SyscallResult {
-                #(#bindings)*
+                let guard = thread.lock();
+                #(#state_bindings)*
+                drop(guard);
+
+                #(#arg_bindings)*
+
                 let future = #future;
                 future.await
             }
@@ -153,7 +179,7 @@ impl Parse for SyscallAttr {
     }
 }
 
-fn collect_syscall_args(item: ItemFn) -> Result<Vec<(PatIdent, Type)>> {
+fn collect_syscall_inputs(item: ItemFn) -> Result<SyscallInputs> {
     let inputs = item
         .sig
         .inputs
@@ -168,7 +194,7 @@ fn collect_syscall_args(item: ItemFn) -> Result<Vec<(PatIdent, Type)>> {
     let args = inputs
         .into_iter()
         .map(|a| match *a.pat {
-            Pat::Ident(b) => Ok((b, *a.ty)),
+            Pat::Ident(pat) => Ok((a.attrs, pat, *a.ty)),
             other => Err(Error::new_spanned(
                 other,
                 "only ident patterns are supported",
@@ -176,8 +202,31 @@ fn collect_syscall_args(item: ItemFn) -> Result<Vec<(PatIdent, Type)>> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(args
-        .into_iter()
-        .filter(|(a, _)| a.ident != "thread" && a.ident != "vm_activator")
-        .collect())
+    let mut inputs = SyscallInputs {
+        states: Vec::new(),
+        args: Vec::new(),
+    };
+
+    for (attrs, pat, ty) in args {
+        if pat.ident == "thread" || pat.ident == "vm_activator" {
+            continue;
+        }
+
+        if attrs.iter().any(is_state_attr) {
+            inputs.states.push((pat, ty));
+        } else {
+            inputs.args.push((pat, ty));
+        }
+    }
+
+    Ok(inputs)
+}
+
+fn is_state_attr(attr: &Attribute) -> bool {
+    attr.meta.path().is_ident("state")
+}
+
+struct SyscallInputs {
+    states: Vec<(PatIdent, Type)>,
+    args: Vec<(PatIdent, Type)>,
 }

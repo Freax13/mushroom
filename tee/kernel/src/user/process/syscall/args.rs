@@ -4,6 +4,7 @@ use core::{
     marker::PhantomData,
 };
 
+use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{checked, CheckedBitPattern, NoUninit, Pod, Zeroable};
@@ -12,8 +13,8 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     user::process::{
-        fd::Events,
-        memory::VirtualMemoryActivator,
+        fd::{Events, FileDescriptorTable},
+        memory::{VirtualMemory, VirtualMemoryActivator},
         thread::{Sigaction, Sigset, Stack, ThreadGuard},
     },
 };
@@ -27,6 +28,25 @@ pub trait SyscallArg: Display + Send + Copy {
         thread: &ThreadGuard<'_>,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result;
+}
+
+/// A thread state that is commonly used by syscall handlers.
+/// These states can be used as inputs for syscalls with the `#[state]`
+/// attribute.
+pub trait ExtractableThreadState: Send {
+    fn extract_from_thread(guard: &ThreadGuard) -> Self;
+}
+
+impl ExtractableThreadState for Arc<FileDescriptorTable> {
+    fn extract_from_thread(guard: &ThreadGuard) -> Self {
+        guard.fdtable().clone()
+    }
+}
+
+impl ExtractableThreadState for Arc<VirtualMemory> {
+    fn extract_from_thread(guard: &ThreadGuard) -> Self {
+        guard.virtual_memory().clone()
+    }
 }
 
 macro_rules! bitflags {

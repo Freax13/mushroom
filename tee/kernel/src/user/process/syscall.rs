@@ -9,7 +9,6 @@ use core::{
 use alloc::{sync::Arc, vec, vec::Vec};
 use bytemuck::{bytes_of, bytes_of_mut, checked::try_pod_read_unaligned, Zeroable};
 use kernel_macros::syscall;
-use log::debug;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -28,10 +27,10 @@ use crate::{
 use self::{
     args::{
         Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, Domain, EpollCreate1Flags,
-        EpollCtlOp, EpollEvent, EventFdFlags, FcntlCmd, FdNum, FileMode, FutexOp, FutexOpWithFlags,
-        GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags, MountFlags, OpenFlags,
-        Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow, SocketPairType, Stat, SyscallArg,
-        Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd, FdNum, FileMode,
+        FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, LinuxDirent64, MmapFlags,
+        MountFlags, OpenFlags, Pipe2Flags, Pointer, Pollfd, ProtFlags, RtSigprocmaskHow,
+        SocketPairType, Stat, SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -47,9 +46,9 @@ use super::{
         },
         pipe,
         unix_socket::UnixSocket,
-        Events,
+        Events, FileDescriptorTable,
     },
-    memory::VirtualMemoryActivator,
+    memory::{VirtualMemory, VirtualMemoryActivator},
     thread::{new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
     Process,
 };
@@ -75,7 +74,12 @@ impl Thread {
 impl ThreadGuard<'_> {
     /// Execute the exit syscall.
     pub fn exit(&mut self, vm_activator: &mut VirtualMemoryActivator, status: u8) {
-        let _ = exit(self, vm_activator, u64::from(status));
+        let _ = exit(
+            self,
+            vm_activator,
+            self.virtual_memory().clone(),
+            u64::from(status),
+        );
     }
 }
 
@@ -146,11 +150,14 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 };
 
 #[syscall(i386 = 3, amd64 = 0)]
-async fn read(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -> SyscallResult {
-    let guard = thread.lock();
-    let fd = guard.fdtable().get(fd)?;
-    let virtual_memory = guard.virtual_memory().clone();
-    drop(guard);
+async fn read(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
 
     let buf = buf.get();
     let count = usize::try_from(count)?;
@@ -167,11 +174,14 @@ async fn read(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) ->
 }
 
 #[syscall(i386 = 4, amd64 = 1)]
-async fn write(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -> SyscallResult {
-    let guard = thread.lock();
-    let fd = guard.fdtable().get(fd)?;
-    let virtual_memory = guard.virtual_memory().clone();
-    drop(guard);
+async fn write(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
 
     let buf = buf.get();
     let count = usize::try_from(count)?;
@@ -192,15 +202,15 @@ async fn write(thread: Arc<Thread>, fd: FdNum, buf: Pointer<[u8]>, count: u64) -
 
 #[syscall(i386 = 5, amd64 = 2)]
 fn open(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     pathname: Pointer<CStr>,
     flags: OpenFlags,
     mode: u64,
 ) -> SyscallResult {
     let mode = FileMode::from_bits_truncate(mode);
-    let filename =
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
+    let filename = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
 
     let file = if flags.contains(OpenFlags::CREAT) {
         create_file(ROOT_NODE.clone(), &filename, mode)?
@@ -210,36 +220,30 @@ fn open(
     };
 
     let fd = if flags.contains(OpenFlags::WRONLY) {
-        thread
-            .fdtable()
-            .insert(WriteonlyFileFileDescription::new(file))?
+        fdtable.insert(WriteonlyFileFileDescription::new(file))?
     } else if flags.contains(OpenFlags::RDWR) {
-        thread
-            .fdtable()
-            .insert(ReadWriteFileFileDescription::new(file))?
+        fdtable.insert(ReadWriteFileFileDescription::new(file))?
     } else {
-        thread
-            .fdtable()
-            .insert(ReadonlyFileFileDescription::new(file))?
+        fdtable.insert(ReadonlyFileFileDescription::new(file))?
     };
 
     Ok(fd.get() as u64)
 }
 
 #[syscall(i386 = 6, amd64 = 3)]
-fn close(thread: &mut ThreadGuard, fd: FdNum) -> SyscallResult {
-    thread.fdtable().close(fd)?;
+fn close(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
+    fdtable.close(fd)?;
     Ok(0)
 }
 
 #[syscall(i386 = 106, amd64 = 4)]
 fn stat(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     filename: Pointer<CStr>,
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
-    vm_activator.activate(thread.virtual_memory(), |vm| {
+    vm_activator.activate(&virtual_memory, |vm| {
         let filename = vm.read_path(filename.get())?;
 
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
@@ -253,15 +257,16 @@ fn stat(
 
 #[syscall(i386 = 108, amd64 = 5)]
 fn fstat(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+    let fd = fdtable.get(fd)?;
     let stat = fd.stat()?;
 
-    vm_activator.activate(thread.virtual_memory(), |vm| {
+    vm_activator.activate(&virtual_memory, |vm| {
         vm.write(statbuf.get(), bytes_of(&stat))
     })?;
 
@@ -270,12 +275,12 @@ fn fstat(
 
 #[syscall(i386 = 107, amd64 = 6)]
 fn lstat(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     filename: Pointer<CStr>,
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
-    vm_activator.activate(thread.virtual_memory(), |vm| {
+    vm_activator.activate(&virtual_memory, |vm| {
         let filename = vm.read_path(filename.get())?;
 
         let node = lookup_node(ROOT_NODE.clone(), &filename)?;
@@ -289,13 +294,13 @@ fn lstat(
 
 #[syscall(i386 = 168, amd64 = 7)]
 fn poll(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     fds: Pointer<FdNum>,
     nfds: u64,
     timeout: u64,
 ) -> SyscallResult {
-    vm_activator.activate(thread.virtual_memory(), |vm| {
+    vm_activator.activate(&virtual_memory, |vm| {
         for i in 0..nfds {
             let mut pollfd = Pollfd::zeroed();
             vm.read(fds.get() + i * 8, bytes_of_mut(&mut pollfd))?;
@@ -311,10 +316,15 @@ fn poll(
 }
 
 #[syscall(i386 = 19, amd64 = 8)]
-fn lseek(thread: &mut ThreadGuard, fd: FdNum, offset: u64, whence: Whence) -> SyscallResult {
+fn lseek(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    offset: u64,
+    whence: Whence,
+) -> SyscallResult {
     let offset = usize::try_from(offset)?;
 
-    let fd = thread.fdtable().get(fd)?;
+    let fd = fdtable.get(fd)?;
     let offset = fd.seek(offset, whence)?;
 
     let offset = u64::try_from(offset)?;
@@ -323,8 +333,9 @@ fn lseek(thread: &mut ThreadGuard, fd: FdNum, offset: u64, whence: Whence) -> Sy
 
 #[syscall(i386 = 90, amd64 = 9)]
 fn mmap(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     addr: Pointer<c_void>,
     length: u64,
     prot: ProtFlags,
@@ -351,24 +362,23 @@ fn mmap(
             assert!(flags.contains(MmapFlags::ANONYMOUS));
             assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
-            let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
-                vm.allocate_stack(addr, length)
-            })?;
+            let addr =
+                vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(addr, length))?;
 
             Ok(addr.as_u64())
         } else if flags.contains(MmapFlags::ANONYMOUS) {
             let permissions = MemoryPermissions::from(prot);
-            let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
+            let addr = vm_activator.activate(&virtual_memory, |vm| {
                 vm.mmap_zero(addr, length, permissions)
             })?;
 
             Ok(addr.as_u64())
         } else {
             let fd = FdNum::parse(fd)?;
-            let fd = thread.fdtable().get(fd)?;
+            let fd = fdtable.get(fd)?;
 
             let permissions = MemoryPermissions::from(prot);
-            let addr = vm_activator.activate(thread.virtual_memory(), |vm| {
+            let addr = vm_activator.activate(&virtual_memory, |vm| {
                 fd.mmap(vm, addr, offset, length, permissions)
             })?;
             Ok(addr.as_u64())
@@ -380,22 +390,20 @@ fn mmap(
 
 #[syscall(i386 = 125, amd64 = 10)]
 fn mprotect(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     addr: Pointer<c_void>,
     len: u64,
     prot: ProtFlags,
 ) -> SyscallResult {
-    vm_activator.activate(thread.virtual_memory(), |vm| {
-        vm.mprotect(addr.get(), len, prot)
-    })?;
+    vm_activator.activate(&virtual_memory, |vm| vm.mprotect(addr.get(), len, prot))?;
     Ok(0)
 }
 
 #[syscall(i386 = 91, amd64 = 11)]
 fn munmap(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     addr: Pointer<c_void>,
     length: u64,
 ) -> SyscallResult {
@@ -403,7 +411,7 @@ fn munmap(
     if !addr.is_aligned(0x1000u64) || length % 0x1000 != 0 {
         return Err(Error::inval(()));
     }
-    vm_activator.activate(thread.virtual_memory(), |a| a.unmap(addr, length));
+    vm_activator.activate(&virtual_memory, |a| a.unmap(addr, length));
     Ok(0)
 }
 
@@ -421,6 +429,7 @@ fn brk(brk_value: u64) -> SyscallResult {
 fn rt_sigaction(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     signum: u64,
     act: Pointer<Sigaction>,
     oldact: Pointer<Sigaction>,
@@ -433,12 +442,11 @@ fn rt_sigaction(
 
     if !oldact.is_null() {
         let sigaction = thread.sigaction.get(signum).ok_or(Error::inval(()))?;
-        vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm_activator.activate(&virtual_memory, |vm| {
             vm.write(oldact.get(), bytes_of(sigaction))
         })?;
     }
     if !act.is_null() {
-        let virtual_memory = thread.virtual_memory().clone();
         let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::inval(()))?;
         vm_activator.activate(&virtual_memory, |vm| {
             vm.read(act.get(), bytes_of_mut(sigaction))
@@ -519,14 +527,15 @@ fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
 
 #[syscall(i386 = 180, amd64 = 17)]
 fn pread64(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     buf: Pointer<c_void>,
     count: u64,
     pos: u64,
 ) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+    let fd = fdtable.get(fd)?;
 
     let buf = buf.get();
     let count = usize::try_from(count)?;
@@ -540,7 +549,7 @@ fn pread64(
     let len = fd.pread(pos, chunk)?;
     let chunk = &mut chunk[..len];
 
-    vm_activator.activate(thread.virtual_memory(), |vm| vm.write(buf, chunk))?;
+    vm_activator.activate(&virtual_memory, |vm| vm.write(buf, chunk))?;
 
     let len = u64::try_from(len)?;
 
@@ -549,14 +558,15 @@ fn pread64(
 
 #[syscall(i386 = 181, amd64 = 18)]
 fn pwrite64(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     buf: Pointer<c_void>,
     count: u64,
     pos: u64,
 ) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+    let fd = fdtable.get(fd)?;
 
     let buf = buf.get();
     let count = usize::try_from(count)?;
@@ -566,7 +576,7 @@ fn pwrite64(
     let max_chunk_len = chunk.len();
     let len = cmp::min(max_chunk_len, count);
     let chunk = &mut chunk[..len];
-    vm_activator.activate(thread.virtual_memory(), |vm| vm.read(buf, chunk))?;
+    vm_activator.activate(&virtual_memory, |vm| vm.read(buf, chunk))?;
 
     let len = fd.pwrite(pos, chunk)?;
 
@@ -575,17 +585,19 @@ fn pwrite64(
 }
 
 #[syscall(i386 = 145, amd64 = 19)]
-async fn readv(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -> SyscallResult {
+async fn readv(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    vec: Pointer<Iovec>,
+    vlen: u64,
+) -> SyscallResult {
     if vlen == 0 {
         return SyscallResult::Ok(0);
     }
     let vlen = usize::try_from(vlen)?;
 
-    let guard = thread.lock();
-    let virtual_memory = guard.virtual_memory().clone();
-    drop(guard);
-
-    let iovec = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+    let iovec = VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
         let mut iovec = Iovec::zeroed();
         for i in 0..vlen {
             vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
@@ -598,21 +610,23 @@ async fn readv(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -
     .await?;
 
     let addr = Pointer::parse(iovec.base)?;
-    read(thread, fd, addr, iovec.len).await
+    read(virtual_memory, fdtable, fd, addr, iovec.len).await
 }
 
 #[syscall(i386 = 146, amd64 = 20)]
-async fn writev(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) -> SyscallResult {
+async fn writev(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    vec: Pointer<Iovec>,
+    vlen: u64,
+) -> SyscallResult {
     if vlen == 0 {
         return SyscallResult::Ok(0);
     }
     let vlen = usize::try_from(vlen)?;
 
-    let guard = thread.lock();
-    let virtual_memory = guard.virtual_memory().clone();
-    drop(guard);
-
-    let iovec = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+    let iovec = VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
         let mut iovec = Iovec::zeroed();
         for i in 0..vlen {
             vm.read(vec.get() + size_of::<Iovec>() * i, bytes_of_mut(&mut iovec))?;
@@ -625,17 +639,17 @@ async fn writev(thread: Arc<Thread>, fd: FdNum, vec: Pointer<Iovec>, vlen: u64) 
     .await?;
 
     let addr = Pointer::parse(iovec.base)?;
-    write(thread, fd, addr, iovec.len).await
+    write(virtual_memory, fdtable, fd, addr, iovec.len).await
 }
 
 #[syscall(i386 = 33, amd64 = 21)]
 fn access(
-    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     mode: u64, // FIXME: use correct type
 ) -> SyscallResult {
-    let path = vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
+    let path = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
     let _node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
     // FIXME: implement the actual access checks.
     Ok(0)
@@ -652,8 +666,7 @@ fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
 }
 
 #[syscall(i386 = 41, amd64 = 32)]
-fn dup(thread: &mut ThreadGuard, fildes: FdNum) -> SyscallResult {
-    let fdtable = thread.fdtable();
+fn dup(#[state] fdtable: Arc<FileDescriptorTable>, fildes: FdNum) -> SyscallResult {
     let fd = fdtable.get(fildes)?;
     let newfd = fdtable.insert(fd)?;
 
@@ -661,8 +674,7 @@ fn dup(thread: &mut ThreadGuard, fildes: FdNum) -> SyscallResult {
 }
 
 #[syscall(i386 = 63, amd64 = 33)]
-fn dup2(thread: &mut ThreadGuard, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
-    let fdtable = thread.fdtable();
+fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
@@ -680,17 +692,14 @@ fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
 
 #[syscall(i386 = 187, amd64 = 40)]
 async fn sendfile(
-    thread: Arc<Thread>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     out: FdNum,
     r#in: FdNum,
     offset: Pointer<u64>,
     count: u64,
 ) -> SyscallResult {
-    let guard = thread.lock();
-    let fdtable = guard.fdtable();
     let out = fdtable.get(out)?;
     let r#in = fdtable.get(r#in)?;
-    drop(guard);
 
     if !offset.is_null() {
         todo!();
@@ -715,7 +724,8 @@ async fn sendfile(
 
 #[syscall(i386 = 360, amd64 = 53)]
 fn socketpair(
-    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     vm_activator: &mut VirtualMemoryActivator,
     domain: Domain,
     r#type: SocketPairType,
@@ -732,8 +742,8 @@ fn socketpair(
             }
 
             let (half1, half2) = UnixSocket::new_pair();
-            res1 = thread.fdtable().insert(half1);
-            res2 = thread.fdtable().insert(half2);
+            res1 = fdtable.insert(half1);
+            res2 = fdtable.insert(half2);
         }
     }
 
@@ -741,13 +751,13 @@ fn socketpair(
     let (fd1, fd2) = match (res1, res2) {
         (Result::Ok(fd1), Result::Ok(fd2)) => (fd1, fd2),
         (Result::Ok(fd), Result::Err(err)) | (Result::Err(err), Result::Ok(fd)) => {
-            let _ = thread.fdtable().close(fd);
+            let _ = fdtable.close(fd);
             return Err(err);
         }
         (Result::Err(err), Result::Err(_)) => return Err(err),
     };
 
-    vm_activator.activate(thread.virtual_memory(), |vm| {
+    vm_activator.activate(&virtual_memory, |vm| {
         vm.write(sv.get(), bytes_of(&[fd1.get(), fd2.get()]))
     })?;
 
@@ -758,6 +768,8 @@ fn socketpair(
 fn clone(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     flags: CloneFlags,
     stack: Pointer<c_void>,
     parent_tid: Pointer<u32>,
@@ -780,10 +792,10 @@ fn clone(
 
     let new_fdtable = if flags.contains(CloneFlags::FILES) {
         // Reuse the same files.
-        thread.fdtable().clone()
+        fdtable
     } else {
         // Create a shallow copy of the files.
-        Arc::new((**thread.fdtable()).clone())
+        Arc::new((*fdtable).clone())
     };
 
     let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
@@ -812,7 +824,7 @@ fn clone(
         );
 
         if flags.contains(CloneFlags::PARENT_SETTID) {
-            vm_activator.activate(thread.virtual_memory(), |vm| {
+            vm_activator.activate(&virtual_memory, |vm| {
                 vm.write(parent_tid.get(), &new_tid.to_ne_bytes())
             })?;
         }
@@ -831,13 +843,18 @@ fn clone(
 }
 
 #[syscall(i386 = 2, amd64 = 57)]
-fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> SyscallResult {
+fn fork(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    vm_activator: &mut VirtualMemoryActivator,
+) -> SyscallResult {
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
-        let virtual_memory = (**thread.virtual_memory()).clone(vm_activator)?;
+        let virtual_memory = (*virtual_memory).clone(vm_activator)?;
         let new_virtual_memory = Some(Arc::new(virtual_memory));
-        let new_fdtable = Arc::new((**thread.fdtable()).clone());
+        let new_fdtable = Arc::new((*fdtable).clone());
 
         Result::Ok(thread.clone(
             new_tid,
@@ -856,14 +873,14 @@ fn fork(thread: &mut ThreadGuard, vm_activator: &mut VirtualMemoryActivator) -> 
 }
 
 #[syscall(i386 = 190, amd64 = 58)]
-async fn vfork(thread: Arc<Thread>) -> SyscallResult {
+async fn vfork(thread: Arc<Thread>, #[state] fdtable: Arc<FileDescriptorTable>) -> SyscallResult {
     let (sender, receiver) = oneshot::new();
 
     let guard = thread.lock();
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
-        let new_fdtable = Arc::new((**guard.fdtable()).clone());
+        let new_fdtable = Arc::new((*fdtable).clone());
 
         Result::Ok(guard.clone(
             new_tid,
@@ -888,40 +905,40 @@ async fn vfork(thread: Arc<Thread>) -> SyscallResult {
 fn execve(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     pathname: Pointer<CStr>,
     argv: Pointer<[&'static CStr]>,
     envp: Pointer<[&'static CStr]>,
 ) -> SyscallResult {
-    let (pathname, args, envs) =
-        vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
-            let pathname = vm.read_path(pathname.get())?;
+    let (pathname, args, envs) = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
+        let pathname = vm.read_path(pathname.get())?;
 
-            let mut args = Vec::new();
-            for i in 0u64.. {
-                let argpp = argv.get() + i * 8;
-                let mut argp = 0u64;
-                vm.read(argpp, bytes_of_mut(&mut argp))?;
-                if argp == 0 {
-                    break;
-                }
-                let argp = VirtAddr::try_new(argp).map_err(|_| Error::fault(()))?;
-                args.push(vm.read_cstring(argp, 0x1000)?);
+        let mut args = Vec::new();
+        for i in 0u64.. {
+            let argpp = argv.get() + i * 8;
+            let mut argp = 0u64;
+            vm.read(argpp, bytes_of_mut(&mut argp))?;
+            if argp == 0 {
+                break;
             }
+            let argp = VirtAddr::try_new(argp).map_err(|_| Error::fault(()))?;
+            args.push(vm.read_cstring(argp, 0x1000)?);
+        }
 
-            let mut envs = Vec::new();
-            for i in 0u64.. {
-                let envpp = envp.get() + i * 8;
-                let mut envp = 0u64;
-                vm.read(envpp, bytes_of_mut(&mut envp))?;
-                if envp == 0 {
-                    break;
-                }
-                let envp = VirtAddr::try_new(envp).map_err(|_| Error::fault(()))?;
-                envs.push(vm.read_cstring(envp, 0x1000)?);
+        let mut envs = Vec::new();
+        for i in 0u64.. {
+            let envpp = envp.get() + i * 8;
+            let mut envp = 0u64;
+            vm.read(envpp, bytes_of_mut(&mut envp))?;
+            if envp == 0 {
+                break;
             }
+            let envp = VirtAddr::try_new(envp).map_err(|_| Error::fault(()))?;
+            envs.push(vm.read_cstring(envp, 0x1000)?);
+        }
 
-            Result::Ok((pathname, args, envs))
-        })?;
+        Result::Ok((pathname, args, envs))
+    })?;
 
     log::info!("execve({pathname:?}, {args:?}, {envs:?})");
 
@@ -938,6 +955,7 @@ fn execve(
 fn exit(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     status: u64,
 ) -> SyscallResult {
     let status = status as u8;
@@ -946,7 +964,7 @@ fn exit(
 
     if core::mem::take(&mut thread.clear_child_tid) != 0 {
         let clear_child_tid = VirtAddr::new(thread.clear_child_tid);
-        let _ = vm_activator.activate(thread.virtual_memory(), |vm| {
+        let _ = vm_activator.activate(&virtual_memory, |vm| {
             vm.write(clear_child_tid, &0u32.to_ne_bytes())
         });
 
@@ -967,6 +985,7 @@ fn exit(
 #[syscall(i386 = 114, amd64 = 61)]
 async fn wait4(
     thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     pid: i64,
     wstatus: Pointer<WStatus>, // FIXME: use correct type
     options: WaitOptions,
@@ -1000,7 +1019,6 @@ async fn wait4(
         let addr = wstatus.get();
         let wstatus = WStatus::exit(status);
 
-        let virtual_memory = thread.lock().virtual_memory().clone();
         VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
             vm.write(addr, bytes_of(&wstatus))
         })
@@ -1013,13 +1031,18 @@ async fn wait4(
 }
 
 #[syscall(i386 = 55, amd64 = 72)]
-fn fcntl(thread: &mut ThreadGuard, fd: FdNum, cmd: FcntlCmd, arg: u64) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+fn fcntl(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    cmd: FcntlCmd,
+    arg: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
 
     match cmd {
         FcntlCmd::DupFd => {
             let min = i32::try_from(arg)?;
-            let fd_num = thread.fdtable().insert_after(min, fd)?;
+            let fd_num = fdtable.insert_after(min, fd)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => {
@@ -1039,27 +1062,24 @@ fn fcntl(thread: &mut ThreadGuard, fd: FdNum, cmd: FcntlCmd, arg: u64) -> Syscal
 
 #[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
-    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     mode: FileMode,
 ) -> SyscallResult {
-    let pathname =
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
-
+    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
     create_directory(ROOT_NODE.clone(), &pathname, mode)?;
-
     Ok(0)
 }
 
 #[syscall(i386 = 83, amd64 = 88)]
 fn symlink(
-    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     oldname: Pointer<CStr>,
     newname: Pointer<CStr>,
 ) -> SyscallResult {
-    let (oldname, newname) = vm_activator.activate(thread.virtual_memory(), |vm| {
+    let (oldname, newname) = vm_activator.activate(&virtual_memory, |vm| {
         let oldname = vm.read_path(oldname.get())?;
         let newname = vm.read_path(newname.get())?;
         Result::<_, Error>::Ok((oldname, newname))
@@ -1072,7 +1092,7 @@ fn symlink(
 
 #[syscall(i386 = 85, amd64 = 89)]
 fn readlink(
-    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
     buf: Pointer<[u8]>,
@@ -1080,7 +1100,7 @@ fn readlink(
 ) -> SyscallResult {
     let bufsiz = usize::try_from(bufsiz)?;
 
-    let len = vm_activator.activate(thread.virtual_memory(), |vm| {
+    let len = vm_activator.activate(&virtual_memory, |vm| {
         let pathname = vm.read_path(pathname.get())?;
         let target = read_link(ROOT_NODE.clone(), &pathname)?;
 
@@ -1100,12 +1120,12 @@ fn readlink(
 
 #[syscall(i386 = 15, amd64 = 90)]
 fn chmod(
-    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     filename: Pointer<CStr>,
     mode: FileMode,
 ) -> SyscallResult {
-    let path = vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(filename.get()))?;
+    let path = vm_activator.activate(&virtual_memory, |vm| vm.read_path(filename.get()))?;
 
     set_mode(ROOT_NODE.clone(), &path, mode)?;
 
@@ -1113,8 +1133,8 @@ fn chmod(
 }
 
 #[syscall(i386 = 94, amd64 = 91)]
-fn fchmod(thread: &mut ThreadGuard, fd: FdNum, mode: FileMode) -> SyscallResult {
-    let fd = thread.fdtable().get(fd)?;
+fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: FileMode) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
     fd.set_mode(mode)?;
     Ok(0)
 }
@@ -1123,6 +1143,7 @@ fn fchmod(thread: &mut ThreadGuard, fd: FdNum, mode: FileMode) -> SyscallResult 
 fn sigaltstack(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     ss: Pointer<Stack>,
     old_ss: Pointer<Stack>,
 ) -> SyscallResult {
@@ -1133,14 +1154,14 @@ fn sigaltstack(
             stack
         });
 
-        vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm_activator.activate(&virtual_memory, |vm| {
             vm.write(old_ss.get(), bytes_of(&old_ss_value))
         })?;
     }
 
     if !ss.is_null() {
         let mut ss_value = Stack::zeroed();
-        vm_activator.activate(thread.virtual_memory(), |vm| {
+        vm_activator.activate(&virtual_memory, |vm| {
             vm.read(ss.get(), bytes_of_mut(&mut ss_value))
         })?;
 
@@ -1175,8 +1196,8 @@ fn arch_prctl(
 
 #[syscall(i386 = 21, amd64 = 165)]
 fn mount(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     dev_name: Pointer<CStr>,
     dir_name: Pointer<CStr>,
     r#type: Pointer<CStr>,
@@ -1184,7 +1205,7 @@ fn mount(
     data: Pointer<c_void>,
 ) -> SyscallResult {
     let (_dev_name, dir_name, r#type) =
-        vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+        vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
             let dev_name = vm.read_path(dev_name.get())?;
             let dir_name = vm.read_path(dir_name.get())?;
             let r#type = vm.read_cstring(r#type.get(), 0x10)?;
@@ -1210,6 +1231,7 @@ fn gettid(thread: &mut ThreadGuard) -> SyscallResult {
 #[syscall(i386 = 240, amd64 = 202)]
 async fn futex(
     thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     uaddr: Pointer<c_void>,
     op: FutexOpWithFlags,
     val: u32,
@@ -1221,13 +1243,11 @@ async fn futex(
         FutexOp::Wait => {
             assert_eq!(utime, 0);
 
-            let vm = thread.lock().virtual_memory().clone();
-
             thread
                 .process()
                 .futexes
                 .clone()
-                .wait(uaddr.get(), val, None, None, vm)
+                .wait(uaddr.get(), val, None, None, virtual_memory)
                 .await?;
 
             Ok(0)
@@ -1246,15 +1266,15 @@ async fn futex(
         FutexOp::WaitBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
 
-            let vm = thread.lock().virtual_memory().clone();
-
             let deadline = if utime != 0 {
-                let vm = vm.clone();
-                let deadline = VirtualMemoryActivator::use_from_async(vm, move |vm| -> Result<_> {
-                    let mut time = Timespec::zeroed();
-                    vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
-                    Ok(time)
-                })
+                let deadline = VirtualMemoryActivator::use_from_async(
+                    virtual_memory.clone(),
+                    move |vm| -> Result<_> {
+                        let mut time = Timespec::zeroed();
+                        vm.read(VirtAddr::new(utime), bytes_of_mut(&mut time))?;
+                        Ok(time)
+                    },
+                )
                 .await?;
                 Some(deadline)
             } else {
@@ -1265,7 +1285,7 @@ async fn futex(
                 .process()
                 .futexes
                 .clone()
-                .wait(uaddr.get(), val, Some(bitset), deadline, vm)
+                .wait(uaddr.get(), val, Some(bitset), deadline, virtual_memory)
                 .await?;
 
             Ok(0)
@@ -1286,17 +1306,18 @@ async fn futex(
 
 #[syscall(i386 = 220, amd64 = 217)]
 fn getdents64(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     dirent: Pointer<LinuxDirent64>,
     count: u64,
 ) -> SyscallResult {
     let capacity = usize::try_from(count)?;
-    let fd = thread.fdtable().get(fd)?;
+    let fd = fdtable.get(fd)?;
     let entries = fd.getdents64(capacity)?;
 
-    let len = vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+    let len = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
         let mut addr = dirent.get();
         for entry in entries {
             let dirent = LinuxDirent64 {
@@ -1330,8 +1351,8 @@ fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallRes
 
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     clock_id: ClockId,
     tp: Pointer<Timespec>,
 ) -> SyscallResult {
@@ -1339,9 +1360,7 @@ fn clock_gettime(
         ClockId::Realtime | ClockId::Monotonic => time::now(),
     };
 
-    vm_activator.activate(thread.virtual_memory(), |vm| {
-        vm.write(tp.get(), bytes_of(&time))
-    })?;
+    vm_activator.activate(&virtual_memory, |vm| vm.write(tp.get(), bytes_of(&time)))?;
 
     Ok(0)
 }
@@ -1355,7 +1374,8 @@ async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
 
 #[syscall(i386 = 256, amd64 = 232)]
 async fn epoll_wait(
-    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     epfd: FdNum,
     event: Pointer<EpollEvent>,
     maxevents: i32,
@@ -1363,10 +1383,6 @@ async fn epoll_wait(
 ) -> SyscallResult {
     let maxevents = usize::try_from(maxevents)?;
 
-    let guard = thread.lock();
-    let fdtable = guard.fdtable().clone();
-    let virtual_memory = guard.virtual_memory().clone();
-    drop(guard);
     let epoll = fdtable.get(epfd)?;
     let events = epoll.epoll_wait(maxevents).await?;
     assert!(events.len() <= maxevents);
@@ -1387,15 +1403,16 @@ async fn epoll_wait(
 
 #[syscall(i386 = 255, amd64 = 233)]
 fn epoll_ctl(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     epfd: FdNum,
     op: EpollCtlOp,
     fd: FdNum,
     event: Pointer<EpollEvent>,
 ) -> SyscallResult {
     let event = if !event.is_null() {
-        vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+        vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
             let mut bytes = [0; size_of::<EpollEvent>()];
             vm.read(event.get(), &mut bytes)?;
             let event = try_pod_read_unaligned::<EpollEvent>(&bytes)?;
@@ -1405,10 +1422,8 @@ fn epoll_ctl(
         None
     };
 
-    debug!("epoll_ctl");
-
-    let epoll = thread.fdtable().get(epfd)?;
-    let fd = thread.fdtable().get(fd)?;
+    let epoll = fdtable.get(epfd)?;
+    let fd = fdtable.get(fd)?;
 
     match op {
         EpollCtlOp::Add => {
@@ -1427,15 +1442,14 @@ fn epoll_ctl(
 fn openat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     dfd: FdNum,
     filename: Pointer<CStr>,
     flags: OpenFlags,
     mode: u64,
 ) -> SyscallResult {
-    let filename =
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(filename.get()))?;
-
-    let fdtable = thread.fdtable();
+    let filename = vm_activator.activate(&virtual_memory, |vm| vm.read_path(filename.get()))?;
 
     let start_dir = if dfd == FdNum::CWD {
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
@@ -1479,14 +1493,13 @@ fn futimesat(
 fn unlinkat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     dfd: FdNum,
     pathname: Pointer<CStr>,
     flags: UnlinkOptions,
 ) -> SyscallResult {
-    let pathname =
-        vm_activator.activate(thread.virtual_memory(), |vm| vm.read_path(pathname.get()))?;
-
-    let fdtable = thread.fdtable();
+    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
 
     let start_dir = if dfd == FdNum::CWD {
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
@@ -1509,19 +1522,19 @@ fn unlinkat(
 fn linkat(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     olddirfd: FdNum,
     oldpath: Pointer<CStr>,
     newdirfd: FdNum,
     newpath: Pointer<CStr>,
     flags: LinkOptions,
 ) -> SyscallResult {
-    let (oldpath, newpath) = vm_activator.activate(thread.virtual_memory(), |vm| -> Result<_> {
+    let (oldpath, newpath) = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
         let oldpath = vm.read_path(oldpath.get())?;
         let newpath = vm.read_path(newpath.get())?;
         Result::Ok((oldpath, newpath))
     })?;
-
-    let fdtable = thread.fdtable();
 
     let olddir = if olddirfd == FdNum::CWD {
         let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
@@ -1550,21 +1563,29 @@ fn linkat(
 }
 
 #[syscall(i386 = 323, amd64 = 290)]
-fn eventfd(thread: &mut ThreadGuard, initval: u32, flags: EventFdFlags) -> SyscallResult {
-    let fd_num = thread.fdtable().insert(EventFd::new(initval))?;
+fn eventfd(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    initval: u32,
+    flags: EventFdFlags,
+) -> SyscallResult {
+    let fd_num = fdtable.insert(EventFd::new(initval))?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
 #[syscall(i386 = 329, amd64 = 291)]
-fn epoll_create1(thread: &mut ThreadGuard, flags: EpollCreate1Flags) -> SyscallResult {
-    let fd_num = thread.fdtable().insert(Epoll::new())?;
+fn epoll_create1(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    flags: EpollCreate1Flags,
+) -> SyscallResult {
+    let fd_num = fdtable.insert(Epoll::new())?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
 #[syscall(i386 = 331, amd64 = 293)]
 fn pipe2(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
@@ -1574,7 +1595,6 @@ fn pipe2(
 
     let (read_half, write_half) = pipe::new();
 
-    let fdtable = thread.fdtable();
     // Insert the first read half.
     let read_half = fdtable.insert(read_half)?;
     // Insert the second write half.
@@ -1588,20 +1608,20 @@ fn pipe2(
     let mut bytes = [0; 8];
     bytes[0..4].copy_from_slice(&read_half.get().to_ne_bytes());
     bytes[4..8].copy_from_slice(&write_half.get().to_ne_bytes());
-    vm_activator.activate(thread.virtual_memory(), |vm| vm.write(pipefd.get(), &bytes))?;
+    vm_activator.activate(&virtual_memory, |vm| vm.write(pipefd.get(), &bytes))?;
 
     Ok(0)
 }
 
 #[syscall(i386 = 355, amd64 = 318)]
 fn getrandom(
-    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     buf: Pointer<c_void>,
     buflen: u64,
     flags: GetRandomFlags,
 ) -> SyscallResult {
-    vm_activator.activate(thread.virtual_memory(), |vm| {
+    vm_activator.activate(&virtual_memory, |vm| {
         let mut len = 0;
         for (i, random) in (0..buflen).zip(RandomFile::random_bytes()) {
             vm.write(buf.get() + i, &[random])?;
@@ -1613,7 +1633,7 @@ fn getrandom(
 
 #[syscall(i386 = 377, amd64 = 326)]
 async fn copy_file_range(
-    thread: Arc<Thread>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     fd_in: FdNum,
     off_in: Pointer<u64>,
     fd_out: FdNum,
@@ -1621,11 +1641,8 @@ async fn copy_file_range(
     len: u64,
     flags: CopyFileRangeFlags,
 ) -> SyscallResult {
-    let guard = thread.lock();
-    let fdtable = guard.fdtable();
     let fd_in = fdtable.get(fd_in)?;
     let fd_out = fdtable.get(fd_out)?;
-    drop(guard);
 
     if !off_in.is_null() || !off_out.is_null() {
         todo!()
