@@ -56,7 +56,11 @@ impl State {
     }
 
     fn advance_to_next_timeout(&mut self) -> Result<(), NoTimeoutScheduledError> {
-        let timeout = self.timeouts.peek().ok_or(NoTimeoutScheduledError)?;
+        let timeout = self
+            .timeouts
+            .iter()
+            .find(|t| t.valid())
+            .ok_or(NoTimeoutScheduledError)?;
         self.advance_to(timeout.time);
         Ok(())
     }
@@ -84,6 +88,11 @@ struct Timeout {
 impl Timeout {
     fn has_expired(&self, clock: u64) -> bool {
         self.time <= clock
+    }
+
+    /// Returns whether firing the timeout will have any effect.
+    fn valid(&self) -> bool {
+        self.sender.can_send()
     }
 
     pub fn fire(self) {

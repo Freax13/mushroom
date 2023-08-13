@@ -24,6 +24,13 @@ pub struct Sender<T>(Arc<SpinMutex<State<T>>>);
 pub struct SendError<T>(T);
 
 impl<T> Sender<T> {
+    /// Returns whether the sender can still send a value.
+    /// This is not the case if the receive half has been dropped.
+    pub fn can_send(&self) -> bool {
+        let guard = self.0.lock();
+        !matches!(&*guard, State::Closed)
+    }
+
     pub fn send(self, value: T) -> Result<(), SendError<T>> {
         let mut guard = self.0.lock();
 
@@ -100,5 +107,12 @@ impl<T> Receiver<T> {
         }
 
         RecvFuture(self).await
+    }
+}
+
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        let mut guard = self.0.lock();
+        *guard = State::Closed;
     }
 }
