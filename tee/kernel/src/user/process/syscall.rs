@@ -464,8 +464,8 @@ fn rt_sigaction(
 struct SysRtSigprocmask;
 
 impl Syscall for SysRtSigprocmask {
-    const NO_I386: usize = 175;
-    const NO_AMD64: usize = 14;
+    const NO_I386: Option<usize> = Some(175);
+    const NO_AMD64: Option<usize> = Some(14);
     const NAME: &'static str = "rt_sigprocmask";
 
     async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {

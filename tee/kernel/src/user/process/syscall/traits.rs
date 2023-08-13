@@ -48,8 +48,8 @@ impl SyscallArg for u32 {
 }
 
 pub trait Syscall {
-    const NO_I386: usize;
-    const NO_AMD64: usize;
+    const NO_I386: Option<usize>;
+    const NO_AMD64: Option<usize>;
     const NAME: &'static str;
 
     #[allow(clippy::too_many_arguments)]
@@ -114,8 +114,12 @@ impl SyscallHandlers {
     where
         T: Syscall<execute(): Send>,
     {
-        self.i386_handlers[T::NO_I386] = Some(SyscallHandler::new::<T>());
-        self.amd64_handlers[T::NO_AMD64] = Some(SyscallHandler::new::<T>());
+        if let Some(no) = T::NO_I386 {
+            self.i386_handlers[no] = Some(SyscallHandler::new::<T>());
+        }
+        if let Some(no) = T::NO_AMD64 {
+            self.amd64_handlers[no] = Some(SyscallHandler::new::<T>());
+        }
         core::mem::forget(val);
     }
 

@@ -16,10 +16,7 @@ pub fn syscall(attrs: TokenStream, input: TokenStream) -> TokenStream {
     expand_syscall(attrs, input).map_or_else(|a| Error::into_compile_error(a).into(), Into::into)
 }
 
-fn expand_syscall(
-    SyscallAttr { i386, amd64 }: SyscallAttr,
-    mut input: ItemFn,
-) -> Result<impl Into<TokenStream>> {
+fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<TokenStream>> {
     let syscall_inputs = collect_syscall_inputs(input.clone())?;
 
     // Remove `#[state]` attribute for parameters.
@@ -107,14 +104,25 @@ fn expand_syscall(
         }
     };
 
+    let i386 = if let Some(i386) = attr.v {
+        quote! { Some(#i386) }
+    } else {
+        quote! { None }
+    };
+    let amd64 = if let Some(amd64) = attr.amd64 {
+        quote! { Some(#amd64) }
+    } else {
+        quote! { None }
+    };
+
     Ok(quote! {
         #input
 
         struct #struct_ident;
 
         impl Syscall for #struct_ident {
-            const NO_I386: usize = #i386;
-            const NO_AMD64: usize = #amd64;
+            const NO_I386: Option<usize> = #i386;
+            const NO_AMD64: Option<usize> = #amd64;
             const NAME: &'static str = #syscall_name;
 
             async fn execute(
@@ -145,8 +153,8 @@ fn expand_syscall(
 }
 
 struct SyscallAttr {
-    i386: Expr,
-    amd64: Expr,
+    v: Option<Expr>,
+    amd64: Option<Expr>,
 }
 
 impl Parse for SyscallAttr {
@@ -172,10 +180,7 @@ impl Parse for SyscallAttr {
             }
         }
 
-        let i386 = i386.ok_or_else(|| Error::new_spanned(&vars, "missing `i386` attribute"))?;
-        let amd64 = amd64.ok_or_else(|| Error::new_spanned(&vars, "missing `amd64` attribute"))?;
-
-        Ok(Self { i386, amd64 })
+        Ok(Self { v: i386, amd64 })
     }
 }
 
