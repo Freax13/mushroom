@@ -95,12 +95,22 @@ impl I386 {
                 "pushfq",
                 "pop rax",
                 "mov gs:[{K_RFLAGS_OFFSET}], rax",
+                // Setup segment registers.
+                "xor rax, rax",
+                "mov ax, gs:[{U_DS_OFFSET}]",
+                "mov ds, ax",
+                "mov ax, gs:[{U_ES_OFFSET}]",
+                "mov es, ax",
+                "mov ax, gs:[{U_FS_OFFSET}]",
+                "mov fs, ax",
+                "mov ax, gs:[{U_GS_OFFSET}]",
+                "swapgs",
+                "mov gs, ax",
+                "swapgs",
                 // Setup stack frame for iretq.
                 // SS
-                "push 0x23",
-                "mov ax, 0x23",
-                "mov es, ax",
-                "mov ds, ax",
+                "mov ax, gs:[{U_SS_OFFSET}]",
+                "push rax",
                 // RSP
                 "mov eax, gs:[{U_ESP_OFFSET}]",
                 "push rax",
@@ -108,7 +118,9 @@ impl I386 {
                 "mov eax, gs:[{U_EFLAGS_OFFSET}]",
                 "push rax",
                 // CS
-                "push 0x1b",
+                "xor rax, rax",
+                "mov ax, gs:[{U_CS_OFFSET}]",
+                "push rax",
                 // RIP
                 "mov eax, gs:[{U_EIP_OFFSET}]",
                 "push rax",
@@ -131,7 +143,7 @@ impl I386 {
                 "ldmxcsr gs:[{U_MXCSR_OFFSET}]",
                 // Swap in userspace GS.
                 "swapgs",
-                // Enter usermdoe
+                // Enter usermode
                 "iretq",
                 "66:",
                 // Save userspace registers.
@@ -142,14 +154,26 @@ impl I386 {
                 "mov gs:[{U_ESI_OFFSET}], esi",
                 "mov gs:[{U_EDI_OFFSET}], edi",
                 "mov gs:[{U_EBP_OFFSET}], ebp",
+                //  Save segment registers.
+                "mov ax, ds",
+                "mov gs:[{U_DS_OFFSET}], ax",
+                "mov ax, es",
+                "mov gs:[{U_ES_OFFSET}], ax",
+                "mov ax, fs",
+                "mov gs:[{U_FS_OFFSET}], ax",
+                "mov ax, gs",
+                "mov gs:[{U_GS_OFFSET}], ax",
+                // Save values from stack frame.
                 "pop rax", // pop EIP
                 "mov gs:[{U_EIP_OFFSET}], eax",
                 "pop rax", // pop CS,
+                "mov gs:[{U_CS_OFFSET}], ax",
                 "pop rax", // pop RFLAGS
                 "mov gs:[{U_EFLAGS_OFFSET}], eax",
                 "pop rax", // pop RSP
-                "mov gs:[{U_ESP_OFFSET}], rax",
+                "mov gs:[{U_ESP_OFFSET}], eax",
                 "pop rax", // pop SS
+                "mov gs:[{U_SS_OFFSET}], ax",
                 "vmovdqa gs:[{U_YMM_OFFSET}+32*0], ymm0",
                 "vmovdqa gs:[{U_YMM_OFFSET}+32*1], ymm1",
                 "vmovdqa gs:[{U_YMM_OFFSET}+32*2], ymm2",
@@ -208,6 +232,12 @@ impl I386 {
                 U_EBP_OFFSET = const userspace_reg_offset!(ebp),
                 U_EIP_OFFSET = const userspace_reg_offset!(eip),
                 U_EFLAGS_OFFSET = const userspace_reg_offset!(eflags),
+                U_CS_OFFSET = const userspace_reg_offset!(cs),
+                U_DS_OFFSET = const userspace_reg_offset!(ds),
+                U_ES_OFFSET = const userspace_reg_offset!(es),
+                U_FS_OFFSET = const userspace_reg_offset!(fs),
+                U_GS_OFFSET = const userspace_reg_offset!(gs),
+                U_SS_OFFSET = const userspace_reg_offset!(ss),
                 U_YMM_OFFSET = const userspace_reg_offset!(ymm),
                 U_MXCSR_OFFSET = const userspace_reg_offset!(mxcsr),
                 out("rax") _,
@@ -301,6 +331,12 @@ pub struct UserspaceRegisters {
     fs_base: u64,
     ymm: [Ymm; 8],
     mxcsr: u64,
+    cs: u16,
+    ds: u16,
+    es: u16,
+    fs: u16,
+    gs: u16,
+    ss: u16,
 }
 
 impl UserspaceRegisters {
@@ -318,10 +354,22 @@ impl UserspaceRegisters {
         fs_base: 0,
         ymm: [Ymm::ZERO; 8],
         mxcsr: 0,
+        cs: 0,
+        ds: 0,
+        es: 0,
+        fs: 0,
+        gs: 0,
+        ss: 0,
     };
 
     const DEFAULT: Self = Self {
         mxcsr: 0x1f80,
+        cs: 0x1b,
+        ds: 0x23,
+        es: 0x23,
+        fs: 0,
+        gs: 0,
+        ss: 0x23,
         ..Self::ZERO
     };
 }
