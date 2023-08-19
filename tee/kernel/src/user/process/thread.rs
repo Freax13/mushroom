@@ -91,6 +91,8 @@ pub struct ThreadState {
     pub notified_parent_about_exit: bool,
     pub cwd: Path,
     pub vfork_done: Option<oneshot::Sender<()>>,
+    // FIXME: Use this field.
+    pub umask: FileMode,
     fdtable: Arc<FileDescriptorTable>,
 }
 
@@ -106,6 +108,7 @@ impl Thread {
         cwd: Path,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
+        umask: FileMode,
     ) -> Self {
         Self {
             tid,
@@ -124,6 +127,7 @@ impl Thread {
                 cwd,
                 vfork_done,
                 fdtable,
+                umask,
             }),
             cpu_state: Mutex::new(cpu_state),
         }
@@ -167,6 +171,7 @@ impl Thread {
             Path::new(b"/".to_vec()).unwrap(),
             None,
             CpuState::None,
+            FileMode::ALL,
         )
     }
 
@@ -279,6 +284,7 @@ impl ThreadGuard<'_> {
             self.cwd.clone(),
             vfork_done,
             cpu_state,
+            self.umask,
         );
 
         let mut guard = thread.lock();

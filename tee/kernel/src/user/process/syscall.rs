@@ -131,6 +131,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysReadlink);
     handlers.register(SysChmod);
     handlers.register(SysFchmod);
+    handlers.register(SysUmask);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -1186,6 +1187,13 @@ fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: FileMode)
     let fd = fdtable.get(fd)?;
     fd.set_mode(mode)?;
     Ok(0)
+}
+
+#[syscall(i386 = 60, amd64 = 95)]
+fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
+    let umask = FileMode::from_bits_truncate(mask);
+    let old = core::mem::replace(&mut thread.umask, umask);
+    SyscallResult::Ok(old.bits())
 }
 
 #[syscall(i386 = 186, amd64 = 131)]
