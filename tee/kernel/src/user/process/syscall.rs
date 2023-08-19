@@ -18,7 +18,7 @@ use crate::{
         self, create_directory, create_file, create_link,
         devtmpfs::{self, RandomFile},
         hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
-        unlink_file, Directory, Node, ROOT_NODE,
+        unlink_file, Node, ROOT_NODE,
     },
     rt::oneshot,
     time,
@@ -126,6 +126,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExit);
     handlers.register(SysWait4);
     handlers.register(SysFcntl);
+    handlers.register(SysChdir);
     handlers.register(SysMkdir);
     handlers.register(SysSymlink);
     handlers.register(SysReadlink);
@@ -1109,6 +1110,19 @@ fn fcntl(
     }
 }
 
+#[syscall(i386 = 12, amd64 = 80)]
+fn chdir(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    vm_activator: &mut VirtualMemoryActivator,
+    path: Pointer<CStr>,
+) -> SyscallResult {
+    let path = vm_activator.activate(&virtual_memory, |vm| vm.read_path(path.get()))?;
+    let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
+    thread.cwd = node.try_into()?;
+    Ok(0)
+}
+
 #[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1561,8 +1575,7 @@ fn openat(
     let filename = vm_activator.activate(&virtual_memory, |vm| vm.read_path(filename.get()))?;
 
     let start_dir = if dfd == FdNum::CWD {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
-        <Arc<dyn Directory>>::try_from(node)?
+        thread.cwd.clone()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir()?
@@ -1611,8 +1624,7 @@ fn unlinkat(
     let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
 
     let start_dir = if dfd == FdNum::CWD {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
-        <Arc<dyn Directory>>::try_from(node)?
+        thread.cwd.clone()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir()?
@@ -1646,15 +1658,13 @@ fn linkat(
     })?;
 
     let olddir = if olddirfd == FdNum::CWD {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
-        <Arc<dyn Directory>>::try_from(node)?
+        thread.cwd.clone()
     } else {
         let fd = fdtable.get(olddirfd)?;
         fd.as_dir()?
     };
     let newdir = if newdirfd == FdNum::CWD {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &thread.cwd)?;
-        <Arc<dyn Directory>>::try_from(node)?
+        thread.cwd.clone()
     } else {
         let fd = fdtable.get(newdirfd)?;
         fd.as_dir()?

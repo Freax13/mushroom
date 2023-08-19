@@ -17,7 +17,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, File, FileSnapshot, ROOT_NODE},
+        node::{lookup_and_resolve_node, Directory, File, FileSnapshot, ROOT_NODE},
         path::Path,
     },
     per_cpu::PerCpu,
@@ -89,7 +89,7 @@ pub struct ThreadState {
     pub sigaltstack: Option<Stack>,
     pub clear_child_tid: u64,
     pub notified_parent_about_exit: bool,
-    pub cwd: Path,
+    pub cwd: Arc<dyn Directory>,
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
@@ -105,7 +105,7 @@ impl Thread {
         process: Arc<Process>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
-        cwd: Path,
+        cwd: Arc<dyn Directory>,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
@@ -168,7 +168,7 @@ impl Thread {
             Arc::new(Process::new(tid)),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::with_standard_io()),
-            Path::new(b"/".to_vec()).unwrap(),
+            ROOT_NODE.clone(),
             None,
             CpuState::None,
             FileMode::ALL,
