@@ -1113,8 +1113,9 @@ fn mkdir(
     #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<CStr>,
-    mode: FileMode,
+    mode: u64,
 ) -> SyscallResult {
+    let mode = FileMode::from_bits_truncate(mode);
     let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
     create_directory(ROOT_NODE.clone(), &pathname, mode)?;
     Ok(0)
