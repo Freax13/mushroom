@@ -3,7 +3,7 @@ use core::{cmp, iter::repeat};
 use alloc::{
     borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
-    sync::Arc,
+    sync::{Arc, Weak},
     vec::Vec,
 };
 use spin::mutex::Mutex;
@@ -17,6 +17,8 @@ use crate::{
 
 pub struct TmpFsDir {
     ino: u64,
+    this: Weak<Self>,
+    parent: Weak<dyn Directory>,
     internal: Mutex<DevTmpFsDirInternal>,
 }
 
@@ -26,18 +28,39 @@ struct DevTmpFsDirInternal {
 }
 
 impl TmpFsDir {
-    pub fn new(mode: FileMode) -> Self {
-        Self {
+    pub fn root(mode: FileMode) -> Arc<Self> {
+        Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
+            this: this_weak.clone(),
+            parent: this_weak.clone(),
             internal: Mutex::new(DevTmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
             }),
-        }
+        })
+    }
+
+    pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> Arc<Self> {
+        Arc::new_cyclic(|this_weak| Self {
+            ino: new_ino(),
+            this: this_weak.clone(),
+            parent,
+            internal: Mutex::new(DevTmpFsDirInternal {
+                mode,
+                items: BTreeMap::new(),
+            }),
+        })
     }
 }
 
 impl Directory for TmpFsDir {
+    fn parent(&self) -> Result<Arc<dyn Directory>> {
+        self.parent
+            .clone()
+            .upgrade()
+            .ok_or_else(|| Error::no_ent(()))
+    }
+
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::Dir, guard.mode);
@@ -86,7 +109,7 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let dir = Arc::new(TmpFsDir::new(mode));
+                let dir = TmpFsDir::new(self.this.clone(), mode);
                 entry.insert(Node::Directory(dir.clone()));
                 Ok(dir)
             }

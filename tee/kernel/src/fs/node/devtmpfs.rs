@@ -1,6 +1,6 @@
 use core::iter::from_fn;
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use spin::{Lazy, Mutex};
 use x86_64::instructions::random::RdRand;
 
@@ -17,8 +17,8 @@ use super::{
     Directory, File, FileSnapshot, Node,
 };
 
-pub fn new() -> Result<impl Directory> {
-    let tmp_fs_dir = TmpFsDir::new(FileMode::from_bits_truncate(0o755));
+pub fn new(parent: Weak<dyn Directory>) -> Result<Arc<dyn Directory>> {
+    let tmp_fs_dir = TmpFsDir::new(parent, FileMode::from_bits_truncate(0o755));
 
     let input_name = FileName::new(b"input").unwrap();
     let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444), *INPUT);

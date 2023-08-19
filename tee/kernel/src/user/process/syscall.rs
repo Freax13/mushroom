@@ -1284,7 +1284,7 @@ fn mount(
         })?;
 
     let node = match r#type.as_bytes() {
-        b"devtmpfs" => Node::Directory(Arc::new(devtmpfs::new()?)),
+        b"devtmpfs" => |parent| Ok(Node::Directory(devtmpfs::new(parent)?)),
         _ => return Err(Error::no_dev(())),
     };
 

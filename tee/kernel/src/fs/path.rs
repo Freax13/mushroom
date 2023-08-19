@@ -59,66 +59,6 @@ impl Path {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-
-    pub fn canonicalize(&mut self) -> Result<()> {
-        // Short-circuit for paths that are already canonical.
-        if self
-            .segments()
-            .all(|segment| matches!(segment, PathSegment::Root | PathSegment::FileName(_)))
-        {
-            return Ok(());
-        }
-
-        let capacity = self
-            .segments()
-            .scan(0usize, |count, b| {
-                match b {
-                    PathSegment::Empty | PathSegment::Dot => {}
-                    PathSegment::DotDot => *count = count.saturating_sub(1),
-                    PathSegment::Root | PathSegment::FileName(_) => *count += 1,
-                }
-                Some(*count)
-            })
-            .max()
-            .unwrap_or_default();
-
-        let mut stack = Vec::with_capacity(capacity);
-        for segment in self.segments() {
-            match segment {
-                PathSegment::Empty => {}
-                PathSegment::Dot => {}
-                PathSegment::DotDot => {
-                    stack.pop();
-                }
-                segment @ (PathSegment::Root | PathSegment::FileName(_)) => {
-                    stack.push(segment);
-                }
-            }
-        }
-
-        // FIXME: We can use a smaller capacity.
-        let mut path = Vec::with_capacity(self.bytes.len());
-
-        let mut iter = stack.into_iter().peekable();
-        if iter.next_if_eq(&PathSegment::Root).is_some() {
-            path.push(b'/');
-        }
-        let mut iter = iter.map(|segment| match segment {
-            PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-                unreachable!()
-            }
-            PathSegment::FileName(filename) => filename,
-        });
-        if let Some(first) = iter.next() {
-            path.extend_from_slice(first.as_bytes());
-            for rest in iter {
-                path.push(b'/');
-                path.extend_from_slice(rest.as_bytes());
-            }
-        }
-        *self = Path::new(path)?;
-        Ok(())
-    }
 }
 
 impl Debug for Path {

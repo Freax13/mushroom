@@ -4,7 +4,11 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::{borrow::Cow, sync::Arc, vec::Vec};
+use alloc::{
+    borrow::Cow,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use spin::Lazy;
 
 use crate::{
@@ -20,7 +24,7 @@ pub mod devtmpfs;
 pub mod tmpfs;
 
 pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> =
-    Lazy::new(|| Arc::new(TmpFsDir::new(FileMode::from_bits_truncate(0o755))));
+    Lazy::new(|| TmpFsDir::root(FileMode::from_bits_truncate(0o755)));
 
 fn new_ino() -> u64 {
     static INO_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -158,6 +162,7 @@ impl Deref for FileSnapshot {
 }
 
 pub trait Directory: Any + Send + Sync {
+    fn parent(&self) -> Result<Arc<dyn Directory>>;
     fn stat(&self) -> Stat;
     fn set_mode(&self, mode: FileMode);
     fn get_node(&self, file_name: &FileName) -> Result<Node>;
@@ -247,8 +252,6 @@ fn lookup_node_recursive(
     path: &Path,
     recursion: &mut u8,
 ) -> Result<(Arc<dyn Directory>, Node)> {
-    let mut path = path.clone();
-    path.canonicalize()?;
     let res = path.segments().try_fold(
         (start_dir.clone(), Node::Directory(start_dir)),
         |(start_dir, node), segment| -> Result<_> {
@@ -258,7 +261,10 @@ fn lookup_node_recursive(
             match segment {
                 PathSegment::Root => Ok((ROOT_NODE.clone(), Node::Directory(ROOT_NODE.clone()))),
                 PathSegment::Empty | PathSegment::Dot => Ok((start_dir, Node::Directory(dir))),
-                PathSegment::DotDot => todo!(),
+                PathSegment::DotDot => {
+                    let parent = dir.parent()?;
+                    Ok((parent.clone(), Node::Directory(parent)))
+                }
                 PathSegment::FileName(file_name) => {
                     *recursion = recursion.checked_sub(1).ok_or_else(|| Error::r#loop(()))?;
                     let node = dir.get_node(&file_name)?;
@@ -361,7 +367,10 @@ pub fn read_link(start_dir: Arc<dyn Directory>, path: &Path) -> Result<Path> {
     }
 }
 
-pub fn mount(path: &Path, node: Node) -> Result<()> {
+pub fn mount(
+    path: &Path,
+    create_node: impl FnOnce(Weak<dyn Directory>) -> Result<Node>,
+) -> Result<()> {
     let (dir, last) = find_parent(ROOT_NODE.clone(), path)?;
     let file_name = match last {
         PathSegment::Root => todo!(),
@@ -370,6 +379,7 @@ pub fn mount(path: &Path, node: Node) -> Result<()> {
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
+    let node = create_node(Arc::downgrade(&dir))?;
     dir.mount(file_name.into_owned(), node)?;
     Ok(())
 }
