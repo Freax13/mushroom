@@ -335,15 +335,12 @@ pub fn create_directory(
     mode: FileMode,
 ) -> Result<Arc<dyn Directory>> {
     let (dir, last) = find_parent(start_dir, path)?;
-    let file_name = match last {
-        PathSegment::Root => todo!(),
-        PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
-        PathSegment::FileName(file_name) => file_name,
-    };
-    let file = dir.create_dir(file_name.into_owned(), mode)?;
-    Ok(file)
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            Err(Error::exist(()))
+        }
+        PathSegment::FileName(file_name) => dir.create_dir(file_name.into_owned(), mode),
+    }
 }
 
 pub fn create_link(start_dir: Arc<dyn Directory>, path: &Path, target: Path) -> Result<()> {
@@ -393,10 +390,9 @@ pub fn set_mode(start_dir: Arc<dyn Directory>, path: &Path, mode: FileMode) -> R
 pub fn unlink_file(start_dir: Arc<dyn Directory>, path: &Path) -> Result<()> {
     let (parent, segment) = find_parent(start_dir, path)?;
     match segment {
-        PathSegment::Root => todo!(),
-        PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            Err(Error::is_dir(()))
+        }
         PathSegment::FileName(filename) => parent.delete_non_dir(filename.into_owned()),
     }
 }
