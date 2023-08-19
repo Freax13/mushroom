@@ -158,23 +158,20 @@ impl VirtualMemory {
             panic!("page fault: {addr:#x} at {rip:?}");
         };
 
-        match error_code & !PageFaultErrorCode::USER_MODE {
-            PageFaultErrorCode::INSTRUCTION_FETCH => unsafe {
-                mapping.make_executable(page).unwrap();
-            },
-            PageFaultErrorCode::CAUSED_BY_WRITE => unsafe {
-                mapping.make_writable(page).unwrap();
-            },
-            a if a
-                == PageFaultErrorCode::CAUSED_BY_WRITE
-                    | PageFaultErrorCode::PROTECTION_VIOLATION =>
+        // Ensure that the page is mapped.
+        unsafe {
+            mapping.make_readable(page).unwrap();
+        }
+        // Ensure that the page has the permissions requested in the error code.
+        if error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE) {
             unsafe {
                 mapping.make_writable(page).unwrap();
-            },
-            error_code if error_code == PageFaultErrorCode::empty() => unsafe {
-                mapping.make_readable(page).unwrap();
-            },
-            error_code => todo!("{addr:#018x} {error_code:?}"),
+            }
+        }
+        if error_code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
+            unsafe {
+                mapping.make_executable(page).unwrap();
+            }
         }
     }
 
