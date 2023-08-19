@@ -128,6 +128,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFcntl);
     handlers.register(SysChdir);
     handlers.register(SysMkdir);
+    handlers.register(SysUnlink);
     handlers.register(SysSymlink);
     handlers.register(SysReadlink);
     handlers.register(SysChmod);
@@ -1133,6 +1134,17 @@ fn mkdir(
     let mode = FileMode::from_bits_truncate(mode);
     let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
     create_directory(ROOT_NODE.clone(), &pathname, mode)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 10, amd64 = 85)]
+fn unlink(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    vm_activator: &mut VirtualMemoryActivator,
+    pathname: Pointer<CStr>,
+) -> SyscallResult {
+    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read_path(pathname.get()))?;
+    unlink_file(ROOT_NODE.clone(), &pathname)?;
     Ok(0)
 }
 
