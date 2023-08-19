@@ -111,6 +111,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysReadv);
     handlers.register(SysWritev);
     handlers.register(SysAccess);
+    handlers.register(SysPipe);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
@@ -658,6 +659,22 @@ fn access(
     let _node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
     // FIXME: implement the actual access checks.
     Ok(0)
+}
+
+#[syscall(i386 = 42, amd64 = 22)]
+fn pipe(
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    pipefd: Pointer<[FdNum; 2]>,
+) -> SyscallResult {
+    pipe2(
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        pipefd,
+        Pipe2Flags::empty(),
+    )
 }
 
 #[syscall(i386 = 219, amd64 = 28)]
