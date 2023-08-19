@@ -100,6 +100,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPoll);
     handlers.register(SysLseek);
     handlers.register(SysMmap);
+    handlers.register(SysMmap2);
     handlers.register(SysMprotect);
     handlers.register(SysMunmap);
     handlers.register(SysBrk);
@@ -392,6 +393,31 @@ fn mmap(
     } else {
         return Err(Error::inval(()));
     }
+}
+
+#[syscall(i386 = 192)]
+fn mmap2(
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    addr: Pointer<c_void>,
+    length: u64,
+    prot: ProtFlags,
+    flags: MmapFlags,
+    fd: u64,
+    offset: u64,
+) -> SyscallResult {
+    mmap(
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        addr,
+        length,
+        prot,
+        flags,
+        fd,
+        offset * 4096,
+    )
 }
 
 #[syscall(i386 = 125, amd64 = 10)]
