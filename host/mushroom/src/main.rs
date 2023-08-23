@@ -46,6 +46,9 @@ struct ConfigArgs {
     /// Path to the binary to run.
     #[arg(long, value_name = "PATH", env = "INIT")]
     init: PathBuf,
+    /// Load KASAN shadow mappings for the kernel.
+    #[arg(long, env = "KASAN")]
+    kasan: bool,
     #[command(flatten)]
     policy: PolicyArgs,
 }
@@ -114,6 +117,7 @@ fn run(run: RunCommand) -> Result<()> {
         &supervisor,
         &kernel,
         &init,
+        run.config.kasan,
         &input,
         run.config.policy.policy(),
     )?;
@@ -178,7 +182,13 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         vcek_cert
     };
 
-    let configuration = Configuration::new(&supervisor, &kernel, &init, run.config.policy.policy());
+    let configuration = Configuration::new(
+        &supervisor,
+        &kernel,
+        &init,
+        run.config.kasan,
+        run.config.policy.policy(),
+    );
     // FIXME: use proper error type and use `?` instead of unwrap.
     configuration
         .verify(input_hash, output_hash, &attestation_report, &vcek_cert)

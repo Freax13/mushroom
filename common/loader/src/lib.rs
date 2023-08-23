@@ -53,9 +53,10 @@ pub fn generate_base_load_commands<'a>(
     supervisor: &'a [u8],
     kernel: &'a [u8],
     init: &'a [u8],
+    load_kasan_shadow_mappings: bool,
 ) -> impl Iterator<Item = LoadCommand> + 'a {
     let load_supervisor = supervisor::load_supervisor(supervisor);
-    let load_kernel = kernel::load_kernel(kernel);
+    let load_kernel = kernel::load_kernel(kernel, load_kasan_shadow_mappings);
     let load_init = init::load_init(init);
     load_supervisor.chain(load_kernel).chain(load_init)
 }
@@ -64,9 +65,11 @@ pub fn generate_load_commands<'a>(
     supervisor: &'a [u8],
     kernel: &'a [u8],
     init: &'a [u8],
+    load_kasan_shadow_mappings: bool,
     input: &'a [u8],
 ) -> (impl Iterator<Item = LoadCommand> + 'a, [u8; 32]) {
-    let base_load_commands = generate_base_load_commands(supervisor, kernel, init);
+    let base_load_commands =
+        generate_base_load_commands(supervisor, kernel, init, load_kasan_shadow_mappings);
     let (load_input, host_data) = input::load_input(input);
     (base_load_commands.chain(load_input), host_data)
 }

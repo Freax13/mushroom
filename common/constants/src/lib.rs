@@ -68,6 +68,7 @@ pub mod virtual_address {
 
     addresses! {
         const KERNEL = 0xffff_8000_0000_0000..=0xffff_8000_ffff_ffff;
+        const KASAN_SHADOW_MAPPING = 0xffff_b000_0000_0000..=0xffff_bfff_ffff_ffff;
         const HEAP = 0xffff_c000_0000_0000..=0xffff_cfff_ffff_ffff;
         const TEMPORARY = 0xffff_d000_0000_0000..=0xffff_dfff_ffff_ffff;
         const INIT = 0xffff_e000_0000_0000..=0xffff_e0ff_ffff_ffff;

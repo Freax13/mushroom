@@ -117,10 +117,15 @@ pub fn load_idt() {
     IDT.load();
 }
 
+#[no_sanitize(address)]
 extern "x86-interrupt" fn page_fault_handler(
     frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
+    page_fault_handler_impl(frame, error_code);
+}
+
+fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
     let _guard = SwapGsGuard::new(&frame);
 
     let cr2 = Cr2::read_raw();
@@ -151,6 +156,9 @@ extern "x86-interrupt" fn page_fault_handler(
             error!("cr2 is not a canonical address");
         }
 
+        #[cfg(sanitize = "address")]
+        crate::sanitize::page_fault_handler(&frame);
+
         panic!(
             "page fault {error_code:?} trying to access {cr2:#018x} at ip {:#018x}",
             frame.instruction_pointer
@@ -158,12 +166,14 @@ extern "x86-interrupt" fn page_fault_handler(
     }
 }
 
+#[no_sanitize(address)]
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code: u64) -> ! {
     let _guard = SwapGsGuard::new(&frame);
 
     panic!("double fault {frame:x?} {code:x?}");
 }
 
+#[no_sanitize(address)]
 #[naked]
 extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // The code that entered userspace stored addresses where execution should

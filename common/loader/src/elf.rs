@@ -1,4 +1,7 @@
-use std::cmp;
+use std::{
+    cmp,
+    iter::{from_fn, once},
+};
 
 use bit_field::BitField;
 use bytemuck::Zeroable;
@@ -8,7 +11,10 @@ use snp_types::{
     cpuid::{CpuidFunction, CpuidPage},
     VmplPermissions,
 };
-use x86_64::{structures::paging::PhysFrame, PhysAddr};
+use x86_64::{
+    structures::paging::{Page, PhysFrame},
+    PhysAddr, VirtAddr,
+};
 
 use crate::{LoadCommand, LoadCommandPayload};
 
@@ -46,6 +52,7 @@ pub fn load(
             let start_addr = PhysAddr::new(ph.p_paddr);
             let start_frame = PhysFrame::containing_address(start_addr);
             let end_inclusive_file_addr = start_addr + (ph.p_filesz - 1);
+            let end_inclusive_file_file = PhysFrame::containing_address(end_inclusive_file_addr);
             let end_inclusive_addr = start_addr + (ph.p_memsz - 1);
             let end_inclusive_frame = PhysFrame::containing_address(end_inclusive_addr);
 
@@ -64,22 +71,24 @@ pub fn load(
                     } else {
                         let mut bytes = [0; 4096];
 
-                        let copy_start = cmp::max(start_addr, frame.start_address());
-                        let copy_end_inclusive =
-                            cmp::min(end_inclusive_file_addr, frame.start_address() + 4095u64);
+                        if frame <= end_inclusive_file_file {
+                            let copy_start = cmp::max(start_addr, frame.start_address());
+                            let copy_end_inclusive =
+                                cmp::min(end_inclusive_file_addr, frame.start_address() + 4095u64);
 
-                        let copy_start_in_frame = (copy_start.as_u64() & 0xFFF) as usize;
-                        let copy_end_inclusive_in_frame =
-                            (copy_end_inclusive.as_u64() & 0xFFF) as usize;
+                            let copy_start_in_frame = (copy_start.as_u64() & 0xFFF) as usize;
+                            let copy_end_inclusive_in_frame =
+                                (copy_end_inclusive.as_u64() & 0xFFF) as usize;
 
-                        let offset_start =
-                            usize::try_from(ph.p_offset + (copy_start - start_addr)).unwrap();
-                        let offset_end_inclusive =
-                            usize::try_from(ph.p_offset + (copy_end_inclusive - start_addr))
-                                .unwrap();
+                            let offset_start =
+                                usize::try_from(ph.p_offset + (copy_start - start_addr)).unwrap();
+                            let offset_end_inclusive =
+                                usize::try_from(ph.p_offset + (copy_end_inclusive - start_addr))
+                                    .unwrap();
 
-                        bytes[copy_start_in_frame..=copy_end_inclusive_in_frame]
-                            .copy_from_slice(&elf_bytes[offset_start..=offset_end_inclusive]);
+                            bytes[copy_start_in_frame..=copy_end_inclusive_in_frame]
+                                .copy_from_slice(&elf_bytes[offset_start..=offset_end_inclusive]);
+                        }
 
                         if shared_page {
                             LoadCommandPayload::Shared(bytes)
@@ -93,6 +102,71 @@ pub fn load(
                         payload,
                     }
                 })
+        })
+}
+
+pub fn load_shadow_mapping(
+    elf_bytes: &[u8],
+    vmpl1_perms_mask: VmplPermissions,
+) -> impl Iterator<Item = LoadCommand> + '_ {
+    let elf = Elf::parse(elf_bytes).unwrap();
+    assert!(elf.is_64);
+
+    fn shadow_mapping_addr(page: Page) -> PhysAddr {
+        const KASAN_SHADOW_SCALE_SHIFT: u64 = 3;
+        /// Note that this is the physical address.
+        const KASAN_SHADOW_OFFSET: u64 = 0x180_0000_0000;
+
+        let start_address = page.start_address();
+        let offset = start_address.as_u64() - 0xffff_8000_0000_0000;
+        let scaled = offset >> KASAN_SHADOW_SCALE_SHIFT;
+        let addr = scaled + KASAN_SHADOW_OFFSET;
+        PhysAddr::new(addr)
+    }
+
+    elf.program_headers
+        .into_iter()
+        .filter(|ph| matches!(ph.p_type, PT_LOAD))
+        .filter(|ph| ph.p_vaddr > 0x8000_0000_0000_0000)
+        .flat_map(move |ph| {
+            let start_addr = VirtAddr::new(ph.p_vaddr);
+            let end_inclusive_addr = start_addr + ph.p_memsz;
+            let start_page = Page::containing_address(start_addr);
+            let end_inclusive_page = Page::containing_address(end_inclusive_addr);
+
+            let mut iter = (start_page..=end_inclusive_page).peekable();
+            from_fn(move || {
+                let page = iter.next()?;
+
+                let mapping_addr = shadow_mapping_addr(page);
+                let mapping_frame = PhysFrame::containing_address(mapping_addr);
+
+                let following_pages = from_fn(|| {
+                    iter.next_if(|&page| {
+                        let mapping_addr = shadow_mapping_addr(page);
+                        mapping_frame == PhysFrame::containing_address(mapping_addr)
+                    })
+                });
+
+                // Start with all markers indicated invalid memory.
+                const ASAN_GLOBAL_REDZONE_MAGIC: u8 = 0xf9;
+                let mut payload = [ASAN_GLOBAL_REDZONE_MAGIC; 0x1000];
+
+                // Allow access to individual pages.
+                for page in once(page).chain(following_pages) {
+                    let addr = shadow_mapping_addr(page);
+                    let offset = (addr.as_u64() & 0xfff) as usize;
+                    payload[offset..][..512].fill(0);
+                }
+
+                let vmpl1_perms =
+                    (VmplPermissions::READ | VmplPermissions::WRITE) & vmpl1_perms_mask;
+                Some(LoadCommand {
+                    physical_address: mapping_frame,
+                    vmpl1_perms,
+                    payload: LoadCommandPayload::Normal(payload),
+                })
+            })
         })
 }
 

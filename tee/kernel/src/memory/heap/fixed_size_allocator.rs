@@ -164,11 +164,25 @@ unsafe impl<const N: usize> Allocator for Block<N> {
         let next_ptr = unsafe { (*ptr.as_ptr()).next };
         self.free_list.set(next_ptr);
 
+        #[cfg(sanitize = "address")]
+        unsafe {
+            crate::sanitize::mark(ptr.as_ptr().cast_const().cast::<_>(), N, true);
+        }
+
         let ptr = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), N);
         Ok(NonNull::new(ptr).unwrap())
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
+        #[cfg(sanitize = "address")]
+        unsafe {
+            crate::sanitize::mark(
+                ptr.as_ptr().byte_add(8).cast_const().cast::<_>(),
+                N - 8,
+                false,
+            );
+        }
+
         let entry = ptr.cast::<Entry<N>>();
 
         let current_free_list = self.free_list.get();

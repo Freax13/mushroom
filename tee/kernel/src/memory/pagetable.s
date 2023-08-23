@@ -7,9 +7,11 @@
 
 .align 4096
 pml4:
-.fill 256, 8, 0 
+.fill 256, 8, 0
 .quad pdp_256 + PTE_PRESENT + PTE_WRITABLE
-.fill 253, 8, 0 
+.fill 95, 8, 0
+.quad pdp_352 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
+.fill 157, 8, 0
 .quad pml4 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
 .quad 0
 
@@ -67,6 +69,21 @@ pd_256_0:
 .quad 0x10140c00000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
 .quad 0x10140e00000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
 .fill 472, 8, 0
+
+.align 4096
+pdp_352:
+.quad pd_352_0 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
+.fill 511, 8, 0
+
+# KASAN shadow mapping
+.align 4096
+pd_352_0:
+.quad 0x18000000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # reset_vector + text
+.quad 0x18000200000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # rodata
+.quad 0x18000400000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # data
+.quad 0x18000600000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # tdata
+.quad 0x18000800000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # stack
+.fill 507, 8, 0
 
 .section .stack, "aw"
 stack:

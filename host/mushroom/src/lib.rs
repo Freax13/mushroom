@@ -50,6 +50,7 @@ pub fn main(
     supervisor: &[u8],
     kernel: &[u8],
     init: &[u8],
+    load_kasan_shadow_mappings: bool,
     input: &[u8],
     policy: GuestPolicy,
 ) -> Result<MushroomResult> {
@@ -61,6 +62,7 @@ pub fn main(
         kernel,
         init,
         input,
+        load_kasan_shadow_mappings,
         policy,
         &kvm_handle,
         &sev_handle,
@@ -77,11 +79,13 @@ struct VmContext {
 
 impl VmContext {
     /// Create the VM, create the BSP and execute all launch commands.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_vm(
         supervisor: &[u8],
         kernel: &[u8],
         init: &[u8],
         input: &[u8],
+        load_kasan_shadow_mappings: bool,
         policy: GuestPolicy,
         kvm_handle: &KvmHandle,
         sev_handle: &SevHandle,
@@ -106,8 +110,13 @@ impl VmContext {
 
         vm.sev_snp_launch_start(policy, sev_handle)?;
 
-        let (load_commands, host_data) =
-            loader::generate_load_commands(supervisor, kernel, init, input);
+        let (load_commands, host_data) = loader::generate_load_commands(
+            supervisor,
+            kernel,
+            init,
+            load_kasan_shadow_mappings,
+            input,
+        );
         let mut load_commands = load_commands.peekable();
 
         let mut num_launch_pages = 0;

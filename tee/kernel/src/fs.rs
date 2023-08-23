@@ -34,6 +34,13 @@ fn load_static_file(
         map_page(header_page, header_entry, &mut &FRAME_ALLOCATOR).expect("failed to map header");
     }
 
+    #[cfg(sanitize = "address")]
+    crate::sanitize::map_shadow(
+        header_page.start_address().as_ptr(),
+        crate::sanitize::MIN_ALLOCATION_SIZE,
+        &mut &FRAME_ALLOCATOR,
+    );
+
     let len = unsafe {
         header_page
             .start_address()
@@ -52,6 +59,18 @@ fn load_static_file(
                 .expect("failed to map content");
         }
     }
+
+    #[cfg(sanitize = "address")]
+    crate::sanitize::map_shadow(
+        header_page
+            .start_address()
+            .as_ptr::<u8>()
+            .wrapping_add(crate::sanitize::MIN_ALLOCATION_SIZE)
+            .cast(),
+        ((0x1000 + len).saturating_sub(crate::sanitize::MIN_ALLOCATION_SIZE))
+            .next_multiple_of(crate::sanitize::MIN_ALLOCATION_SIZE),
+        &mut &FRAME_ALLOCATOR,
+    );
 
     let first_input_page = header_page + 1;
     let ptr = first_input_page.start_address().as_ptr();

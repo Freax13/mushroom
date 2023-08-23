@@ -9,7 +9,7 @@ use crate::{
 };
 
 use core::{
-    arch::global_asm,
+    arch::{asm, global_asm},
     fmt,
     iter::Step,
     marker::{PhantomData, PhantomPinned},
@@ -455,10 +455,18 @@ impl ActivePageTableEntry<Level4> {
     }
 
     pub fn freeze(&self, frozen: bool) {
-        if frozen {
-            self.entry.fetch_and(!(1 << WRITE_BIT), Ordering::SeqCst);
-        } else {
-            self.entry.fetch_or(1 << WRITE_BIT, Ordering::SeqCst);
+        let mut entry = atomic_load(&self.entry);
+        while entry.get_bit(PRESENT_BIT) {
+            assert_eq!(entry.get_bit(WRITE_BIT), frozen);
+
+            let mut new_entry = entry;
+            new_entry.set_bit(WRITE_BIT, !frozen);
+
+            let res = atomic_compare_exchange(&self.entry, entry, new_entry);
+            match res {
+                Ok(_) => break,
+                Err(new_entry) => entry = new_entry,
+            }
         }
     }
 }
@@ -508,7 +516,7 @@ where
         let user = flags.contains(PageTableFlags::USER);
         let global = flags.contains(PageTableFlags::GLOBAL) & L::CAN_SET_GLOBAL;
 
-        let mut current_entry = self.entry.load(Ordering::SeqCst);
+        let mut current_entry = atomic_load(&self.entry);
         loop {
             // Check if the entry was already initialized.
             if current_entry.get_bit(PRESENT_BIT) {
@@ -521,12 +529,7 @@ where
                 let new_reference_count = current_reference_count + 1;
                 let mut new_entry = current_entry;
                 new_entry.set_bits(REFERENCE_COUNT_BITS, new_reference_count);
-                let res = self.entry.compare_exchange(
-                    current_entry,
-                    new_entry,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
                 match res {
                     Ok(_) => {
                         // We successfully updated the reference count.
@@ -554,12 +557,7 @@ where
 
                 // First, try to mark the entry as in progress of being initialized.
                 let new_entry = 1 << INITIALIZING_BIT;
-                let res = self.entry.compare_exchange(
-                    current_entry,
-                    new_entry,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
                 match res {
                     Ok(_) => {
                         // We've acquired to rights to initialize the entry.
@@ -582,7 +580,7 @@ where
                 new_entry.set_bits(REFERENCE_COUNT_BITS, 0);
 
                 // Write the entry back.
-                self.entry.store(new_entry, Ordering::SeqCst);
+                atomic_store(&self.entry, new_entry);
 
                 // Zero out the page table.
                 let table_ptr = self.as_table_ptr().cast_mut();
@@ -592,7 +590,7 @@ where
 
                 // Unset INITIALIZING_BIT.
                 new_entry.set_bit(INITIALIZING_BIT, false);
-                self.entry.store(new_entry, Ordering::SeqCst);
+                atomic_store(&self.entry, new_entry);
 
                 // We're done.
                 return Some(true);
@@ -603,7 +601,7 @@ where
     /// Increases the reference count. Returns `Ok(())` if there reference count
     /// was increased, returns `Err(())` if the page table didn't exist.
     fn increase_reference_count(&self) -> Result<(), ()> {
-        let mut current_entry = self.entry.load(Ordering::SeqCst);
+        let mut current_entry = atomic_load(&self.entry);
         loop {
             // Verify that the entry was already initialized.
             if !current_entry.get_bit(PRESENT_BIT) {
@@ -615,12 +613,7 @@ where
             let new_reference_count = current_reference_count + 1;
             let mut new_entry = current_entry;
             new_entry.set_bits(REFERENCE_COUNT_BITS, new_reference_count);
-            let res = self.entry.compare_exchange(
-                current_entry,
-                new_entry,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
+            let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
             match res {
                 Ok(_) => {
                     // We successfully updated the reference count.
@@ -644,7 +637,7 @@ where
     /// The caller must ensure that the entry is that `release` is only called
     /// after the `acquire` is no longer needed.
     unsafe fn release_reference_count(&self) -> Option<PhysFrame> {
-        let mut current_entry = self.entry.load(Ordering::SeqCst);
+        let mut current_entry = atomic_load(&self.entry);
         loop {
             // Sanity check that the entry is not already unmapped.
             debug_assert_ne!(current_entry, 0, "{:?} isn't mapped", self.page());
@@ -657,12 +650,7 @@ where
                 let mut new_entry = current_entry;
                 new_entry.set_bits(REFERENCE_COUNT_BITS, new_reference_count);
 
-                let res = self.entry.compare_exchange(
-                    current_entry,
-                    new_entry,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
                 match res {
                     Ok(_) => {
                         // Success!
@@ -681,12 +669,7 @@ where
                 // the frame.
 
                 // First try to commit the zeroing.
-                let res = self.entry.compare_exchange(
-                    current_entry,
-                    0,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                let res = atomic_compare_exchange(&self.entry, current_entry, 0);
                 match res {
                     Ok(_) => {
                         // Success!
@@ -749,7 +732,7 @@ impl<L> ActivePageTableEntry<L> {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.entry.load(Ordering::SeqCst).get_bit(DIRTY_BIT)
+        atomic_load(&self.entry).get_bit(DIRTY_BIT)
     }
 }
 
@@ -762,9 +745,7 @@ impl ActivePageTableEntry<Level1> {
     ///
     /// `frame` must not already be mapped.
     pub unsafe fn map(&self, entry: PresentPageTableEntry) {
-        let res = self
-            .entry
-            .compare_exchange(0, entry.0.get(), Ordering::SeqCst, Ordering::SeqCst);
+        let res = atomic_compare_exchange(&self.entry, 0, entry.0.get());
         res.expect("the page was already mapped");
 
         self.parent_table_entry()
@@ -786,14 +767,7 @@ impl ActivePageTableEntry<Level1> {
         old_entry: PresentPageTableEntry,
         new_entry: PresentPageTableEntry,
     ) -> Result<(), PresentPageTableEntry> {
-        let _ = self
-            .entry
-            .compare_exchange(
-                old_entry.0.get(),
-                new_entry.0.get(),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
+        let _ = atomic_compare_exchange(&self.entry, old_entry.0.get(), new_entry.0.get())
             .map_err(|entry| PresentPageTableEntry::try_from(entry).unwrap())?;
 
         self.flush(old_entry.global());
@@ -805,7 +779,7 @@ impl ActivePageTableEntry<Level1> {
     ///
     /// Panics if the page isn't mapped.
     pub unsafe fn unmap(&self) -> PresentPageTableEntry {
-        let old_entry = self.entry.swap(0, Ordering::SeqCst);
+        let old_entry = atomic_swap(&self.entry, 0);
         let old_entry = PresentPageTableEntry::try_from(old_entry).unwrap();
         self.flush(old_entry.global());
 
@@ -835,8 +809,8 @@ impl ActivePageTableEntry<Level1> {
             assert!(!writable);
         }
 
-        self.entry.fetch_or(add_mask, Ordering::SeqCst);
-        self.entry.fetch_and(!remove_mask, Ordering::SeqCst);
+        atomic_fetch_or(&self.entry, add_mask);
+        atomic_fetch_and(&self.entry, !remove_mask);
 
         self.flush(global);
     }
@@ -861,14 +835,14 @@ impl ActivePageTableEntry<Level1> {
             assert!(!writable);
         }
 
-        self.entry.fetch_or(add_mask, Ordering::SeqCst);
-        self.entry.fetch_and(!remove_mask, Ordering::SeqCst);
+        atomic_fetch_or(&self.entry, add_mask);
+        atomic_fetch_and(&self.entry, !remove_mask);
 
         self.flush(global);
     }
 
     pub fn entry(&self) -> Option<PresentPageTableEntry> {
-        let entry = self.entry.load(Ordering::SeqCst);
+        let entry = atomic_load(&self.entry);
         if !entry.get_bit(PRESENT_BIT) {
             return None;
         }
@@ -1116,3 +1090,117 @@ impl fmt::Debug for PresentPageTableEntry {
 
 #[derive(Debug)]
 pub struct PageNotPresentError(());
+
+/// Wrapper around `AtomicU64::load` without address sanitizer checks.
+#[inline(always)]
+fn atomic_load(entry: &AtomicU64) -> u64 {
+    if cfg!(sanitize = "address") {
+        let out;
+        unsafe {
+            asm! {
+                "mov {out}, [{ptr}]",
+                out = out(reg) out,
+                ptr = in(reg) entry.as_ptr(),
+            }
+        }
+        out
+    } else {
+        entry.load(Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `AtomicU64::store` without address sanitizer checks.
+#[inline(always)]
+fn atomic_store(entry: &AtomicU64, val: u64) {
+    if cfg!(sanitize = "address") {
+        unsafe {
+            asm! {
+                "mov [{ptr}], {val}",
+                val = in(reg) val,
+                ptr = in(reg) entry.as_ptr(),
+            }
+        }
+    } else {
+        entry.store(val, Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `AtomicU64::swap` without address sanitizer checks.
+#[inline(always)]
+fn atomic_swap(entry: &AtomicU64, val: u64) -> u64 {
+    if cfg!(sanitize = "address") {
+        let out;
+        unsafe {
+            asm! {
+                "xchg [{ptr}], {val}",
+                val = inout(reg) val => out,
+                ptr = in(reg) entry.as_ptr(),
+            }
+        }
+        out
+    } else {
+        entry.swap(val, Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `AtomicU64::compare_exchange` without address sanitizer checks.
+#[inline(always)]
+fn atomic_compare_exchange(entry: &AtomicU64, current: u64, new: u64) -> Result<u64, u64> {
+    if cfg!(sanitize = "address") {
+        let success: u16;
+        let current_value: u64;
+        unsafe {
+            asm! {
+                "lock cmpxchg [{ptr}], {new_value}",
+                "setne {success:l}",
+                ptr = in(reg) entry.as_ptr(),
+                new_value = in(reg) new,
+                inout("rax") current => current_value,
+                success = lateout(reg) success,
+            }
+        }
+        if success & 0xff == 0 {
+            Ok(current_value)
+        } else {
+            Err(current_value)
+        }
+    } else {
+        entry.compare_exchange(current, new, Ordering::SeqCst, Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `AtomicU64::fetch_or` without address sanitizer checks.
+#[inline(always)]
+fn atomic_fetch_or(entry: &AtomicU64, val: u64) -> u64 {
+    if cfg!(sanitize = "address") {
+        let mut current = atomic_load(entry);
+        loop {
+            let new = current | val;
+            let res = atomic_compare_exchange(entry, current, new);
+            match res {
+                Ok(current) => return current,
+                Err(new) => current = new,
+            }
+        }
+    } else {
+        entry.fetch_or(val, Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `AtomicU64::fetch_and` without address sanitizer checks.
+#[inline(always)]
+fn atomic_fetch_and(entry: &AtomicU64, val: u64) -> u64 {
+    if cfg!(sanitize = "address") {
+        let mut current = atomic_load(entry);
+        loop {
+            let new = current & val;
+            let res = atomic_compare_exchange(entry, current, new);
+            match res {
+                Ok(current) => return current,
+                Err(new) => current = new,
+            }
+        }
+    } else {
+        entry.fetch_and(val, Ordering::SeqCst)
+    }
+}

@@ -21,8 +21,15 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    pub fn new(supervisor: &[u8], kernel: &[u8], init: &[u8], policy: GuestPolicy) -> Self {
-        let commands = generate_base_load_commands(supervisor, kernel, init);
+    pub fn new(
+        supervisor: &[u8],
+        kernel: &[u8],
+        init: &[u8],
+        load_kasan_shadow_mappings: bool,
+        policy: GuestPolicy,
+    ) -> Self {
+        let commands =
+            generate_base_load_commands(supervisor, kernel, init, load_kasan_shadow_mappings);
 
         let mut launch_digest = [0; 48];
 

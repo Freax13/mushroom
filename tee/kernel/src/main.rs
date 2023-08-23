@@ -6,6 +6,7 @@
     allocator_api,
     asm_const,
     async_fn_in_trait,
+    cfg_sanitize,
     const_mut_refs,
     const_pointer_byte_offsets,
     core_intrinsics,
@@ -16,10 +17,14 @@
     lazy_cell,
     linked_list_cursors,
     naked_functions,
+    no_sanitize,
     noop_waker,
     offset_of,
     pointer_byte_offsets,
+    pointer_is_aligned,
+    ptr_metadata,
     return_type_notation,
+    slice_ptr_get,
     step_trait,
     trait_upcasting,
     try_trait_v2
@@ -44,6 +49,8 @@ mod panic;
 mod per_cpu;
 mod reset_vector;
 mod rt;
+#[cfg(sanitize = "address")]
+mod sanitize;
 mod supervisor;
 mod time;
 mod user;

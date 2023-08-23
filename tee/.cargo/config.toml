@@ -11,3 +11,10 @@ rustflags = [
     "-C",
     "force-frame-pointers=true",
 ]
+
+[target."cfg(kasan)"]
+rustflags = [
+    "-Zsanitizer=kernel-address",
+    "-Cllvm-args=-asan-mapping-offset=0xdfffc00000000000 -asan-constructor-kind=none -asan-destructor-kind=none",
+    "-Clink-args=-mllvm -asan-mapping-offset=0xdfffc00000000000 -mllvm -asan-constructor-kind=none -mllvm -asan-destructor-kind=none",
+]

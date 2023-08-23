@@ -37,6 +37,7 @@ SECTIONS {
     .data (0xffff800002000000) :
     {
         *(.data .data.*)
+        *(.ldata .ldata.*)
         *(.got .got.*)
         *(.bss .bss.*)
     } :data

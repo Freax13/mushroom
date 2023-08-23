@@ -31,11 +31,17 @@ where
     A: FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB> + Copy,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let pages = layout.size().div_ceil(0x1000);
+        #[cfg(not(sanitize = "address"))]
+        let min_size = 0x1000;
+        #[cfg(sanitize = "address")]
+        let min_size = crate::sanitize::MIN_ALLOCATION_SIZE;
+
+        let units = layout.size().div_ceil(min_size);
+        let pages = units * (min_size / 0x1000);
 
         let size = pages * 0x1000;
         let len = u64::try_from(size).map_err(|_| AllocError)?;
-        let addr = if layout.align() <= 0x1000 {
+        let addr = if layout.align() <= min_size {
             self.bump_addr.fetch_add(len, Ordering::SeqCst)
         } else {
             let align = u64::try_from(layout.align()).unwrap();
@@ -62,6 +68,9 @@ where
             let res = unsafe { map_page(page, entry, &mut allocator) };
             res.unwrap();
         }
+
+        #[cfg(sanitize = "address")]
+        crate::sanitize::map_shadow(addr.as_mut_ptr(), size, &mut allocator);
 
         Ok(NonNull::new(core::ptr::slice_from_raw_parts_mut(addr.as_mut_ptr(), size)).unwrap())
     }
