@@ -1,5 +1,6 @@
 use core::{
     arch::asm,
+    borrow::Borrow,
     cmp,
     intrinsics::volatile_copy_nonoverlapping_memory,
     iter::Step,
@@ -28,7 +29,7 @@ use x86_64::{
 
 use crate::{
     error::{Error, Result},
-    fs::{node::FileSnapshot, path::Path},
+    fs::node::FileSnapshot,
     memory::{
         frame::FRAME_ALLOCATOR,
         pagetable::{
@@ -40,7 +41,13 @@ use crate::{
     rt::oneshot,
 };
 
-use super::syscall::args::ProtFlags;
+use super::syscall::{
+    args::{
+        pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
+        Pointer, ProtFlags,
+    },
+    cpu_state::Abi,
+};
 
 type DynVirtualMemoryOp = Box<dyn FnOnce(&mut VirtualMemoryActivator) + Send>;
 static PENDING_VIRTUAL_MEMORY_OPERATIONS: SegQueue<DynVirtualMemoryOp> = SegQueue::new();
@@ -204,7 +211,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         self.state.lock().init(vm_size)
     }
 
-    pub fn read(&self, addr: VirtAddr, bytes: &mut [u8]) -> Result<()> {
+    pub fn read_bytes(&self, addr: VirtAddr, bytes: &mut [u8]) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -247,11 +254,38 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         Ok(())
     }
 
-    pub fn read_cstring(&self, mut addr: VirtAddr, max_length: usize) -> Result<CString> {
+    /// Read a pointee from userspace with the given ABI and return the amount of bytes read.
+    pub fn read_sized_with_abi<T, P>(&self, pointer: Pointer<T>, abi: Abi) -> Result<(usize, T)>
+    where
+        T: ReadablePointee<P>,
+    {
+        T::read(pointer.get(), self, abi)
+    }
+
+    /// Read a pointee from userspace with the given ABI.
+    pub fn read_with_abi<T, P>(&self, pointer: Pointer<T>, abi: Abi) -> Result<T>
+    where
+        T: ReadablePointee<P>,
+    {
+        let (_size, value) = self.read_sized_with_abi(pointer, abi)?;
+        Ok(value)
+    }
+
+    /// Read a pointee from userspace.
+    pub fn read<T, P>(&self, pointer: Pointer<T>) -> Result<T>
+    where
+        T: ReadablePointee<P> + AbiAgnosticPointee,
+    {
+        self.read_with_abi(pointer, Abi::Amd64)
+    }
+
+    /// Read a string from userspace.
+    pub fn read_cstring(&self, pointer: Pointer<CString>, max_length: usize) -> Result<CString> {
+        let mut addr = pointer.get();
         let mut ret = Vec::new();
         loop {
             let mut buf = 0;
-            self.read(addr, core::array::from_mut(&mut buf))?;
+            self.read_bytes(addr, core::array::from_mut(&mut buf))?;
             if buf == 0 {
                 break;
             }
@@ -265,13 +299,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         Ok(ret)
     }
 
-    pub fn read_path(&self, addr: VirtAddr) -> Result<Path> {
-        const PATH_MAX: usize = 0x1000;
-        let pathname = self.read_cstring(addr, PATH_MAX)?;
-        Path::new(pathname.into_bytes())
-    }
-
-    pub fn write(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
+    pub fn write_bytes(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -310,6 +338,28 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         }
 
         Ok(())
+    }
+
+    /// Write a pointee to userspace with the given abi. Returns the amount of
+    /// written bytes.
+    pub fn write_with_abi<T, P>(
+        &self,
+        pointer: Pointer<T>,
+        value: impl Borrow<T>,
+        abi: Abi,
+    ) -> Result<usize>
+    where
+        T: WritablePointee<P> + ?Sized,
+    {
+        value.borrow().write(pointer.get(), self, abi)
+    }
+
+    /// Write a pointee to userspace. Returns the amount of  written bytes.
+    pub fn write<T, P>(&self, pointer: Pointer<T>, value: impl Borrow<T>) -> Result<usize>
+    where
+        T: WritablePointee<P> + AbiAgnosticPointee + ?Sized,
+    {
+        self.write_with_abi(pointer, value, Abi::Amd64)
     }
 
     pub fn force_write(&self, page: Page, bytes: &[u8; 0x1000]) -> Result<()> {
@@ -563,7 +613,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             find_dirty_userspace_pages(|page| {
                 let bytes = &mut [0; 0x1000];
                 let addr = page.start_address();
-                self.read(addr, bytes)?;
+                self.read_bytes(addr, bytes)?;
                 f(page, bytes, self.vm_activator())
             })
         }

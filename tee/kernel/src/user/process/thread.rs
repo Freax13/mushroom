@@ -27,7 +27,10 @@ use crate::{
 use super::{
     fd::FileDescriptorTable,
     memory::{VirtualMemory, VirtualMemoryActivator},
-    syscall::{args::FileMode, cpu_state::CpuState},
+    syscall::{
+        args::{FileMode, Pointer},
+        cpu_state::CpuState,
+    },
     Process,
 };
 
@@ -87,7 +90,7 @@ pub struct ThreadState {
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
     pub sigaltstack: Option<Stack>,
-    pub clear_child_tid: u64,
+    pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
     pub cwd: Arc<dyn Directory>,
     pub vfork_done: Option<oneshot::Sender<()>>,
@@ -122,7 +125,7 @@ impl Thread {
                 sigmask: Sigset(0),
                 sigaction: [Sigaction::DEFAULT; 64],
                 sigaltstack: None,
-                clear_child_tid: 0,
+                clear_child_tid: Pointer::NULL,
                 notified_parent_about_exit: false,
                 cwd,
                 vfork_done,
@@ -266,7 +269,7 @@ impl ThreadGuard<'_> {
         new_virtual_memory: Option<Arc<VirtualMemory>>,
         fdtable: Arc<FileDescriptorTable>,
         stack: VirtAddr,
-        new_clear_child_tid: Option<VirtAddr>,
+        new_clear_child_tid: Option<Pointer<u32>>,
         new_tls: Option<u64>,
         vfork_done: Option<oneshot::Sender<()>>,
     ) -> Thread {
@@ -289,7 +292,7 @@ impl ThreadGuard<'_> {
 
         let mut guard = thread.lock();
         if let Some(clear_child_tid) = new_clear_child_tid {
-            guard.clear_child_tid = clear_child_tid.as_u64();
+            guard.clear_child_tid = clear_child_tid;
         }
         drop(guard);
 
@@ -375,7 +378,7 @@ impl ThreadGuard<'_> {
 
         self.virtual_memory = Arc::new(virtual_memory);
         *self.thread.cpu_state.lock() = cpu_state;
-        self.clear_child_tid = 0;
+        self.clear_child_tid = Pointer::NULL;
 
         Ok(())
     }
@@ -442,13 +445,12 @@ impl KernelRegisters {
     };
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct Sigaction {
-    sa_handler_or_sigaction: u64,
-    sa_mask: Sigset,
-    flags: u64,
-    sa_restorer: u64,
+    pub sa_handler_or_sigaction: u64,
+    pub sa_mask: Sigset,
+    pub flags: u64,
+    pub sa_restorer: u64,
 }
 
 impl Sigaction {
@@ -462,7 +464,7 @@ impl Sigaction {
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
-pub struct Sigset(u64);
+pub struct Sigset(pub u64);
 
 impl BitOrAssign for Sigset {
     fn bitor_assign(&mut self, rhs: Self) {
@@ -484,17 +486,15 @@ impl Not for Sigset {
     }
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct Stack {
-    pub ss_sp: u64,
+    pub sp: u64,
     pub flags: StackFlags,
-    _pad: u32,
     pub size: u64,
 }
 
 bitflags! {
-    #[derive(Pod, Zeroable)]
+    #[derive(Default, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct StackFlags: i32 {
         const ONSTACK = 1 << 0;

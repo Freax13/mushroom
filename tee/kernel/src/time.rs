@@ -122,13 +122,13 @@ impl Ord for Timeout {
 impl Timespec {
     fn from_ms(ms: u64) -> Self {
         Timespec {
-            tv_sec: ms / 1000,
-            tv_nsec: (ms % 1000) * 1_000_000,
+            tv_sec: u32::try_from(ms / 1000).unwrap(),
+            tv_nsec: u32::try_from((ms % 1000) * 1_000_000).unwrap(),
         }
     }
 
     fn into_ms(self) -> u64 {
-        self.tv_sec * 1000 + self.tv_nsec / 1_000_000
+        u64::from(self.tv_sec) * 1000 + u64::from(self.tv_nsec) / 1_000_000
     }
 }
 

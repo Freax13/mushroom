@@ -42,7 +42,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         .enumerate()
         .map(|(idx, (pat, ty))| {
             quote! {
-                let #pat = <#ty as SyscallArg>::parse(syscall_args.args[#idx])?;
+                let #pat = <#ty as SyscallArg>::parse(syscall_args.args[#idx], abi)?;
             }
         });
     let print_statements = syscall_inputs
@@ -58,7 +58,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
             };
             quote! {
                 write!(f, #format_string)?;
-                <#ty as SyscallArg>::display(f, syscall_args.args[#idx], thread, vm_activator)?;
+                <#ty as SyscallArg>::display(f, syscall_args.args[#idx], abi, thread, vm_activator)?;
             }
         });
     let function_invocation_args = input
@@ -129,6 +129,8 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
                 thread: Arc<Thread>,
                 syscall_args: SyscallArgs,
             ) -> SyscallResult {
+                let abi = syscall_args.abi;
+
                 let guard = thread.lock();
                 #(#state_bindings)*
                 drop(guard);
@@ -144,6 +146,8 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
                 thread: &ThreadGuard<'_>,
                 vm_activator: &mut VirtualMemoryActivator,
             ) -> fmt::Result {
+                let abi = syscall_args.abi;
+
                 write!(f, "{}(", #syscall_name)?;
                 #(#print_statements)*
                 write!(f, ")")
@@ -213,7 +217,7 @@ fn collect_syscall_inputs(item: ItemFn) -> Result<SyscallInputs> {
     };
 
     for (attrs, pat, ty) in args {
-        if pat.ident == "thread" || pat.ident == "vm_activator" {
+        if pat.ident == "thread" || pat.ident == "vm_activator" || pat.ident == "abi" {
             continue;
         }
 

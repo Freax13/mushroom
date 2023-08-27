@@ -1,4 +1,6 @@
-use core::{intrinsics::caller_location, num::TryFromIntError, panic::Location};
+use core::{
+    convert::Infallible, intrinsics::caller_location, num::TryFromIntError, panic::Location,
+};
 
 use bytemuck::checked::CheckedCastError;
 
@@ -83,6 +85,12 @@ impl From<CheckedCastError> for Error {
     #[track_caller]
     fn from(_: CheckedCastError) -> Self {
         Error::inval(())
+    }
+}
+
+impl From<Infallible> for Error {
+    fn from(err: Infallible) -> Self {
+        match err {}
     }
 }
 

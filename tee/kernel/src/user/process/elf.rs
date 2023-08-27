@@ -140,11 +140,11 @@ impl ActiveVirtualMemory<'_, '_> {
         let mut write = |value: u64| match vm_size {
             VmSize::ThirtyTwo => {
                 let value = u32::try_from(value).unwrap();
-                self.write(addr, &value.to_ne_bytes()).unwrap();
+                self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
                 addr += 4u64;
             }
             VmSize::FourtySeven => {
-                self.write(addr, &value.to_ne_bytes()).unwrap();
+                self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
                 addr += 8u64;
             }
         };
@@ -152,7 +152,7 @@ impl ActiveVirtualMemory<'_, '_> {
         let mut str_addr = stack + 0x800u64;
         let mut write_str = |value: &CStr| {
             let addr = str_addr;
-            self.write(str_addr, value.to_bytes_with_nul())?;
+            self.write_bytes(str_addr, value.to_bytes_with_nul())?;
             str_addr += value.to_bytes_with_nul().len();
             Result::<_>::Ok(addr)
         };

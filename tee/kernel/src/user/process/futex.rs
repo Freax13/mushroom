@@ -1,14 +1,12 @@
 use core::num::NonZeroU32;
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
-use bytemuck::bytes_of_mut;
 use futures::{select_biased, FutureExt};
 use spin::Mutex;
-use x86_64::VirtAddr;
 
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
-    syscall::args::Timespec,
+    syscall::args::{Pointer, Timespec},
 };
 use crate::{
     error::{Error, Result},
@@ -17,7 +15,7 @@ use crate::{
 };
 
 pub struct Futexes {
-    futexes: Mutex<BTreeMap<VirtAddr, Vec<FutexWaiter>>>,
+    futexes: Mutex<BTreeMap<Pointer<u32>, Vec<FutexWaiter>>>,
 }
 
 impl Futexes {
@@ -29,17 +27,15 @@ impl Futexes {
 
     pub async fn wait(
         self: Arc<Self>,
-        uaddr: VirtAddr,
+        uaddr: Pointer<u32>,
         val: u32,
         bitset: Option<NonZeroU32>,
         deadline: Option<Timespec>,
         vm: Arc<VirtualMemory>,
     ) -> Result<()> {
-        let mut current_value = 0;
-
         let receiver = VirtualMemoryActivator::use_from_async(vm, move |vm| {
             // Check if the value already changed. This can help avoid taking the lock.
-            vm.read(uaddr, bytes_of_mut(&mut current_value))?;
+            let current_value = vm.read(uaddr)?;
             if current_value != val {
                 return Err(Error::again(()));
             }
@@ -47,7 +43,7 @@ impl Futexes {
             let mut guard = self.futexes.lock();
 
             // Now that we've taken the lock, we need to check again.
-            vm.read(uaddr, bytes_of_mut(&mut current_value))?;
+            let current_value = vm.read(uaddr)?;
             if current_value != val {
                 return Err(Error::again(()));
             }
@@ -77,7 +73,7 @@ impl Futexes {
         }
     }
 
-    pub fn wake(&self, uaddr: VirtAddr, num_waiters: u32, bitset: Option<NonZeroU32>) -> u32 {
+    pub fn wake(&self, uaddr: Pointer<u32>, num_waiters: u32, bitset: Option<NonZeroU32>) -> u32 {
         if num_waiters == 0 {
             return 0;
         }

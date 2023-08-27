@@ -12,7 +12,7 @@ use super::{new_ino, DirEntry, DirEntryName, Directory, File, FileSnapshot, Link
 use crate::{
     error::{Error, Result},
     fs::path::{FileName, Path},
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat},
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
 
 pub struct TmpFsDir {
@@ -72,18 +72,22 @@ impl Directory for TmpFsDir {
             mode,
             uid: 0,
             gid: 0,
-            _pad0: 0,
             rdev: 0,
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: 0,
-            atime_nsec: 0,
-            mtime: 0,
-            mtime_nsec: 0,
-            ctime: 0,
-            ctime_nsec: 0,
-            _unused: [0; 3],
+            atime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            mtime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            ctime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
         }
     }
 
@@ -266,18 +270,22 @@ impl File for TmpFsFile {
             mode,
             uid: 0,
             gid: 0,
-            _pad0: 0,
             rdev: 0,
             size,
             blksize: 0,
             blocks: 0,
-            atime: 0,
-            atime_nsec: 0,
-            mtime: 0,
-            mtime_nsec: 0,
-            ctime: 0,
-            ctime_nsec: 0,
-            _unused: [0; 3],
+            atime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            mtime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            ctime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
         }
     }
 
