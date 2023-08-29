@@ -112,6 +112,19 @@ impl TryFrom<NonLinkNode> for Arc<dyn Directory> {
     }
 }
 
+impl TryFrom<Node> for Arc<dyn Directory> {
+    type Error = Error;
+
+    #[track_caller]
+    fn try_from(value: Node) -> Result<Self> {
+        match value {
+            Node::File(_) => Err(Error::not_dir(())),
+            Node::Directory(dir) => Ok(dir),
+            Node::Link(_) => Err(Error::not_dir(())),
+        }
+    }
+}
+
 impl From<NonLinkNode> for Node {
     fn from(value: NonLinkNode) -> Self {
         match value {

@@ -217,6 +217,7 @@ async fn write(
 
 #[syscall(i386 = 5, amd64 = 2)]
 fn open(
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -224,25 +225,16 @@ fn open(
     flags: OpenFlags,
     mode: u64,
 ) -> SyscallResult {
-    let mode = FileMode::from_bits_truncate(mode);
-    let filename = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
-
-    let file = if flags.contains(OpenFlags::CREAT) {
-        create_file(ROOT_NODE.clone(), &filename, mode)?
-    } else {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
-        node.try_into()?
-    };
-
-    let fd = if flags.contains(OpenFlags::WRONLY) {
-        fdtable.insert(WriteonlyFileFileDescription::new(file))?
-    } else if flags.contains(OpenFlags::RDWR) {
-        fdtable.insert(ReadWriteFileFileDescription::new(file))?
-    } else {
-        fdtable.insert(ReadonlyFileFileDescription::new(file))?
-    };
-
-    Ok(fd.get() as u64)
+    openat(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        FdNum::CWD,
+        pathname,
+        flags,
+        mode,
+    )
 }
 
 #[syscall(i386 = 6, amd64 = 3)]
@@ -1562,24 +1554,34 @@ fn openat(
         fd.as_dir()?
     };
 
-    let node = if flags.contains(OpenFlags::NOFOLLOW) {
-        lookup_node(start_dir, &filename)?
-    } else {
-        Node::from(lookup_and_resolve_node(start_dir, &filename)?)
-    };
+    let fd = if flags.contains(OpenFlags::DIRECTORY) {
+        let node = if flags.contains(OpenFlags::NOFOLLOW) {
+            lookup_node(start_dir.clone(), &filename)?
+        } else {
+            Node::from(lookup_and_resolve_node(start_dir, &filename)?)
+        };
 
-    if flags.contains(OpenFlags::DIRECTORY) {
-        match node {
-            Node::File(_) => Err(Error::not_dir(())),
-            Node::Directory(dir) => {
-                let fd = fdtable.insert(DirectoryFileDescription::new(dir))?;
-                Ok(fd.get() as u64)
-            }
-            Node::Link(_) => Err(Error::r#loop(())),
-        }
+        let dir = node.try_into()?;
+        fdtable.insert(DirectoryFileDescription::new(dir))?
     } else {
-        todo!()
-    }
+        let mode = FileMode::from_bits_truncate(mode);
+
+        let file = if flags.contains(OpenFlags::CREAT) {
+            create_file(start_dir.clone(), &filename, mode)?
+        } else {
+            let node = lookup_and_resolve_node(start_dir.clone(), &filename)?;
+            node.try_into()?
+        };
+
+        if flags.contains(OpenFlags::WRONLY) {
+            fdtable.insert(WriteonlyFileFileDescription::new(file))?
+        } else if flags.contains(OpenFlags::RDWR) {
+            fdtable.insert(ReadWriteFileFileDescription::new(file))?
+        } else {
+            fdtable.insert(ReadonlyFileFileDescription::new(file))?
+        }
+    };
+    Ok(fd.get() as u64)
 }
 
 #[syscall(i386 = 299, amd64 = 261)]
