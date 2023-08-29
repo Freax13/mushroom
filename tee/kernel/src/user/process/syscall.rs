@@ -1153,20 +1153,22 @@ fn unlink(
 
 #[syscall(i386 = 83, amd64 = 88)]
 fn symlink(
-    #[state] virtual_memory: Arc<VirtualMemory>,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     oldname: Pointer<Path>,
     newname: Pointer<Path>,
 ) -> SyscallResult {
-    let (oldname, newname) = vm_activator.activate(&virtual_memory, |vm| {
-        let oldname = vm.read(oldname)?;
-        let newname = vm.read(newname)?;
-        Result::<_, Error>::Ok((oldname, newname))
-    })?;
-
-    create_link(ROOT_NODE.clone(), &newname, oldname)?;
-
-    Ok(0)
+    symlinkat(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        oldname,
+        FdNum::CWD,
+        newname,
+    )
 }
 
 #[syscall(i386 = 85, amd64 = 89)]
@@ -1660,6 +1662,34 @@ fn linkat(
         &oldpath,
         flags.contains(LinkOptions::SYMLINK_FOLLOW),
     )?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 304, amd64 = 266)]
+fn symlinkat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    oldname: Pointer<Path>,
+    newdfd: FdNum,
+    newname: Pointer<Path>,
+) -> SyscallResult {
+    let newdfd = if newdfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(newdfd)?;
+        fd.as_dir()?
+    };
+
+    let (oldname, newname) = vm_activator.activate(&virtual_memory, |vm| {
+        let oldname = vm.read(oldname)?;
+        let newname = vm.read(newname)?;
+        Result::<_, Error>::Ok((oldname, newname))
+    })?;
+
+    create_link(newdfd, &newname, oldname)?;
 
     Ok(0)
 }
