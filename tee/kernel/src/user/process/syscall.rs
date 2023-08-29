@@ -1575,6 +1575,10 @@ fn openat(
             node.try_into()?
         };
 
+        if flags.contains(OpenFlags::TRUNC) {
+            file.truncate()?;
+        }
+
         if flags.contains(OpenFlags::WRONLY) {
             fdtable.insert(WriteonlyFileFileDescription::new(file))?
         } else if flags.contains(OpenFlags::RDWR) {

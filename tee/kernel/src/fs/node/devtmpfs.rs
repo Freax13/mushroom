@@ -71,6 +71,10 @@ impl File for NullFile {
         Ok(buf.len())
     }
 
+    fn truncate(&self) -> Result<()> {
+        Ok(())
+    }
+
     fn read_snapshot(&self) -> Result<FileSnapshot> {
         Ok(FileSnapshot::empty())
     }
@@ -150,6 +154,14 @@ impl File for OutputFile {
         Ok(buf.len())
     }
 
+    fn truncate(&self) -> Result<()> {
+        let guard = self.internal.lock();
+        if guard.offset != 0 {
+            return Err(Error::io(()));
+        }
+        Ok(())
+    }
+
     fn read_snapshot(&self) -> Result<FileSnapshot> {
         Err(Error::inval(()))
     }
@@ -226,6 +238,10 @@ impl File for RandomFile {
 
     fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize> {
         Ok(buf.len())
+    }
+
+    fn truncate(&self) -> Result<()> {
+        Ok(())
     }
 
     fn read_snapshot(&self) -> Result<FileSnapshot> {

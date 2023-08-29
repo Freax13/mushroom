@@ -318,6 +318,12 @@ impl File for TmpFsFile {
         Ok(buf.len())
     }
 
+    fn truncate(&self) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard.content = Arc::new(Cow::Borrowed(&[]));
+        Ok(())
+    }
+
     fn read_snapshot(&self) -> Result<FileSnapshot> {
         let content = self.internal.lock().content.clone();
         Ok(FileSnapshot(content))

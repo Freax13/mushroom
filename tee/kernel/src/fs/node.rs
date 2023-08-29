@@ -140,6 +140,7 @@ pub trait File: Send + Sync + 'static {
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
     fn read_snapshot(&self) -> Result<FileSnapshot>;
+    fn truncate(&self) -> Result<()>;
 
     fn mode(&self) -> FileMode {
         self.stat().mode.mode()
