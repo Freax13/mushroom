@@ -8,7 +8,8 @@ use goblin::{
         program_header::PT_LOAD,
     },
 };
-use x86_64::VirtAddr;
+use spin::Lazy;
+use x86_64::{instructions::random::RdRand, VirtAddr};
 
 use super::{
     memory::{ActiveVirtualMemory, MemoryPermissions, VmSize},
@@ -150,12 +151,13 @@ impl ActiveVirtualMemory<'_, '_> {
         };
 
         let mut str_addr = stack + 0x800u64;
-        let mut write_str = |value: &CStr| {
+        let mut write_bytes = |value: &[u8]| {
             let addr = str_addr;
-            self.write_bytes(str_addr, value.to_bytes_with_nul())?;
-            str_addr += value.to_bytes_with_nul().len();
+            self.write_bytes(str_addr, value)?;
+            str_addr += value.len();
             Result::<_>::Ok(addr)
         };
+        let mut write_str = |value: &CStr| write_bytes(value.to_bytes_with_nul());
 
         write(u64::try_from(argv.len()).unwrap()); // argc
         for arg in argv {
@@ -186,6 +188,8 @@ impl ActiveVirtualMemory<'_, '_> {
         }
         write(9); // AT_ENTRY
         write(info.entry);
+        write(25); // AT_RANDOM
+        write(write_bytes(&random_bytes())?.as_u64());
         write(0); // AT_NULL
 
         let cpu_state = match vm_size {
@@ -267,4 +271,17 @@ struct LoadInfo {
 enum Bits {
     ThirtyTwo,
     SixtyFour,
+}
+
+fn random_bytes() -> [u8; 16] {
+    // Generate random bytes.
+    static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
+    let mut random_iter = from_fn(|| Some(RD_RAND.get_u64()))
+        .flatten()
+        .flat_map(u64::to_ne_bytes);
+
+    // Fill 16 values.
+    let mut buffer = [0; 16];
+    buffer.fill_with(|| random_iter.next().unwrap());
+    buffer
 }
