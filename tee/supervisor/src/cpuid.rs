@@ -1,3 +1,7 @@
+//! This whole module is a huge giant FIXME. We already sort of hard-code a lot
+//! of values, so we should just commit to that and use algorithms to fit that
+//! instead of writing individual handlers.
+
 use core::cell::{LazyCell, SyncUnsafeCell};
 
 use snp_types::cpuid::CpuidPage;
@@ -9,7 +13,7 @@ use crate::FakeSync;
 
 pub fn c_bit_location() -> usize {
     static C_BIT: FakeSync<LazyCell<usize>> = FakeSync::new(LazyCell::new(|| {
-        let function = lookup_provided_cpuid_function(0x8000001F, 0, 1, 0).unwrap();
+        let function = lookup_provided_cpuid_function(0x8000001F, None, 1, 0).unwrap();
         (function.ebx & 0x3f) as usize
     }));
     **C_BIT
@@ -21,7 +25,7 @@ pub fn c_bit_location() -> usize {
 /// features bits), so handle these with care.
 pub fn lookup_provided_cpuid_function(
     eax: u32,
-    ecx: u32,
+    ecx: Option<u32>,
     xcr0: u64,
     xss: u64,
 ) -> Option<snp_types::cpuid::CpuidFunction> {
@@ -116,8 +120,18 @@ const EXTENDED_FUNCTIONS: &[CpuidFunctions] = &[
     UNIMPLEMENTED,
     UNIMPLEMENTED,
     UNIMPLEMENTED,
-    UNIMPLEMENTED,
-    UNIMPLEMENTED,
+    (
+        fn_8000_0005_eax,
+        fn_8000_0005_ebx,
+        fn_8000_0005_ecx,
+        fn_8000_0005_edx,
+    ),
+    (
+        fn_8000_0006_eax,
+        fn_8000_0006_ebx,
+        fn_8000_0006_ecx,
+        fn_8000_0006_edx,
+    ),
     UNIMPLEMENTED,
     (
         fn_8000_0008_eax,
@@ -172,7 +186,7 @@ fn fn_0000_0001_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
 }
 
 fn fn_0000_0001_ebx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    let provided_value = lookup_provided_cpuid_function(eax, 0, xcr0, xss)
+    let provided_value = lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .ebx;
     let provided_cl_flush = provided_value.get_bits(8..=15);
@@ -191,13 +205,13 @@ fn fn_0000_0001_ebx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
 }
 
 fn fn_0000_0001_ecx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, 0, xcr0, xss)
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .ecx
 }
 
 fn fn_0000_0001_edx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, 0, xcr0, xss)
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .edx
 }
@@ -234,39 +248,75 @@ fn fn_8000_0001_ebx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
     ebx
 }
 
-fn fn_8000_0001_ecx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_8000_0001_ecx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .ecx
 }
 
-fn fn_8000_0001_edx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_8000_0001_edx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .edx
 }
 
-fn fn_8000_0008_eax(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_8000_0005_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0xff_40_ff_40
+}
+
+fn fn_8000_0005_ebx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0xff_40_ff_40
+}
+
+fn fn_8000_0005_ecx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x20_08_01_40
+}
+
+fn fn_8000_0005_edx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x20_08_01_40
+}
+
+// FIXME: Fill in reasonable values.
+fn fn_8000_0006_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0xff_40_ff_40
+}
+
+// FIXME: Fill in reasonable values.
+fn fn_8000_0006_ebx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0xff_40_ff_40
+}
+
+// FIXME: Fill in reasonable values.
+fn fn_8000_0006_ecx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x20_08_01_40
+}
+
+// FIXME: Fill in reasonable values.
+fn fn_8000_0006_edx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x20_08_01_40
+}
+
+fn fn_8000_0008_eax(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .eax
 }
 
-fn fn_8000_0008_ebx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_8000_0008_ebx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .ebx
 }
 
-fn fn_8000_0008_ecx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
+fn fn_8000_0008_ecx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
     // FIXME: Does we have to check the APIC ID size?
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .ecx
 }
 
-fn fn_8000_0008_edx(eax: u32, ecx: u32, xcr0: u64, xss: u64) -> u32 {
-    lookup_provided_cpuid_function(eax, ecx, xcr0, xss)
+fn fn_8000_0008_edx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
+    lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .edx
 }
