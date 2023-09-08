@@ -7,7 +7,7 @@ use crate::{
     fs::node::File,
     user::process::{
         memory::{ActiveVirtualMemory, MemoryPermissions},
-        syscall::args::{FileMode, Stat, Whence},
+        syscall::args::{FileMode, Pointer, Stat, Whence},
     },
 };
 
@@ -32,6 +32,18 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let mut guard = self.cursor_idx.lock();
         let len = self.file.read(*guard, buf)?;
+        *guard += len;
+        Ok(len)
+    }
+
+    fn read_to_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.read_to_user(*guard, vm, pointer, len)?;
         *guard += len;
         Ok(len)
     }
@@ -97,6 +109,18 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.cursor_idx.lock();
         let len = self.file.write(*guard, buf)?;
+        *guard += len;
+        Ok(len)
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.write_from_user(*guard, vm, pointer, len)?;
         *guard += len;
         Ok(len)
     }

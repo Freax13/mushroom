@@ -12,7 +12,10 @@ use super::{new_ino, DirEntry, DirEntryName, Directory, File, FileSnapshot, Link
 use crate::{
     error::{Error, Result},
     fs::path::{FileName, Path},
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
+    user::process::{
+        memory::ActiveVirtualMemory,
+        syscall::args::{FileMode, FileType, FileTypeAndMode, Pointer, Stat, Timespec},
+    },
 };
 
 pub struct TmpFsDir {
@@ -301,6 +304,20 @@ impl File for TmpFsFile {
         Ok(len)
     }
 
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let guard = self.internal.lock();
+        let slice = guard.content.get(offset..).ok_or(Error::inval(()))?;
+        let len = cmp::min(slice.len(), len);
+        vm.write_bytes(pointer.get(), &slice[..len])?;
+        Ok(len)
+    }
+
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.lock();
         let bytes = Arc::make_mut(&mut guard.content);
@@ -316,6 +333,29 @@ impl File for TmpFsFile {
         bytes[offset..][..buf.len()].copy_from_slice(buf);
 
         Ok(buf.len())
+    }
+
+    fn write_from_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        let bytes = Arc::make_mut(&mut guard.content);
+        let bytes = bytes.to_mut();
+
+        // Grow the file to be able to hold at least `offset+buf.len()` bytes.
+        let new_min_len = offset + len;
+        if bytes.len() < new_min_len {
+            bytes.resize(new_min_len, 0);
+        }
+
+        // Read from userspace into the file.
+        vm.read_bytes(pointer.get(), &mut bytes[offset..][..len])?;
+
+        Ok(len)
     }
 
     fn truncate(&self) -> Result<()> {

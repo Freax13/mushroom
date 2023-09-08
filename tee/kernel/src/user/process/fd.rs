@@ -1,8 +1,9 @@
-use core::{cmp, ops::Deref};
+use core::{any::type_name, cmp, ops::Deref};
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
+use log::debug;
 use spin::Mutex;
 use x86_64::VirtAddr;
 
@@ -12,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    memory::{ActiveVirtualMemory, MemoryPermissions},
-    syscall::args::{EpollEvent, FdNum, FileMode, Stat, Whence},
+    memory::{ActiveVirtualMemory, MemoryPermissions, VirtualMemory, VirtualMemoryActivator},
+    syscall::args::{EpollEvent, FdNum, FileMode, Pointer, Stat, Whence},
 };
 
 pub mod dir;
@@ -136,9 +137,52 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Err(Error::inval(()))
     }
 
+    fn read_to_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized read from {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        let count = self.read(buf)?;
+
+        let buf = &buf[..count];
+        vm.write_bytes(pointer.get(), buf)?;
+
+        Ok(count)
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::inval(()))
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized write to {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        vm.read_bytes(pointer.get(), buf)?;
+
+        self.write(buf)
     }
 
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
@@ -242,6 +286,36 @@ pub async fn do_io<R>(
     loop {
         // Try to execute the closure.
         let res = callback();
+        match res {
+            Ok(value) => return Ok(value),
+            Err(err) if err.kind() == ErrorKind::Again => {
+                // Wait for the fd to be ready, then try again.
+                fd.ready(events).await?;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+pub async fn do_io_with_vm<R, F>(
+    fd: &(impl OpenFileDescription + ?Sized),
+    events: Events,
+    vm: Arc<VirtualMemory>,
+    mut callback: F,
+) -> Result<R>
+where
+    R: Send + 'static,
+    F: FnMut(&mut ActiveVirtualMemory) -> Result<R> + Send + 'static,
+{
+    loop {
+        // Try to execute the closure.
+        let (res, f) = VirtualMemoryActivator::use_from_async(vm.clone(), move |vm| {
+            let res = callback(vm);
+            (res, callback)
+        })
+        .await;
+        callback = f;
+
         match res {
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again => {

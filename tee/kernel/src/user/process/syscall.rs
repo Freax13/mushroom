@@ -5,7 +5,7 @@ use core::{
     num::NonZeroU32,
 };
 
-use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
+use alloc::{ffi::CString, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use kernel_macros::syscall;
@@ -47,7 +47,7 @@ use self::{
 use super::{
     fd::{
         dir::DirectoryFileDescription,
-        do_io,
+        do_io, do_io_with_vm,
         epoll::Epoll,
         eventfd::EventFd,
         file::{
@@ -174,18 +174,15 @@ async fn read(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let buf = buf.get();
     let count = usize::try_from(count)?;
 
-    let len = cmp::min(count, 8192);
-    let mut buffer = vec![0; len];
-    let len = do_io(&*fd, Events::READ, || fd.read(&mut buffer)).await?;
-    buffer.truncate(len);
+    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
+        fd.read_to_user(vm, buf, count)
+    })
+    .await?;
 
-    VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| vm.write_bytes(buf, &buffer))
-        .await?;
-
-    Ok(len.try_into()?)
+    let len = u64::try_from(len)?;
+    Ok(len)
 }
 
 #[syscall(i386 = 4, amd64 = 1)]
@@ -198,18 +195,12 @@ async fn write(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let buf = buf.get();
     let count = usize::try_from(count)?;
-    let len = cmp::min(8192, count);
-    let mut chunk = vec![0u8; len];
 
-    let chunk = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| -> Result<_> {
-        vm.read_bytes(buf, &mut chunk)?;
-        Ok(chunk)
+    let len = do_io_with_vm(&*fd.clone(), Events::WRITE, virtual_memory, move |vm| {
+        fd.write_from_user(vm, buf, count)
     })
     .await?;
-
-    let len = do_io(&*fd, Events::WRITE, || fd.write(&chunk)).await?;
 
     let len = u64::try_from(len)?;
     Ok(len)

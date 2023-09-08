@@ -1,4 +1,4 @@
-use core::iter::from_fn;
+use core::{cmp, iter::from_fn};
 
 use alloc::sync::{Arc, Weak};
 use spin::{Lazy, Mutex};
@@ -8,7 +8,10 @@ use crate::{
     error::{Error, Result},
     fs::{path::FileName, INPUT},
     supervisor,
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
+    user::process::{
+        memory::ActiveVirtualMemory,
+        syscall::args::{FileMode, FileType, FileTypeAndMode, Pointer, Stat, Timespec},
+    },
 };
 
 use super::{
@@ -67,8 +70,28 @@ impl File for NullFile {
         Ok(0)
     }
 
+    fn read_to_user(
+        &self,
+        _offset: usize,
+        _vm: &mut ActiveVirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
     fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize> {
         Ok(buf.len())
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &mut ActiveVirtualMemory,
+        _pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        Ok(len)
     }
 
     fn truncate(&self) -> Result<()> {
@@ -152,6 +175,39 @@ impl File for OutputFile {
         guard.offset += buf.len();
 
         Ok(buf.len())
+    }
+
+    fn write_from_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.internal.lock();
+
+        // Make sure that writes always append.
+        if guard.offset != offset {
+            return Err(Error::inval(()));
+        }
+
+        let mut addr = pointer.get();
+        let mut remaining_len = len;
+        while remaining_len > 0 {
+            let buffer_len = cmp::min(remaining_len, 0x1000);
+            let mut buf = [0; 0x1000];
+            let buf = &mut buf[..buffer_len];
+
+            vm.read_bytes(addr, buf)?;
+
+            supervisor::output(buf);
+            guard.offset += buf.len();
+
+            addr += buf.len();
+            remaining_len -= buf.len();
+        }
+
+        Ok(len)
     }
 
     fn truncate(&self) -> Result<()> {
@@ -238,6 +294,16 @@ impl File for RandomFile {
 
     fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize> {
         Ok(buf.len())
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &mut ActiveVirtualMemory,
+        _pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        Ok(len)
     }
 
     fn truncate(&self) -> Result<()> {

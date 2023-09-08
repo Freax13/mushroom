@@ -1,5 +1,5 @@
 use core::{
-    any::Any,
+    any::{type_name, Any},
     ops::Deref,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -9,11 +9,15 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use log::debug;
 use spin::Lazy;
 
 use crate::{
     error::{Error, Result},
-    user::process::syscall::args::{FileMode, FileType, Stat},
+    user::process::{
+        memory::ActiveVirtualMemory,
+        syscall::args::{FileMode, FileType, Pointer, Stat},
+    },
 };
 
 use self::tmpfs::TmpFsDir;
@@ -138,7 +142,50 @@ pub trait File: Send + Sync + 'static {
     fn stat(&self) -> Stat;
     fn set_mode(&self, mode: FileMode);
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized read from {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        let count = self.read(offset, buf)?;
+
+        let buf = &buf[..count];
+        vm.write_bytes(pointer.get(), buf)?;
+
+        Ok(count)
+    }
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
+    fn write_from_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized write to {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        vm.read_bytes(pointer.get(), buf)?;
+
+        self.write(offset, buf)
+    }
     fn read_snapshot(&self) -> Result<FileSnapshot>;
     fn truncate(&self) -> Result<()>;
 
