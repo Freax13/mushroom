@@ -1,4 +1,4 @@
-use core::{cmp, iter::repeat};
+use core::cmp;
 
 use alloc::{
     borrow::Cow,
@@ -325,8 +325,8 @@ impl File for TmpFsFile {
 
         // Grow the file to be able to hold at least `offset+buf.len()` bytes.
         let new_min_len = offset + buf.len();
-        if let Some(diff) = new_min_len.checked_sub(bytes.len()) {
-            bytes.extend(repeat(0).take(diff));
+        if bytes.len() < new_min_len {
+            bytes.resize(new_min_len, 0);
         }
 
         // Copy the buffer into the file.
@@ -354,6 +354,33 @@ impl File for TmpFsFile {
 
         // Read from userspace into the file.
         vm.read_bytes(pointer.get(), &mut bytes[offset..][..len])?;
+
+        Ok(len)
+    }
+
+    fn append(&self, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        let bytes = Arc::make_mut(&mut guard.content);
+        let bytes = bytes.to_mut();
+        bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn append_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        let bytes = Arc::make_mut(&mut guard.content);
+        let bytes = bytes.to_mut();
+
+        let prev_len = bytes.len();
+        bytes.resize(bytes.len() + len, 0);
+
+        // Copy the buffer into the file.
+        vm.read_bytes(pointer.get(), &mut bytes[prev_len..])?;
 
         Ok(len)
     }

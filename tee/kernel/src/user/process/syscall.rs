@@ -51,7 +51,8 @@ use super::{
         epoll::Epoll,
         eventfd::EventFd,
         file::{
-            ReadWriteFileFileDescription, ReadonlyFileFileDescription, WriteonlyFileFileDescription,
+            AppendFileFileDescription, ReadWriteFileFileDescription, ReadonlyFileFileDescription,
+            WriteonlyFileFileDescription,
         },
         pipe,
         unix_socket::UnixSocket,
@@ -1571,7 +1572,11 @@ fn openat(
         }
 
         if flags.contains(OpenFlags::WRONLY) {
-            fdtable.insert(WriteonlyFileFileDescription::new(file))?
+            if flags.contains(OpenFlags::APPEND) {
+                fdtable.insert(AppendFileFileDescription::new(file))?
+            } else {
+                fdtable.insert(WriteonlyFileFileDescription::new(file))?
+            }
         } else if flags.contains(OpenFlags::RDWR) {
             fdtable.insert(ReadWriteFileFileDescription::new(file))?
         } else {

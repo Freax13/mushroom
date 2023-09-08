@@ -186,6 +186,26 @@ pub trait File: Send + Sync + 'static {
 
         self.write(offset, buf)
     }
+    fn append(&self, buf: &[u8]) -> Result<usize>;
+    fn append_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized write to {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        vm.read_bytes(pointer.get(), buf)?;
+
+        self.append(buf)
+    }
     fn read_snapshot(&self) -> Result<FileSnapshot>;
     fn truncate(&self) -> Result<()>;
 

@@ -333,6 +333,7 @@ bitflags! {
         const EXCL = 1 << 7;
         const NOCTTY = 1 << 8;
         const TRUNC = 1 << 9;
+        const APPEND = 1 << 10;
         const LARGEFILE = 1 << 15;
         const DIRECTORY = 1 << 16;
         const NOFOLLOW = 1 << 17;

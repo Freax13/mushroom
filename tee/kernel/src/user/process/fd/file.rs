@@ -155,6 +155,41 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
     }
 }
 
+/// A file description for files opened as write-only.
+pub struct AppendFileFileDescription {
+    file: Arc<dyn File>,
+}
+
+impl AppendFileFileDescription {
+    pub fn new(file: Arc<dyn File>) -> Self {
+        Self { file }
+    }
+}
+
+impl OpenFileDescription for AppendFileFileDescription {
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        self.file.append(buf)
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        self.file.append_from_user(vm, pointer, len)
+    }
+
+    fn set_mode(&self, mode: FileMode) -> Result<()> {
+        self.file.set_mode(mode);
+        Ok(())
+    }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.file.stat())
+    }
+}
+
 /// A file description for files opened as read and write.
 pub struct ReadWriteFileFileDescription {
     file: Arc<dyn File>,

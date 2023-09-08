@@ -94,6 +94,19 @@ impl File for NullFile {
         Ok(len)
     }
 
+    fn append(&self, buf: &[u8]) -> Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn append_from_user(
+        &self,
+        _vm: &mut ActiveVirtualMemory,
+        _: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        Ok(len)
+    }
+
     fn truncate(&self) -> Result<()> {
         Ok(())
     }
@@ -210,6 +223,15 @@ impl File for OutputFile {
         Ok(len)
     }
 
+    fn append(&self, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.internal.lock();
+
+        supervisor::output(buf);
+        guard.offset += buf.len();
+
+        Ok(buf.len())
+    }
+
     fn truncate(&self) -> Result<()> {
         let guard = self.internal.lock();
         if guard.offset != 0 {
@@ -299,6 +321,19 @@ impl File for RandomFile {
     fn write_from_user(
         &self,
         _offset: usize,
+        _vm: &mut ActiveVirtualMemory,
+        _pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        Ok(len)
+    }
+
+    fn append(&self, buf: &[u8]) -> Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn append_from_user(
+        &self,
         _vm: &mut ActiveVirtualMemory,
         _pointer: Pointer<[u8]>,
         len: usize,
