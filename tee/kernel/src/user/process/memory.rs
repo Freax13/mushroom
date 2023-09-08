@@ -129,18 +129,7 @@ pub struct VirtualMemory {
 
 impl VirtualMemory {
     pub fn new() -> Self {
-        // FIXME: Use a more robust pcid allocation algorithm.
-        static PCID_COUNTER: AtomicU16 = AtomicU16::new(1);
-        let pcid = PCID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let pcid = Pcid::new(pcid).unwrap();
-
-        let pml4 = allocate_pml4().unwrap();
-
-        Self {
-            state: Mutex::new(VirtualMemoryState::new()),
-            pml4,
-            pcid,
-        }
+        Self::default()
     }
 
     /// # Safety
@@ -194,6 +183,23 @@ impl VirtualMemory {
         })?;
 
         Ok(this)
+    }
+}
+
+impl Default for VirtualMemory {
+    fn default() -> Self {
+        // FIXME: Use a more robust pcid allocation algorithm.
+        static PCID_COUNTER: AtomicU16 = AtomicU16::new(1);
+        let pcid = PCID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pcid = Pcid::new(pcid).unwrap();
+
+        let pml4 = allocate_pml4().unwrap();
+
+        Self {
+            state: Mutex::new(VirtualMemoryState::new()),
+            pml4,
+            pcid,
+        }
     }
 }
 
