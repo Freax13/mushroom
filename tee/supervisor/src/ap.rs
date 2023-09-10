@@ -43,7 +43,7 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
 static APS: FakeSync<[RefCell<Ap>; MAX_APS_COUNT as usize]> =
     FakeSync::new([const { RefCell::new(Ap::new()) }; MAX_APS_COUNT as usize]);
 
-static SCHEDULE_COUNTER: FakeSync<Cell<u8>> = FakeSync::new(Cell::new(0));
+static SCHEDULE_COUNTER: FakeSync<Cell<u64>> = FakeSync::new(Cell::new(0));
 
 #[allow(clippy::large_enum_variant)]
 pub enum Ap {
@@ -202,8 +202,7 @@ fn handle_ioio_prot(
         }
         SCHEDULE_PORT => {
             let old_schedule_counter = SCHEDULE_COUNTER.get();
-            let new_schedule_counter =
-                old_schedule_counter.saturating_add(u8::try_from(rax).unwrap_or(!0));
+            let new_schedule_counter = old_schedule_counter + rax;
             SCHEDULE_COUNTER.set(new_schedule_counter);
         }
         HALT_PORT => {
