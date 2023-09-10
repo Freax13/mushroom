@@ -39,7 +39,7 @@ use self::{
         EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd, FdNum, FileMode,
         FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags,
         Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow, SocketPairType, Stat,
-        SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        Stat64, SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -101,8 +101,10 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysOpen);
     handlers.register(SysClose);
     handlers.register(SysStat);
+    handlers.register(SysStat64);
     handlers.register(SysFstat);
     handlers.register(SysLstat);
+    handlers.register(SysLstat64);
     handlers.register(SysPoll);
     handlers.register(SysLseek);
     handlers.register(SysMmap);
@@ -256,6 +258,27 @@ fn stat(
     Ok(0)
 }
 
+#[syscall(i386 = 195)]
+fn stat64(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    filename: Pointer<Path>,
+    statbuf: Pointer<Stat>,
+) -> SyscallResult {
+    vm_activator.activate(&virtual_memory, |vm| {
+        let filename = vm.read(filename)?;
+
+        let node = lookup_and_resolve_node(thread.cwd.clone(), &filename)?;
+        let stat = node.stat();
+        let stat64 = Stat64::from(stat);
+
+        vm.write_bytes(statbuf.get(), bytes_of(&stat64))
+    })?;
+
+    Ok(0)
+}
+
 #[syscall(i386 = 108, amd64 = 5)]
 fn fstat(
     vm_activator: &mut VirtualMemoryActivator,
@@ -288,6 +311,27 @@ fn lstat(
         let stat = node.stat();
 
         vm.write_with_abi(statbuf, stat, abi)
+    })?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 196)]
+fn lstat64(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    filename: Pointer<Path>,
+    statbuf: Pointer<Stat>,
+) -> SyscallResult {
+    vm_activator.activate(&virtual_memory, |vm| {
+        let filename = vm.read(filename)?;
+
+        let node = lookup_node(thread.cwd.clone(), &filename)?;
+        let stat = node.stat();
+
+        let stat64 = Stat64::from(stat);
+        vm.write_bytes(statbuf.get(), bytes_of(&stat64))
     })?;
 
     Ok(0)

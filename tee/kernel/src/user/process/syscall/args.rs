@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-use self::pointee::{Pointee, PrimitivePointee};
+use self::pointee::{Pointee, PrimitivePointee, Timespec32};
 
 use super::cpu_state::Abi;
 
@@ -588,6 +588,58 @@ pub struct Stat {
     pub atime: Timespec,
     pub mtime: Timespec,
     pub ctime: Timespec,
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, NoUninit)]
+#[repr(C, packed)]
+pub struct Stat64 {
+    pub dev: u64,
+    pub __pad0: [u8; 4],
+
+    pub __ino: u32,
+
+    pub mode: FileTypeAndMode,
+    pub nlink: u32,
+
+    pub uid: u32,
+    pub gid: u32,
+
+    pub rdev: u64,
+    pub __pad3: [u8; 4],
+
+    pub size: i64,
+    pub blksize: u32,
+
+    pub blocks: i64,
+
+    pub atime: Timespec32,
+    pub mtime: Timespec32,
+    pub ctime: Timespec32,
+
+    pub ino: u64,
+}
+
+impl From<Stat> for Stat64 {
+    fn from(value: Stat) -> Self {
+        Self {
+            dev: value.dev,
+            __pad0: [0; 4],
+            __ino: value.ino as u32,
+            mode: value.mode,
+            nlink: value.nlink as u32,
+            uid: value.uid,
+            gid: value.gid,
+            rdev: value.rdev,
+            __pad3: [0; 4],
+            size: value.size,
+            blksize: value.blksize as u32,
+            blocks: value.blocks,
+            atime: Timespec32::from(value.atime),
+            mtime: Timespec32::from(value.mtime),
+            ctime: Timespec32::from(value.ctime),
+            ino: value.ino,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Zeroable, NoUninit)]
