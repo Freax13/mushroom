@@ -134,6 +134,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExecve);
     handlers.register(SysExit);
     handlers.register(SysWait4);
+    handlers.register(SysUname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysChdir);
@@ -1167,6 +1168,32 @@ async fn wait4(
     THREADS.remove(tid);
 
     Ok(u64::from(tid))
+}
+
+#[syscall(amd64 = 63)]
+fn uname(
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    fd: u64,
+) -> SyscallResult {
+    vm_activator.activate(&virtual_memory, |vm| {
+        const SIZE: usize = 65;
+        vm.write_bytes(VirtAddr::new(fd), &[0; SIZE * 5])?;
+        for (i, bs) in [
+            b"Linux\0" as &[u8],
+            b"host\0",
+            b"6.1.46\0",
+            b"mushroom\0",
+            b"x86_64\0",
+            b"(none)\0",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            vm.write_bytes(VirtAddr::new(fd + (i * SIZE) as u64), bs)?;
+        }
+        Ok(0)
+    })
 }
 
 #[syscall(i386 = 55, amd64 = 72)]
