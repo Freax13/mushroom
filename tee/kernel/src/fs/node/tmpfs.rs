@@ -161,14 +161,20 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                entry.insert(Node::Link(Link { target }));
+                entry.insert(Node::Link(Link {
+                    ino: new_ino(),
+                    target,
+                }));
                 Ok(())
             }
             Entry::Occupied(mut entry) => {
                 if create_new {
                     return Err(Error::exist(()));
                 }
-                entry.insert(Node::Link(Link { target }));
+                entry.insert(Node::Link(Link {
+                    ino: new_ino(),
+                    target,
+                }));
                 Ok(())
             }
         }

@@ -16,7 +16,7 @@ use crate::{
     error::{Error, Result},
     user::process::{
         memory::ActiveVirtualMemory,
-        syscall::args::{FileMode, FileType, Pointer, Stat},
+        syscall::args::{FileMode, FileType, FileTypeAndMode, Pointer, Stat, Timespec},
     },
 };
 
@@ -312,12 +312,36 @@ impl From<FileName<'static>> for DirEntryName {
 
 #[derive(Clone)]
 pub struct Link {
+    ino: u64,
     target: Path,
 }
 
 impl Link {
     fn stat(&self) -> Stat {
-        todo!()
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Link, FileMode::ALL),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            mtime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            ctime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        }
     }
 }
 
