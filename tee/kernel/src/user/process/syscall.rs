@@ -1962,10 +1962,6 @@ fn pipe2(
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
-    if flags != Pipe2Flags::CLOEXEC {
-        todo!()
-    }
-
     let (read_half, write_half) = pipe::new();
 
     // Insert the first read half.
