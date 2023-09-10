@@ -159,6 +159,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysNewfstatat);
     handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
+    handlers.register(SysSymlinkat);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
