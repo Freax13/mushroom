@@ -924,6 +924,7 @@ fn clone(
     let new_process = if flags.contains(CloneFlags::THREAD) {
         None
     } else {
+        thread.unwaited_children += 1;
         Some(Arc::new(Process::new(new_tid)))
     };
 
@@ -989,6 +990,8 @@ fn fork(
     #[state] fdtable: Arc<FileDescriptorTable>,
     vm_activator: &mut VirtualMemoryActivator,
 ) -> SyscallResult {
+    thread.unwaited_children += 1;
+
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
@@ -1016,7 +1019,9 @@ fn fork(
 async fn vfork(thread: Arc<Thread>, #[state] fdtable: Arc<FileDescriptorTable>) -> SyscallResult {
     let (sender, receiver) = oneshot::new();
 
-    let guard = thread.lock();
+    let mut guard = thread.lock();
+    guard.unwaited_children += 1;
+
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
@@ -1138,6 +1143,12 @@ async fn wait4(
     let (tid, status) = match pid {
         ..=-2 => todo!(),
         -1 => {
+            let guard = thread.lock();
+            if guard.unwaited_children == 0 {
+                return Err(Error::child(()));
+            }
+            drop(guard);
+
             if options.contains(WaitOptions::NOHANG) {
                 let Some((tid, status)) = thread.try_wait_for_child_death() else {
                     return Ok(0);
@@ -1164,6 +1175,10 @@ async fn wait4(
         })
         .await?;
     }
+
+    let mut guard = thread.lock();
+    guard.unwaited_children -= 1;
+    drop(guard);
 
     THREADS.remove(tid);
 

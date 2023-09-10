@@ -97,6 +97,8 @@ pub struct ThreadState {
     // FIXME: Use this field.
     pub umask: FileMode,
     fdtable: Arc<FileDescriptorTable>,
+
+    pub unwaited_children: u64,
 }
 
 impl Thread {
@@ -131,6 +133,7 @@ impl Thread {
                 vfork_done,
                 fdtable,
                 umask,
+                unwaited_children: 0,
             }),
             cpu_state: Mutex::new(cpu_state),
         }
