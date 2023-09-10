@@ -135,6 +135,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExit);
     handlers.register(SysWait4);
     handlers.register(SysFcntl);
+    handlers.register(SysFcntl64);
     handlers.register(SysChdir);
     handlers.register(SysMkdir);
     handlers.register(SysUnlink);
@@ -1167,6 +1168,36 @@ async fn wait4(
 
 #[syscall(i386 = 55, amd64 = 72)]
 fn fcntl(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    cmd: FcntlCmd,
+    arg: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+
+    match cmd {
+        FcntlCmd::DupFd => {
+            let min = i32::try_from(arg)?;
+            let fd_num = fdtable.insert_after(min, fd)?;
+            Ok(fd_num.get().try_into()?)
+        }
+        FcntlCmd::GetFd => {
+            // FIXME: implement this
+            Ok(0)
+        }
+        FcntlCmd::SetFd => {
+            // FIXME: implement this
+            Ok(0)
+        }
+        FcntlCmd::GetFl => {
+            // FIXME: implement this
+            Ok(0)
+        }
+    }
+}
+
+#[syscall(i386 = 221)]
+fn fcntl64(
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     cmd: FcntlCmd,
