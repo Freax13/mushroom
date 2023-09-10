@@ -359,7 +359,6 @@ fn schedule_one() -> bool {
         let mut ap = ap.borrow_mut();
         if let Ap::Initialized(initialized) = &mut *ap {
             if initialized.halted {
-                debug!("kick core {}", initialized.apic_id - FIRST_AP);
                 initialized.halted = false;
                 initialized.kick();
                 return true;
