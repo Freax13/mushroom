@@ -18,7 +18,7 @@ use crate::{
             self, create_directory, create_file, create_link,
             devtmpfs::{self, RandomFile},
             hard_link, lookup_and_resolve_node, lookup_node, read_link, rename, set_mode,
-            unlink_dir, unlink_file, DirEntry, Node, ROOT_NODE,
+            unlink_dir, unlink_file, DirEntry, Node,
         },
         path::Path,
     },
@@ -245,6 +245,7 @@ fn close(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult
 
 #[syscall(i386 = 106, amd64 = 4)]
 fn stat(
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -254,7 +255,7 @@ fn stat(
     vm_activator.activate(&virtual_memory, |vm| {
         let filename = vm.read(filename)?;
 
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &filename)?;
+        let node = lookup_and_resolve_node(thread.cwd.clone(), &filename)?;
         let stat = node.stat();
 
         vm.write_with_abi(statbuf, stat, abi)
@@ -303,6 +304,7 @@ fn fstat(
 
 #[syscall(i386 = 107, amd64 = 6)]
 fn lstat(
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -312,7 +314,7 @@ fn lstat(
     vm_activator.activate(&virtual_memory, |vm| {
         let filename = vm.read(filename)?;
 
-        let node = lookup_node(ROOT_NODE.clone(), &filename)?;
+        let node = lookup_node(thread.cwd.clone(), &filename)?;
         let stat = node.stat();
 
         vm.write_with_abi(statbuf, stat, abi)
@@ -729,13 +731,14 @@ async fn writev(
 
 #[syscall(i386 = 33, amd64 = 21)]
 fn access(
+    thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<Path>,
     mode: u64, // FIXME: use correct type
 ) -> SyscallResult {
     let path = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
-    let _node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
+    let _node = lookup_and_resolve_node(thread.cwd.clone(), &path)?;
     // FIXME: implement the actual access checks.
     Ok(0)
 }
@@ -1234,13 +1237,14 @@ fn chdir(
     path: Pointer<Path>,
 ) -> SyscallResult {
     let path = vm_activator.activate(&virtual_memory, |vm| vm.read(path))?;
-    let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
+    let node = lookup_and_resolve_node(thread.cwd.clone(), &path)?;
     thread.cwd = node.try_into()?;
     Ok(0)
 }
 
 #[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
+    thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<Path>,
@@ -1248,19 +1252,27 @@ fn mkdir(
 ) -> SyscallResult {
     let mode = FileMode::from_bits_truncate(mode);
     let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
-    create_directory(ROOT_NODE.clone(), &pathname, mode)?;
+    create_directory(thread.cwd.clone(), &pathname, mode)?;
     Ok(0)
 }
 
 #[syscall(i386 = 10, amd64 = 85)]
 fn unlink(
-    #[state] virtual_memory: Arc<VirtualMemory>,
+    thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     pathname: Pointer<Path>,
 ) -> SyscallResult {
-    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
-    unlink_file(ROOT_NODE.clone(), &pathname)?;
-    Ok(0)
+    unlinkat(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        FdNum::CWD,
+        pathname,
+        UnlinkOptions::REMOVEDIR,
+    )
 }
 
 #[syscall(i386 = 83, amd64 = 88)]
@@ -1285,6 +1297,7 @@ fn symlink(
 
 #[syscall(i386 = 85, amd64 = 89)]
 fn readlink(
+    thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     pathname: Pointer<Path>,
@@ -1295,7 +1308,7 @@ fn readlink(
 
     let len = vm_activator.activate(&virtual_memory, |vm| {
         let pathname = vm.read(pathname)?;
-        let target = read_link(ROOT_NODE.clone(), &pathname)?;
+        let target = read_link(thread.cwd.clone(), &pathname)?;
 
         let bytes = target.as_bytes();
         // Truncate to `bufsiz`.
@@ -1313,6 +1326,7 @@ fn readlink(
 
 #[syscall(i386 = 15, amd64 = 90)]
 fn chmod(
+    thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     vm_activator: &mut VirtualMemoryActivator,
     filename: Pointer<Path>,
@@ -1320,7 +1334,7 @@ fn chmod(
 ) -> SyscallResult {
     let path = vm_activator.activate(&virtual_memory, |vm| vm.read(filename))?;
 
-    set_mode(ROOT_NODE.clone(), &path, mode)?;
+    set_mode(thread.cwd.clone(), &path, mode)?;
 
     Ok(0)
 }
