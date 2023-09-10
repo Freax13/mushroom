@@ -8,6 +8,7 @@ use super::{Events, OpenFileDescription};
 use crate::{
     error::{Error, Result},
     rt::notify::{Notify, NotifyOnDrop},
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
 
 struct State {
@@ -69,6 +70,33 @@ impl OpenFileDescription for ReadHalf {
             wait.await;
         }
     }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: 0,
+            ino: 0,
+            nlink: 0,
+            mode: FileTypeAndMode::new(FileType::Fifo, FileMode::ALL),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            mtime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            ctime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        })
+    }
 }
 
 pub struct WriteHalf {
@@ -85,6 +113,33 @@ impl OpenFileDescription for WriteHalf {
         self.notify.notify();
 
         Ok(buf.len())
+    }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: 0,
+            ino: 0,
+            nlink: 0,
+            mode: FileTypeAndMode::new(FileType::Fifo, FileMode::ALL),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            mtime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            ctime: Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        })
     }
 }
 
