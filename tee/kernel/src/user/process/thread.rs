@@ -174,7 +174,7 @@ impl Thread {
             ROOT_NODE.clone(),
             None,
             CpuState::None,
-            FileMode::ALL,
+            FileMode::empty(),
         )
     }
 
