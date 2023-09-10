@@ -17,8 +17,8 @@ use crate::{
         node::{
             self, create_directory, create_file, create_link,
             devtmpfs::{self, RandomFile},
-            hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
-            unlink_file, DirEntry, Node, ROOT_NODE,
+            hard_link, lookup_and_resolve_node, lookup_node, read_link, rename, set_mode,
+            unlink_dir, unlink_file, DirEntry, Node, ROOT_NODE,
         },
         path::Path,
     },
@@ -159,6 +159,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
+    handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
 
@@ -1740,6 +1741,41 @@ fn pipe2(
     vm_activator.activate(&virtual_memory, |vm| {
         vm.write(pipefd, [read_half, write_half])
     })?;
+
+    Ok(0)
+}
+
+#[syscall(amd64 = 316)]
+fn renameat2(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    olddfd: FdNum,
+    oldname: Pointer<Path>,
+    newdfd: FdNum,
+    newname: Pointer<Path>,
+    flags: u64,
+) -> SyscallResult {
+    let oldd = if olddfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(olddfd)?;
+        fd.as_dir()?
+    };
+
+    let newd = if newdfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(newdfd)?;
+        fd.as_dir()?
+    };
+
+    let (oldname, newname) = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
+        Ok((vm.read(oldname)?, vm.read(newname)?))
+    })?;
+
+    rename(oldd, &oldname, newd, &newname)?;
 
     Ok(0)
 }

@@ -534,3 +534,32 @@ pub fn hard_link(
         PathSegment::FileName(filename) => parent.hard_link(filename.into_owned(), target_node),
     }
 }
+
+pub fn rename(
+    oldd: Arc<dyn Directory>,
+    oldname: &Path,
+    newd: Arc<dyn Directory>,
+    newname: &Path,
+) -> Result<()> {
+    let (old_parent, segment) = find_parent(oldd, oldname)?;
+    let oldname = match segment {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            return Err(Error::is_dir(()))
+        }
+        PathSegment::FileName(filename) => filename,
+    };
+
+    let (new_parent, segment) = find_parent(newd, newname)?;
+    let newname = match segment {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            return Err(Error::is_dir(()))
+        }
+        PathSegment::FileName(filename) => filename,
+    };
+
+    let node = old_parent.get_node(&oldname)?;
+    new_parent.mount(newname.into_owned(), node)?;
+    old_parent.delete_non_dir(oldname.into_owned())?;
+
+    Ok(())
+}
