@@ -156,6 +156,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysEpollWait);
     handlers.register(SysEpollCtl);
     handlers.register(SysFutimesat);
+    handlers.register(SysNewfstatat);
     handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
     handlers.register(SysEventfd);
@@ -1638,6 +1639,36 @@ fn futimesat(
     times: Pointer<c_void>, // FIXME: use correct type
 ) -> SyscallResult {
     // FIXME: Implement this.
+    Ok(0)
+}
+
+#[syscall(amd64 = 262)]
+fn newfstatat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    statbuf: Pointer<Stat>,
+    flags: u64,
+) -> SyscallResult {
+    let start_dir = if dfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir()?
+    };
+
+    vm_activator.activate(&virtual_memory, |vm| {
+        let pathname = vm.read(pathname)?;
+
+        let node = lookup_and_resolve_node(start_dir, &pathname)?;
+        let stat = node.stat();
+
+        vm.write_with_abi(statbuf, stat, abi)
+    })?;
     Ok(0)
 }
 
