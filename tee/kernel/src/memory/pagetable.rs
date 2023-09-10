@@ -237,27 +237,18 @@ pub unsafe fn find_dirty_userspace_pages(mut f: impl FnMut(Page) -> Result<()>) 
 
         for p4_index in (0..256).map(PageTableIndex::new) {
             let pml4e = &pml4[p4_index];
-            if !pml4e.is_dirty() {
-                continue;
-            }
             let Some(pdp) = pml4e.acquire_existing() else {
                 continue;
             };
 
             for p3_index in (0..512).map(PageTableIndex::new) {
                 let pdpe = &pdp[p3_index];
-                if !pdpe.is_dirty() {
-                    continue;
-                }
                 let Some(pd) = pdpe.acquire_existing() else {
                     continue;
                 };
 
                 for p2_index in (0..512).map(PageTableIndex::new) {
                     let pde = &pd[p2_index];
-                    if !pde.is_dirty() {
-                        continue;
-                    }
                     let Some(pt) = pde.acquire_existing() else {
                         continue;
                     };
