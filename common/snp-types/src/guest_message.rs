@@ -7,7 +7,7 @@ use crate::Reserved;
 pub struct Message {
     pub auth_tag: [u8; 32],
     pub msg_seqno: u64,
-    _reserved1: Reserved<8>,
+    _reserved1: Reserved<8, false>,
     pub algo: Algo,
     pub content: Content,
 }
