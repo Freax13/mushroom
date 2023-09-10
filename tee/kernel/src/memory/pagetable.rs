@@ -82,7 +82,7 @@ pub fn allocate_pml4() -> Result<PhysFrame> {
 pub unsafe fn map_page(
     page: Page,
     entry: PresentPageTableEntry,
-    allocator: &mut impl FrameAllocator<Size4KiB>,
+    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
 ) -> Result<()> {
     trace!(
         "mapping page {page:?}->{entry:?} pml4={:?}",
@@ -439,12 +439,19 @@ impl ActivePageTableEntry<Level4> {
     pub fn acquire(
         &self,
         flags: PageTableFlags,
-        allocator: &mut impl FrameAllocator<Size4KiB>,
+        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
     ) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
-        let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
-        let reserved_allocation = storage.allocate(allocator)?;
-        self.acquire_reference_count(reserved_allocation, flags)
-            .unwrap();
+        if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
+            let reserved_allocation = storage.allocate(allocator)?;
+            self.acquire_reference_count(reserved_allocation, flags)
+                .unwrap();
+        } else {
+            let mut storage = ReservedFrameStorage::new();
+            let reserved_allocation = storage.allocate(allocator)?;
+            self.acquire_reference_count(reserved_allocation, flags)
+                .unwrap();
+            storage.release(allocator);
+        }
 
         Ok(ActivePageTableEntryGuard { entry: self })
     }
@@ -478,13 +485,22 @@ where
     pub fn acquire(
         &self,
         flags: PageTableFlags,
-        allocator: &mut impl FrameAllocator<Size4KiB>,
+        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
     ) -> Result<ActivePageTableEntryGuard<'_, L>> {
-        let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
-        let reserved_allocation = storage.allocate(allocator)?;
-        let initialized = self
-            .acquire_reference_count(reserved_allocation, flags)
-            .unwrap();
+        let initialized =
+            if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
+                let reserved_allocation = storage.allocate(allocator)?;
+                self.acquire_reference_count(reserved_allocation, flags)
+                    .unwrap()
+            } else {
+                let mut storage = ReservedFrameStorage::new();
+                let reserved_allocation = storage.allocate(allocator)?;
+                let res = self
+                    .acquire_reference_count(reserved_allocation, flags)
+                    .unwrap();
+                storage.release(allocator);
+                res
+            };
 
         if initialized {
             let parent_entry = self.parent_table_entry();
@@ -970,6 +986,15 @@ impl ReservedFrameStorage {
         }
 
         Ok(ReservedFrameAllocation { storage: self })
+    }
+
+    pub fn release(mut self, allocator: &mut (impl FrameDeallocator<Size4KiB> + ?Sized)) {
+        let Some(frame) = self.frame.take() else {
+            return;
+        };
+        unsafe {
+            allocator.deallocate_frame(frame);
+        }
     }
 }
 

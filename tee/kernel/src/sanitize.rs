@@ -5,7 +5,7 @@ use x86_64::{
     registers::control::Cr2,
     structures::{
         idt::InterruptStackFrame,
-        paging::{FrameAllocator, Page, Size4KiB},
+        paging::{FrameAllocator, FrameDeallocator, Page, Size4KiB},
     },
     VirtAddr,
 };
@@ -32,7 +32,11 @@ fn map_from_shadow(addr: u64) -> u64 {
 pub const MIN_ALLOCATION_SIZE: usize = 0x1000 << ASAN_MAPPING_SCALE;
 
 /// Add `ptr` to the shadow mapping.
-pub fn map_shadow(ptr: *const c_void, size: usize, allocator: &mut impl FrameAllocator<Size4KiB>) {
+pub fn map_shadow(
+    ptr: *const c_void,
+    size: usize,
+    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
+) {
     let addr = ptr as u64;
     assert!(
         addr.get_bit(63),
