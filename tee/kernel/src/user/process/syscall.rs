@@ -126,6 +126,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup2);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
+    handlers.register(SysSendfile64);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysFork);
@@ -799,6 +800,7 @@ async fn sendfile(
 ) -> SyscallResult {
     let out = fdtable.get(out)?;
     let r#in = fdtable.get(r#in)?;
+    let count = usize::try_from(count)?;
 
     if !offset.is_null() {
         todo!();
@@ -806,7 +808,46 @@ async fn sendfile(
 
     let buffer = &mut [0; 8192];
     let mut total_len = 0;
-    loop {
+    while total_len < count {
+        let chunk_len = cmp::min(count - total_len, buffer.len());
+        let buffer = &mut buffer[..chunk_len];
+
+        let len = do_io(&*r#in, Events::READ, || r#in.read(buffer)).await?;
+        let buffer = &buffer[..len];
+        if buffer.is_empty() {
+            break;
+        }
+        total_len += buffer.len();
+
+        out.write_all(buffer).await?;
+    }
+
+    let len = u64::try_from(total_len)?;
+    Ok(len)
+}
+
+#[syscall(i386 = 239)]
+async fn sendfile64(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    out: FdNum,
+    r#in: FdNum,
+    offset: Pointer<LongOffset>,
+    count: u64,
+) -> SyscallResult {
+    let out = fdtable.get(out)?;
+    let r#in = fdtable.get(r#in)?;
+    let count = usize::try_from(count)?;
+
+    if !offset.is_null() {
+        todo!();
+    }
+
+    let buffer = &mut [0; 8192];
+    let mut total_len = 0;
+    while total_len < count {
+        let chunk_len = cmp::min(count - total_len, buffer.len());
+        let buffer = &mut buffer[..chunk_len];
+
         let len = do_io(&*r#in, Events::READ, || r#in.read(buffer)).await?;
         let buffer = &buffer[..len];
         if buffer.is_empty() {
