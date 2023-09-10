@@ -82,7 +82,7 @@ impl Futexes {
 
         let mut guard = self.futexes.lock();
         if let Some(waiters) = guard.get_mut(&uaddr) {
-            let mut drain_iter = waiters.drain_filter(|waiter| waiter.matches_bitset(bitset));
+            let mut drain_iter = waiters.extract_if(|waiter| waiter.matches_bitset(bitset));
 
             for waiter in drain_iter.by_ref() {
                 // Wake up the thread.
@@ -96,8 +96,6 @@ impl Futexes {
                     break;
                 }
             }
-
-            drain_iter.keep_rest();
         }
 
         woken
