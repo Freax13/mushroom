@@ -524,85 +524,14 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         addr: Option<VirtAddr>,
         len: u64,
         permissions: MemoryPermissions,
-        mut backing: Backing,
+        backing: Backing,
     ) -> Result<VirtAddr> {
         assert!(len < (1 << 47), "mapping of size {len:#x} can never exist");
 
         let mut state = self.state.lock();
         let state = state.initialized_mut();
 
-        let addr = addr.unwrap_or_else(|| state.find_free_address(len));
-        let end = addr + len;
-
-        debug!(
-            "adding mapping {:?}-{:?} {:?}",
-            addr,
-            addr + len,
-            permissions
-        );
-
-        state.unmap(addr, len);
-
-        // If the mapping isn't page aligned, immediately map pages for the unaligned start and end.
-        match (addr.is_aligned(0x1000u64), end.is_aligned(0x1000u64)) {
-            (false, false) => {
-                let start_page: Page = Page::containing_address(addr);
-                let end_page: Page = Page::containing_address(end);
-                if start_page == end_page {
-                    state.map_unaligned(addr, len, &backing, 0, permissions)?;
-                } else {
-                    let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
-                    state.map_unaligned(addr, unaligned_len, &backing, 0, permissions)?;
-
-                    let unaligned_len = end.as_u64() % 0x1000;
-                    state.map_unaligned(
-                        end - unaligned_len,
-                        unaligned_len,
-                        &backing,
-                        len - unaligned_len,
-                        permissions,
-                    )?;
-                }
-            }
-            (false, true) => {
-                let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
-                state.map_unaligned(addr, unaligned_len, &backing, 0, permissions)?;
-            }
-            (true, false) => {
-                let unaligned_len = end.as_u64() % 0x1000;
-                state.map_unaligned(
-                    end - unaligned_len,
-                    unaligned_len,
-                    &backing,
-                    len - unaligned_len,
-                    permissions,
-                )?;
-            }
-            (true, true) => {}
-        }
-
-        let start_page = Page::containing_address(addr.align_up(0x1000u64));
-        let end_page = Page::containing_address(end);
-        if end_page > start_page {
-            let num_pages = end_page - start_page;
-            let backing = if addr.is_aligned(0x1000u64) {
-                backing
-            } else {
-                let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
-                backing.split(unaligned_len)
-            };
-
-            let mapping = Mapping {
-                start: start_page,
-                num_pages,
-                permissions,
-                backing,
-            };
-
-            state.mappings.push(mapping);
-        }
-
-        Ok(addr)
+        state.add_mapping(addr, len, permissions, backing)
     }
 
     pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
@@ -624,6 +553,14 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             })
         }
     }
+
+    pub fn brk_end(&mut self) -> Result<VirtAddr> {
+        self.state.lock().initialized_mut().brk_end()
+    }
+
+    pub fn set_brk_end(&mut self, brk_end: u64) -> Result<VirtAddr> {
+        self.state.lock().initialized_mut().set_brk_end(brk_end)
+    }
 }
 
 impl Deref for ActiveVirtualMemory<'_, '_> {
@@ -644,6 +581,7 @@ enum VirtualMemoryState {
 struct InitializedVirtualMemoryState {
     vm_size: VmSize,
     mappings: Vec<Mapping>,
+    brk: Option<Brk>,
 }
 
 impl VirtualMemoryState {
@@ -656,6 +594,7 @@ impl VirtualMemoryState {
         *self = Self::Initialized(InitializedVirtualMemoryState {
             vm_size,
             mappings: Vec::new(),
+            brk: None,
         });
     }
 
@@ -706,6 +645,89 @@ impl InitializedVirtualMemoryState {
                 Some(candidate)
             })
             .unwrap()
+    }
+
+    fn add_mapping(
+        &mut self,
+        addr: Option<VirtAddr>,
+        len: u64,
+        permissions: MemoryPermissions,
+        mut backing: Backing,
+    ) -> Result<VirtAddr> {
+        assert!(len < (1 << 47), "mapping of size {len:#x} can never exist");
+
+        let addr = addr.unwrap_or_else(|| self.find_free_address(len));
+        let end = addr + len;
+
+        debug!(
+            "adding mapping {:?}-{:?} {:?}",
+            addr,
+            addr + len,
+            permissions
+        );
+
+        self.unmap(addr, len);
+
+        // If the mapping isn't page aligned, immediately map pages for the unaligned start and end.
+        match (addr.is_aligned(0x1000u64), end.is_aligned(0x1000u64)) {
+            (false, false) => {
+                let start_page: Page = Page::containing_address(addr);
+                let end_page: Page = Page::containing_address(end);
+                if start_page == end_page {
+                    self.map_unaligned(addr, len, &backing, 0, permissions)?;
+                } else {
+                    let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
+                    self.map_unaligned(addr, unaligned_len, &backing, 0, permissions)?;
+
+                    let unaligned_len = end.as_u64() % 0x1000;
+                    self.map_unaligned(
+                        end - unaligned_len,
+                        unaligned_len,
+                        &backing,
+                        len - unaligned_len,
+                        permissions,
+                    )?;
+                }
+            }
+            (false, true) => {
+                let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
+                self.map_unaligned(addr, unaligned_len, &backing, 0, permissions)?;
+            }
+            (true, false) => {
+                let unaligned_len = end.as_u64() % 0x1000;
+                self.map_unaligned(
+                    end - unaligned_len,
+                    unaligned_len,
+                    &backing,
+                    len - unaligned_len,
+                    permissions,
+                )?;
+            }
+            (true, true) => {}
+        }
+
+        let start_page = Page::containing_address(addr.align_up(0x1000u64));
+        let end_page = Page::containing_address(end);
+        if end_page > start_page {
+            let num_pages = end_page - start_page;
+            let backing = if addr.is_aligned(0x1000u64) {
+                backing
+            } else {
+                let unaligned_len = 0x1000 - (addr.as_u64() % 0x1000);
+                backing.split(unaligned_len)
+            };
+
+            let mapping = Mapping {
+                start: start_page,
+                num_pages,
+                permissions,
+                backing,
+            };
+
+            self.mappings.push(mapping);
+        }
+
+        Ok(addr)
     }
 
     fn map_unaligned(
@@ -820,6 +842,59 @@ impl InitializedVirtualMemoryState {
 
             unreachable!()
         }
+    }
+
+    fn brk_mut(&mut self) -> Result<&mut Brk> {
+        if self.brk.is_none() {
+            let len = 0x1000;
+            let start = self.add_mapping(
+                None,
+                len,
+                MemoryPermissions::READ | MemoryPermissions::WRITE,
+                Backing::Zero,
+            )?;
+
+            let brk = Brk {
+                _start: start,
+                end: start + len,
+            };
+            self.brk = Some(brk);
+        }
+
+        Ok(self.brk.as_mut().unwrap())
+    }
+
+    pub fn brk_end(&mut self) -> Result<VirtAddr> {
+        self.brk_mut().map(|brk| brk.end)
+    }
+
+    pub fn set_brk_end(&mut self, brk_end: u64) -> Result<VirtAddr> {
+        let brk = self.brk_mut()?;
+        let prev_end = brk.end;
+
+        if let Some(grow) = brk_end
+            .checked_sub(brk.end.as_u64())
+            .filter(|&len| len != 0)
+        {
+            self.add_mapping(
+                Some(prev_end),
+                grow,
+                MemoryPermissions::READ | MemoryPermissions::WRITE,
+                Backing::Zero,
+            )?;
+        }
+
+        if let Some(shrink) = prev_end
+            .as_u64()
+            .checked_sub(brk_end)
+            .filter(|&len| len != 0)
+        {
+            self.unmap(VirtAddr::new(brk_end), shrink);
+        }
+
+        let brk = self.brk_mut()?;
+        brk.end = VirtAddr::new(brk_end);
+        Ok(brk.end)
     }
 }
 
@@ -1212,4 +1287,10 @@ where
 pub enum VmSize {
     ThirtyTwo = 32,
     FourtySeven = 47,
+}
+
+#[derive(Clone)]
+struct Brk {
+    _start: VirtAddr,
+    end: VirtAddr,
 }

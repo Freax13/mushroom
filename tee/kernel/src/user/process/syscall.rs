@@ -495,14 +495,25 @@ fn munmap(
     Ok(0)
 }
 
-// FIXME: use correct name for brk_value
 #[syscall(i386 = 45, amd64 = 12)]
-fn brk(brk_value: u64) -> SyscallResult {
-    if brk_value == 0 || brk_value == 0x1000 {
-        return Ok(0);
+fn brk(
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    brk_value: u64,
+) -> SyscallResult {
+    if brk_value % 0x1000 != 0 {
+        return Err(Error::inval(()));
     }
 
-    Err(Error::no_mem(()))
+    vm_activator
+        .activate(&virtual_memory, |vm| -> Result<_> {
+            if brk_value == 0 {
+                return vm.brk_end();
+            }
+
+            vm.set_brk_end(brk_value)
+        })
+        .map(VirtAddr::as_u64)
 }
 
 #[syscall(i386 = 174, amd64 = 13)]
