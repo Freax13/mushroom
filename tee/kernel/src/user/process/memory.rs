@@ -1208,7 +1208,11 @@ impl Backing {
         match self {
             Backing::File(backing) => {
                 let offset = usize::try_from(backing.offset + offset).unwrap();
-                buf.copy_from_slice(&backing.bytes[offset..][..buf.len()]);
+                if offset > backing.bytes.len() {
+                    buf.fill(0);
+                } else {
+                    buf.copy_from_slice(&backing.bytes[offset..][..buf.len()]);
+                }
             }
             Backing::Zero | Backing::Stack => {
                 // The memory in these backings starts out as zero.
