@@ -334,6 +334,7 @@ bitflags! {
         const NOCTTY = 1 << 8;
         const TRUNC = 1 << 9;
         const APPEND = 1 << 10;
+        const DSYNC = 1 << 12;
         const LARGEFILE = 1 << 15;
         const DIRECTORY = 1 << 16;
         const NOFOLLOW = 1 << 17;
@@ -383,6 +384,8 @@ bitflags! {
         const SHARED_VALIDATE = 1 << 0 | 1 << 1;
         const FIXED = 1 << 4;
         const ANONYMOUS = 1 << 5;
+        const DENYWRITE = 1 << 11;
+        const LOCKED = 1 << 13;
         const STACK = 1 << 17;
     }
 }
