@@ -160,6 +160,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUnlinkat);
     handlers.register(SysLinkat);
     handlers.register(SysSymlinkat);
+    handlers.register(SysFchmodat);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
@@ -1767,6 +1768,30 @@ fn symlinkat(
     })?;
 
     create_link(newdfd, &newname, oldname)?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 306, amd64 = 268)]
+fn fchmodat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    dfd: FdNum,
+    filename: Pointer<Path>,
+    mode: FileMode,
+) -> SyscallResult {
+    let newdfd = if dfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir()?
+    };
+
+    let path = vm_activator.activate(&virtual_memory, |vm| vm.read(filename))?;
+
+    set_mode(newdfd, &path, mode)?;
 
     Ok(0)
 }
