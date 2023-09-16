@@ -723,7 +723,7 @@ where
         let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
         let page = Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index);
         let addr = page.start_address();
-        unsafe { &*addr.as_ptr() }
+        addr.as_ptr()
     }
 }
 
@@ -828,6 +828,7 @@ impl ActivePageTableEntry<Level1> {
 
         // FIXME: Free up the frame.
         let _maybe_frame = unsafe { self.parent_table_entry().release_reference_count() };
+        assert_eq!(_maybe_frame, None);
 
         old_entry
     }
@@ -1027,7 +1028,11 @@ impl ReservedFrameStorage {
 
 impl Drop for ReservedFrameStorage {
     fn drop(&mut self) {
-        // (&BUMP_FRAME_ALLOCATOR).dea
+        if let Some(frame) = self.frame.take() {
+            unsafe {
+                (&FRAME_ALLOCATOR).deallocate_frame(frame);
+            }
+        }
     }
 }
 
