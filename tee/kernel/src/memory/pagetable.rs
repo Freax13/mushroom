@@ -525,6 +525,13 @@ where
 
         let mut current_entry = atomic_load(&self.entry);
         loop {
+            // If the entry is being initialized right now, spin.
+            if current_entry.get_bit(INITIALIZING_BIT) {
+                core::hint::spin_loop();
+                current_entry = atomic_load(&self.entry);
+                continue;
+            }
+
             // Check if the entry was already initialized.
             if current_entry.get_bit(PRESENT_BIT) {
                 // Sanity check.
@@ -552,13 +559,6 @@ where
                 return Some(false);
             } else {
                 // Start initializing the entry.
-
-                // Check if another core is already initializing the entry.
-                if current_entry.get_bit(INITIALIZING_BIT) {
-                    // There's nothing we can do, busy loop.
-                    core::hint::spin_loop();
-                    continue;
-                }
 
                 // Try to initialize the entry ourselves.
 
@@ -610,6 +610,13 @@ where
     fn increase_reference_count(&self) -> Result<(), ()> {
         let mut current_entry = atomic_load(&self.entry);
         loop {
+            // If the entry is being initialized right now, spin.
+            if current_entry.get_bit(INITIALIZING_BIT) {
+                core::hint::spin_loop();
+                current_entry = atomic_load(&self.entry);
+                continue;
+            }
+
             // Verify that the entry was already initialized.
             if !current_entry.get_bit(PRESENT_BIT) {
                 return Err(());
