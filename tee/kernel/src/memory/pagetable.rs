@@ -538,20 +538,22 @@ where
                 assert_eq!(user, current_entry.get_bit(USER_BIT));
                 assert_eq!(global, current_entry.get_bit(GLOBAL_BIT));
 
-                // Increase the reference count.
-                let current_reference_count = current_entry.get_bits(REFERENCE_COUNT_BITS);
-                let new_reference_count = current_reference_count + 1;
-                let mut new_entry = current_entry;
-                new_entry.set_bits(REFERENCE_COUNT_BITS, new_reference_count);
-                let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
-                match res {
-                    Ok(_) => {
-                        // We successfully updated the reference count.
-                    }
-                    Err(entry) => {
-                        // Some other core modified the entry. Retry.
-                        current_entry = entry;
-                        continue;
+                if !self.is_static_entry() {
+                    // Increase the reference count.
+                    let current_reference_count = current_entry.get_bits(REFERENCE_COUNT_BITS);
+                    let new_reference_count = current_reference_count + 1;
+                    let mut new_entry = current_entry;
+                    new_entry.set_bits(REFERENCE_COUNT_BITS, new_reference_count);
+                    let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
+                    match res {
+                        Ok(_) => {
+                            // We successfully updated the reference count.
+                        }
+                        Err(entry) => {
+                            // Some other core modified the entry. Retry.
+                            current_entry = entry;
+                            continue;
+                        }
                     }
                 }
 
@@ -608,6 +610,10 @@ where
     /// Increases the reference count. Returns `Ok(())` if there reference count
     /// was increased, returns `Err(())` if the page table didn't exist.
     fn increase_reference_count(&self) -> Result<(), ()> {
+        if self.is_static_entry() {
+            return Ok(());
+        }
+
         let mut current_entry = atomic_load(&self.entry);
         loop {
             // If the entry is being initialized right now, spin.
@@ -651,6 +657,10 @@ where
     /// The caller must ensure that the entry is that `release` is only called
     /// after the `acquire` is no longer needed.
     unsafe fn release_reference_count(&self) -> Option<PhysFrame> {
+        if self.is_static_entry() {
+            return None;
+        }
+
         let mut current_entry = atomic_load(&self.entry);
         loop {
             // Sanity check that the entry is not already unmapped.
@@ -743,6 +753,25 @@ impl<L> ActivePageTableEntry<L> {
         let p2_index = addr.p1_index();
         let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
         Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index)
+    }
+
+    /// Returns whether this entry is one of the pml4 entries used for kernel
+    /// memory. These entries are not reference counted because they will never
+    /// change.
+    pub fn is_static_entry(&self) -> bool {
+        let start = Page::from_page_table_indices(
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+            PageTableIndex::new(256),
+        );
+        let end = Page::from_page_table_indices(
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+            RECURSIVE_INDEX,
+            PageTableIndex::new(511),
+        );
+        (start..=end).contains(&self.page())
     }
 
     pub fn is_dirty(&self) -> bool {
