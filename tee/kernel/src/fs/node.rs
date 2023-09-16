@@ -4,13 +4,13 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::spin::lazy::Lazy;
 use alloc::{
     borrow::Cow,
     sync::{Arc, Weak},
     vec::Vec,
 };
 use log::debug;
-use spin::Lazy;
 
 use crate::{
     error::{Error, Result},

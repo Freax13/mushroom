@@ -1,5 +1,5 @@
+use crate::spin::mutex::Mutex;
 use alloc::{sync::Arc, vec::Vec};
-use spin::mutex::Mutex;
 
 use crate::{
     error::{Error, Result},

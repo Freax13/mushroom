@@ -3,12 +3,12 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::spin::mutex::Mutex;
 use arrayvec::ArrayVec;
 use constants::{
     FINISH_OUTPUT_MSR, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
     UPDATE_OUTPUT_MSR,
 };
-use spin::Mutex;
 use x86_64::{
     instructions::port::PortWriteOnly,
     registers::model_specific::Msr,

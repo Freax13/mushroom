@@ -1,8 +1,8 @@
 //! We don't expose the real time to userspace, we simulate it.
 
+use crate::spin::{lazy::Lazy, mutex::Mutex};
 use alloc::collections::BinaryHeap;
 use log::debug;
-use spin::{Lazy, Mutex};
 
 use crate::{rt::oneshot, user::process::syscall::args::Timespec};
 

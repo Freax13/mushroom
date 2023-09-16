@@ -4,11 +4,11 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use crate::spin::mutex::Mutex;
 use alloc::vec::Vec;
 use arrayvec::ArrayVec;
 use bit_field::BitArray;
 use log::{debug, warn};
-use spin::Mutex;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB, Size4KiB};
 
 use crate::supervisor;

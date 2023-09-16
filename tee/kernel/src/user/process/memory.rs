@@ -8,11 +8,11 @@ use core::{
     sync::atomic::{AtomicU16, Ordering},
 };
 
+use crate::spin::mutex::Mutex;
 use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
 use crossbeam_queue::SegQueue;
 use log::debug;
-use spin::Mutex;
 use x86_64::{
     align_down,
     instructions::{interrupts::without_interrupts, random::RdRand, tlb::Pcid},

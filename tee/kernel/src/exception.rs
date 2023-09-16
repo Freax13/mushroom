@@ -3,9 +3,9 @@
 use core::mem::offset_of;
 use core::{alloc::Layout, arch::asm, ptr::null_mut};
 
+use crate::spin::lazy::Lazy;
 use alloc::alloc::alloc;
 use log::{debug, error, trace};
-use spin::Lazy;
 use x86_64::{
     instructions::tables::load_tss,
     registers::{

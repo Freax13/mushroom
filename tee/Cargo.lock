@@ -420,7 +420,6 @@ dependencies = [
  "kernel-macros",
  "log",
  "serial-log",
- "spin",
  "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
 ]
 

@@ -6,11 +6,11 @@ use core::{
     task::{Context, Waker},
 };
 
+use crate::spin::mutex::Mutex;
 use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
 use log::{debug, warn};
-use spin::mutex::SpinMutex;
 
 use crate::{
     supervisor::schedule_vcpu,
@@ -40,7 +40,7 @@ pub fn poll(vm_activator: &mut VirtualMemoryActivator) -> bool {
 
 struct Task {
     state: AtomicCell<TaskState>,
-    future: SpinMutex<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    future: Mutex<Pin<Box<dyn Future<Output = ()> + Send>>>,
     spawn_location: &'static Location<'static>,
 }
 
@@ -49,7 +49,7 @@ impl Task {
     fn new(future: impl Future<Output = ()> + Send + 'static) -> Arc<Self> {
         Arc::new(Self {
             state: AtomicCell::new(TaskState::Waiting),
-            future: SpinMutex::new(Box::pin(future)),
+            future: Mutex::new(Box::pin(future)),
             spawn_location: Location::caller(),
         })
     }

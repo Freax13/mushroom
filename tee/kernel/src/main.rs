@@ -54,6 +54,7 @@ mod reset_vector;
 mod rt;
 #[cfg(sanitize = "address")]
 mod sanitize;
+mod spin;
 mod supervisor;
 mod time;
 mod user;

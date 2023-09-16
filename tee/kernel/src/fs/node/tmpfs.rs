@@ -1,12 +1,12 @@
 use core::cmp;
 
+use crate::spin::mutex::Mutex;
 use alloc::{
     borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     sync::{Arc, Weak},
     vec::Vec,
 };
-use spin::mutex::Mutex;
 
 use super::{new_ino, DirEntry, DirEntryName, Directory, File, FileSnapshot, Link, Node};
 use crate::{

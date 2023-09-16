@@ -1,8 +1,8 @@
 use core::iter::from_fn;
 
+use crate::spin::mutex::Mutex;
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
 use async_trait::async_trait;
-use spin::mutex::SpinMutex;
 
 use super::{Events, OpenFileDescription};
 use crate::{
@@ -12,7 +12,7 @@ use crate::{
 };
 
 struct State {
-    buffer: SpinMutex<VecDeque<u8>>,
+    buffer: Mutex<VecDeque<u8>>,
 }
 
 pub struct ReadHalf {
@@ -145,7 +145,7 @@ impl OpenFileDescription for WriteHalf {
 
 pub fn new() -> (ReadHalf, WriteHalf) {
     let state = Arc::new(State {
-        buffer: SpinMutex::new(VecDeque::new()),
+        buffer: Mutex::new(VecDeque::new()),
     });
     let notify = Arc::new(Notify::new());
 

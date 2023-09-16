@@ -18,10 +18,10 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::spin::lazy::Lazy;
 use bit_field::BitField;
 use bitflags::bitflags;
 use log::trace;
-use spin::Lazy;
 use x86_64::{
     instructions::tlb::Invlpgb,
     registers::control::Cr3,

@@ -1,8 +1,8 @@
 use core::num::NonZeroU32;
 
+use crate::spin::mutex::Mutex;
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use futures::{select_biased, FutureExt};
-use spin::Mutex;
 
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},

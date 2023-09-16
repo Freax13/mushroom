@@ -1,5 +1,5 @@
+use crate::spin::mutex::Mutex;
 use alloc::sync::Arc;
-use spin::Mutex;
 use x86_64::VirtAddr;
 
 use crate::{

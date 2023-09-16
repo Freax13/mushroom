@@ -4,11 +4,11 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
+use crate::spin::mutex::Mutex;
 use alloc::sync::Arc;
-use spin::mutex::SpinMutex;
 
 pub fn new<T>() -> (Sender<T>, Receiver<T>) {
-    let state = Arc::new(SpinMutex::new(State::Empty));
+    let state = Arc::new(Mutex::new(State::Empty));
     (Sender(state.clone()), Receiver(state))
 }
 
@@ -19,7 +19,7 @@ enum State<T> {
     Closed,
 }
 
-pub struct Sender<T>(Arc<SpinMutex<State<T>>>);
+pub struct Sender<T>(Arc<Mutex<State<T>>>);
 
 pub struct SendError<T>(T);
 
@@ -72,7 +72,7 @@ impl<T> Drop for Sender<T> {
     }
 }
 
-pub struct Receiver<T>(Arc<SpinMutex<State<T>>>);
+pub struct Receiver<T>(Arc<Mutex<State<T>>>);
 
 #[derive(Debug)]
 pub struct RecvError;

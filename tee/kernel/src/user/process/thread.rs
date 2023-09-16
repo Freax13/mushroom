@@ -4,6 +4,7 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use crate::spin::mutex::{Mutex, MutexGuard};
 use alloc::{
     collections::BTreeMap,
     sync::{Arc, Weak},
@@ -11,7 +12,6 @@ use alloc::{
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
-use spin::{Mutex, MutexGuard};
 use x86_64::VirtAddr;
 
 use crate::{

@@ -9,11 +9,11 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
+use crate::spin::mutex::Mutex;
 use alloc::{sync::Arc, vec::Vec};
-use spin::mutex::SpinMutex;
 
 pub struct Notify {
-    state: SpinMutex<State>,
+    state: Mutex<State>,
 }
 
 struct State {
@@ -24,7 +24,7 @@ struct State {
 impl Notify {
     pub fn new() -> Self {
         Self {
-            state: SpinMutex::new(State {
+            state: Mutex::new(State {
                 generation: 0,
                 wakers: Vec::new(),
             }),

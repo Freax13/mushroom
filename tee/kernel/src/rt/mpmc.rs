@@ -6,12 +6,12 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
+use crate::spin::mutex::Mutex;
 use alloc::{
     collections::VecDeque,
     sync::{Arc, Weak},
     vec::Vec,
 };
-use spin::mutex::SpinMutex;
 
 pub fn new<T>() -> (Sender<T>, Receiver<T>) {
     let receiver = Receiver::new();
@@ -24,9 +24,9 @@ struct State<T> {
     values: VecDeque<T>,
 }
 
-pub struct Sender<T>(Weak<SpinMutex<State<T>>>);
+pub struct Sender<T>(Weak<Mutex<State<T>>>);
 
-pub struct Receiver<T>(Arc<SpinMutex<State<T>>>);
+pub struct Receiver<T>(Arc<Mutex<State<T>>>);
 
 impl<T> Sender<T> {
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
@@ -54,7 +54,7 @@ pub struct SendError<T>(T);
 
 impl<T> Receiver<T> {
     pub fn new() -> Self {
-        Self(Arc::new(SpinMutex::new(State {
+        Self(Arc::new(Mutex::new(State {
             wakers: Vec::new(),
             values: VecDeque::new(),
         })))

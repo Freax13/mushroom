@@ -3,14 +3,14 @@
 use super::notify::Notify;
 
 pub struct OnceCell<T> {
-    state: spin::once::Once<T>,
+    state: crate::spin::once::Once<T>,
     notify: Notify,
 }
 
 impl<T> OnceCell<T> {
     pub fn new() -> Self {
         Self {
-            state: spin::once::Once::new(),
+            state: crate::spin::once::Once::new(),
             notify: Notify::new(),
         }
     }

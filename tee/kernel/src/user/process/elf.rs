@@ -1,5 +1,6 @@
 use core::{ffi::CStr, iter::from_fn};
 
+use crate::spin::lazy::Lazy;
 use alloc::{borrow::ToOwned, ffi::CString, sync::Arc, vec};
 use goblin::{
     elf::Elf,
@@ -8,7 +9,6 @@ use goblin::{
         program_header::PT_LOAD,
     },
 };
-use spin::Lazy;
 use x86_64::{instructions::random::RdRand, VirtAddr};
 
 use super::{

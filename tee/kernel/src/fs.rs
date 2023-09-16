@@ -1,5 +1,5 @@
+use crate::spin::lazy::Lazy;
 use constants::{physical_address, virtual_address};
-use spin::Lazy;
 use x86_64::structures::paging::{frame::PhysFrameRangeInclusive, page::PageRangeInclusive};
 
 use crate::memory::{

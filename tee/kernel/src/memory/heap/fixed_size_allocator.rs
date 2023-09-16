@@ -5,7 +5,7 @@ use core::{
     ptr::{addr_of_mut, NonNull},
 };
 
-use spin::Mutex;
+use crate::spin::mutex::Mutex;
 
 use super::fallback_allocator::LimitedAllocator;
 

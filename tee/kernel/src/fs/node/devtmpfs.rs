@@ -1,7 +1,7 @@
 use core::{cmp, iter::from_fn};
 
+use crate::spin::{lazy::Lazy, mutex::Mutex};
 use alloc::sync::{Arc, Weak};
-use spin::{Lazy, Mutex};
 use x86_64::instructions::random::RdRand;
 
 use crate::{

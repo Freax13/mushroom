@@ -1,8 +1,8 @@
+use crate::spin::mutex::Mutex;
 use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
-use spin::Mutex;
 
 use crate::error::Result;
 use crate::user::process::syscall::args::{EpollEvent, EpollEvents};

@@ -1,10 +1,10 @@
 use core::{any::type_name, cmp, ops::Deref};
 
+use crate::spin::mutex::Mutex;
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use log::debug;
-use spin::Mutex;
 use x86_64::VirtAddr;
 
 use crate::{

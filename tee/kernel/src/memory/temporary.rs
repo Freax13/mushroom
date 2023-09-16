@@ -1,7 +1,7 @@
 use core::cell::{RefCell, RefMut};
 
+use crate::spin::{lazy::Lazy, mutex::Mutex};
 use constants::virtual_address::TEMPORARY;
-use spin::{Lazy, Mutex};
 use x86_64::structures::paging::{page::PageRangeInclusive, Page, PhysFrame, Size4KiB};
 
 use crate::{
