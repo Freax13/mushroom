@@ -128,7 +128,7 @@ impl ActiveVirtualMemory<'_, '_> {
         }
 
         // Create stack.
-        let len = 0x2_0000;
+        let len = 0x10_0000;
         let stack = self.allocate_stack(None, len)? + len;
 
         self.mmap_zero(
