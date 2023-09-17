@@ -18,7 +18,7 @@ use crate::{
             self, create_directory, create_file, create_link,
             devtmpfs::{self, RandomFile},
             hard_link, lookup_and_resolve_node, lookup_node, read_link, rename, set_mode,
-            unlink_dir, unlink_file, DirEntry, Node,
+            unlink_dir, unlink_file, DirEntry, Node, OldDirEntry,
         },
         path::Path,
     },
@@ -137,6 +137,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
+    handlers.register(SysGetdents);
     handlers.register(SysChdir);
     handlers.register(SysFchdir);
     handlers.register(SysMkdir);
@@ -1298,6 +1299,28 @@ fn fcntl64(
             Ok(0)
         }
     }
+}
+
+#[syscall(i386 = 141, amd64 = 78)]
+fn getdents(
+    abi: Abi,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    dirent: Pointer<[OldDirEntry]>,
+    count: u64,
+) -> SyscallResult {
+    let capacity = usize::try_from(count)?;
+    let fd = fdtable.get(fd)?;
+    let entries = fd.getdents64(capacity)?;
+    let entries = entries.into_iter().map(OldDirEntry).collect::<Vec<_>>();
+
+    let len = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
+        vm.write_with_abi(dirent, &*entries, abi)
+    })?;
+    let len = u64::try_from(len)?;
+    Ok(len)
 }
 
 #[syscall(i386 = 12, amd64 = 80)]

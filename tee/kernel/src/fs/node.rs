@@ -288,6 +288,8 @@ impl DirEntry {
     }
 }
 
+pub struct OldDirEntry(pub DirEntry);
+
 pub enum DirEntryName {
     FileName(FileName<'static>),
     Dot,

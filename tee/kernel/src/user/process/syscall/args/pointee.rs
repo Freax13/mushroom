@@ -16,7 +16,10 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
-    fs::{node::DirEntry, path::Path},
+    fs::{
+        node::{DirEntry, OldDirEntry},
+        path::Path,
+    },
     user::process::{
         memory::{ActiveVirtualMemory, VirtualMemoryActivator},
         syscall::cpu_state::Abi,
@@ -818,3 +821,90 @@ impl WritablePointee for DirEntry {
 }
 
 impl AbiAgnosticPointee for DirEntry {}
+
+impl Pointee for OldDirEntry {}
+
+impl WritablePointee for OldDirEntry {
+    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize> {
+        let len = self.len(abi);
+
+        let dirent = OldLinuxDirent {
+            ino: self.0.ino,
+            off: u64::try_from(len)?,
+            reclen: u16::try_from(len)?,
+        };
+        let base_len = vm.write_with_abi(Pointer::new(addr.as_u64()), dirent, abi)?;
+        // vm.write_bytes(addr, bytes_of(&dirent))?;
+        vm.write_bytes(addr + base_len, self.0.name.as_ref())?;
+        vm.write_bytes(
+            addr + base_len + self.0.name.as_ref().len(),
+            &[0, self.0.ty as u8],
+        )?;
+        Ok(len)
+    }
+}
+
+impl OldDirEntry {
+    pub fn len(&self, abi: Abi) -> usize {
+        let base_size = match abi {
+            Abi::I386 => size_of::<<OldLinuxDirent as AbiDependentPointee>::I386>(),
+            Abi::Amd64 => size_of::<<OldLinuxDirent as AbiDependentPointee>::Amd64>(),
+        };
+        let len = base_size + self.0.name.as_ref().len() + 2;
+        len.next_multiple_of(8)
+    }
+}
+
+impl Pointee for OldLinuxDirent {}
+
+impl AbiDependentPointee for OldLinuxDirent {
+    type I386 = OldLinuxDirent32;
+    type Amd64 = OldLinuxDirent64;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OldLinuxDirent {
+    pub ino: u64,
+    pub off: u64,
+    pub reclen: u16,
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C, packed(2))]
+struct OldLinuxDirent32 {
+    pub ino: u32,
+    pub off: u32,
+    pub reclen: u16,
+}
+
+impl TryFrom<OldLinuxDirent> for OldLinuxDirent32 {
+    type Error = Error;
+
+    fn try_from(value: OldLinuxDirent) -> Result<Self> {
+        Ok(Self {
+            ino: u32::try_from(value.ino)?,
+            off: u32::try_from(value.off)?,
+            reclen: value.reclen,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C, packed(2))]
+struct OldLinuxDirent64 {
+    pub ino: u64,
+    pub off: u64,
+    pub reclen: u16,
+}
+
+impl TryFrom<OldLinuxDirent> for OldLinuxDirent64 {
+    type Error = Error;
+
+    fn try_from(value: OldLinuxDirent) -> Result<Self> {
+        Ok(Self {
+            ino: value.ino,
+            off: value.off,
+            reclen: value.reclen,
+        })
+    }
+}

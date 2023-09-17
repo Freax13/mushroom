@@ -334,6 +334,7 @@ bitflags! {
         const NOCTTY = 1 << 8;
         const TRUNC = 1 << 9;
         const APPEND = 1 << 10;
+        const NONBLOCK = 1 << 11;
         const DSYNC = 1 << 12;
         const LARGEFILE = 1 << 15;
         const DIRECTORY = 1 << 16;
