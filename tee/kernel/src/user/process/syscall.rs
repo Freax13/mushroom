@@ -138,6 +138,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysChdir);
+    handlers.register(SysFchdir);
     handlers.register(SysMkdir);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
@@ -1309,6 +1310,17 @@ fn chdir(
     let path = vm_activator.activate(&virtual_memory, |vm| vm.read(path))?;
     let node = lookup_and_resolve_node(thread.cwd.clone(), &path)?;
     thread.cwd = node.try_into()?;
+    Ok(0)
+}
+
+#[syscall(i386 = 133, amd64 = 81)]
+fn fchdir(
+    thread: &mut ThreadGuard,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+) -> SyscallResult {
+    let dirfd = fdtable.get(fd)?;
+    thread.cwd = dirfd.as_dir()?;
     Ok(0)
 }
 
