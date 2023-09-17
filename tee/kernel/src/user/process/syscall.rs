@@ -1159,7 +1159,7 @@ fn exit(
 async fn wait4(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    pid: i64,
+    pid: i32,
     wstatus: Pointer<WStatus>, // FIXME: use correct type
     options: WaitOptions,
     rusage: Pointer<c_void>, // FIXME: use correct type
