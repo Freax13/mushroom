@@ -394,7 +394,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         if !writeable {
             mapping.permissions.remove(MemoryPermissions::WRITE);
             unsafe {
-                remove_flags(page, PageTableFlags::WRITABLE | PageTableFlags::USER);
+                remove_flags(page, PageTableFlags::WRITABLE);
             }
         }
 
