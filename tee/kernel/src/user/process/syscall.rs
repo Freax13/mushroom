@@ -919,9 +919,8 @@ fn socketpair(
 }
 
 #[syscall(i386 = 120, amd64 = 56)]
-fn clone(
-    thread: &mut ThreadGuard,
-    vm_activator: &mut VirtualMemoryActivator,
+async fn clone(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     flags: CloneFlags,
@@ -932,64 +931,82 @@ fn clone(
 ) -> SyscallResult {
     let new_tid = new_tid();
 
-    let new_process = if flags.contains(CloneFlags::THREAD) {
-        None
-    } else {
-        thread.unwaited_children += 1;
-        Some(Arc::new(Process::new(new_tid)))
-    };
+    let (tid, vfork_receiver) = VirtualMemoryActivator::r#do(move |vm_activator| -> Result<_> {
+        let mut thread = thread.lock();
 
-    let new_virtual_memory = if flags.contains(CloneFlags::VM) {
-        None
-    } else {
-        todo!()
-    };
+        let new_process = if flags.contains(CloneFlags::THREAD) {
+            None
+        } else {
+            thread.unwaited_children += 1;
+            Some(Arc::new(Process::new(new_tid)))
+        };
 
-    let new_fdtable = if flags.contains(CloneFlags::FILES) {
-        // Reuse the same files.
-        fdtable
-    } else {
-        // Create a shallow copy of the files.
-        Arc::new((*fdtable).clone())
-    };
+        let new_virtual_memory = if flags.contains(CloneFlags::VM) {
+            None
+        } else {
+            Some(Arc::new((**thread.virtual_memory()).clone(vm_activator)?))
+        };
 
-    let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
-        Some(child_tid)
-    } else {
-        None
-    };
+        let new_fdtable = if flags.contains(CloneFlags::FILES) {
+            // Reuse the same files.
+            fdtable
+        } else {
+            // Create a shallow copy of the files.
+            Arc::new((*fdtable).clone())
+        };
 
-    let new_tls = if flags.contains(CloneFlags::SETTLS) {
-        Some(tls)
-    } else {
-        None
-    };
+        let new_clear_child_tid = if flags.contains(CloneFlags::CHILD_CLEARTID) {
+            Some(child_tid)
+        } else {
+            None
+        };
 
-    let tid = Thread::spawn(|weak_thread| {
-        let new_thread = thread.clone(
-            new_tid,
-            weak_thread,
-            new_process,
-            new_virtual_memory,
-            new_fdtable,
-            stack.get(),
-            new_clear_child_tid,
-            new_tls,
-            None,
-        );
+        let new_tls = if flags.contains(CloneFlags::SETTLS) {
+            Some(tls)
+        } else {
+            None
+        };
 
-        if flags.contains(CloneFlags::PARENT_SETTID) {
-            vm_activator.activate(&virtual_memory, |vm| vm.write(parent_tid, new_tid))?;
-        }
+        let (vfork_sender, vfork_receiver) = if flags.contains(CloneFlags::VFORK) {
+            let (sender, receiver) = oneshot::new();
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
 
-        if flags.contains(CloneFlags::CHILD_SETTID) {
-            let guard = new_thread.lock();
-            let virtual_memory = guard.virtual_memory();
-            vm_activator.activate(virtual_memory, |vm| vm.write(child_tid, new_tid))?;
-        }
+        let tid = Thread::spawn(|weak_thread| {
+            let new_thread = thread.clone(
+                new_tid,
+                weak_thread,
+                new_process,
+                new_virtual_memory,
+                new_fdtable,
+                stack.get(),
+                new_clear_child_tid,
+                new_tls,
+                vfork_sender,
+            );
 
-        Result::Ok(new_thread)
-    })?;
+            if flags.contains(CloneFlags::PARENT_SETTID) {
+                vm_activator.activate(&virtual_memory, |vm| vm.write(parent_tid, new_tid))?;
+            }
+
+            if flags.contains(CloneFlags::CHILD_SETTID) {
+                let guard = new_thread.lock();
+                let virtual_memory = guard.virtual_memory();
+                vm_activator.activate(virtual_memory, |vm| vm.write(child_tid, new_tid))?;
+            }
+
+            Result::Ok(new_thread)
+        })?;
+
+        Ok((tid, vfork_receiver))
+    })
+    .await?;
+
+    if let Some(vfork_receiver) = vfork_receiver {
+        let _ = vfork_receiver.recv().await;
+    }
 
     Ok(u64::from(tid))
 }
