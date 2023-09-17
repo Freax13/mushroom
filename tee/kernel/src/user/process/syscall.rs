@@ -18,7 +18,7 @@ use crate::{
             self, create_directory, create_file, create_link,
             devtmpfs::{self, RandomFile},
             hard_link, lookup_and_resolve_node, lookup_node, read_link, rename, set_mode,
-            unlink_dir, unlink_file, DirEntry, Node, OldDirEntry,
+            unlink_dir, unlink_file, DirEntry, Node, NonLinkNode, OldDirEntry,
         },
         path::Path,
     },
@@ -1799,27 +1799,30 @@ fn openat(
     } else {
         let mode = FileMode::from_bits_truncate(mode);
 
-        let file = if flags.contains(OpenFlags::CREAT) {
-            create_file(start_dir.clone(), &filename, mode)?
+        let node = if flags.contains(OpenFlags::CREAT) {
+            NonLinkNode::File(create_file(start_dir.clone(), &filename, mode)?)
         } else {
-            let node = lookup_and_resolve_node(start_dir.clone(), &filename)?;
-            node.try_into()?
+            lookup_and_resolve_node(start_dir.clone(), &filename)?
         };
+        match node {
+            NonLinkNode::File(file) => {
+                if flags.contains(OpenFlags::TRUNC) {
+                    file.truncate()?;
+                }
 
-        if flags.contains(OpenFlags::TRUNC) {
-            file.truncate()?;
-        }
-
-        if flags.contains(OpenFlags::WRONLY) {
-            if flags.contains(OpenFlags::APPEND) {
-                fdtable.insert(AppendFileFileDescription::new(file))?
-            } else {
-                fdtable.insert(WriteonlyFileFileDescription::new(file))?
+                if flags.contains(OpenFlags::WRONLY) {
+                    if flags.contains(OpenFlags::APPEND) {
+                        fdtable.insert(AppendFileFileDescription::new(file))?
+                    } else {
+                        fdtable.insert(WriteonlyFileFileDescription::new(file))?
+                    }
+                } else if flags.contains(OpenFlags::RDWR) {
+                    fdtable.insert(ReadWriteFileFileDescription::new(file))?
+                } else {
+                    fdtable.insert(ReadonlyFileFileDescription::new(file))?
+                }
             }
-        } else if flags.contains(OpenFlags::RDWR) {
-            fdtable.insert(ReadWriteFileFileDescription::new(file))?
-        } else {
-            fdtable.insert(ReadonlyFileFileDescription::new(file))?
+            NonLinkNode::Directory(dir) => fdtable.insert(DirectoryFileDescription::new(dir))?,
         }
     };
     Ok(fd.get() as u64)
