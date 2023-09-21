@@ -7,10 +7,13 @@ use bytemuck::pod_read_unaligned;
 use super::{Events, OpenFileDescription};
 use crate::{
     error::{Error, Result},
+    fs::node::new_ino,
     rt::notify::Notify,
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
 
 pub struct EventFd {
+    ino: u64,
     notify: Notify,
     counter: AtomicU64,
 }
@@ -18,6 +21,7 @@ pub struct EventFd {
 impl EventFd {
     pub fn new(initval: u32) -> Self {
         Self {
+            ino: new_ino(),
             notify: Notify::new(),
             counter: AtomicU64::new(u64::from(initval)),
         }
@@ -93,6 +97,25 @@ impl OpenFileDescription for EventFd {
             }
 
             wait.await;
+        }
+    }
+
+    #[inline]
+    fn stat(&self) -> Stat {
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Unknown, FileMode::from_bits_truncate(0o600)),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
         }
     }
 }

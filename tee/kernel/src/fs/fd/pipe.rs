@@ -71,11 +71,11 @@ impl OpenFileDescription for ReadHalf {
         }
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Ok(Stat {
+    fn stat(&self) -> Stat {
+        Stat {
             dev: 0,
             ino: 0,
-            nlink: 0,
+            nlink: 1,
             mode: FileTypeAndMode::new(FileType::Fifo, FileMode::ALL),
             uid: 0,
             gid: 0,
@@ -83,19 +83,10 @@ impl OpenFileDescription for ReadHalf {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            mtime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            ctime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-        })
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        }
     }
 }
 
@@ -115,11 +106,11 @@ impl OpenFileDescription for WriteHalf {
         Ok(buf.len())
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Ok(Stat {
+    fn stat(&self) -> Stat {
+        Stat {
             dev: 0,
             ino: 0,
-            nlink: 0,
+            nlink: 1,
             mode: FileTypeAndMode::new(FileType::Fifo, FileMode::ALL),
             uid: 0,
             gid: 0,
@@ -127,19 +118,10 @@ impl OpenFileDescription for WriteHalf {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            mtime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            ctime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-        })
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        }
     }
 }
 

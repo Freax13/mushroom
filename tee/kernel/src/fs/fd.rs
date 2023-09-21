@@ -1,7 +1,17 @@
 use core::{any::type_name, cmp, ops::Deref};
 
-use crate::spin::mutex::Mutex;
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use crate::{
+    fs::{
+        node::{new_ino, DirEntryName, DynINode, FileAccessContext},
+        path::FileName,
+    },
+    spin::mutex::Mutex,
+    user::process::{
+        memory::{ActiveVirtualMemory, MemoryPermissions, VirtualMemory, VirtualMemoryActivator},
+        syscall::args::{EpollEvent, FdNum, FileMode, FileType, Pointer, Stat, Whence},
+    },
+};
+use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use log::debug;
@@ -9,12 +19,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, ErrorKind, Result},
-    fs::node::{DirEntry, Directory},
-};
-
-use super::{
-    memory::{ActiveVirtualMemory, MemoryPermissions, VirtualMemory, VirtualMemoryActivator},
-    syscall::args::{EpollEvent, FdNum, FileMode, Pointer, Stat, Whence},
+    fs::node::DirEntry,
 };
 
 pub mod dir;
@@ -46,7 +51,7 @@ impl Deref for FileDescriptor {
 }
 
 pub struct FileDescriptorTable {
-    table: Mutex<BTreeMap<i32, FileDescriptor>>,
+    table: Mutex<BTreeMap<i32, FileDescriptorTableEntry>>,
 }
 
 impl FileDescriptorTable {
@@ -59,11 +64,11 @@ impl FileDescriptorTable {
     pub fn with_standard_io() -> Self {
         let this = Self::empty();
 
-        let stdin = this.insert(std::Stdin).unwrap();
+        let stdin = this.insert(std::Stdin::new()).unwrap();
         assert_eq!(stdin.get(), 0);
-        let stdout = this.insert(std::Stdout).unwrap();
+        let stdout = this.insert(std::Stdout::new()).unwrap();
         assert_eq!(stdout.get(), 1);
-        let stderr = this.insert(std::Stderr).unwrap();
+        let stderr = this.insert(std::Stderr::new()).unwrap();
         assert_eq!(stderr.get(), 2);
 
         this
@@ -73,7 +78,7 @@ impl FileDescriptorTable {
         self.insert_after(0, fd)
     }
 
-    fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptor>, min: i32) -> Result<i32> {
+    fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptorTableEntry>, min: i32) -> Result<i32> {
         const MAX_FD: i32 = i32::MAX;
 
         let min = cmp::max(0, min);
@@ -92,20 +97,20 @@ impl FileDescriptorTable {
     pub fn insert_after(&self, min: i32, fd: impl Into<FileDescriptor>) -> Result<FdNum> {
         let mut guard = self.table.lock();
         let fd_num = Self::find_free_fd_num(&guard, min)?;
-        guard.insert(fd_num, fd.into());
+        guard.insert(fd_num, FileDescriptorTableEntry::new(fd.into()));
         Ok(FdNum::new(fd_num))
     }
 
     pub fn replace(&self, fd_num: FdNum, fd: impl Into<FileDescriptor>) {
         let mut guard = self.table.lock();
-        guard.insert(fd_num.get(), fd.into());
+        guard.insert(fd_num.get(), FileDescriptorTableEntry::new(fd.into()));
     }
 
     pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
         self.table
             .lock()
             .get(&fd_num.get())
-            .cloned()
+            .map(|fd| fd.fd.clone())
             .ok_or(Error::bad_f(()))
     }
 
@@ -115,15 +120,46 @@ impl FileDescriptorTable {
             .lock()
             .remove(&fd_num.get())
             .ok_or(Error::bad_f(()))?;
-        fd.close()
+        fd.fd.close()
+    }
+
+    pub fn list_entries(&self) -> Vec<DirEntry> {
+        let guard = self.table.lock();
+        guard
+            .iter()
+            .map(|(num, entry)| DirEntry {
+                ino: entry.ino,
+                ty: entry.fd.ty(),
+                name: DirEntryName::FileName(
+                    FileName::new(format!("{num}").as_bytes())
+                        .unwrap()
+                        .into_owned(),
+                ),
+            })
+            .collect()
+    }
+}
+
+struct FileDescriptorTableEntry {
+    ino: u64,
+    fd: FileDescriptor,
+}
+
+impl FileDescriptorTableEntry {
+    fn new(fd: FileDescriptor) -> Self {
+        Self { ino: new_ino(), fd }
     }
 }
 
 impl Clone for FileDescriptorTable {
     fn clone(&self) -> Self {
         // Copy the table.
-        let table = self.table.lock().clone();
-
+        let table = self
+            .table
+            .lock()
+            .iter()
+            .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone())))
+            .collect();
         Self {
             table: Mutex::new(table),
         }
@@ -220,15 +256,17 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Err(Error::io(()))
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Err(Error::io(()))
+    fn stat(&self) -> Stat;
+
+    fn ty(&self) -> FileType {
+        self.stat().mode.ty()
     }
 
-    fn as_dir(&self) -> Result<Arc<dyn Directory>> {
+    fn as_dir(&self) -> Result<DynINode> {
         Err(Error::not_dir(()))
     }
 
-    fn getdents64(&self, capacity: usize) -> Result<Vec<DirEntry>> {
+    fn getdents64(&self, capacity: usize, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = capacity;
         Err(Error::not_dir(()))
     }

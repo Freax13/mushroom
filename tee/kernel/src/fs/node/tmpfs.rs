@@ -1,6 +1,15 @@
 use core::cmp;
 
-use crate::spin::mutex::Mutex;
+use crate::{
+    dir_impls,
+    fs::fd::{
+        dir::{open_dir, Directory},
+        file::{open_file, File},
+        FileDescriptor,
+    },
+    spin::mutex::Mutex,
+    user::process::syscall::args::OpenFlags,
+};
 use alloc::{
     borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
@@ -8,7 +17,10 @@ use alloc::{
     vec::Vec,
 };
 
-use super::{new_ino, DirEntry, DirEntryName, Directory, File, FileSnapshot, Link, Node};
+use super::{
+    lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext,
+    FileSnapshot, INode,
+};
 use crate::{
     error::{Error, Result},
     fs::path::{FileName, Path},
@@ -21,13 +33,13 @@ use crate::{
 pub struct TmpFsDir {
     ino: u64,
     this: Weak<Self>,
-    parent: Weak<dyn Directory>,
+    parent: Weak<dyn INode>,
     internal: Mutex<DevTmpFsDirInternal>,
 }
 
 struct DevTmpFsDirInternal {
     mode: FileMode,
-    items: BTreeMap<FileName<'static>, Node>,
+    items: BTreeMap<FileName<'static>, DynINode>,
 }
 
 impl TmpFsDir {
@@ -43,7 +55,7 @@ impl TmpFsDir {
         })
     }
 
-    pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> Arc<Self> {
+    pub fn new(parent: Weak<dyn INode>, mode: FileMode) -> Arc<Self> {
         Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
             this: this_weak.clone(),
@@ -56,13 +68,8 @@ impl TmpFsDir {
     }
 }
 
-impl Directory for TmpFsDir {
-    fn parent(&self) -> Result<Arc<dyn Directory>> {
-        self.parent
-            .clone()
-            .upgrade()
-            .ok_or_else(|| Error::no_ent(()))
-    }
+impl INode for TmpFsDir {
+    dir_impls!();
 
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
@@ -79,26 +86,35 @@ impl Directory for TmpFsDir {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            mtime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            ctime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
         }
+    }
+
+    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
 
-    fn get_node(&self, path_segment: &FileName) -> Result<Node> {
+    fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
+        self.internal.lock().items.insert(file_name.clone(), node);
+        Ok(())
+    }
+}
+
+impl Directory for TmpFsDir {
+    fn parent(&self) -> Result<DynINode> {
+        self.parent
+            .clone()
+            .upgrade()
+            .ok_or_else(|| Error::no_ent(()))
+    }
+
+    fn get_node(&self, path_segment: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
         self.internal
             .lock()
             .items
@@ -107,17 +123,13 @@ impl Directory for TmpFsDir {
             .ok_or(Error::no_ent(()))
     }
 
-    fn create_dir(
-        &self,
-        file_name: FileName<'static>,
-        mode: FileMode,
-    ) -> Result<Arc<dyn Directory>> {
+    fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
                 let dir = TmpFsDir::new(self.this.clone(), mode);
-                entry.insert(Node::Directory(dir.clone()));
+                entry.insert(dir.clone());
                 Ok(dir)
             }
             Entry::Occupied(_) => Err(Error::exist(())),
@@ -129,24 +141,23 @@ impl Directory for TmpFsDir {
         path_segment: FileName<'static>,
         mode: FileMode,
         create_new: bool,
-    ) -> Result<Arc<dyn File>> {
+    ) -> Result<DynINode> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(path_segment);
         match entry {
             Entry::Vacant(entry) => {
-                let file = Arc::new(TmpFsFile::new(mode, &[]));
-                entry.insert(Node::File(file.clone()));
-                Ok(file)
+                let node = TmpFsFile::new(mode, &[]);
+                entry.insert(node.clone());
+                Ok(node)
             }
-            Entry::Occupied(mut entry) => {
+            Entry::Occupied(entry) => {
                 if create_new {
                     return Err(Error::exist(()));
                 }
-                match entry.get_mut() {
-                    Node::File(f) => Ok(f.clone()),
-                    Node::Link(_) => Err(Error::exist(())),
-                    Node::Directory(_) => Err(Error::exist(())),
+                if entry.get().ty() != FileType::File {
+                    return Err(Error::exist(()));
                 }
+                Ok(entry.get().clone())
             }
         }
     }
@@ -156,41 +167,38 @@ impl Directory for TmpFsDir {
         file_name: FileName<'static>,
         target: Path,
         create_new: bool,
-    ) -> Result<()> {
+    ) -> Result<DynINode> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                entry.insert(Node::Link(Link {
+                let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
-                }));
-                Ok(())
+                });
+                entry.insert(link.clone());
+                Ok(link)
             }
             Entry::Occupied(mut entry) => {
                 if create_new {
                     return Err(Error::exist(()));
                 }
-                entry.insert(Node::Link(Link {
+                let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
-                }));
-                Ok(())
+                });
+                entry.insert(link.clone());
+                Ok(link)
             }
         }
     }
 
-    fn hard_link(&self, file_name: FileName<'static>, node: Node) -> Result<()> {
+    fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         self.internal.lock().items.insert(file_name.clone(), node);
         Ok(())
     }
 
-    fn mount(&self, file_name: FileName<'static>, node: Node) -> Result<()> {
-        self.internal.lock().items.insert(file_name.clone(), node);
-        Ok(())
-    }
-
-    fn list_entries(&self) -> Vec<DirEntry> {
+    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Vec<DirEntry> {
         let guard = self.internal.lock();
 
         let mut entries = Vec::with_capacity(2 + guard.items.len());
@@ -212,7 +220,6 @@ impl Directory for TmpFsDir {
                 name: DirEntryName::from(name.clone()),
             })
         }
-
         entries
     }
 
@@ -222,7 +229,7 @@ impl Directory for TmpFsDir {
         let Entry::Occupied(entry) = node else {
             return Err(Error::no_ent(()));
         };
-        if matches!(entry.get(), Node::Directory(_)) {
+        if entry.get().ty() == FileType::Dir {
             return Err(Error::is_dir(()));
         }
         entry.remove();
@@ -235,7 +242,7 @@ impl Directory for TmpFsDir {
         let Entry::Occupied(entry) = node else {
             return Err(Error::no_ent(()));
         };
-        if !matches!(entry.get(), Node::Directory(_)) {
+        if entry.get().ty() != FileType::Dir {
             return Err(Error::is_dir(()));
         }
         entry.remove();
@@ -245,6 +252,7 @@ impl Directory for TmpFsDir {
 
 pub struct TmpFsFile {
     ino: u64,
+    this: Weak<Self>,
     internal: Mutex<TmpFsFileInternal>,
 }
 
@@ -254,18 +262,19 @@ struct TmpFsFileInternal {
 }
 
 impl TmpFsFile {
-    pub fn new(mode: FileMode, content: &'static [u8]) -> Self {
-        Self {
+    pub fn new(mode: FileMode, content: &'static [u8]) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
             ino: new_ino(),
             internal: Mutex::new(TmpFsFileInternal {
                 content: Arc::new(Cow::Borrowed(content)),
                 mode,
             }),
-        }
+        })
     }
 }
 
-impl File for TmpFsFile {
+impl INode for TmpFsFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::File, guard.mode);
@@ -283,25 +292,27 @@ impl File for TmpFsFile {
             size,
             blksize: 0,
             blocks: 0,
-            atime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            mtime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            ctime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
         }
+    }
+
+    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
 
+    fn read_snapshot(&self) -> Result<FileSnapshot> {
+        let content = self.internal.lock().content.clone();
+        Ok(FileSnapshot(content))
+    }
+}
+
+impl File for TmpFsFile {
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
         let guard = self.internal.lock();
         let slice = guard.content.get(offset..).ok_or(Error::inval(()))?;
@@ -396,9 +407,51 @@ impl File for TmpFsFile {
         guard.content = Arc::new(Cow::Borrowed(&[]));
         Ok(())
     }
+}
 
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        let content = self.internal.lock().content.clone();
-        Ok(FileSnapshot(content))
+#[derive(Clone)]
+pub struct TmpFsSymlink {
+    ino: u64,
+    target: Path,
+}
+
+impl INode for TmpFsSymlink {
+    fn stat(&self) -> Stat {
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Link, FileMode::ALL),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        }
+    }
+
+    fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
+        Err(Error::r#loop(()))
+    }
+
+    fn set_mode(&self, _mode: FileMode) {
+        todo!()
+    }
+
+    fn read_link(&self) -> Result<Path> {
+        Ok(self.target.clone())
+    }
+
+    fn try_resolve_link(
+        &self,
+        start_dir: DynINode,
+        ctx: &mut FileAccessContext,
+    ) -> Result<Option<(DynINode, DynINode)>> {
+        ctx.follow_symlink()?;
+        lookup_node_with_parent(start_dir, &self.target, ctx).map(Some)
     }
 }

@@ -32,6 +32,8 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
     let struct_name = format!("Sys{}", AsUpperCamelCase(&syscall_name));
     let struct_ident = Ident::new(&struct_name, input.sig.ident.span());
     let state_bindings = syscall_inputs.states.iter().map(|(pat, ty)| {
+        let mut pat = pat.clone();
+        pat.mutability.take();
         quote! {
             let #pat = <#ty as ExtractableThreadState>::extract_from_thread(&guard);
         }

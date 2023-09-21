@@ -7,6 +7,7 @@ use crate::memory::{
     pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
 };
 
+pub mod fd;
 pub mod node;
 pub mod path;
 

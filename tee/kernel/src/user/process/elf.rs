@@ -1,7 +1,7 @@
 use core::{ffi::CStr, iter::from_fn};
 
-use crate::spin::lazy::Lazy;
-use alloc::{borrow::ToOwned, ffi::CString, sync::Arc, vec};
+use crate::{fs::node::FileAccessContext, spin::lazy::Lazy};
+use alloc::{borrow::ToOwned, ffi::CString, vec};
 use goblin::{
     elf::Elf,
     elf64::{
@@ -21,7 +21,7 @@ use super::{
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, File, FileSnapshot, ROOT_NODE},
+        node::{lookup_and_resolve_node, FileSnapshot, ROOT_NODE},
         path::Path,
     },
 };
@@ -84,10 +84,11 @@ impl ActiveVirtualMemory<'_, '_> {
         bytes: FileSnapshot,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
+        ctx: &mut FileAccessContext,
     ) -> Result<CpuState> {
         match &**bytes {
-            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, argv, envp),
-            [b'#', b'!', ..] => self.start_shebang(bytes, argv, envp),
+            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, argv, envp, ctx),
+            [b'#', b'!', ..] => self.start_shebang(bytes, argv, envp, ctx),
             _ => Err(Error::no_exec(())),
         }
     }
@@ -97,6 +98,7 @@ impl ActiveVirtualMemory<'_, '_> {
         elf_bytes: FileSnapshot,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
+        ctx: &mut FileAccessContext,
     ) -> Result<CpuState> {
         let elf = Elf::parse(&elf_bytes).map_err(|_| Error::inval(()))?;
         let interpreter = elf.interpreter.map(ToOwned::to_owned);
@@ -115,12 +117,11 @@ impl ActiveVirtualMemory<'_, '_> {
 
         if let Some(interpreter) = interpreter {
             let path = Path::new(interpreter.into_bytes())?;
-            let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
-            let file: Arc<dyn File> = node.try_into()?;
-            if !file.mode().contains(FileMode::EXECUTE) {
+            let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path, ctx)?;
+            if !node.mode().contains(FileMode::EXECUTE) {
                 return Err(Error::acces(()));
             }
-            let interpreter = file.read_snapshot()?;
+            let interpreter = node.read_snapshot()?;
             let loader_info = self.load_elf(0x5000_0000_0000, interpreter)?;
             assert_eq!(loader_info.bits, info.bits);
             entrypoint = loader_info.entry;
@@ -207,6 +208,7 @@ impl ActiveVirtualMemory<'_, '_> {
         bytes: FileSnapshot,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
+        ctx: &mut FileAccessContext,
     ) -> Result<CpuState> {
         // Strip shebang.
         let bytes = bytes.strip_prefix(b"#!").ok_or_else(|| Error::inval(()))?;
@@ -240,12 +242,11 @@ impl ActiveVirtualMemory<'_, '_> {
 
         let interpreter_path = args.next().ok_or_else(|| Error::inval(()))??;
         let path = Path::new(interpreter_path.as_bytes().to_vec())?;
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path)?;
-        let file: Arc<dyn File> = node.try_into()?;
-        if !file.mode().contains(FileMode::EXECUTE) {
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path, ctx)?;
+        if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
-        let interpreter = file.read_snapshot()?;
+        let interpreter = node.read_snapshot()?;
 
         let mut new_argv = vec![interpreter_path];
         for arg in args {
@@ -253,7 +254,7 @@ impl ActiveVirtualMemory<'_, '_> {
         }
         new_argv.extend(argv.iter().map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(interpreter, &new_argv, envp)
+        self.start_executable(interpreter, &new_argv, envp, ctx)
     }
 }
 

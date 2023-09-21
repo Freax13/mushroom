@@ -1,17 +1,107 @@
-use crate::spin::mutex::Mutex;
+use core::any::type_name;
+
+use crate::{fs::node::INode, spin::mutex::Mutex, user::process::syscall::args::OpenFlags};
 use alloc::sync::Arc;
+use log::debug;
 use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
-    fs::node::File,
     user::process::{
         memory::{ActiveVirtualMemory, MemoryPermissions},
         syscall::args::{FileMode, Pointer, Stat, Whence},
     },
 };
 
-use super::OpenFileDescription;
+use super::{FileDescriptor, OpenFileDescription};
+
+pub trait File: INode {
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized read from {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        let count = self.read(offset, buf)?;
+
+        let buf = &buf[..count];
+        vm.write_bytes(pointer.get(), buf)?;
+
+        Ok(count)
+    }
+    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
+    fn write_from_user(
+        &self,
+        offset: usize,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized write to {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        vm.read_bytes(pointer.get(), buf)?;
+
+        self.write(offset, buf)
+    }
+    fn append(&self, buf: &[u8]) -> Result<usize>;
+    fn append_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        mut len: usize,
+    ) -> Result<usize> {
+        const MAX_BUFFER_LEN: usize = 8192;
+        if len > MAX_BUFFER_LEN {
+            len = MAX_BUFFER_LEN;
+            debug!("unoptimized write to {} truncated", type_name::<Self>());
+        }
+
+        let mut buf = [0; MAX_BUFFER_LEN];
+        let buf = &mut buf[..len];
+
+        vm.read_bytes(pointer.get(), buf)?;
+
+        self.append(buf)
+    }
+    fn truncate(&self) -> Result<()>;
+}
+
+pub fn open_file(file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
+    if flags.contains(OpenFlags::TRUNC) {
+        file.truncate()?;
+    }
+
+    let fd = if flags.contains(OpenFlags::WRONLY) {
+        if flags.contains(OpenFlags::APPEND) {
+            FileDescriptor::from(AppendFileFileDescription::new(file))
+        } else {
+            FileDescriptor::from(WriteonlyFileFileDescription::new(file))
+        }
+    } else if flags.contains(OpenFlags::RDWR) {
+        FileDescriptor::from(ReadWriteFileFileDescription::new(file))
+    } else {
+        FileDescriptor::from(ReadonlyFileFileDescription::new(file))
+    };
+    Ok(fd)
+}
 
 /// A file description for files opened as read-only.
 pub struct ReadonlyFileFileDescription {
@@ -73,8 +163,8 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         Ok(())
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Ok(self.file.stat())
+    fn stat(&self) -> Stat {
+        self.file.stat()
     }
 
     fn mmap(
@@ -150,8 +240,8 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         Ok(())
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Ok(self.file.stat())
+    fn stat(&self) -> Stat {
+        self.file.stat()
     }
 }
 
@@ -185,8 +275,8 @@ impl OpenFileDescription for AppendFileFileDescription {
         Ok(())
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Ok(self.file.stat())
+    fn stat(&self) -> Stat {
+        self.file.stat()
     }
 }
 
@@ -249,7 +339,7 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         Ok(())
     }
 
-    fn stat(&self) -> Result<Stat> {
-        Ok(self.file.stat())
+    fn stat(&self) -> Stat {
+        self.file.stat()
     }
 }

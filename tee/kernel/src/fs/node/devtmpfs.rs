@@ -1,6 +1,13 @@
 use core::{cmp, iter::from_fn};
 
-use crate::spin::{lazy::Lazy, mutex::Mutex};
+use crate::{
+    fs::fd::{
+        file::{open_file, File},
+        FileDescriptor,
+    },
+    spin::{lazy::Lazy, mutex::Mutex},
+    user::process::syscall::args::OpenFlags,
+};
 use alloc::sync::{Arc, Weak};
 use x86_64::instructions::random::RdRand;
 
@@ -15,57 +22,87 @@ use crate::{
 };
 
 use super::{
-    new_ino,
+    fdfs, new_ino,
     tmpfs::{TmpFsDir, TmpFsFile},
-    Directory, File, FileSnapshot, Node,
+    DynINode, INode,
 };
 
-pub fn new(parent: Weak<dyn Directory>) -> Result<Arc<dyn Directory>> {
+pub fn new(parent: Weak<dyn INode>) -> Result<DynINode> {
     let tmp_fs_dir = TmpFsDir::new(parent, FileMode::from_bits_truncate(0o755));
 
     let input_name = FileName::new(b"input").unwrap();
     let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444), *INPUT);
-    tmp_fs_dir.mount(input_name, Node::File(Arc::new(input_file)))?;
+    tmp_fs_dir.mount(input_name, input_file)?;
 
     let output_name = FileName::new(b"output").unwrap();
     let output_file = OutputFile::new();
-    tmp_fs_dir.mount(output_name, Node::File(Arc::new(output_file)))?;
+    tmp_fs_dir.mount(output_name, output_file)?;
 
     let null_name = FileName::new(b"null").unwrap();
     let null_file = NullFile::new();
-    tmp_fs_dir.mount(null_name, Node::File(Arc::new(null_file)))?;
+    tmp_fs_dir.mount(null_name, null_file)?;
 
     let random_file = RandomFile::new();
-    let random_file = Arc::new(random_file);
     let random_name = FileName::new(b"random").unwrap();
-    tmp_fs_dir.mount(random_name, Node::File(random_file.clone()))?;
+    tmp_fs_dir.mount(random_name, random_file.clone())?;
     let urandom_name = FileName::new(b"urandom").unwrap();
-    tmp_fs_dir.mount(urandom_name, Node::File(random_file))?;
+    tmp_fs_dir.mount(urandom_name, random_file)?;
+
+    let fd_name = FileName::new(b"fd").unwrap();
+    let fd = fdfs::new(
+        Arc::downgrade(&tmp_fs_dir) as _,
+        FileMode::from_bits_truncate(0o777),
+    );
+    tmp_fs_dir.mount(fd_name, fd)?;
 
     Ok(tmp_fs_dir)
 }
 
 struct NullFile {
+    ino: u64,
+    this: Weak<Self>,
     mode: Mutex<FileMode>,
 }
 
 impl NullFile {
-    fn new() -> Self {
-        Self {
+    fn new() -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            ino: new_ino(),
+            this: this.clone(),
             mode: Mutex::new(FileMode::from_bits_truncate(0o666)),
-        }
+        })
     }
 }
 
-impl File for NullFile {
+impl INode for NullFile {
     fn stat(&self) -> Stat {
-        todo!()
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, *self.mode.lock()),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        }
+    }
+
+    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
         *self.mode.lock() = mode;
     }
+}
 
+impl File for NullFile {
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
         Ok(0)
     }
@@ -110,14 +147,11 @@ impl File for NullFile {
     fn truncate(&self) -> Result<()> {
         Ok(())
     }
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Ok(FileSnapshot::empty())
-    }
 }
 
 struct OutputFile {
     ino: u64,
+    this: Weak<Self>,
     internal: Mutex<OutputFileInternal>,
 }
 
@@ -127,25 +161,26 @@ struct OutputFileInternal {
 }
 
 impl OutputFile {
-    fn new() -> Self {
-        Self {
+    fn new() -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
             ino: new_ino(),
+            this: this.clone(),
             internal: Mutex::new(OutputFileInternal {
                 mode: FileMode::OWNER_ALL,
                 offset: 0,
             }),
-        }
+        })
     }
 }
 
-impl File for OutputFile {
+impl INode for OutputFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::File, guard.mode);
         Stat {
             dev: 0,
             ino: self.ino,
-            nlink: 0,
+            nlink: 1,
             mode,
             uid: 0,
             gid: 0,
@@ -153,25 +188,22 @@ impl File for OutputFile {
             size: guard.offset as i64,
             blksize: 0,
             blocks: 0,
-            atime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            mtime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            ctime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
         }
+    }
+
+    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
+}
 
+impl File for OutputFile {
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
         Err(Error::inval(()))
     }
@@ -239,14 +271,11 @@ impl File for OutputFile {
         }
         Ok(())
     }
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Err(Error::inval(()))
-    }
 }
 
 pub struct RandomFile {
     ino: u64,
+    this: Weak<Self>,
     internal: Mutex<RandomFileInternal>,
 }
 
@@ -255,13 +284,14 @@ struct RandomFileInternal {
 }
 
 impl RandomFile {
-    fn new() -> Self {
-        Self {
+    fn new() -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
             ino: new_ino(),
+            this: this.clone(),
             internal: Mutex::new(RandomFileInternal {
                 mode: FileMode::from_bits_truncate(0o666),
             }),
-        }
+        })
     }
 
     pub fn random_bytes() -> impl Iterator<Item = u8> {
@@ -270,14 +300,14 @@ impl RandomFile {
     }
 }
 
-impl File for RandomFile {
+impl INode for RandomFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::File, guard.mode);
         Stat {
             dev: 0,
             ino: self.ino,
-            nlink: 0,
+            nlink: 1,
             mode,
             uid: 0,
             gid: 0,
@@ -285,25 +315,22 @@ impl File for RandomFile {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            mtime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
-            ctime: Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            },
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
         }
+    }
+
+    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
+}
 
+impl File for RandomFile {
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize> {
         let mut len = 0;
         for (buf, random) in buf.iter_mut().zip(Self::random_bytes()) {
@@ -343,9 +370,5 @@ impl File for RandomFile {
 
     fn truncate(&self) -> Result<()> {
         Ok(())
-    }
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Err(Error::inval(()))
     }
 }

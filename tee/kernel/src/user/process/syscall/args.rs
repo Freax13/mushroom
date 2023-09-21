@@ -11,8 +11,8 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
+    fs::fd::{Events, FileDescriptorTable},
     user::process::{
-        fd::{Events, FileDescriptorTable},
         memory::{VirtualMemory, VirtualMemoryActivator},
         thread::ThreadGuard,
     },
@@ -674,9 +674,11 @@ impl FileTypeAndMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, CheckedBitPattern)]
+#[derive(Debug, Clone, Copy, CheckedBitPattern, PartialEq, Eq)]
 #[repr(u32)]
+#[allow(unused)]
 pub enum FileType {
+    Unknown = 0o00,
     Fifo = 0o01,
     Char = 0o02,
     Dir = 0o04,
@@ -755,6 +757,13 @@ enum_arg! {
 pub struct Timespec {
     pub tv_sec: u32,
     pub tv_nsec: u32,
+}
+
+impl Timespec {
+    pub const ZERO: Self = Self {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
 }
 
 enum_arg! {

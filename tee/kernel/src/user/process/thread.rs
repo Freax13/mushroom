@@ -4,7 +4,13 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use crate::spin::mutex::{Mutex, MutexGuard};
+use crate::{
+    fs::{
+        fd::FileDescriptorTable,
+        node::{DynINode, FileAccessContext},
+    },
+    spin::mutex::{Mutex, MutexGuard},
+};
 use alloc::{
     collections::BTreeMap,
     sync::{Arc, Weak},
@@ -17,7 +23,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, Directory, File, FileSnapshot, ROOT_NODE},
+        node::{lookup_and_resolve_node, FileSnapshot, ROOT_NODE},
         path::Path,
     },
     per_cpu::PerCpu,
@@ -25,7 +31,6 @@ use crate::{
 };
 
 use super::{
-    fd::FileDescriptorTable,
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
         args::{FileMode, Pointer},
@@ -92,7 +97,7 @@ pub struct ThreadState {
     pub sigaltstack: Option<Stack>,
     pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
-    pub cwd: Arc<dyn Directory>,
+    pub cwd: DynINode,
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
@@ -110,7 +115,7 @@ impl Thread {
         process: Arc<Process>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
-        cwd: Arc<dyn Directory>,
+        cwd: DynINode,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
@@ -352,16 +357,16 @@ impl ThreadGuard<'_> {
         path: &Path,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
+        ctx: &mut FileAccessContext,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), path)?;
-        let file: Arc<dyn File> = node.try_into()?;
-        if !file.mode().contains(FileMode::EXECUTE) {
+        let node = lookup_and_resolve_node(ROOT_NODE.clone(), path, ctx)?;
+        if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
-        let bytes = file.read_snapshot()?;
+        let bytes = node.read_snapshot()?;
 
-        self.start_executable(bytes, argv, envp, vm_activator)
+        self.start_executable(bytes, argv, envp, ctx, vm_activator)
     }
 
     pub fn start_executable(
@@ -369,13 +374,15 @@ impl ThreadGuard<'_> {
         bytes: FileSnapshot,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
+        ctx: &mut FileAccessContext,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let cpu_state =
-            vm_activator.activate(&virtual_memory, |vm| vm.start_executable(bytes, argv, envp))?;
+        let cpu_state = vm_activator.activate(&virtual_memory, |vm| {
+            vm.start_executable(bytes, argv, envp, ctx)
+        })?;
 
         // Success! Commit the new state to the thread.
 
