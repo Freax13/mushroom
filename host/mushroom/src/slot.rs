@@ -43,7 +43,7 @@ impl Slot {
         let len = u64::try_from(len)?;
         // FIXME: We should be able to pass `HUGE_PMD`, but it currently appears to be buggy.
         let restricted_fd = vm
-            .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
+            .create_guest_memfd(len, KvmGuestMemFdFlags::HUGE_PMD)
             .context("failed to create guest memfd")?;
 
         Ok(Self {

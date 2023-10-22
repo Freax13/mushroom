@@ -98,7 +98,7 @@ impl VmContext {
         // Enable CPUID
         piafb.ecx.set_bit(21, true);
 
-        let vm = kvm_handle.create_vm(true)?;
+        let vm = kvm_handle.create_snp_vm()?;
         let vm = Arc::new(vm);
 
         const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
@@ -169,6 +169,12 @@ impl VmContext {
                     first_page_type,
                     first_vmpl1_perms,
                     sev_handle,
+                )?;
+
+                vm.set_memory_attributes(
+                    gpa.start_address().as_u64(),
+                    u64::try_from(slot.shared_mapping().len().get())?,
+                    KvmMemoryAttributes::PRIVATE,
                 )?;
 
                 num_launch_pages += pages.len();
@@ -278,14 +284,11 @@ impl VmContext {
                                         self.vm.map_encrypted_memory(kvm_slot_id, &slot)?;
                                     }
 
-                                    let mut address = gpa;
-                                    let mut size = Size2MiB::SIZE;
                                     self.vm.set_memory_attributes(
-                                        &mut address,
-                                        &mut size,
+                                        gpa,
+                                        Size2MiB::SIZE,
                                         KvmMemoryAttributes::PRIVATE,
                                     )?;
-                                    ensure!(size == 0);
 
                                     entry.insert(slot);
                                 }
@@ -351,15 +354,11 @@ impl VmContext {
                                                     "only 4kib pages are supported"
                                                 );
 
-                                                let mut address =
-                                                    entry.gfn().start_address().as_u64();
-                                                let mut size = 0x1000;
                                                 self.vm.set_memory_attributes(
-                                                    &mut address,
-                                                    &mut size,
+                                                    entry.gfn().start_address().as_u64(),
+                                                    0x1000,
                                                     KvmMemoryAttributes::empty(),
                                                 )?;
-                                                ensure!(size == 0);
                                             }
                                             Ok(op) => bail!("unsupported page operation: {op:?}"),
                                             Err(op) => bail!("unknown page operation: {op:?}"),
@@ -379,11 +378,11 @@ impl VmContext {
                                 }
                                 PageOperation::PageAssignmentShared => {}
                             }
-                            let mut address = address.start_address().as_u64();
-                            let mut size = 0x1000;
-                            self.vm
-                                .set_memory_attributes(&mut address, &mut size, attributes)?;
-                            ensure!(size == 0);
+                            self.vm.set_memory_attributes(
+                                address.start_address().as_u64(),
+                                0x1000,
+                                attributes,
+                            )?;
 
                             let response =
                                 GhcbInfo::SnpPageStateChangeResponse { error_code: None };

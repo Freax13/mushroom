@@ -63,11 +63,11 @@ impl KvmHandle {
         Ok(Self { fd })
     }
 
-    pub fn create_vm(&self, protected: bool) -> Result<VmHandle> {
+    pub fn create_snp_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
         ioctl_write_int_bad!(kvm_create_vm, request_code_none!(KVMIO, 0x01));
-        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), i32::from(protected)) };
+        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), 3) };
         let raw_fd = res.context("failed to create vm")?;
         let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
@@ -564,28 +564,26 @@ impl VmHandle {
 
     pub fn set_memory_attributes(
         &self,
-        address: &mut u64,
-        size: &mut u64,
+        address: u64,
+        size: u64,
         attributes: KvmMemoryAttributes,
     ) -> Result<()> {
         debug!(?address, ?size, ?attributes, "setting memory attributes");
 
-        let mut data = KvmSetMemoryAttributes {
-            address: *address,
-            size: *size,
+        let data = KvmSetMemoryAttributes {
+            address,
+            size,
             attributes,
             flags: 0,
         };
-        ioctl_readwrite!(
+        ioctl_write_ptr!(
             kvm_set_memory_attributes,
             KVMIO,
             0xd3,
             KvmSetMemoryAttributes
         );
-        let res = unsafe { kvm_set_memory_attributes(self.fd.as_raw_fd(), &mut data) };
+        let res = unsafe { kvm_set_memory_attributes(self.fd.as_raw_fd(), &data) };
         res.context("failed to set memory attributes")?;
-        *address = data.address;
-        *size = data.size;
         Ok(())
     }
 
