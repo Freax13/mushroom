@@ -5,17 +5,20 @@ use core::{
     intrinsics::volatile_copy_nonoverlapping_memory,
     iter::Step,
     ops::Deref,
-    sync::atomic::{AtomicU16, Ordering},
 };
 
-use crate::spin::mutex::Mutex;
+use crate::spin::{lazy::Lazy, mutex::Mutex};
 use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
 use crossbeam_queue::SegQueue;
 use log::debug;
 use x86_64::{
     align_down,
-    instructions::{interrupts::without_interrupts, random::RdRand, tlb::Pcid},
+    instructions::{
+        interrupts::without_interrupts,
+        random::RdRand,
+        tlb::{Invlpgb, Pcid},
+    },
     registers::{
         control::{Cr0, Cr0Flags, Cr3},
         rflags::{self, RFlags},
@@ -102,7 +105,7 @@ impl VirtualMemoryActivator {
 
         // Switch the page tables.
         unsafe {
-            Cr3::write_pcid(virtual_memory.pml4, virtual_memory.pcid);
+            Cr3::write_pcid(virtual_memory.pml4, virtual_memory.pcid_allocation.pcid);
         }
         let mut active_virtual_memory = ActiveVirtualMemory {
             activator: self,
@@ -124,7 +127,7 @@ impl VirtualMemoryActivator {
 pub struct VirtualMemory {
     state: Mutex<VirtualMemoryState>,
     pml4: PhysFrame,
-    pcid: Pcid,
+    pcid_allocation: PcidAllocation,
 }
 
 impl VirtualMemory {
@@ -188,17 +191,14 @@ impl VirtualMemory {
 
 impl Default for VirtualMemory {
     fn default() -> Self {
-        // FIXME: Use a more robust pcid allocation algorithm.
-        static PCID_COUNTER: AtomicU16 = AtomicU16::new(1);
-        let pcid = PCID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let pcid = Pcid::new(pcid).unwrap();
+        let pcid_allocation = ALLOCATIONS.lock().allocate();
 
         let pml4 = allocate_pml4().unwrap();
 
         Self {
             state: Mutex::new(VirtualMemoryState::new()),
             pml4,
-            pcid,
+            pcid_allocation,
         }
     }
 }
@@ -1297,4 +1297,63 @@ pub enum VmSize {
 struct Brk {
     _start: VirtAddr,
     end: VirtAddr,
+}
+
+static ALLOCATIONS: Mutex<PcidAllocations> = Mutex::new(PcidAllocations::new());
+
+struct PcidAllocations {
+    last_idx: usize,
+    in_use: [bool; 4096],
+}
+
+impl PcidAllocations {
+    const fn new() -> Self {
+        Self {
+            last_idx: 0,
+            in_use: [false; 4096],
+        }
+    }
+
+    fn allocate(&mut self) -> PcidAllocation {
+        let mut counter = 0;
+
+        while self.in_use[self.last_idx] {
+            self.last_idx += 1;
+            self.last_idx %= self.in_use.len();
+            counter += 1;
+            assert!(counter < self.in_use.len());
+        }
+
+        self.in_use[self.last_idx] = true;
+        let pcid = Pcid::new(self.last_idx as u16).unwrap();
+        self.last_idx += 1;
+        self.last_idx %= self.in_use.len();
+        PcidAllocation { pcid }
+    }
+
+    unsafe fn deallocate(&mut self, pcid: Pcid) {
+        static INVLPGB: Lazy<Invlpgb> =
+            Lazy::new(|| Invlpgb::new().expect("invlpgb not supported"));
+
+        unsafe {
+            INVLPGB.build().pcid(pcid).flush();
+        }
+
+        INVLPGB.tlbsync();
+
+        self.in_use[usize::from(pcid.value())] = false;
+    }
+}
+
+pub struct PcidAllocation {
+    pcid: Pcid,
+}
+
+impl Drop for PcidAllocation {
+    fn drop(&mut self) {
+        let mut guard = ALLOCATIONS.lock();
+        unsafe {
+            guard.deallocate(self.pcid);
+        }
+    }
 }
