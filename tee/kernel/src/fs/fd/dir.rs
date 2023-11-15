@@ -144,7 +144,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.dir.stat()
     }
 
-    fn as_dir(&self) -> Result<DynINode> {
+    fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {
         Ok(self.dir.clone())
     }
 

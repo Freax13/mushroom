@@ -1357,10 +1357,11 @@ fn chdir(
 fn fchdir(
     thread: &mut ThreadGuard,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     fd: FdNum,
 ) -> SyscallResult {
     let dirfd = fdtable.get(fd)?;
-    thread.cwd = dirfd.as_dir()?;
+    thread.cwd = dirfd.as_dir(&mut ctx)?;
     Ok(0)
 }
 
@@ -1811,7 +1812,7 @@ fn openat(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(dfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     let node = if flags.contains(OpenFlags::CREAT) {
@@ -1859,7 +1860,7 @@ fn newfstatat(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(dfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     vm_activator.activate(&virtual_memory, |vm| {
@@ -1890,7 +1891,7 @@ fn unlinkat(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(dfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     if flags.contains(UnlinkOptions::REMOVEDIR) {
@@ -1951,13 +1952,13 @@ fn linkat(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(olddirfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
     let newdir = if newdirfd == FdNum::CWD {
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(newdirfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     hard_link(
@@ -1987,7 +1988,7 @@ fn symlinkat(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(newdfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     let (oldname, newname) = vm_activator.activate(&virtual_memory, |vm| {
@@ -2016,7 +2017,7 @@ fn fchmodat(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(dfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     let path = vm_activator.activate(&virtual_memory, |vm| vm.read(filename))?;
@@ -2089,14 +2090,14 @@ fn renameat2(
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(olddfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     let newd = if newdfd == FdNum::CWD {
         thread.cwd.clone()
     } else {
         let fd = fdtable.get(newdfd)?;
-        fd.as_dir()?
+        fd.as_dir(&mut ctx)?
     };
 
     let (oldname, newname) = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {

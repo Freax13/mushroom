@@ -264,7 +264,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         self.stat().mode.ty()
     }
 
-    fn as_dir(&self) -> Result<DynINode> {
+    fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
+        let _ = ctx;
         Err(Error::not_dir(()))
     }
 
