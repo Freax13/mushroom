@@ -159,7 +159,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
             }
             Whence::End => todo!(),
             Whence::Data => todo!(),
-            Whence::Hole => todo!(),
+            Whence::Hole => {
+                // We don't support holes so we always jump to the end of the file.
+                *guard = usize::try_from(self.file.stat().size)?;
+            }
         }
         Ok(*guard)
     }
