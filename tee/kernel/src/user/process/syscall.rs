@@ -1832,6 +1832,7 @@ fn openat(
                 start_dir,
                 &filename,
                 FileMode::from_bits_truncate(mode),
+                flags.contains(OpenFlags::EXCL),
                 &mut ctx,
             )?
         } else if flags.contains(OpenFlags::NOFOLLOW) {

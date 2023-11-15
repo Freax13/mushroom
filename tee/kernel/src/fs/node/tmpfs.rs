@@ -19,8 +19,8 @@ use alloc::{
 };
 
 use super::{
-    lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext,
-    FileSnapshot, INode,
+    create_file, lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode,
+    FileAccessContext, FileSnapshot, INode,
 };
 use crate::{
     error::{Error, Result},
@@ -155,6 +155,7 @@ impl Directory for TmpFsDir {
         path_segment: FileName<'static>,
         mode: FileMode,
         create_new: bool,
+        ctx: &mut FileAccessContext,
     ) -> Result<DynINode> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(path_segment);
@@ -168,10 +169,16 @@ impl Directory for TmpFsDir {
                 if create_new {
                     return Err(Error::exist(()));
                 }
-                if entry.get().ty() != FileType::File {
+                let entry = entry.get();
+                if entry.ty() == FileType::Link {
+                    let this = self.this.upgrade().unwrap();
+                    let link = entry.read_link()?;
+                    return create_file(this, &link, mode, create_new, ctx);
+                }
+                if entry.ty() != FileType::File {
                     return Err(Error::exist(()));
                 }
-                Ok(entry.get().clone())
+                Ok(entry.clone())
             }
         }
     }

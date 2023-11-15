@@ -36,8 +36,9 @@ macro_rules! dir_impls {
             file_name: FileName<'static>,
             mode: FileMode,
             create_new: bool,
+            ctx: &mut FileAccessContext,
         ) -> Result<DynINode> {
-            Directory::create_file(self, file_name, mode, create_new)
+            Directory::create_file(self, file_name, mode, create_new, ctx)
         }
 
         fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
@@ -107,6 +108,7 @@ pub trait Directory: INode {
         file_name: FileName<'static>,
         mode: FileMode,
         create_new: bool,
+        ctx: &mut FileAccessContext,
     ) -> Result<DynINode>;
     fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode>;
     fn create_link(
