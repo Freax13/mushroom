@@ -1,6 +1,6 @@
 use core::iter::from_fn;
 
-use crate::spin::mutex::Mutex;
+use crate::{spin::mutex::Mutex, user::process::syscall::args::OpenFlags};
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
 use async_trait::async_trait;
 
@@ -22,6 +22,10 @@ pub struct ReadHalf {
 
 #[async_trait]
 impl OpenFileDescription for ReadHalf {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let mut guard = self.state.buffer.lock();
 
@@ -96,6 +100,10 @@ pub struct WriteHalf {
 }
 
 impl OpenFileDescription for WriteHalf {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.state.buffer.lock();
         guard.extend(buf.iter().copied());

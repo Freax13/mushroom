@@ -89,19 +89,25 @@ pub trait Directory: INode {
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
 }
 
-pub fn open_dir(dir: Arc<dyn Directory>, _flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
     Ok(FileDescriptor::from(DirectoryFileDescription {
+        flags,
         dir,
         entries: Mutex::new(None),
     }))
 }
 
 struct DirectoryFileDescription {
+    flags: OpenFlags,
     dir: Arc<dyn Directory>,
     entries: Mutex<Option<Vec<DirEntry>>>,
 }
 
 impl OpenFileDescription for DirectoryFileDescription {
+    fn flags(&self) -> OpenFlags {
+        self.flags
+    }
+
     fn stat(&self) -> Stat {
         self.dir.stat()
     }

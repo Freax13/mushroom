@@ -6,7 +6,9 @@ use super::{Events, OpenFileDescription};
 use crate::{
     error::Result,
     fs::node::new_ino,
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
+    user::process::syscall::args::{
+        FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+    },
 };
 
 pub struct UnixSocket {
@@ -21,6 +23,10 @@ impl UnixSocket {
 
 #[async_trait]
 impl OpenFileDescription for UnixSocket {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn read(&self, _buf: &mut [u8]) -> Result<usize> {
         todo!()
     }

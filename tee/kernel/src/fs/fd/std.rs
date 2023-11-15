@@ -4,7 +4,9 @@ use super::OpenFileDescription;
 use crate::{
     error::Result,
     fs::node::new_ino,
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
+    user::process::syscall::args::{
+        FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+    },
 };
 
 pub struct Stdin {
@@ -18,6 +20,10 @@ impl Stdin {
 }
 
 impl OpenFileDescription for Stdin {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn stat(&self) -> Stat {
         Stat {
             dev: 0,
@@ -48,6 +54,10 @@ impl Stdout {
 }
 
 impl OpenFileDescription for Stdout {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
         debug!("{chunk:02x?}");
@@ -84,6 +94,10 @@ impl Stderr {
 }
 
 impl OpenFileDescription for Stderr {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
         debug!("{chunk:02x?}");

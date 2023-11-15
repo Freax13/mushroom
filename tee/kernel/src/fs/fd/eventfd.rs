@@ -9,7 +9,9 @@ use crate::{
     error::{Error, Result},
     fs::node::new_ino,
     rt::notify::Notify,
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
+    user::process::syscall::args::{
+        FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+    },
 };
 
 pub struct EventFd {
@@ -30,6 +32,10 @@ impl EventFd {
 
 #[async_trait]
 impl OpenFileDescription for EventFd {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         if buf.len() != 8 {
             return Err(Error::inval(()));

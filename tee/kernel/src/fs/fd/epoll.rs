@@ -7,7 +7,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::error::Result;
 use crate::user::process::syscall::args::{
-    EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, Stat, Timespec,
+    EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
 
 use super::{Events, FileDescriptor, OpenFileDescription};
@@ -28,6 +28,10 @@ impl Epoll {
 
 #[async_trait]
 impl OpenFileDescription for Epoll {
+    fn flags(&self) -> OpenFlags {
+        OpenFlags::empty()
+    }
+
     async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {
         let guard = self.interest_list.lock();
         let mut events = guard

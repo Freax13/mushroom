@@ -8,7 +8,7 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::{ActiveVirtualMemory, MemoryPermissions, VirtualMemory, VirtualMemoryActivator},
-        syscall::args::{EpollEvent, FdNum, FileMode, FileType, Pointer, Stat, Whence},
+        syscall::args::{EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Whence},
     },
 };
 use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
@@ -168,6 +168,8 @@ impl Clone for FileDescriptorTable {
 
 #[async_trait]
 pub trait OpenFileDescription: Send + Sync + 'static {
+    fn flags(&self) -> OpenFlags;
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::inval(()))
