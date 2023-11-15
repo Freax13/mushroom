@@ -1,6 +1,9 @@
 use core::{ffi::CStr, iter::from_fn};
 
-use crate::{fs::node::FileAccessContext, spin::lazy::Lazy};
+use crate::{
+    fs::node::{DynINode, FileAccessContext},
+    spin::lazy::Lazy,
+};
 use alloc::{borrow::ToOwned, ffi::CString, vec};
 use goblin::{
     elf::Elf,
@@ -21,7 +24,7 @@ use super::{
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, FileSnapshot, ROOT_NODE},
+        node::{lookup_and_resolve_node, FileSnapshot},
         path::Path,
     },
 };
@@ -85,10 +88,11 @@ impl ActiveVirtualMemory<'_, '_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
+        cwd: DynINode,
     ) -> Result<CpuState> {
         match &**bytes {
-            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, argv, envp, ctx),
-            [b'#', b'!', ..] => self.start_shebang(bytes, argv, envp, ctx),
+            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, argv, envp, ctx, cwd),
+            [b'#', b'!', ..] => self.start_shebang(bytes, argv, envp, ctx, cwd),
             _ => Err(Error::no_exec(())),
         }
     }
@@ -99,6 +103,7 @@ impl ActiveVirtualMemory<'_, '_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
+        cwd: DynINode,
     ) -> Result<CpuState> {
         let elf = Elf::parse(&elf_bytes).map_err(|_| Error::inval(()))?;
         let interpreter = elf.interpreter.map(ToOwned::to_owned);
@@ -117,7 +122,7 @@ impl ActiveVirtualMemory<'_, '_> {
 
         if let Some(interpreter) = interpreter {
             let path = Path::new(interpreter.into_bytes())?;
-            let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path, ctx)?;
+            let node = lookup_and_resolve_node(cwd.clone(), &path, ctx)?;
             if !node.mode().contains(FileMode::EXECUTE) {
                 return Err(Error::acces(()));
             }
@@ -209,6 +214,7 @@ impl ActiveVirtualMemory<'_, '_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
+        cwd: DynINode,
     ) -> Result<CpuState> {
         // Strip shebang.
         let bytes = bytes.strip_prefix(b"#!").ok_or_else(|| Error::inval(()))?;
@@ -242,7 +248,7 @@ impl ActiveVirtualMemory<'_, '_> {
 
         let interpreter_path = args.next().ok_or_else(|| Error::inval(()))??;
         let path = Path::new(interpreter_path.as_bytes().to_vec())?;
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), &path, ctx)?;
+        let node = lookup_and_resolve_node(cwd.clone(), &path, ctx)?;
         if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
@@ -254,7 +260,7 @@ impl ActiveVirtualMemory<'_, '_> {
         }
         new_argv.extend(argv.iter().map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(interpreter, &new_argv, envp, ctx)
+        self.start_executable(interpreter, &new_argv, envp, ctx, cwd)
     }
 }
 

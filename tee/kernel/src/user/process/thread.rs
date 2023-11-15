@@ -360,7 +360,7 @@ impl ThreadGuard<'_> {
         ctx: &mut FileAccessContext,
         vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
-        let node = lookup_and_resolve_node(ROOT_NODE.clone(), path, ctx)?;
+        let node = lookup_and_resolve_node(self.cwd.clone(), path, ctx)?;
         if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
@@ -381,7 +381,7 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let cpu_state = vm_activator.activate(&virtual_memory, |vm| {
-            vm.start_executable(bytes, argv, envp, ctx)
+            vm.start_executable(bytes, argv, envp, ctx, self.cwd.clone())
         })?;
 
         // Success! Commit the new state to the thread.
