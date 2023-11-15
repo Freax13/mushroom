@@ -906,3 +906,10 @@ unsafe impl CheckedBitPattern for UserDescFlags {
 pub struct Offset(pub i64);
 
 pub struct LongOffset(pub i64);
+
+bitflags! {
+    pub struct AtFlags {
+        const AT_SYMLINK_NOFOLLOW = 0x100;
+        const AT_EMPTY_PATH = 0x1000;
+    }
+}

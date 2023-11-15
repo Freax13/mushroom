@@ -39,11 +39,12 @@ use crate::{
 
 use self::{
     args::{
-        Advice, ArchPrctlCode, ClockId, CloneFlags, CopyFileRangeFlags, Domain, EpollCreate1Flags,
-        EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd, FdNum, FileMode,
-        FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags,
-        Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow, SocketPairType, Stat,
-        Stat64, SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
+        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
+        FdNum, FileMode, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags,
+        MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow,
+        SocketPairType, Stat, Stat64, SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions,
+        Whence,
     },
     traits::{Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -153,6 +154,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExitGroup);
     handlers.register(SysEpollWait);
     handlers.register(SysEpollCtl);
+    handlers.register(SysFchownat);
     handlers.register(SysFutimesat);
     handlers.register(SysNewfstatat);
     handlers.register(SysUnlinkat);
@@ -1868,6 +1870,18 @@ fn mkdirat(
     let mode = FileMode::from_bits_truncate(mode);
     let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 298, amd64 = 260)]
+fn fchownat(
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    user: u32,
+    group: u32,
+    flag: AtFlags,
+) -> SyscallResult {
+    // FIXME: Implement this.
     Ok(0)
 }
 
