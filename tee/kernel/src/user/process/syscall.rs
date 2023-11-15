@@ -129,6 +129,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysGetdents);
+    handlers.register(SysGetcwd);
     handlers.register(SysChdir);
     handlers.register(SysFchdir);
     handlers.register(SysMkdir);
@@ -1319,6 +1320,24 @@ fn getdents(
     })?;
     let len = u64::try_from(len)?;
     Ok(len)
+}
+
+#[syscall(i386 = 17, amd64 = 79)]
+fn getcwd(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    size: u64,
+) -> SyscallResult {
+    let cwd = thread.cwd.path(&mut ctx)?;
+    if cwd.as_bytes().len() + 1 > usize::try_from(size)? {
+        return Err(Error::range(()));
+    }
+
+    vm_activator.activate(&virtual_memory, |vm| vm.write(path, cwd))?;
+    Ok(0)
 }
 
 #[syscall(i386 = 12, amd64 = 80)]

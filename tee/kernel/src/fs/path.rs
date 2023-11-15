@@ -59,6 +59,15 @@ impl Path {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    pub fn join_segment(&mut self, name: &FileName) -> Self {
+        let mut bytes = self.bytes.to_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(&name.0);
+        Self {
+            bytes: Arc::from(bytes),
+        }
+    }
 }
 
 impl Debug for Path {

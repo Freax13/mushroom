@@ -330,6 +330,14 @@ impl ReadablePointee for Path {
     }
 }
 
+impl WritablePointee for Path {
+    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _abi: Abi) -> Result<usize> {
+        vm.write_bytes(addr, self.as_bytes())?;
+        vm.write_bytes(addr + self.as_bytes().len(), b"\0")?;
+        Ok(self.as_bytes().len() + 1)
+    }
+}
+
 impl<T> Pointee for Pointer<T> where T: ?Sized {}
 
 impl<T> AbiDependentPointee for Pointer<T>

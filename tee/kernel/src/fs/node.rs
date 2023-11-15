@@ -58,6 +58,10 @@ pub trait INode: Send + Sync + 'static {
 
     // Directory related functions.
 
+    fn path(&self, _ctx: &mut FileAccessContext) -> Result<Path> {
+        Err(Error::not_dir(()))
+    }
+
     fn parent(&self) -> Result<DynINode> {
         Err(Error::not_dir(()))
     }

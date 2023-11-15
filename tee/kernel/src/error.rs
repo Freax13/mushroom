@@ -68,6 +68,7 @@ errors! {
     Inval inval 22,
     Mfile mfile 24,
     NoTty no_tty 25,
+    Range range 34,
     NoSys no_sys 38,
     NameTooLong name_too_long 78,
     Loop r#loop 90,
