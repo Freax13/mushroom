@@ -149,6 +149,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockGettime);
     handlers.register(SysOpenat);
+    handlers.register(SysMkdirat);
     handlers.register(SysExitGroup);
     handlers.register(SysEpollWait);
     handlers.register(SysEpollCtl);
@@ -1368,16 +1369,23 @@ fn fchdir(
 #[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
     thread: &mut ThreadGuard,
-    #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] mut ctx: FileAccessContext,
     vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     pathname: Pointer<Path>,
     mode: u64,
 ) -> SyscallResult {
-    let mode = FileMode::from_bits_truncate(mode);
-    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
-    create_directory(thread.cwd.clone(), &pathname, mode, &mut ctx)?;
-    Ok(0)
+    mkdirat(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        pathname,
+        mode,
+    )
 }
 
 #[syscall(i386 = 10, amd64 = 85)]
@@ -1836,6 +1844,30 @@ fn openat(
 
     let fd = fdtable.insert(fd)?;
     Ok(fd.get() as u64)
+}
+
+#[syscall(i386 = 296, amd64 = 258)]
+fn mkdirat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    mode: u64,
+) -> SyscallResult {
+    let start_dir = if dfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let mode = FileMode::from_bits_truncate(mode);
+    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
+    create_directory(start_dir, &pathname, mode, &mut ctx)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 299, amd64 = 261)]
