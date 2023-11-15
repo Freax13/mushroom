@@ -227,7 +227,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
         let _ = offset;
         let _ = whence;
-        Err(Error::inval(()))
+        Err(Error::s_pipe(()))
     }
 
     fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
