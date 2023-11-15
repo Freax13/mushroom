@@ -2065,8 +2065,10 @@ fn fchmodat(
     #[state] mut ctx: FileAccessContext,
     dfd: FdNum,
     filename: Pointer<Path>,
-    mode: FileMode,
+    mode: u64,
 ) -> SyscallResult {
+    let mode = FileMode::from_bits_truncate(mode);
+
     let newdfd = if dfd == FdNum::CWD {
         thread.cwd.clone()
     } else {
