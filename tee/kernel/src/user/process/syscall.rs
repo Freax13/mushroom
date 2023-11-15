@@ -154,6 +154,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFutimesat);
     handlers.register(SysNewfstatat);
     handlers.register(SysUnlinkat);
+    handlers.register(SysRenameat);
     handlers.register(SysLinkat);
     handlers.register(SysSymlinkat);
     handlers.register(SysFchmodat);
@@ -1880,6 +1881,32 @@ fn unlinkat(
     }
 
     Ok(0)
+}
+
+#[syscall(i386 = 302, amd64 = 264)]
+fn renameat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    olddfd: FdNum,
+    oldname: Pointer<Path>,
+    newdfd: FdNum,
+    newname: Pointer<Path>,
+) -> SyscallResult {
+    renameat2(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        ctx,
+        olddfd,
+        oldname,
+        newdfd,
+        newname,
+        0,
+    )
 }
 
 #[syscall(i386 = 303, amd64 = 265)]
