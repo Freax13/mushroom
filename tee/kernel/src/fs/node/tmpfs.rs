@@ -8,6 +8,7 @@ use crate::{
         FileDescriptor,
     },
     spin::mutex::Mutex,
+    time::now,
     user::process::syscall::args::OpenFlags,
 };
 use alloc::{
@@ -40,10 +41,15 @@ pub struct TmpFsDir {
 struct DevTmpFsDirInternal {
     mode: FileMode,
     items: BTreeMap<FileName<'static>, DynINode>,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl TmpFsDir {
     pub fn root(mode: FileMode) -> Arc<Self> {
+        let now = now();
+
         Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
             this: this_weak.clone(),
@@ -51,11 +57,16 @@ impl TmpFsDir {
             internal: Mutex::new(DevTmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
+                atime: now,
+                mtime: now,
+                ctime: now,
             }),
         })
     }
 
     pub fn new(parent: Weak<dyn INode>, mode: FileMode) -> Arc<Self> {
+        let now = now();
+
         Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
             this: this_weak.clone(),
@@ -63,6 +74,9 @@ impl TmpFsDir {
             internal: Mutex::new(DevTmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
+                atime: now,
+                mtime: now,
+                ctime: now,
             }),
         })
     }
@@ -86,9 +100,9 @@ impl INode for TmpFsDir {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         }
     }
 
@@ -259,16 +273,24 @@ pub struct TmpFsFile {
 struct TmpFsFileInternal {
     content: Arc<Cow<'static, [u8]>>,
     mode: FileMode,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl TmpFsFile {
     pub fn new(mode: FileMode, content: &'static [u8]) -> Arc<Self> {
+        let now = now();
+
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             ino: new_ino(),
             internal: Mutex::new(TmpFsFileInternal {
                 content: Arc::new(Cow::Borrowed(content)),
                 mode,
+                atime: now,
+                mtime: now,
+                ctime: now,
             }),
         })
     }
@@ -292,9 +314,9 @@ impl INode for TmpFsFile {
             size,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         }
     }
 
