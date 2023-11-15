@@ -163,6 +163,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSymlinkat);
     handlers.register(SysFchmodat);
     handlers.register(SysFaccessat);
+    handlers.register(SysUtimensat);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
@@ -2082,6 +2083,17 @@ fn fchmodat(
 
 #[syscall(i386 = 307, amd64 = 269)]
 fn faccessat(dfd: FdNum, pathname: Pointer<Path>, mode: FileMode, flags: u64) -> SyscallResult {
+    // FIXME: implement this
+    Ok(0)
+}
+
+#[syscall(i386 = 320, amd64 = 280)]
+fn utimensat(
+    dirfd: FdNum,
+    pathname: Pointer<Path>,
+    times: Pointer<c_void>,
+    flags: i32,
+) -> SyscallResult {
     // FIXME: implement this
     Ok(0)
 }
