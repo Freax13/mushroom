@@ -26,6 +26,7 @@ pub mod dir;
 pub mod epoll;
 pub mod eventfd;
 pub mod file;
+pub mod path;
 pub mod pipe;
 mod std;
 pub mod unix_socket;

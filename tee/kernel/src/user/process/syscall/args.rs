@@ -340,6 +340,7 @@ bitflags! {
         const DIRECTORY = 1 << 16;
         const NOFOLLOW = 1 << 17;
         const SYNC = 1 << 19;
+        const PATH = 1 << 21;
     }
 }
 

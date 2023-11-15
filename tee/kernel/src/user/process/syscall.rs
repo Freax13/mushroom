@@ -15,8 +15,8 @@ use crate::{
     error::{Error, Result},
     fs::{
         fd::{
-            do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, pipe, unix_socket::UnixSocket,
-            Events, FileDescriptorTable,
+            do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
+            unix_socket::UnixSocket, Events, FileDescriptor, FileDescriptorTable,
         },
         node::{
             self, create_directory, create_file, create_link,
@@ -1815,20 +1815,25 @@ fn openat(
         fd.as_dir(&mut ctx)?
     };
 
-    let node = if flags.contains(OpenFlags::CREAT) {
-        create_file(
-            start_dir,
-            &filename,
-            FileMode::from_bits_truncate(mode),
-            &mut ctx,
-        )?
-    } else if flags.contains(OpenFlags::NOFOLLOW) {
-        lookup_node(start_dir.clone(), &filename, &mut ctx)?
+    let fd = if flags.contains(OpenFlags::PATH) {
+        let path_fd = PathFd::new(Arc::downgrade(&start_dir), filename);
+        FileDescriptor::from(path_fd)
     } else {
-        lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
+        let node = if flags.contains(OpenFlags::CREAT) {
+            create_file(
+                start_dir,
+                &filename,
+                FileMode::from_bits_truncate(mode),
+                &mut ctx,
+            )?
+        } else if flags.contains(OpenFlags::NOFOLLOW) {
+            lookup_node(start_dir.clone(), &filename, &mut ctx)?
+        } else {
+            lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
+        };
+        node.open(flags)?
     };
 
-    let fd = node.open(flags)?;
     let fd = fdtable.insert(fd)?;
     Ok(fd.get() as u64)
 }
