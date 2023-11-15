@@ -1388,7 +1388,7 @@ fn mkdir(
     )
 }
 
-#[syscall(i386 = 10, amd64 = 85)]
+#[syscall(i386 = 10, amd64 = 87)]
 fn unlink(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
@@ -1405,7 +1405,7 @@ fn unlink(
         ctx,
         FdNum::CWD,
         pathname,
-        UnlinkOptions::REMOVEDIR,
+        UnlinkOptions::empty(),
     )
 }
 
