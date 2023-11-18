@@ -26,7 +26,6 @@ use crate::{
         node::{lookup_and_resolve_node, FileSnapshot, ROOT_NODE},
         path::Path,
     },
-    per_cpu::PerCpu,
     rt::{mpmc, once::OnceCell, oneshot, spawn},
 };
 
@@ -34,7 +33,7 @@ use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
         args::{FileMode, Pointer},
-        cpu_state::{CpuState, Exit},
+        cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
 };
@@ -214,6 +213,7 @@ impl Thread {
 
                 match exit {
                     Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+                    Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                 }
             }
         };
@@ -251,16 +251,20 @@ impl Thread {
 
     fn run_userspace(&self, vm_activator: &mut VirtualMemoryActivator) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
-
-        let per_cpu = PerCpu::get();
-        per_cpu
-            .current_virtual_memory
-            .set(Some(virtual_memory.clone()));
-
         vm_activator.activate(&virtual_memory, |_| unsafe {
             let mut guard = self.cpu_state.lock();
             guard.run_user()
         })
+    }
+
+    async fn handle_page_fault(&self, page_fault: PageFaultExit) {
+        let virtual_memory = self.lock().virtual_memory().clone();
+        let handled =
+            VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |_| unsafe {
+                virtual_memory.handle_page_fault(page_fault.addr, page_fault.code)
+            })
+            .await;
+        assert!(handled);
     }
 }
 

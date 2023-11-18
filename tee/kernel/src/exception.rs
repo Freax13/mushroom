@@ -117,8 +117,40 @@ pub fn load_idt() {
     IDT.load();
 }
 
-#[no_sanitize(address)]
+#[naked]
 extern "x86-interrupt" fn page_fault_handler(
+    frame: InterruptStackFrame,
+    error_code: PageFaultErrorCode,
+) {
+    unsafe {
+        asm!(
+            // Check whether the exception happened in userspace.
+            "test word ptr [rsp+16], 3",
+            "je 66f",
+
+            // Userspace code path:
+            "swapgs",
+            // Store the error code.
+            "mov byte ptr gs:[{VECTOR_OFFSET}], 0xe",
+            "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
+            // Jump to the userspace exit point.
+            "jmp gs:[{HANDLER_OFFSET}]",
+
+            // Jump to the kernel page fault handler.
+            "66:",
+            "jmp {kernel_page_fault_handler}",
+
+            kernel_page_fault_handler = sym kernel_page_fault_handler,
+            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+            ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
+            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            options(noreturn),
+        );
+    }
+}
+
+#[no_sanitize(address)]
+extern "x86-interrupt" fn kernel_page_fault_handler(
     frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
@@ -132,20 +164,8 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
 
     trace!("page fault");
 
-    if error_code.contains(PageFaultErrorCode::USER_MODE) {
-        let per_cpu = PerCpu::get();
-        let current_virtual_memory = per_cpu.current_virtual_memory.take();
-        per_cpu
-            .current_virtual_memory
-            .set(current_virtual_memory.clone());
+    assert!(error_code.contains(PageFaultErrorCode::USER_MODE));
 
-        debug!("rip={:?}", frame.instruction_pointer);
-
-        let current_virtual_memory = current_virtual_memory.unwrap();
-        unsafe {
-            current_virtual_memory.handle_page_fault(cr2, error_code, frame.instruction_pointer);
-        }
-    } else {
         if let Ok(cr2) = VirtAddr::try_new(cr2) {
             if let Some(entry) = entry_for_page(Page::containing_address(cr2)) {
                 error!("page is mapped to {entry:?}");
@@ -163,7 +183,6 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
             "page fault {error_code:?} trying to access {cr2:#018x} at ip {:#018x}",
             frame.instruction_pointer
         );
-    }
 }
 
 #[no_sanitize(address)]
@@ -181,7 +200,9 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     unsafe {
         asm!(
             "swapgs",
+            "mov byte ptr gs:[{VECTOR_OFFSET}], 0x80",
             "jmp gs:[{HANDLER_OFFSET}]",
+            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
             options(noreturn)
         );

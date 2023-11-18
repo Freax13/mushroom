@@ -7,8 +7,8 @@ use alloc::{vec, vec::Vec};
 use bit_field::BitField;
 use x86_64::{
     instructions::tables::{lgdt, sgdt},
-    registers::xcontrol::XCr0Flags,
-    structures::DescriptorTablePointer,
+    registers::{control::Cr2, xcontrol::XCr0Flags},
+    structures::{idt::PageFaultErrorCode, DescriptorTablePointer},
     VirtAddr,
 };
 
@@ -185,7 +185,7 @@ impl CpuState {
                 // Note that `swapgs` was already executed by the exception/interrupt handler.
                 "66:",
                 // Record the exit reason.
-                "mov byte ptr gs:[{EXIT_OFFSET}], {EXIT_INT_80}",
+                "mov byte ptr gs:[{EXIT_OFFSET}], {EXIT_EXCP}",
                 // Save values from stack frame.
                 "mov gs:[{U_RAX_OFFSET}], rax",
                 "pop rax", // pop RIP
@@ -272,7 +272,7 @@ impl CpuState {
                 EXCEPTION_HANDLER_EXIT_POINT_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
                 EXIT_OFFSET = const offset_of!(PerCpu, exit),
                 EXIT_SYSCALL = const RawExit::Syscall as u8,
-                EXIT_INT_80 = const RawExit::Int80 as u8,
+                EXIT_EXCP = const RawExit::Exception as u8,
                 K_RAX_OFFSET = const kernel_reg_offset!(rax),
                 K_RBX_OFFSET = const kernel_reg_offset!(rbx),
                 K_RCX_OFFSET = const kernel_reg_offset!(rcx),
@@ -355,27 +355,39 @@ impl CpuState {
                     args: [arg0, arg1, arg2, arg3, arg4, arg5],
                 })
             }
-            RawExit::Int80 => {
-                let no = self.registers.rax as u32;
-                let arg0 = self.registers.rbx as u32;
-                let arg1 = self.registers.rcx as u32;
-                let arg2 = self.registers.rdx as u32;
-                let arg3 = self.registers.rsi as u32;
-                let arg4 = self.registers.rdi as u32;
-                let arg5 = self.registers.rbp as u32;
-                Exit::Syscall(SyscallArgs {
-                    abi: Abi::I386,
-                    no: u64::from(no),
-                    args: [
-                        u64::from(arg0),
-                        u64::from(arg1),
-                        u64::from(arg2),
-                        u64::from(arg3),
-                        u64::from(arg4),
-                        u64::from(arg5),
-                    ],
-                })
-            }
+            RawExit::Exception => match PerCpu::get().vector.get() {
+                0xe => {
+                    let code =
+                        PageFaultErrorCode::from_bits(PerCpu::get().error_code.get()).unwrap();
+                    assert!(code.contains(PageFaultErrorCode::USER_MODE));
+                    Exit::PageFault(PageFaultExit {
+                        addr: Cr2::read_raw(),
+                        code,
+                    })
+                }
+                0x80 => {
+                    let no = self.registers.rax as u32;
+                    let arg0 = self.registers.rbx as u32;
+                    let arg1 = self.registers.rcx as u32;
+                    let arg2 = self.registers.rdx as u32;
+                    let arg3 = self.registers.rsi as u32;
+                    let arg4 = self.registers.rdi as u32;
+                    let arg5 = self.registers.rbp as u32;
+                    Exit::Syscall(SyscallArgs {
+                        abi: Abi::I386,
+                        no: u64::from(no),
+                        args: [
+                            u64::from(arg0),
+                            u64::from(arg1),
+                            u64::from(arg2),
+                            u64::from(arg3),
+                            u64::from(arg4),
+                            u64::from(arg5),
+                        ],
+                    })
+                }
+                vector => unimplemented!("unknown vector: {vector:#02x?}"),
+            },
         }
     }
 
@@ -530,12 +542,18 @@ pub enum RawExit {
     /// instruction.
     Syscall = 0,
     /// The process yielded control to the kernel by issueing the `int 0x80`
-    /// instruction.
-    Int80 = 1,
+    /// instruction or triggering an exception.
+    Exception = 1,
 }
 
 pub enum Exit {
     Syscall(SyscallArgs),
+    PageFault(PageFaultExit),
+}
+
+pub struct PageFaultExit {
+    pub addr: u64,
+    pub code: PageFaultErrorCode,
 }
 
 #[derive(Clone)]

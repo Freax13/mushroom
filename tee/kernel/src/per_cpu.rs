@@ -5,7 +5,6 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use alloc::sync::Arc;
 use constants::MAX_APS_COUNT;
 use x86_64::{
     registers::segmentation::{Segment64, GS},
@@ -15,10 +14,7 @@ use x86_64::{
 
 use crate::{
     memory::pagetable::ReservedFrameStorage,
-    user::process::{
-        memory::VirtualMemory,
-        syscall::cpu_state::{KernelRegisters, RawExit, Registers},
-    },
+    user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
 };
 
 static COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -35,11 +31,12 @@ pub struct PerCpu {
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
-    pub current_virtual_memory: Cell<Option<Arc<VirtualMemory>>>,
     pub int0x80_handler: Cell<u64>,
     pub exit_with_sysret: Cell<bool>,
     pub userspace_exception_exit_point: Cell<u64>,
     pub exit: Cell<RawExit>,
+    pub vector: Cell<u8>,
+    pub error_code: Cell<u64>,
 }
 
 impl PerCpu {
@@ -53,11 +50,12 @@ impl PerCpu {
             temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
-            current_virtual_memory: Cell::new(None),
             int0x80_handler: Cell::new(0),
             exit_with_sysret: Cell::new(false),
             userspace_exception_exit_point: Cell::new(0),
             exit: Cell::new(RawExit::Syscall),
+            vector: Cell::new(0),
+            error_code: Cell::new(0),
         }
     }
 
