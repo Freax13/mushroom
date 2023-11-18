@@ -798,6 +798,10 @@ fn dup(#[state] fdtable: Arc<FileDescriptorTable>, fildes: FdNum) -> SyscallResu
 
 #[syscall(i386 = 63, amd64 = 33)]
 fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
+    if newfd.get() < 0 {
+        return Err(Error::bad_f(()));
+    }
+
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
