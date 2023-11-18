@@ -102,6 +102,28 @@ const STANDARD_FUNCTIONS: &[CpuidFunctions] = &[
         fn_0000_0001_ecx,
         fn_0000_0001_edx,
     ),
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    (
+        fn_0000_0007_eax,
+        fn_0000_0007_ebx,
+        fn_0000_0007_ecx,
+        fn_0000_0007_edx,
+    ),
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    UNIMPLEMENTED,
+    (
+        fn_0000_000d_eax,
+        fn_0000_000d_ebx,
+        fn_0000_000d_ecx,
+        fn_0000_000d_edx,
+    ),
 ];
 
 const EXTENDED_FUNCTIONS: &[CpuidFunctions] = &[
@@ -214,6 +236,38 @@ fn fn_0000_0001_edx(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
     lookup_provided_cpuid_function(eax, None, xcr0, xss)
         .unwrap()
         .edx
+}
+
+fn fn_0000_0007_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x00000000
+}
+
+fn fn_0000_0007_ebx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x219c95a9
+}
+
+fn fn_0000_0007_ecx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x0040069c
+}
+
+fn fn_0000_0007_edx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x00000000
+}
+
+fn fn_0000_000d_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x0000_0207
+}
+
+fn fn_0000_000d_ebx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x00000988
+}
+
+fn fn_0000_000d_ecx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x00000988
+}
+
+fn fn_0000_000d_edx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0x0000_0000
 }
 
 fn fn_8000_0000_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
