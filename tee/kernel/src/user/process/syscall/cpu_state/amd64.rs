@@ -9,12 +9,13 @@ use x86_64::{
 use crate::{error::Error, per_cpu::PerCpu, user::process::syscall::traits::SyscallArgs};
 use crate::{error::Result, user::process::syscall::traits::SyscallResult};
 
-use super::super::super::thread::KernelRegisters;
 use super::Abi;
+use super::{super::super::thread::KernelRegisters, XSaveArea};
 
 #[derive(Clone)]
 pub struct Amd64 {
     registers: UserspaceRegisters,
+    xsave_area: XSaveArea,
 }
 
 impl Amd64 {
@@ -25,6 +26,7 @@ impl Amd64 {
                 rsp,
                 ..UserspaceRegisters::DEFAULT
             },
+            xsave_area: XSaveArea::new(),
         }
     }
 
@@ -46,6 +48,8 @@ impl Amd64 {
         unsafe {
             FS::write_base(VirtAddr::new(self.registers.fs_base));
         }
+
+        self.xsave_area.load();
 
         unsafe {
             asm!(
@@ -93,23 +97,6 @@ impl Amd64 {
                 "mov r15, gs:[{U_R15_OFFSET}]",
                 "mov rcx, gs:[{U_RIP_OFFSET}]",
                 "mov r11, gs:[{U_RFLAGS_OFFSET}]",
-                "vmovdqa ymm0, gs:[{U_YMM_OFFSET}+32*0]",
-                "vmovdqa ymm1, gs:[{U_YMM_OFFSET}+32*1]",
-                "vmovdqa ymm2, gs:[{U_YMM_OFFSET}+32*2]",
-                "vmovdqa ymm3, gs:[{U_YMM_OFFSET}+32*3]",
-                "vmovdqa ymm4, gs:[{U_YMM_OFFSET}+32*4]",
-                "vmovdqa ymm5, gs:[{U_YMM_OFFSET}+32*5]",
-                "vmovdqa ymm6, gs:[{U_YMM_OFFSET}+32*6]",
-                "vmovdqa ymm7, gs:[{U_YMM_OFFSET}+32*7]",
-                "vmovdqa ymm8, gs:[{U_YMM_OFFSET}+32*8]",
-                "vmovdqa ymm9, gs:[{U_YMM_OFFSET}+32*9]",
-                "vmovdqa ymm10, gs:[{U_YMM_OFFSET}+32*10]",
-                "vmovdqa ymm11, gs:[{U_YMM_OFFSET}+32*11]",
-                "vmovdqa ymm12, gs:[{U_YMM_OFFSET}+32*12]",
-                "vmovdqa ymm13, gs:[{U_YMM_OFFSET}+32*13]",
-                "vmovdqa ymm14, gs:[{U_YMM_OFFSET}+32*14]",
-                "vmovdqa ymm15, gs:[{U_YMM_OFFSET}+32*15]",
-                "ldmxcsr gs:[{U_MXCSR_OFFSET}]",
                 // Swap in userspace GS.
                 "swapgs",
                 // Enter usermode
@@ -134,23 +121,6 @@ impl Amd64 {
                 "mov gs:[{U_R15_OFFSET}], r15",
                 "mov gs:[{U_RIP_OFFSET}], rcx",
                 "mov gs:[{U_RFLAGS_OFFSET}], r11",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*0], ymm0",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*1], ymm1",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*2], ymm2",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*3], ymm3",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*4], ymm4",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*5], ymm5",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*6], ymm6",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*7], ymm7",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*8], ymm8",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*9], ymm9",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*10], ymm10",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*11], ymm11",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*12], ymm12",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*13], ymm13",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*14], ymm14",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*15], ymm15",
-                "stmxcsr gs:[{U_MXCSR_OFFSET}]",
                 // Restore the kernel registers.
                 "mov rax, gs:[{K_RAX_OFFSET}]",
                 "mov rbx, gs:[{K_RBX_OFFSET}]",
@@ -205,14 +175,14 @@ impl Amd64 {
                 U_R15_OFFSET = const userspace_reg_offset!(r15),
                 U_RIP_OFFSET = const userspace_reg_offset!(rip),
                 U_RFLAGS_OFFSET = const userspace_reg_offset!(rflags),
-                U_YMM_OFFSET = const userspace_reg_offset!(ymm),
-                U_MXCSR_OFFSET = const userspace_reg_offset!(mxcsr),
                 out("rax") _,
                 out("rdx") _,
                 out("rcx") _,
                 options(preserves_flags)
             );
         }
+
+        self.xsave_area.save();
 
         self.registers = per_cpu.userspace64_registers.get();
 
@@ -282,8 +252,6 @@ pub struct UserspaceRegisters {
     rip: u64,
     rflags: u64,
     fs_base: u64,
-    ymm: [Ymm; 16],
-    mxcsr: u64,
 }
 
 impl UserspaceRegisters {
@@ -305,8 +273,6 @@ impl UserspaceRegisters {
         rip: 0,
         rflags: 0,
         fs_base: 0,
-        ymm: [Ymm::ZERO; 16],
-        mxcsr: 0,
     };
 
     const DEFAULT: Self = Self {
@@ -327,15 +293,5 @@ impl UserspaceRegisters {
         rip: 0,
         rflags: 0,
         fs_base: 0,
-        ymm: [Ymm::ZERO; 16],
-        mxcsr: 0x1f80,
     };
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C, align(32))]
-struct Ymm([u8; 32]);
-
-impl Ymm {
-    pub const ZERO: Self = Self([0; 32]);
 }

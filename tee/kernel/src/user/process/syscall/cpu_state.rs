@@ -1,4 +1,13 @@
-use crate::error::{Error, Result};
+use core::arch::{asm, x86_64::__cpuid_count};
+
+use alloc::{vec, vec::Vec};
+use bit_field::BitField;
+use x86_64::registers::xcontrol::XCr0Flags;
+
+use crate::{
+    error::{Error, Result},
+    spin::lazy::Lazy,
+};
 
 use super::traits::{SyscallArgs, SyscallResult};
 
@@ -70,4 +79,57 @@ impl CpuState {
 pub enum Abi {
     I386,
     Amd64,
+}
+
+#[derive(Clone)]
+struct XSaveArea {
+    data: Vec<u8>,
+}
+
+impl XSaveArea {
+    pub fn new() -> Self {
+        static SIZE: Lazy<usize> = Lazy::new(|| {
+            let res = unsafe { __cpuid_count(0xd, 0x0) };
+            res.ecx as usize
+        });
+
+        let mut data = vec![0; *SIZE];
+        data[0..2].copy_from_slice(&0x37fu16.to_ne_bytes()); // FCW
+        data[5] = 0xff; // FTW
+        data[24..28].copy_from_slice(&0x1f80u32.to_ne_bytes()); // MXCSR
+
+        Self { data }
+    }
+
+    fn save(&mut self) {
+        let flags = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
+        let bits = flags.bits();
+        let lower = bits.get_bits(..32);
+        let upper = bits.get_bits(32..);
+
+        unsafe {
+            asm!(
+                "xsave64 [{xsave_area}]",
+                xsave_area = in(reg) self.data.as_mut_ptr(),
+                in("rax") lower,
+                in("rdx") upper,
+            );
+        }
+    }
+
+    fn load(&self) {
+        let flags = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
+        let bits = flags.bits();
+        let lower = bits.get_bits(..32);
+        let upper = bits.get_bits(32..);
+
+        unsafe {
+            asm!(
+                "xrstor64 [{xsave_area}]",
+                xsave_area = in(reg) self.data.as_ptr(),
+                in("rax") lower,
+                in("rdx") upper,
+            );
+        }
+    }
 }

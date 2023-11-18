@@ -10,7 +10,11 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::{error::Error, per_cpu::PerCpu, user::process::syscall::traits::SyscallArgs};
+use crate::{
+    error::Error,
+    per_cpu::PerCpu,
+    user::process::syscall::{cpu_state::XSaveArea, traits::SyscallArgs},
+};
 use crate::{error::Result, user::process::syscall::traits::SyscallResult};
 
 use super::super::super::thread::KernelRegisters;
@@ -20,6 +24,7 @@ use super::Abi;
 pub struct I386 {
     registers: UserspaceRegisters,
     gdt: Vec<u64>,
+    xsave_area: XSaveArea,
 }
 
 impl I386 {
@@ -35,6 +40,7 @@ impl I386 {
                 ..UserspaceRegisters::DEFAULT
             },
             gdt,
+            xsave_area: XSaveArea::new(),
         }
     }
 
@@ -68,6 +74,8 @@ impl I386 {
         unsafe {
             lgdt(&pointer);
         }
+
+        self.xsave_area.load();
 
         unsafe {
             asm!(
@@ -132,15 +140,6 @@ impl I386 {
                 "mov esi, gs:[{U_ESI_OFFSET}]",
                 "mov edi, gs:[{U_EDI_OFFSET}]",
                 "mov ebp, gs:[{U_EBP_OFFSET}]",
-                "vmovdqa ymm0, gs:[{U_YMM_OFFSET}+32*0]",
-                "vmovdqa ymm1, gs:[{U_YMM_OFFSET}+32*1]",
-                "vmovdqa ymm2, gs:[{U_YMM_OFFSET}+32*2]",
-                "vmovdqa ymm3, gs:[{U_YMM_OFFSET}+32*3]",
-                "vmovdqa ymm4, gs:[{U_YMM_OFFSET}+32*4]",
-                "vmovdqa ymm5, gs:[{U_YMM_OFFSET}+32*5]",
-                "vmovdqa ymm6, gs:[{U_YMM_OFFSET}+32*6]",
-                "vmovdqa ymm7, gs:[{U_YMM_OFFSET}+32*7]",
-                "ldmxcsr gs:[{U_MXCSR_OFFSET}]",
                 // Swap in userspace GS.
                 "swapgs",
                 // Enter usermode
@@ -174,15 +173,6 @@ impl I386 {
                 "mov gs:[{U_ESP_OFFSET}], eax",
                 "pop rax", // pop SS
                 "mov gs:[{U_SS_OFFSET}], ax",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*0], ymm0",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*1], ymm1",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*2], ymm2",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*3], ymm3",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*4], ymm4",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*5], ymm5",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*6], ymm6",
-                "vmovdqa gs:[{U_YMM_OFFSET}+32*7], ymm7",
-                "stmxcsr gs:[{U_MXCSR_OFFSET}]",
                 // Restore the kernel registers.
                 "mov rax, gs:[{K_RAX_OFFSET}]",
                 "mov rbx, gs:[{K_RBX_OFFSET}]",
@@ -238,14 +228,14 @@ impl I386 {
                 U_FS_OFFSET = const userspace_reg_offset!(fs),
                 U_GS_OFFSET = const userspace_reg_offset!(gs),
                 U_SS_OFFSET = const userspace_reg_offset!(ss),
-                U_YMM_OFFSET = const userspace_reg_offset!(ymm),
-                U_MXCSR_OFFSET = const userspace_reg_offset!(mxcsr),
                 out("rax") _,
                 out("rdx") _,
                 out("rcx") _,
                 options(preserves_flags)
             );
         }
+
+        self.xsave_area.save();
 
         // Restore the old GDT.
         unsafe {
@@ -329,8 +319,6 @@ pub struct UserspaceRegisters {
     eip: u32,
     eflags: u32,
     fs_base: u64,
-    ymm: [Ymm; 8],
-    mxcsr: u64,
     cs: u16,
     ds: u16,
     es: u16,
@@ -352,8 +340,6 @@ impl UserspaceRegisters {
         eip: 0,
         eflags: 0,
         fs_base: 0,
-        ymm: [Ymm::ZERO; 8],
-        mxcsr: 0,
         cs: 0,
         ds: 0,
         es: 0,
@@ -363,7 +349,6 @@ impl UserspaceRegisters {
     };
 
     const DEFAULT: Self = Self {
-        mxcsr: 0x1f80,
         cs: 0x1b,
         ds: 0x23,
         es: 0x23,
@@ -372,12 +357,4 @@ impl UserspaceRegisters {
         ss: 0x23,
         ..Self::ZERO
     };
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C, align(32))]
-struct Ymm([u8; 32]);
-
-impl Ymm {
-    pub const ZERO: Self = Self([0; 32]);
 }
