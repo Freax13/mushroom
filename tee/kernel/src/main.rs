@@ -38,7 +38,6 @@
 extern crate alloc;
 
 use exception::switch_stack;
-use serial_log::SerialLogger;
 use supervisor::launch_next_ap;
 
 use crate::{per_cpu::PerCpu, user::process::memory::VirtualMemoryActivator};
@@ -47,6 +46,7 @@ mod error;
 mod exception;
 mod fs;
 mod host;
+mod logging;
 mod memory;
 mod panic;
 mod per_cpu;
@@ -64,7 +64,7 @@ mod user;
 /// This function must only be called once.
 unsafe fn main() -> ! {
     if cfg!(not(feature = "harden")) {
-        let _ = log::set_logger(&SerialLogger);
+        let _ = log::set_logger(&logging::FastLogger);
         log::set_max_level(log::LevelFilter::Trace);
     }
 

@@ -9,7 +9,7 @@ use log::{debug, info, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
     vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
-    VmplPermissions,
+    Uninteresting, VmplPermissions,
 };
 use x86_64::{
     instructions::hlt,
@@ -187,8 +187,13 @@ fn handle_ioio_prot(
             assert!(!guest_exit_info1.get_bit(2)); // We don't support string based access.
             assert!(!guest_exit_info1.get_bit(0)); // We only support writes.
 
-            let char = char::try_from(rax as u32).unwrap_or('?');
-            log_buffer.write(char);
+            let Uninteresting(xmm) = vmsa.fpreg_xmm(tweak_bitmap);
+
+            let bytes = xmm.get(..rax as usize).unwrap();
+            let str = core::str::from_utf8(bytes).unwrap();
+            for c in str.chars() {
+                log_buffer.write(c);
+            }
         }
         KICK_AP_PORT => {
             let apic_id = u8::try_from(rax).unwrap();

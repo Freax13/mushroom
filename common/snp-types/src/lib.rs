@@ -46,7 +46,7 @@ impl<const SIZE: usize, const MBZ: bool> fmt::Debug for Reserved<SIZE, MBZ> {
 /// values is not of interest.
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(transparent)]
-pub struct Uninteresting<T>(T);
+pub struct Uninteresting<T>(pub T);
 
 impl<T> Uninteresting<T> {
     pub const fn new(value: T) -> Self {

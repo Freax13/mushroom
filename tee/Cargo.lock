@@ -147,7 +147,7 @@ dependencies = [
 name = "constants"
 version = "0.1.0"
 dependencies = [
- "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
+ "x86_64",
 ]
 
 [[package]]
@@ -419,8 +419,7 @@ dependencies = [
  "goblin",
  "kernel-macros",
  "log",
- "serial-log",
- "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
+ "x86_64",
 ]
 
 [[package]]
@@ -592,15 +591,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bebd363326d05ec3e2f532ab7660680f3b02130d780c299bca73469d521bc0ed"
 
 [[package]]
-name = "serial-log"
-version = "0.1.0"
-dependencies = [
- "constants",
- "log",
- "x86_64 0.14.10 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "sha2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -619,7 +609,7 @@ dependencies = [
  "bitflags",
  "bytemuck",
  "paste",
- "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
+ "x86_64",
 ]
 
 [[package]]
@@ -662,7 +652,7 @@ dependencies = [
  "sha2",
  "snp-types",
  "volatile 0.5.1",
- "x86_64 0.14.10 (git+https://github.com/rust-osdev/x86_64?rev=bae6119533f19cd5c3557d5a302524f1d72456c5)",
+ "x86_64",
 ]
 
 [[package]]
@@ -803,18 +793,6 @@ name = "windows_x86_64_msvc"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
-
-[[package]]
-name = "x86_64"
-version = "0.14.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "100555a863c0092238c2e0e814c1096c1e5cf066a309c696a87e907b5f8c5d69"
-dependencies = [
- "bit_field",
- "bitflags",
- "rustversion",
- "volatile 0.4.6",
-]
 
 [[package]]
 name = "x86_64"
