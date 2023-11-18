@@ -16,10 +16,7 @@ use x86_64::{instructions::random::RdRand, VirtAddr};
 
 use super::{
     memory::{ActiveVirtualMemory, MemoryPermissions, VmSize},
-    syscall::{
-        args::FileMode,
-        cpu_state::{amd64::Amd64, i386::I386, CpuState},
-    },
+    syscall::{args::FileMode, cpu_state::CpuState},
 };
 use crate::{
     error::{Error, Result},
@@ -198,13 +195,11 @@ impl ActiveVirtualMemory<'_, '_> {
         write(write_bytes(&random_bytes())?.as_u64());
         write(0); // AT_NULL
 
-        let cpu_state = match vm_size {
-            VmSize::ThirtyTwo => CpuState::I386(I386::new(
-                entrypoint.try_into().unwrap(),
-                stack.as_u64().try_into().unwrap(),
-            )),
-            VmSize::FourtySeven => CpuState::Amd64(Amd64::new(entrypoint, stack.as_u64())),
+        let cs = match vm_size {
+            VmSize::ThirtyTwo => 0x1b,
+            VmSize::FourtySeven => 0x2b,
         };
+        let cpu_state = CpuState::new(cs, entrypoint, stack.as_u64());
         Ok(cpu_state)
     }
 

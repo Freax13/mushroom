@@ -22,7 +22,7 @@ use crate::{
     },
     user::process::{
         memory::{ActiveVirtualMemory, VirtualMemoryActivator},
-        syscall::cpu_state::Abi,
+        syscall::traits::Abi,
         thread::{Sigaction, Sigset, Stack, StackFlags, ThreadGuard},
     },
 };

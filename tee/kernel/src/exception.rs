@@ -182,7 +182,7 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
         asm!(
             "swapgs",
             "jmp gs:[{HANDLER_OFFSET}]",
-            HANDLER_OFFSET = const offset_of!(PerCpu, int0x80_handler),
+            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
             options(noreturn)
         );
     }

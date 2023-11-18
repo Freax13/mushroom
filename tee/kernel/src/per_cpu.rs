@@ -17,8 +17,7 @@ use crate::{
     memory::pagetable::ReservedFrameStorage,
     user::process::{
         memory::VirtualMemory,
-        syscall::cpu_state::{amd64, i386},
-        thread::KernelRegisters,
+        syscall::cpu_state::{KernelRegisters, RawExit, Registers},
     },
 };
 
@@ -31,14 +30,16 @@ pub struct PerCpu {
     this: *mut PerCpu,
     pub idx: usize,
     pub kernel_registers: Cell<KernelRegisters>,
-    pub userspace32_registers: Cell<i386::UserspaceRegisters>,
-    pub userspace64_registers: Cell<amd64::UserspaceRegisters>,
+    pub new_userspace_registers: Cell<Registers>,
     pub reserved_frame_storage: RefCell<ReservedFrameStorage>,
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
     pub current_virtual_memory: Cell<Option<Arc<VirtualMemory>>>,
     pub int0x80_handler: Cell<u64>,
+    pub exit_with_sysret: Cell<bool>,
+    pub userspace_exception_exit_point: Cell<u64>,
+    pub exit: Cell<RawExit>,
 }
 
 impl PerCpu {
@@ -47,14 +48,16 @@ impl PerCpu {
             this: null_mut(),
             idx: 0,
             kernel_registers: Cell::new(KernelRegisters::ZERO),
-            userspace32_registers: Cell::new(i386::UserspaceRegisters::ZERO),
-            userspace64_registers: Cell::new(amd64::UserspaceRegisters::ZERO),
+            new_userspace_registers: Cell::new(Registers::ZERO),
             reserved_frame_storage: RefCell::new(ReservedFrameStorage::new()),
             temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
             current_virtual_memory: Cell::new(None),
             int0x80_handler: Cell::new(0),
+            exit_with_sysret: Cell::new(false),
+            userspace_exception_exit_point: Cell::new(0),
+            exit: Cell::new(RawExit::Syscall),
         }
     }
 

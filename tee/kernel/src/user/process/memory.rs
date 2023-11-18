@@ -49,7 +49,7 @@ use super::syscall::{
         pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
         Pointer, ProtFlags,
     },
-    cpu_state::Abi,
+    traits::Abi,
 };
 
 type DynVirtualMemoryOp = Box<dyn FnOnce(&mut VirtualMemoryActivator) + Send>;

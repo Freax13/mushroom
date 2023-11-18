@@ -30,10 +30,7 @@ use crate::{
     time,
     user::process::{
         memory::MemoryPermissions,
-        syscall::{
-            args::{LongOffset, UserDesc, UserDescFlags},
-            cpu_state::Abi,
-        },
+        syscall::args::{LongOffset, UserDesc, UserDescFlags},
     },
 };
 
@@ -46,7 +43,7 @@ use self::{
         SocketPairType, Stat, Stat64, SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions,
         Whence,
     },
-    traits::{Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
+    traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
 
 use super::{
@@ -57,15 +54,11 @@ use super::{
 
 pub mod args;
 pub mod cpu_state;
-mod traits;
+pub mod traits;
 
 impl Thread {
     /// Returns true if the thread should continue to run.
-    pub async fn execute_syscall(self: Arc<Self>) {
-        let guard = self.cpu_state.lock();
-        let args = guard.syscall_args().unwrap();
-        drop(guard);
-
+    pub async fn execute_syscall(self: Arc<Self>, args: SyscallArgs) {
         let result = SYSCALL_HANDLERS.execute(self.clone(), args).await;
 
         let mut guard = self.cpu_state.lock();

@@ -20,7 +20,7 @@ use crate::{
 
 use self::pointee::{Pointee, PrimitivePointee, Timespec32};
 
-use super::cpu_state::Abi;
+use super::traits::Abi;
 
 pub mod pointee;
 

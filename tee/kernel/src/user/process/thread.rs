@@ -34,7 +34,7 @@ use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
         args::{FileMode, Pointer},
-        cpu_state::CpuState,
+        cpu_state::{CpuState, Exit},
     },
     Process,
 };
@@ -181,7 +181,7 @@ impl Thread {
             Arc::new(FileDescriptorTable::with_standard_io()),
             ROOT_NODE.clone(),
             None,
-            CpuState::None,
+            CpuState::new(0, 0, 0),
             FileMode::empty(),
         )
     }
@@ -207,12 +207,14 @@ impl Thread {
         let run_future = async {
             loop {
                 let clone = self.clone();
-                VirtualMemoryActivator::r#do(move |vm_activator| {
-                    clone.run_userspace(vm_activator).unwrap();
+                let exit = VirtualMemoryActivator::r#do(move |vm_activator| {
+                    clone.run_userspace(vm_activator).unwrap()
                 })
                 .await;
 
-                self.clone().execute_syscall().await;
+                match exit {
+                    Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+                }
             }
         };
 
@@ -247,7 +249,7 @@ impl Thread {
         let _ = self.dead_children.sender().send((tid, status));
     }
 
-    fn run_userspace(&self, vm_activator: &mut VirtualMemoryActivator) -> Result<()> {
+    fn run_userspace(&self, vm_activator: &mut VirtualMemoryActivator) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
 
         let per_cpu = PerCpu::get();
@@ -257,7 +259,7 @@ impl Thread {
 
         vm_activator.activate(&virtual_memory, |_| unsafe {
             let mut guard = self.cpu_state.lock();
-            guard.run_userspace()
+            guard.run_user()
         })
     }
 }
@@ -410,49 +412,6 @@ impl DerefMut for ThreadGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }
-}
-
-#[derive(Clone, Copy)]
-pub struct KernelRegisters {
-    pub rax: u64,
-    pub rbx: u64,
-    pub rcx: u64,
-    pub rdx: u64,
-    pub rsi: u64,
-    pub rdi: u64,
-    pub rsp: u64,
-    pub rbp: u64,
-    pub r8: u64,
-    pub r9: u64,
-    pub r10: u64,
-    pub r11: u64,
-    pub r12: u64,
-    pub r13: u64,
-    pub r14: u64,
-    pub r15: u64,
-    pub rflags: u64,
-}
-
-impl KernelRegisters {
-    pub const ZERO: Self = Self {
-        rax: 0,
-        rbx: 0,
-        rcx: 0,
-        rdx: 0,
-        rsi: 0,
-        rdi: 0,
-        rsp: 0,
-        rbp: 0,
-        r8: 0,
-        r9: 0,
-        r10: 0,
-        r11: 0,
-        r12: 0,
-        r13: 0,
-        r14: 0,
-        r15: 0,
-        rflags: 0,
-    };
 }
 
 #[derive(Debug, Clone, Copy)]

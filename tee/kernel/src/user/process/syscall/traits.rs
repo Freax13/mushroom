@@ -17,13 +17,20 @@ use crate::{
     },
 };
 
-use super::{args::SyscallArg, cpu_state::Abi};
+use super::args::SyscallArg;
 
 #[derive(Clone, Copy)]
 pub struct SyscallArgs {
     pub abi: Abi,
     pub no: u64,
     pub args: [u64; 6],
+}
+
+/// The ABI used during a syscall.
+#[derive(Debug, Clone, Copy)]
+pub enum Abi {
+    I386,
+    Amd64,
 }
 
 pub type SyscallResult = Result<u64>;
