@@ -17,17 +17,25 @@ use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
 pub struct Slot {
     gpa: PhysFrame,
     shared_mapping: AnonymousPrivateMapping,
-    restricted_fd: OwnedFd,
+    restricted_fd: Option<OwnedFd>,
 }
 
 impl Slot {
-    pub fn for_launch_update(vm: &VmHandle, gpa: PhysFrame, pages: &[Page]) -> Result<Self> {
+    pub fn for_launch_update(
+        vm: &VmHandle,
+        gpa: PhysFrame,
+        pages: &[Page],
+        private: bool,
+    ) -> Result<Self> {
         let shared_mapping = AnonymousPrivateMapping::for_private_mapping(pages)?;
 
         let len = u64::try_from(pages.len() * 0x1000)?;
-        let restricted_fd = vm
-            .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
-            .context("failed to create guest memfd")?;
+        let restricted_fd = private
+            .then(|| {
+                vm.create_guest_memfd(len, KvmGuestMemFdFlags::empty())
+                    .context("failed to create guest memfd")
+            })
+            .transpose()?;
 
         Ok(Self {
             gpa,
@@ -36,15 +44,17 @@ impl Slot {
         })
     }
 
-    pub fn new(vm: &VmHandle, gpa: PhysFrame) -> Result<Self> {
+    pub fn new(vm: &VmHandle, gpa: PhysFrame, private: bool) -> Result<Self> {
         let len = 512 * 0x1000;
         let shared_mapping = AnonymousPrivateMapping::new(len)?;
 
         let len = u64::try_from(len)?;
-        // FIXME: We should be able to pass `HUGE_PMD`, but it currently appears to be buggy.
-        let restricted_fd = vm
-            .create_guest_memfd(len, KvmGuestMemFdFlags::HUGE_PMD)
-            .context("failed to create guest memfd")?;
+        let restricted_fd = private
+            .then(|| {
+                vm.create_guest_memfd(len, KvmGuestMemFdFlags::HUGE_PMD)
+                    .context("failed to create guest memfd")
+            })
+            .transpose()?;
 
         Ok(Self {
             gpa,
@@ -61,8 +71,8 @@ impl Slot {
         &self.shared_mapping
     }
 
-    pub fn restricted_fd(&self) -> BorrowedFd {
-        self.restricted_fd.as_fd()
+    pub fn restricted_fd(&self) -> Option<BorrowedFd> {
+        self.restricted_fd.as_ref().map(OwnedFd::as_fd)
     }
 
     pub fn read<T>(&self, gpa: PhysAddr) -> Result<T>
@@ -149,6 +159,9 @@ impl AnonymousPrivateMapping {
         self.len
     }
 }
+
+unsafe impl Send for AnonymousPrivateMapping {}
+unsafe impl Sync for AnonymousPrivateMapping {}
 
 impl Drop for AnonymousPrivateMapping {
     fn drop(&mut self) {

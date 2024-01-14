@@ -29,7 +29,7 @@ impl Configuration {
         policy: GuestPolicy,
     ) -> Self {
         let commands =
-            generate_base_load_commands(supervisor, kernel, init, load_kasan_shadow_mappings);
+            generate_base_load_commands(Some(supervisor), kernel, init, load_kasan_shadow_mappings);
 
         let mut launch_digest = [0; 48];
 

@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
 use snp_types::guest_policy::GuestPolicy;
+use tracing::warn;
 use vcek_kds::{Product, Vcek};
 
 #[tokio::main]
@@ -38,8 +39,13 @@ enum MushroomSubcommand {
 #[derive(Args)]
 struct ConfigArgs {
     /// Path to the supervisor.
-    #[arg(long, value_name = "PATH", env = "SUPERVISOR")]
-    supervisor: PathBuf,
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "SUPERVISOR",
+        required_unless_present = "insecure"
+    )]
+    supervisor: Option<PathBuf>,
     /// Path to the kernel.
     #[arg(long, value_name = "PATH", env = "KERNEL")]
     kernel: PathBuf,
@@ -62,8 +68,8 @@ struct IoArgs {
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
     /// Path to store the attestation report.
-    #[arg(long, value_name = "PATH")]
-    attestation_report: PathBuf,
+    #[arg(long, value_name = "PATH", required_unless_present = "insecure")]
+    attestation_report: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -104,27 +110,42 @@ struct RunCommand {
     config: ConfigArgs,
     #[command(flatten)]
     io: IoArgs,
+    /// Whether the run the workload in a non-SNP VM.
+    #[arg(long)]
+    insecure: bool,
 }
 
 fn run(run: RunCommand) -> Result<()> {
-    let supervisor =
-        std::fs::read(run.config.supervisor).context("failed to read supervisor file")?;
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
 
-    let result = mushroom::main(
-        &supervisor,
-        &kernel,
-        &init,
-        run.config.kasan,
-        &input,
-        run.config.policy.policy(),
-    )?;
+    let result = if !run.insecure {
+        let supervisor_path = run.config.supervisor.context("missing supervisor path")?;
+        let supervisor =
+            std::fs::read(supervisor_path).context("failed to read supervisor file")?;
+
+        mushroom::main(
+            &supervisor,
+            &kernel,
+            &init,
+            run.config.kasan,
+            &input,
+            run.config.policy.policy(),
+        )?
+    } else {
+        if run.io.attestation_report.is_some() {
+            warn!("No attestation report will be produced in insecure mode.");
+        }
+        mushroom::insecure::main(&kernel, &init, run.config.kasan, &input)?
+    };
 
     std::fs::write(run.io.output, result.output).context("failed to write output")?;
-    std::fs::write(run.io.attestation_report, result.attestation_report)
-        .context("failed to write attestation report")?;
+    if let Some((path, attestation_report)) =
+        run.io.attestation_report.zip(result.attestation_report)
+    {
+        std::fs::write(path, attestation_report).context("failed to write attestation report")?;
+    }
 
     Ok(())
 }
@@ -141,14 +162,18 @@ struct VerifyCommand {
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
-    let supervisor =
-        std::fs::read(run.config.supervisor).context("failed to read supervisor file")?;
+    let supervisor = std::fs::read(run.config.supervisor.context("missing supervisor path")?)
+        .context("failed to read supervisor file")?;
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
     let output = std::fs::read(run.io.output).context("failed to read output file")?;
-    let attestation_report =
-        std::fs::read(run.io.attestation_report).context("failed to read attestation report")?;
+    let attestation_report = std::fs::read(
+        run.io
+            .attestation_report
+            .context("missing attestion report path")?,
+    )
+    .context("failed to read attestation report")?;
 
     let input_hash = InputHash::new(&input);
     let output_hash = OutputHash::new(&output);

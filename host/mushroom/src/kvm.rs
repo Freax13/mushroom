@@ -3,7 +3,7 @@
 use std::{
     array::from_fn,
     fs::OpenOptions,
-    mem::size_of,
+    mem::{size_of, size_of_val},
     num::{NonZeroU8, NonZeroUsize},
     os::{
         fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
@@ -61,6 +61,17 @@ impl KvmHandle {
         );
 
         Ok(Self { fd })
+    }
+
+    pub fn create_vm(&self) -> Result<VmHandle> {
+        debug!("creating vm");
+
+        ioctl_write_int_bad!(kvm_create_vm, request_code_none!(KVMIO, 0x01));
+        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), 0) };
+        let raw_fd = res.context("failed to create vm")?;
+        let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+
+        Ok(VmHandle { fd })
     }
 
     pub fn create_snp_vm(&self) -> Result<VmHandle> {
@@ -135,25 +146,21 @@ impl VmHandle {
         Ok(())
     }
 
-    pub fn set_user_memory_region(
+    pub unsafe fn set_user_memory_region(
         &self,
         slot: u16,
         guest_phys_addr: u64,
-        pages: Box<[Page]>,
-    ) -> Result<VolatilePtr<[Page]>> {
-        // FIXME: Is returning a racy volatile pointer bad? No one knows!
-
+        memory_size: u64,
+        userspace_addr: u64,
+    ) -> Result<()> {
         debug!("mapping memory");
-
-        let pages = Box::leak(pages);
-        let pages = unsafe { VolatilePtr::new(NonNull::from(pages)) };
 
         let region = KvmUserspaceMemoryRegion {
             slot: u32::from(slot),
             flags: KvmUserspaceMemoryRegionFlags::empty(),
             guest_phys_addr,
-            memory_size: u64::try_from(pages.len() * 0x1000).unwrap(),
-            userspace_addr: pages.as_raw_ptr().as_ptr() as *mut Page as u64,
+            memory_size,
+            userspace_addr,
         };
 
         ioctl_write_ptr!(
@@ -164,7 +171,7 @@ impl VmHandle {
         );
         let res = unsafe { kvm_set_user_memory_region(self.fd.as_raw_fd(), &region) };
         res.context("failed to map memory")?;
-        Ok(pages)
+        Ok(())
     }
 
     pub unsafe fn map_private_memory(
@@ -176,6 +183,10 @@ impl VmHandle {
         restricted_fd: Option<BorrowedFd>,
         restricted_offset: u64,
     ) -> Result<()> {
+        if restricted_fd.is_none() {
+            return self.set_user_memory_region(slot, guest_phys_addr, memory_size, userspace_addr);
+        }
+
         debug!("mapping private memory");
 
         let region = KvmUserspaceMemoryRegion2 {
@@ -216,33 +227,8 @@ impl VmHandle {
                 slot.gpa().start_address().as_u64(),
                 u64::try_from(shared_mapping.len().get())?,
                 u64::try_from(shared_mapping.as_ptr().as_ptr() as usize)?,
-                Some(restricted_fd),
+                restricted_fd,
                 0,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    pub unsafe fn map_encrypted_memory_evil(
-        &self,
-        id: u16,
-        slot: &Slot,
-        offset: u64,
-    ) -> Result<()> {
-        debug!(id, guest_phys_addr = %format_args!("{:x?}", slot.gpa()), "mapping private memory");
-
-        let shared_mapping = slot.shared_mapping();
-        let restricted_fd = slot.restricted_fd();
-
-        unsafe {
-            self.map_private_memory(
-                id,
-                slot.gpa().start_address().as_u64(),
-                u64::try_from(shared_mapping.len().get())?,
-                u64::try_from(shared_mapping.as_ptr().as_ptr() as usize)?,
-                Some(restricted_fd),
-                offset,
             )?;
         }
 
@@ -720,6 +706,26 @@ impl VcpuHandle {
         Ok(())
     }
 
+    pub fn set_xcr(&self, xcr: u32, value: u64) -> Result<()> {
+        let mut kvm_xcrs = KvmXcrs::zeroed();
+        kvm_xcrs.nr_xcrs = 1;
+        kvm_xcrs.xcrs[0].xcr = xcr;
+        kvm_xcrs.xcrs[0].value = value;
+
+        ioctl_write_ptr!(kvm_set_xcrs, KVMIO, 0xa7, KvmXcrs);
+        let res = unsafe { kvm_set_xcrs(self.fd.as_raw_fd(), &kvm_xcrs) };
+        res.context("failed to set xcr registers")?;
+        Ok(())
+    }
+
+    pub fn get_fpu(&self) -> Result<KvmFpu> {
+        let mut kvm_fpu = KvmFpu::zeroed();
+        ioctl_read!(kvm_get_fpu, KVMIO, 0x8c, KvmFpu);
+        let res = unsafe { kvm_get_fpu(self.fd.as_raw_fd(), &mut kvm_fpu) };
+        res.context("failed to get fpu state")?;
+        Ok(kvm_fpu)
+    }
+
     pub fn get_debug_regs(&self) -> Result<KvmDebugRegs> {
         let mut regs = KvmDebugRegs {
             db: [0; 4],
@@ -997,13 +1003,13 @@ impl KvmSegment {
     pub const CODE64: Self = Self {
         base: 0,
         limit: 0xffff_ffff,
-        selector: 0,
-        ty: 10,
+        selector: 0x10,
+        ty: 0xb,
         present: 1,
         dpl: 0,
-        db: 1,
-        s: 0,
-        l: 0,
+        db: 0,
+        s: 1,
+        l: 1,
         g: 0,
         avl: 0,
         unusable: 0,
@@ -1012,14 +1018,14 @@ impl KvmSegment {
     pub const DATA64: Self = Self {
         base: 0,
         limit: 0xffff_ffff,
-        selector: 0,
-        ty: 3,
+        selector: 0x10,
+        ty: 0x3,
         present: 1,
         dpl: 0,
         db: 1,
-        s: 0,
+        s: 1,
         l: 0,
-        g: 0,
+        g: 1,
         avl: 0,
         unusable: 0,
         _padding: 0,
@@ -1138,7 +1144,10 @@ impl KvmRun {
             24 => KvmExit::SystemEvent(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitSystemEvent>()],
             )),
-            30 => KvmExit::Msr(pod_read_unaligned(
+            29 => KvmExit::RdMsr(pod_read_unaligned(
+                &self.exit_data[..size_of::<KvmExitMsr>()],
+            )),
+            30 => KvmExit::WrMsr(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitMsr>()],
             )),
             38 => KvmExit::MemoryFault(pod_read_unaligned(
@@ -1154,9 +1163,13 @@ impl KvmRun {
 
     pub fn set_exit(&mut self, exit: KvmExit) {
         match exit {
+            KvmExit::RdMsr(msr) => {
+                self.exit_reason = 29;
+                self.exit_data[..size_of_val(&msr)].copy_from_slice(bytes_of(&msr));
+            }
             KvmExit::Vmgexit(vmgexit) => {
                 self.exit_reason = 50;
-                self.exit_data[..size_of::<KvmExitVmgexit>()].copy_from_slice(bytes_of(&vmgexit));
+                self.exit_data[..size_of_val(&vmgexit)].copy_from_slice(bytes_of(&vmgexit));
             }
             _ => unimplemented!(),
         }
@@ -1261,7 +1274,8 @@ pub enum KvmExit {
     Interrupted,
     Internal(KvmExitInternalError),
     SystemEvent(KvmExitSystemEvent),
-    Msr(KvmExitMsr),
+    RdMsr(KvmExitMsr),
+    WrMsr(KvmExitMsr),
     MemoryFault(KvmExitMemoryFault),
     Vmgexit(KvmExitVmgexit),
     ReflectVc,
@@ -1731,6 +1745,41 @@ pub enum KvmMpState {
     Load = 8,
     ApResetHold = 9,
     Suspended = 10,
+}
+
+const KVM_MAX_XCRS: usize = 16;
+
+#[derive(Zeroable)]
+#[repr(C)]
+struct KvmXcr {
+    xcr: u32,
+    reserved: u32,
+    value: u64,
+}
+
+#[derive(Zeroable)]
+#[repr(C)]
+struct KvmXcrs {
+    nr_xcrs: u32,
+    flags: u32,
+    xcrs: [KvmXcr; KVM_MAX_XCRS],
+    padding: [u64; 16],
+}
+
+#[derive(Clone, Copy, Zeroable)]
+#[repr(C)]
+pub struct KvmFpu {
+    pub fpr: [[u8; 8]; 16],
+    pub fcw: u16,
+    pub fsw: u16,
+    pub ftwx: u8, /* in fxsave format */
+    pub pad1: u8,
+    pub last_opcode: u16,
+    pub last_ip: u64,
+    pub last_dp: u64,
+    pub xmm: [[u8; 16]; 16],
+    pub mxcsr: u32,
+    pad2: u32,
 }
 
 #[cfg(test)]

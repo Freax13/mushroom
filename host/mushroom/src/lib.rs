@@ -43,6 +43,7 @@ use crate::{
     slot::Slot,
 };
 
+pub mod insecure;
 mod kvm;
 mod slot;
 
@@ -111,7 +112,7 @@ impl VmContext {
         vm.sev_snp_launch_start(policy, sev_handle)?;
 
         let (load_commands, host_data) = loader::generate_load_commands(
-            supervisor,
+            Some(supervisor),
             kernel,
             init,
             load_kasan_shadow_mappings,
@@ -152,7 +153,7 @@ impl VmContext {
                 });
             }
 
-            let slot = Slot::for_launch_update(&vm, gpa, &pages)
+            let slot = Slot::for_launch_update(&vm, gpa, &pages, true)
                 .context("failed to create slot for launch update")?;
 
             unsafe {
@@ -277,7 +278,7 @@ impl VmContext {
                                     let gpa = DYNAMIC.start() + u64::from(slot_id) * Size2MiB::SIZE;
                                     let gfn =
                                         PhysFrame::from_start_address(PhysAddr::new(gpa)).unwrap();
-                                    let slot = Slot::new(&self.vm, gfn)
+                                    let slot = Slot::new(&self.vm, gfn, true)
                                         .context("failed to create dynamic slot")?;
 
                                     unsafe {
@@ -397,7 +398,7 @@ impl VmContext {
                         _ => bail!("unsupported msr protocol value: {info:?}"),
                     }
                 }
-                KvmExit::Msr(msr) => match msr.index {
+                KvmExit::WrMsr(msr) => match msr.index {
                     UPDATE_OUTPUT_MSR => {
                         let gfn =
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
@@ -422,7 +423,7 @@ impl VmContext {
                         let attestation_report = attestation_report[..len].to_vec();
                         return Ok(MushroomResult {
                             output,
-                            attestation_report,
+                            attestation_report: Some(attestation_report),
                         });
                     }
                     index => unimplemented!("unsupported MSR: {index:#08x}"),
@@ -507,5 +508,5 @@ where
 
 pub struct MushroomResult {
     pub output: Vec<u8>,
-    pub attestation_report: Vec<u8>,
+    pub attestation_report: Option<Vec<u8>>,
 }
