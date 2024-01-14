@@ -27,4 +27,4 @@ tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 vcek-kds = { workspace = true }
 volatile = { version = "0.5.1", features = ["unstable"] }
-x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "bae6119533f19cd5c3557d5a302524f1d72456c5" }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "1ba2dec28b0380f4b25cfaa3b62c8400d89ac82c" }

@@ -11,7 +11,6 @@ use crate::{
 use core::{
     arch::{asm, global_asm},
     fmt,
-    iter::Step,
     marker::{PhantomData, PhantomPinned},
     num::NonZeroU64,
     ops::{Deref, Index, Range},
@@ -23,15 +22,14 @@ use bit_field::BitField;
 use bitflags::bitflags;
 use log::trace;
 use x86_64::{
-    instructions::tlb::Invlpgb,
-    registers::control::Cr3,
+    registers::control::{Cr3, Cr4, Cr4Flags},
     structures::paging::{
         FrameAllocator, FrameDeallocator, Page, PageTableIndex, PhysFrame, Size4KiB,
     },
     PhysAddr, VirtAddr,
 };
 
-use super::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame};
+use super::{frame::FRAME_ALLOCATOR, invlpgb::INVLPGB, temporary::copy_into_frame};
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(510);
 
@@ -84,10 +82,7 @@ pub unsafe fn map_page(
     entry: PresentPageTableEntry,
     allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
 ) -> Result<()> {
-    trace!(
-        "mapping page {page:?}->{entry:?} pml4={:?}",
-        Cr3::read_pcid().0
-    );
+    trace!("mapping page {page:?}->{entry:?} pml4={:?}", Cr3::read().0);
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
@@ -293,14 +288,13 @@ fn freeze_userspace<R>(f: impl FnOnce() -> R) -> R {
 }
 
 fn flush_current_pcid() {
-    static INVLPGB: Lazy<Invlpgb> = Lazy::new(|| Invlpgb::new().expect("invlpgb not supported"));
-
-    let (_, pcid) = Cr3::read_pcid();
-    unsafe {
-        INVLPGB.build().pcid(pcid).flush();
+    let cr4 = Cr4::read();
+    if cr4.contains(Cr4Flags::PCID) {
+        let (_, pcid) = Cr3::read_pcid();
+        INVLPGB.flush_pcid(pcid);
+    } else {
+        INVLPGB.flush_all();
     }
-
-    INVLPGB.tlbsync();
 }
 
 struct Level4;
@@ -729,21 +723,7 @@ where
 
 impl<L> ActivePageTableEntry<L> {
     fn flush(&self, global: bool) {
-        static INVLPGB: Lazy<Invlpgb> =
-            Lazy::new(|| Invlpgb::new().expect("invlpgb not supported"));
-
-        let flush = INVLPGB.build();
-        let page = self.page();
-        let next_page = Step::forward(page, 1);
-        let flush = flush.pages(Page::range(page, next_page));
-        let flush = if global {
-            flush.include_global()
-        } else {
-            flush
-        };
-        flush.flush();
-
-        INVLPGB.tlbsync();
+        INVLPGB.flush_page(self.page(), global);
     }
 
     pub fn page(&self) -> Page<Size4KiB> {

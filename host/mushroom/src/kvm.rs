@@ -113,6 +113,35 @@ impl KvmHandle {
 
         Ok(Box::from(buffer.entries[..buffer.nent as usize].to_vec()))
     }
+
+    pub fn get_supported_hv_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
+        const MAX_ENTRIES: usize = 256;
+        let mut buffer = KvmCpuid2::<MAX_ENTRIES> {
+            nent: MAX_ENTRIES as u32,
+            _padding: 0,
+            entries: [KvmCpuidEntry2 {
+                function: 0,
+                index: 0,
+                flags: 0,
+                eax: 0,
+                ebx: 0,
+                ecx: 0,
+                edx: 0,
+                padding: [0; 3],
+            }; MAX_ENTRIES],
+        };
+
+        ioctl_readwrite!(kvm_get_supported_cpuid, KVMIO, 0xc1, KvmCpuid2<0>);
+        let res = unsafe {
+            kvm_get_supported_cpuid(
+                self.fd.as_raw_fd(),
+                &mut buffer as *mut KvmCpuid2<MAX_ENTRIES> as *mut KvmCpuid2<0>,
+            )
+        };
+        res.context("failed to query supported hv cpuid features")?;
+
+        Ok(Box::from(buffer.entries[..buffer.nent as usize].to_vec()))
+    }
 }
 
 pub struct VmHandle {

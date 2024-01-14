@@ -13,4 +13,4 @@ itertools = { version = "0.10.5", default-features = false }
 snp-types = { workspace = true }
 thiserror = { version = "1.0.37" }
 raw-cpuid = "10.6.0"
-x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "bae6119533f19cd5c3557d5a302524f1d72456c5" }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "1ba2dec28b0380f4b25cfaa3b62c8400d89ac82c" }

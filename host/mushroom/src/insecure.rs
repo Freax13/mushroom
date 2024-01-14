@@ -52,6 +52,18 @@ pub fn main(
     // Enable CPUID
     piafb.ecx.set_bit(21, true);
 
+    let mut cpuid_entries = Vec::from(cpuid_entries);
+    for entry in kvm_handle.get_supported_hv_cpuid()?.iter().copied() {
+        if let Some(e) = cpuid_entries
+            .iter_mut()
+            .find(|e| e.function == entry.function && e.index == entry.index)
+        {
+            *e = entry;
+        } else {
+            cpuid_entries.push(entry);
+        }
+    }
+
     let vm = kvm_handle.create_vm()?;
     let vm = Arc::new(vm);
 

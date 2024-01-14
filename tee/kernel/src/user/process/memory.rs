@@ -1,26 +1,18 @@
 use core::{
-    arch::asm,
-    borrow::Borrow,
-    cmp,
-    intrinsics::volatile_copy_nonoverlapping_memory,
-    iter::Step,
+    arch::asm, borrow::Borrow, cmp, intrinsics::volatile_copy_nonoverlapping_memory, iter::Step,
     ops::Deref,
 };
 
-use crate::spin::{lazy::Lazy, mutex::Mutex};
+use crate::{memory::invlpgb::INVLPGB, spin::mutex::Mutex};
 use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
 use crossbeam_queue::SegQueue;
 use log::debug;
 use x86_64::{
     align_down,
-    instructions::{
-        interrupts::without_interrupts,
-        random::RdRand,
-        tlb::{Invlpgb, Pcid},
-    },
+    instructions::{interrupts::without_interrupts, random::RdRand, tlb::Pcid},
     registers::{
-        control::{Cr0, Cr0Flags, Cr3},
+        control::{Cr0, Cr0Flags, Cr3, Cr3Flags, Cr4, Cr4Flags},
         rflags::{self, RFlags},
     },
     structures::{
@@ -101,12 +93,19 @@ impl VirtualMemoryActivator {
         F: for<'r> FnOnce(&'r mut ActiveVirtualMemory<'a, 'b>) -> R,
     {
         // Save the current page tables.
-        let (prev_pml4, prev_pcid) = Cr3::read_pcid();
+        let (prev_pml4, bits) = Cr3::read_raw();
 
         // Switch the page tables.
-        unsafe {
-            Cr3::write_pcid(virtual_memory.pml4, virtual_memory.pcid_allocation.pcid);
+        if let Some(pcid_allocation) = virtual_memory.pcid_allocation.as_ref() {
+            unsafe {
+                Cr3::write_pcid(virtual_memory.pml4, pcid_allocation.pcid);
+            }
+        } else {
+            unsafe {
+                Cr3::write(virtual_memory.pml4, Cr3Flags::empty());
+            }
         }
+
         let mut active_virtual_memory = ActiveVirtualMemory {
             activator: self,
             virtual_memory,
@@ -117,7 +116,7 @@ impl VirtualMemoryActivator {
 
         // Restore the page tables.
         unsafe {
-            Cr3::write_pcid(prev_pml4, prev_pcid);
+            Cr3::write_raw(prev_pml4, bits);
         }
 
         res
@@ -127,7 +126,8 @@ impl VirtualMemoryActivator {
 pub struct VirtualMemory {
     state: Mutex<VirtualMemoryState>,
     pml4: PhysFrame,
-    pcid_allocation: PcidAllocation,
+    /// None if PCID is not supported.
+    pcid_allocation: Option<PcidAllocation>,
 }
 
 impl VirtualMemory {
@@ -188,7 +188,10 @@ impl VirtualMemory {
 
 impl Default for VirtualMemory {
     fn default() -> Self {
-        let pcid_allocation = ALLOCATIONS.lock().allocate();
+        let cr4 = &Cr4::read();
+        let pcid_allocation = cr4
+            .contains(Cr4Flags::PCID)
+            .then(|| ALLOCATIONS.lock().allocate());
 
         let pml4 = allocate_pml4().unwrap();
 
@@ -1329,14 +1332,7 @@ impl PcidAllocations {
     }
 
     unsafe fn deallocate(&mut self, pcid: Pcid) {
-        static INVLPGB: Lazy<Invlpgb> =
-            Lazy::new(|| Invlpgb::new().expect("invlpgb not supported"));
-
-        unsafe {
-            INVLPGB.build().pcid(pcid).flush();
-        }
-
-        INVLPGB.tlbsync();
+        INVLPGB.flush_pcid(pcid);
 
         self.in_use[usize::from(pcid.value())] = false;
     }
