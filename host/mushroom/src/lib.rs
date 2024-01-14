@@ -103,7 +103,11 @@ impl VmContext {
         let vm = Arc::new(vm);
 
         const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
-        vm.enable_capability(KvmCap::X86_USER_SPACE_MSR, KVM_MSR_EXIT_REASON_UNKNOWN)?;
+        const KVM_MSR_EXIT_REASON_FILTER: u64 = 2;
+        vm.enable_capability(
+            KvmCap::X86_USER_SPACE_MSR,
+            KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
+        )?;
 
         vm.create_irqchip()?;
 
