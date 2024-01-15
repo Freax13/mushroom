@@ -122,6 +122,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
+    handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
     handlers.register(SysChdir);
@@ -1299,6 +1300,13 @@ fn fcntl64(
             Ok(0)
         }
     }
+}
+
+#[syscall(i386 = 93, amd64 = 77)]
+fn ftruncate(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, length: u64) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    fd.truncate(length)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 141, amd64 = 78)]

@@ -431,9 +431,24 @@ impl File for TmpFsFile {
         Ok(len)
     }
 
-    fn truncate(&self) -> Result<()> {
+    fn truncate(&self, len: u64) -> Result<()> {
+        let len = usize::try_from(len)?;
+
         let mut guard = self.internal.lock();
-        guard.content = Arc::new(Cow::Borrowed(&[]));
+        if guard.content.len() != len {
+            if len == 0 {
+                guard.content = Arc::new(Cow::Borrowed(&[]));
+            } else if let Some(content) = Arc::get_mut(&mut guard.content) {
+                content.to_mut().resize(len, 0);
+            } else {
+                let mut content = Vec::with_capacity(len);
+                let copy_len = cmp::min(len, guard.content.len());
+                content.extend(&guard.content[..copy_len]);
+                content.resize(len, 0);
+                guard.content = Arc::new(Cow::Owned(content));
+            }
+        }
+
         Ok(())
     }
 }

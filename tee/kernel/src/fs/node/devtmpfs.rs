@@ -144,7 +144,7 @@ impl File for NullFile {
         Ok(len)
     }
 
-    fn truncate(&self) -> Result<()> {
+    fn truncate(&self, _len: u64) -> Result<()> {
         Ok(())
     }
 }
@@ -264,9 +264,9 @@ impl File for OutputFile {
         Ok(buf.len())
     }
 
-    fn truncate(&self) -> Result<()> {
+    fn truncate(&self, len: u64) -> Result<()> {
         let guard = self.internal.lock();
-        if guard.offset != 0 {
+        if guard.offset != usize::try_from(len)? {
             return Err(Error::io(()));
         }
         Ok(())
@@ -368,7 +368,7 @@ impl File for RandomFile {
         Ok(len)
     }
 
-    fn truncate(&self) -> Result<()> {
+    fn truncate(&self, _len: u64) -> Result<()> {
         Ok(())
     }
 }

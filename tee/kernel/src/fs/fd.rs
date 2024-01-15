@@ -242,6 +242,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Err(Error::inval(()))
     }
 
+    fn truncate(&self, length: u64) -> Result<()> {
+        let _ = length;
+        Err(Error::inval(()))
+    }
+
     fn close(&self) -> Result<()> {
         Ok(())
     }
