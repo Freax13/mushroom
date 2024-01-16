@@ -206,23 +206,23 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
 
     assert!(error_code.contains(PageFaultErrorCode::USER_MODE));
 
-        if let Ok(cr2) = VirtAddr::try_new(cr2) {
-            if let Some(entry) = entry_for_page(Page::containing_address(cr2)) {
-                error!("page is mapped to {entry:?}");
-            } else {
-                error!("page is not mapped");
-            }
+    if let Ok(cr2) = VirtAddr::try_new(cr2) {
+        if let Some(entry) = entry_for_page(Page::containing_address(cr2)) {
+            error!("page is mapped to {entry:?}");
         } else {
-            error!("cr2 is not a canonical address");
+            error!("page is not mapped");
         }
+    } else {
+        error!("cr2 is not a canonical address");
+    }
 
-        #[cfg(sanitize = "address")]
-        crate::sanitize::page_fault_handler(&frame);
+    #[cfg(sanitize = "address")]
+    crate::sanitize::page_fault_handler(&frame);
 
-        panic!(
-            "page fault {error_code:?} trying to access {cr2:#018x} at ip {:#018x}",
-            frame.instruction_pointer
-        );
+    panic!(
+        "page fault {error_code:?} trying to access {cr2:#018x} at ip {:#018x}",
+        frame.instruction_pointer
+    );
 }
 
 #[no_sanitize(address)]
