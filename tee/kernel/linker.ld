@@ -32,6 +32,9 @@ SECTIONS {
         *(.rodata .rodata.*)
         *(.eh_frame .eh_frame.*)
         *(.eh_frame_hdr .eh_frame_hdr.*)
+        __recoverable_start = .;
+        *(.recoverable .recoverable.*)
+        __recoverable_end = .;
     } :rodata
 
     .data (0xffff800002000000) :

@@ -136,9 +136,49 @@ extern "x86-interrupt" fn page_fault_handler(
             // Jump to the userspace exit point.
             "jmp gs:[{HANDLER_OFFSET}]",
 
-            // Jump to the kernel page fault handler.
+            // Kernel code path:
             "66:",
+            // Check if we can recover from the exception.
+            "push rax",
+            "push rbx",
+            "push rcx",
+            // Loop setup
+            "mov rbx, [rsp+8+24]",
+            "lea rax, [rip+__recoverable_start]",
+            "lea rcx, [rip+__recoverable_end]",
+            "sub rcx, rax",
+            "shr rcx, 4",
+            "test rcx, rcx",
+            "je 68f",
+
+            // Loop body.
+            "67:",
+            "cmp [rax], rbx",
+            "je 69f",
+            "add rax, 16",
+            "loop 67b",
+
+            // We couldn't recover from the exception.
+            "68:",
+            "pop rcx",
+            "pop rbx",
+            "pop rax",
+
+            // Jump to the kernel page fault handler.
             "jmp {kernel_page_fault_handler}",
+
+            // Recover from the exception.
+            "69:",
+            "mov rax, [rax+8]",
+            "mov [rsp+8+24], rax",
+
+            "pop rcx",
+            "pop rbx",
+            "pop rax",
+
+            "mov rdx, 1",
+            "add rsp, 8",
+            "iretq",
 
             kernel_page_fault_handler = sym kernel_page_fault_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),

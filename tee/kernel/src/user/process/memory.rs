@@ -5,6 +5,7 @@ use core::{
 
 use crate::{memory::invlpgb::INVLPGB, spin::mutex::Mutex};
 use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
+use bit_field::BitField;
 use bitflags::bitflags;
 use crossbeam_queue::SegQueue;
 use log::debug;
@@ -222,6 +223,10 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
             return Ok(());
         }
 
+        if try_read_user_fast(addr, bytes).is_ok() {
+            return Ok(());
+        }
+
         let state = self.state.lock();
         let state = state.initialized();
 
@@ -307,6 +312,10 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
     pub fn write_bytes(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
         if bytes.is_empty() {
+            return Ok(());
+        }
+
+        if try_write_user_fast(bytes, addr).is_ok() {
             return Ok(());
         }
 
@@ -1349,4 +1358,115 @@ impl Drop for PcidAllocation {
             guard.deallocate(self.pcid);
         }
     }
+}
+
+/// Try to copy memory from `src` into `dest`.
+///
+/// This function is not unsafe. If the read fails for some reason `Err(())` is
+/// returned.
+#[inline(always)]
+fn try_read_fast(src: VirtAddr, dest: &mut [u8]) -> Result<(), ()> {
+    if dest.is_empty() {
+        return Ok(());
+    }
+
+    let failed: u64;
+    unsafe {
+        asm!(
+            "66:",
+            "rep movsb",
+            "67:",
+            ".pushsection .recoverable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            inout("rsi") src.as_u64() => _,
+            inout("rdi") dest.as_mut_ptr() => _,
+            inout("rcx") dest.len() => _,
+            inout("rdx") 0u64 => failed,
+        );
+    }
+
+    // assert_eq!(failed, 0);
+
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Try to copy user memory from `src` into `dest`.
+///
+/// This function is not unsafe. If the read fails for some reason `Err(())` is
+/// returned. If `src` isn't user memory `Err(())` is returned.
+#[inline(always)]
+fn try_read_user_fast(src: VirtAddr, dest: &mut [u8]) -> Result<(), ()> {
+    if dest.is_empty() {
+        return Ok(());
+    }
+
+    // Make sure that even the end is still in the lower half.
+    let end_inclusive = Step::forward_checked(src, dest.len() - 1).ok_or(())?;
+    if end_inclusive.as_u64().get_bit(63) {
+        return Err(());
+    }
+
+    without_smap(|| try_read_fast(src, dest))
+}
+
+/// Try to copy memory from `src` into `dest`.
+///
+/// If the write fails for some reason `Err(())` is returned.
+///
+/// # Safety
+///
+/// The caller has to ensure writing to `dest` doesn't invalidate any of Rust's
+/// rules.
+#[inline(always)]
+unsafe fn try_write_fast(src: &[u8], dest: VirtAddr) -> Result<(), ()> {
+    if src.is_empty() {
+        return Ok(());
+    }
+
+    let failed: u64;
+    unsafe {
+        asm!(
+            "66:",
+            "rep movsb",
+            "67:",
+            ".pushsection .recoverable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            inout("rsi") src.as_ptr() => _,
+            inout("rdi") dest.as_u64() => _,
+            inout("rcx") src.len() => _,
+            inout("rdx") 0u64 => failed,
+        );
+    }
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Try to copy memory from `src` into `dest`.
+///
+/// If the write fails for some reason `Err(())` is returned. If `src` isn't
+/// user memory `Err(())` is returned.
+#[inline(always)]
+fn try_write_user_fast(src: &[u8], dest: VirtAddr) -> Result<(), ()> {
+    if src.is_empty() {
+        return Ok(());
+    }
+
+    // Make sure that even the end is still in the lower half.
+    let end_inclusive = Step::forward_checked(dest, src.len() - 1).ok_or(())?;
+    if end_inclusive.as_u64().get_bit(63) {
+        return Err(());
+    }
+
+    without_smap(|| unsafe { try_write_fast(src, dest) })
 }
