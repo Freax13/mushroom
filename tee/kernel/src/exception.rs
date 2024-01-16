@@ -193,11 +193,11 @@ extern "x86-interrupt" fn page_fault_handler(
 extern "x86-interrupt" fn kernel_page_fault_handler(
     frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
-) {
+) -> ! {
     page_fault_handler_impl(frame, error_code);
 }
 
-fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
+fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErrorCode) -> ! {
     let _guard = SwapGsGuard::new(&frame);
 
     let cr2 = Cr2::read_raw();
