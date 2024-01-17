@@ -333,9 +333,33 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         Ok(len)
     }
 
+    fn read_to_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.read_to_user(*guard, vm, pointer, len)?;
+        *guard += len;
+        Ok(len)
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.cursor_idx.lock();
         let len = self.file.write(*guard, buf)?;
+        *guard += len;
+        Ok(len)
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.cursor_idx.lock();
+        let len = self.file.write_from_user(*guard, vm, pointer, len)?;
         *guard += len;
         Ok(len)
     }
