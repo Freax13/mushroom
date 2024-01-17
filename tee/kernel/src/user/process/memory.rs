@@ -3,7 +3,10 @@ use core::{
     ops::Deref,
 };
 
-use crate::{memory::invlpgb::INVLPGB, spin::mutex::Mutex};
+use crate::{
+    memory::invlpgb::INVLPGB,
+    spin::{lazy::Lazy, mutex::Mutex},
+};
 use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -1138,17 +1141,17 @@ impl Mapping {
                     }
                 }
                 Backing::Zero | Backing::Stack => {
-                    // FIXME: We could map a specific zero frame.
-                    let frame = (&FRAME_ALLOCATOR).allocate_frame().unwrap();
-                    unsafe {
-                        // SAFETY: We just allocated the frame, so we can do whatever.
-                        zero_frame(frame)?;
-                    }
+                    static ZERO_FRAME: Lazy<PhysFrame> = Lazy::new(|| {
+                        let frame = (&FRAME_ALLOCATOR).allocate_frame().unwrap();
+                        unsafe {
+                            // SAFETY: We just allocated the frame, so we can do whatever.
+                            zero_frame(frame).unwrap();
+                        }
+                        frame
+                    });
 
-                    let mut flags = PageTableFlags::USER;
-                    if self.permissions.contains(MemoryPermissions::WRITE) {
-                        flags |= PageTableFlags::WRITABLE;
-                    }
+                    let frame = *ZERO_FRAME;
+                    let mut flags = PageTableFlags::USER | PageTableFlags::COW;
                     if self.permissions.contains(MemoryPermissions::EXECUTE) {
                         flags |= PageTableFlags::EXECUTABLE;
                     }
