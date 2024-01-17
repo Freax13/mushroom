@@ -9,7 +9,9 @@
 pml4:
 .fill 256, 8, 0
 .quad pdp_256 + PTE_PRESENT + PTE_WRITABLE
-.fill 95, 8, 0
+.quad pdp_257 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
+.quad pdp_258 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
+.fill 93, 8, 0
 .quad pdp_352 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
 .fill 157, 8, 0
 .quad pml4 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE
@@ -84,6 +86,22 @@ pd_352_0:
 .quad 0x18000600000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # tdata
 .quad 0x18000800000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE # stack
 .fill 507, 8, 0
+
+# Dynamic physical memory mapping
+.align 4096
+pdp_257:
+.set i, 0
+.rept 512
+.quad 0x20000000000 + i * 0x40000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
+.set i, i + 1
+.endr
+
+.align 4096
+pdp_258:
+.rept 512
+.quad 0x20000000000 + i * 0x40000000 + PTE_PRESENT + PTE_WRITABLE + PTE_NO_EXECUTE + PTE_HUGE
+.set i, i + 1
+.endr
 
 .section .stack, "aw"
 stack:

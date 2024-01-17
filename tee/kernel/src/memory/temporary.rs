@@ -1,7 +1,10 @@
-use core::cell::{RefCell, RefMut};
+use core::{
+    arch::asm,
+    cell::{RefCell, RefMut},
+};
 
 use crate::spin::{lazy::Lazy, mutex::Mutex};
-use constants::virtual_address::TEMPORARY;
+use constants::{physical_address::DYNAMIC, virtual_address::TEMPORARY};
 use x86_64::structures::paging::{page::PageRangeInclusive, Page, PhysFrame, Size4KiB};
 
 use crate::{
@@ -15,17 +18,57 @@ use crate::{
 
 use super::pagetable::{unmap_page, PageTableFlags};
 
+/// We have a physical mapping of `DYNAMIC` at `0xffff_8080_0000_0000`. Using
+/// this mapping is a lot faster than creating and destroying a temporary
+/// mapping.
+#[inline(always)]
+fn get_fast_mapping(frame: PhysFrame) -> Option<*mut [u8; 4096]> {
+    DYNAMIC.contains(frame.start_address().as_u64()).then(|| {
+        (frame.start_address().as_u64() - DYNAMIC.start() + 0xffff_8080_0000_0000) as *mut _
+    })
+}
+
 /// Fill a frame with zeros.
 ///
 /// # Safety
 ///
 /// Writing to the frame must be safe.
+#[inline(always)]
 pub unsafe fn zero_frame(frame: PhysFrame) -> Result<()> {
+    if let Some(dst) = get_fast_mapping(frame) {
+        unsafe { zero_frame_direct(dst) };
+        Ok(())
+    } else {
+        unsafe { zero_frame_slow(frame) }
+    }
+}
+
+#[inline(never)]
+#[cold]
+unsafe fn zero_frame_slow(frame: PhysFrame) -> Result<()> {
     let mut mapping = TemporaryMapping::new(frame)?;
     unsafe {
-        core::intrinsics::volatile_set_memory(mapping.as_mut_ptr(), 0, 1);
+        zero_frame_direct(mapping.as_mut_ptr());
     }
     Ok(())
+}
+
+#[inline(always)]
+unsafe fn zero_frame_direct(dst: *mut [u8; 4096]) {
+    unsafe {
+        asm! {
+            "vpxor ymm0, ymm0, ymm0",
+            "66:",
+            "vmovntdq [{dst}], ymm0",
+            "vmovntdq [{dst}+32], ymm0",
+            "add {dst}, 64",
+            "loop 66b",
+            "sfence",
+            dst = inout(reg) dst => _,
+            inout("ecx") 4096 / 64 => _,
+            options(nostack),
+        }
+    }
 }
 
 /// Copy bytes into a frame.
@@ -33,12 +76,61 @@ pub unsafe fn zero_frame(frame: PhysFrame) -> Result<()> {
 /// # Safety
 ///
 /// Writing to the frame must be safe.
+#[inline(always)]
 pub unsafe fn copy_into_frame(frame: PhysFrame, bytes: &[u8; 0x1000]) -> Result<()> {
+    if let Some(dst) = get_fast_mapping(frame) {
+        unsafe { copy_into_page_direct(bytes, dst) };
+        Ok(())
+    } else {
+        unsafe { copy_into_frame_slow(frame, bytes) }
+    }
+}
+
+#[inline(never)]
+#[cold]
+pub unsafe fn copy_into_frame_slow(frame: PhysFrame, bytes: &[u8; 0x1000]) -> Result<()> {
     let mut mapping = TemporaryMapping::new(frame)?;
     unsafe {
-        core::intrinsics::volatile_copy_nonoverlapping_memory(mapping.as_mut_ptr(), bytes, 1);
+        copy_into_page_direct(bytes.as_ptr().cast(), mapping.as_mut_ptr());
     }
     Ok(())
+}
+
+#[inline(always)]
+unsafe fn copy_into_page_direct(src: *const [u8; 4096], dst: *mut [u8; 4096]) {
+    assert!(dst.is_aligned_to(32));
+
+    if src.is_aligned_to(32) {
+        unsafe {
+            asm! {
+                "66:",
+                "vmovdqa ymm0, [{src}]",
+                "vmovdqa [{dst}], ymm0",
+                "add {src}, 32",
+                "add {dst}, 32",
+                "loop 66b",
+                src = inout(reg) src => _,
+                dst = inout(reg) dst => _,
+                inout("ecx") 4096 / 32 => _,
+                options(nostack),
+            }
+        }
+    } else {
+        unsafe {
+            asm! {
+                "66:",
+                "vmovdqu ymm0, [{src}]",
+                "vmovdqa [{dst}], ymm0",
+                "add {src}, 32",
+                "add {dst}, 32",
+                "loop 66b",
+                src = inout(reg) src => _,
+                dst = inout(reg) dst => _,
+                inout("ecx") 4096 / 32 => _,
+                options(nostack),
+            }
+        }
+    }
 }
 
 struct TemporaryMapping {
