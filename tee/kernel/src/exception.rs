@@ -205,7 +205,7 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
 
     trace!("page fault");
 
-    assert!(error_code.contains(PageFaultErrorCode::USER_MODE));
+    assert!(!error_code.contains(PageFaultErrorCode::USER_MODE));
 
     if let Ok(cr2) = VirtAddr::try_new(cr2) {
         if let Some(entry) = entry_for_page(Page::containing_address(cr2)) {
