@@ -5,7 +5,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     sync::{
         mpsc::{self, SyncSender},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -14,8 +14,8 @@ use anyhow::{Context, Result};
 use bit_field::BitField;
 use bytemuck::bytes_of;
 use constants::{
-    physical_address::DYNAMIC, FINISH_OUTPUT_MSR, FIRST_AP, MAX_APS_COUNT, MEMORY_MSR,
-    UPDATE_OUTPUT_MSR,
+    physical_address::DYNAMIC, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT,
+    MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
 };
 use snp_types::PageType;
 use tracing::{debug, info};
@@ -145,6 +145,8 @@ pub fn main(
     let cpuid_entries = Arc::<[KvmCpuidEntry2]>::from(cpuid_entries);
     let dynamic_memory_state = Arc::new(DynamicMemory::new(vm.clone()));
     let (tx, rx) = mpsc::sync_channel(0);
+    let init_scheduler = Arc::new(Scheduler::new(1));
+    let run_scheduler = Arc::new(Scheduler::new(0));
 
     for i in 0..MAX_APS_COUNT {
         let id = FIRST_AP + i;
@@ -154,6 +156,8 @@ pub fn main(
             cpuid_entries.clone(),
             dynamic_memory_state.clone(),
             tx.clone(),
+            init_scheduler.clone(),
+            run_scheduler.clone(),
         );
     }
 
@@ -180,6 +184,8 @@ fn run_ap(
     cpuid_entries: Arc<[KvmCpuidEntry2]>,
     dynamic_memory: Arc<DynamicMemory>,
     tx: SyncSender<OutputEvent>,
+    init_scheduler: Arc<Scheduler>,
+    run_scheduler: Arc<Scheduler>,
 ) {
     std::thread::spawn(move || {
         let ap = vm.create_vcpu(i32::from(id)).unwrap();
@@ -223,9 +229,7 @@ fn run_ap(
         regs.rsp = 0xffff_8000_0400_3ff8;
         ap.set_regs(regs).unwrap();
 
-        if id != FIRST_AP {
-            std::thread::park();
-        }
+        init_scheduler.wait();
 
         loop {
             // Run the AP.
@@ -234,13 +238,19 @@ fn run_ap(
             // Check the exit.
             let exit = kvm_run.read().exit();
             match exit {
-                KvmExit::Io(_) => {
+                KvmExit::Io(io) => match io.port {
+                    LOG_PORT => {
                     let regs = ap.get_regs().unwrap();
                     let fpu = ap.get_fpu().unwrap();
                     let bytes = &bytes_of(&fpu.xmm)[..regs.rax as usize];
                     let str = String::from_utf8_lossy(bytes);
                     print!("{str}");
                 }
+                    SCHEDULE_PORT => run_scheduler.schedule(),
+                    KICK_AP_PORT => init_scheduler.schedule(),
+                    HALT_PORT => run_scheduler.wait(),
+                    other => todo!("unimplemented IO port access: {other:#06x}"),
+                },
                 KvmExit::RdMsr(mut msr) => {
                     match msr.index {
                         MEMORY_MSR => {
@@ -340,4 +350,37 @@ impl DynamicMemory {
 enum OutputEvent {
     Update(Vec<u8>),
     Finish,
+}
+
+struct Scheduler {
+    permits: Mutex<u64>,
+    condvar: Condvar,
+}
+
+impl Scheduler {
+    pub fn new(start: u64) -> Self {
+        Self {
+            permits: Mutex::new(start),
+            condvar: Condvar::new(),
+        }
+    }
+
+    pub fn wait(&self) {
+        let mut guard = self.permits.lock().unwrap();
+        loop {
+            if let Some(new_count) = guard.checked_sub(1) {
+                *guard = new_count;
+                return;
+            }
+            guard = self.condvar.wait(guard).unwrap();
+        }
+    }
+
+    pub fn schedule(&self) {
+        let mut guard = self.permits.lock().unwrap();
+        *guard += 1;
+        drop(guard);
+
+        self.condvar.notify_all();
+    }
 }
