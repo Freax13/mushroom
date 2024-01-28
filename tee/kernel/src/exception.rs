@@ -118,6 +118,7 @@ pub fn load_idt() {
 }
 
 #[naked]
+#[no_sanitize(address)]
 extern "x86-interrupt" fn page_fault_handler(
     frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
