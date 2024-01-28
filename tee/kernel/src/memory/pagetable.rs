@@ -1047,6 +1047,7 @@ bitflags! {
         const USER = 1 << 2;
         const GLOBAL = 1 << 3;
         const COW = 1 << 4;
+        const DIRTY = 1 << 5;
     }
 }
 
@@ -1070,6 +1071,8 @@ impl PresentPageTableEntry {
         );
         let cow = flags.contains(PageTableFlags::COW);
         entry.set_bit(COW_BIT, cow);
+        let dirty = flags.contains(PageTableFlags::DIRTY);
+        entry.set_bit(DIRTY_BIT, dirty);
 
         if cow {
             assert!(!writable);
@@ -1089,6 +1092,7 @@ impl PresentPageTableEntry {
         flags.set(PageTableFlags::GLOBAL, self.global());
         flags.set(PageTableFlags::EXECUTABLE, self.executable());
         flags.set(PageTableFlags::COW, self.cow());
+        flags.set(PageTableFlags::DIRTY, self.dirty());
         flags
     }
 
@@ -1110,6 +1114,10 @@ impl PresentPageTableEntry {
 
     pub fn cow(&self) -> bool {
         self.0.get().get_bit(COW_BIT)
+    }
+
+    pub fn dirty(&self) -> bool {
+        self.0.get().get_bit(DIRTY_BIT)
     }
 }
 
