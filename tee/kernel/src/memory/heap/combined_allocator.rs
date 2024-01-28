@@ -5,25 +5,22 @@ use core::{
 
 use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSizeAllocator};
 
-type CombinedAllocator<A> = FallbackAllocator<
-    FallbackAllocator<
-        FallbackAllocator<
-            FixedSizeAllocator<A, 8>,
-            FallbackAllocator<
-                FixedSizeAllocator<A, 16>,
-                FallbackAllocator<
-                    FixedSizeAllocator<A, 24>,
-                    FallbackAllocator<
-                        FixedSizeAllocator<A, 32>,
-                        FallbackAllocator<FixedSizeAllocator<A, 48>, FixedSizeAllocator<A, 64>>,
-                    >,
-                >,
-            >,
-        >,
-        FixedSizeAllocator<A, 1024>,
-    >,
-    A,
->;
+macro_rules! with_buckets {
+    ($macro:ident) => {
+        $macro!(8, 16, 24, 32, 40, 48, 64, 96, 128, 256, 512, 1024)
+    };
+}
+
+macro_rules! bucket_type {
+    ($last:expr) => {
+        FallbackAllocator<FixedSizeAllocator<A, $last>, A>
+    };
+    ($first:expr, $($next:expr),*) => {
+        FallbackAllocator<FixedSizeAllocator<A, $first>, bucket_type!($($next),*)>
+    };
+}
+
+type CombinedAllocator<A> = with_buckets!(bucket_type);
 
 #[allow(clippy::type_complexity)]
 pub struct Combined<A>
@@ -39,26 +36,16 @@ where
 {
     // FIXME: This should just take `A` where `A: Copy`. https://github.com/rust-lang/rust-clippy/issues/10535
     pub const fn new(allocator: &'static A) -> Combined<&'static A> {
-        let small8 = FixedSizeAllocator::<_, 8>::new(allocator);
-        let small16 = FixedSizeAllocator::<_, 16>::new(allocator);
-        let small24 = FixedSizeAllocator::<_, 24>::new(allocator);
-        let small32 = FixedSizeAllocator::<_, 32>::new(allocator);
-        let small48 = FixedSizeAllocator::<_, 48>::new(allocator);
-        let small64 = FixedSizeAllocator::<_, 64>::new(allocator);
+        macro_rules! new {
+            ($last:expr) => {
+                FallbackAllocator::new(FixedSizeAllocator::<_, $last>::new(allocator), allocator)
+            };
+            ($first:expr, $($next:expr),*) => {
+                FallbackAllocator::new(FixedSizeAllocator::<_, $first>::new(allocator), new!($($next),*))
+            };
+        }
 
-        let fallback = FallbackAllocator::new(small48, small64);
-        let fallback = FallbackAllocator::new(small32, fallback);
-        let fallback = FallbackAllocator::new(small24, fallback);
-        let fallback = FallbackAllocator::new(small16, fallback);
-        let small_allocators = FallbackAllocator::new(small8, fallback);
-
-        let big = FixedSizeAllocator::<_, 1024>::new(allocator);
-        let big_allocators = big;
-
-        let huge_allocator = allocator;
-
-        let allocator = FallbackAllocator::new(small_allocators, big_allocators);
-        let allocator = FallbackAllocator::new(allocator, huge_allocator);
+        let allocator = with_buckets!(new);
 
         Combined { allocator }
     }

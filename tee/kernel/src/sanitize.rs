@@ -10,12 +10,13 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::memory::pagetable::{map_page, PageTableFlags, PresentPageTableEntry};
+use crate::memory::pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry};
 
 mod interface;
 
 const ASAN_MAPPING_OFFSET: u64 = 0xdfff_c000_0000_0000;
 const ASAN_MAPPING_SCALE: u64 = 3;
+const ASAN_MAPPING_MULTIPLIER: usize = 1 << ASAN_MAPPING_SCALE;
 
 /// Map a real address to the shadow address.
 #[inline]
@@ -71,6 +72,38 @@ pub fn map_shadow(
     }
 }
 
+/// Remove `ptr` from the shadow mapping.
+pub fn unmap_shadow(
+    ptr: *const c_void,
+    size: usize,
+    allocator: &mut impl FrameDeallocator<Size4KiB>,
+) {
+    let addr = ptr as u64;
+    assert!(
+        addr.get_bit(63),
+        "can only map shadow for addresses in the upper half"
+    );
+    assert!(
+        ptr.is_aligned_to(MIN_ALLOCATION_SIZE),
+        "pointer is not aligned"
+    );
+    assert!(size % MIN_ALLOCATION_SIZE == 0, "size is not aligned");
+
+    let shadow_address = map_to_shadow(addr);
+    let shadow_addr = VirtAddr::new(shadow_address);
+    let shadow_page = Page::containing_address(shadow_addr);
+
+    let pages = size / 0x1000;
+    let shadow_pages = pages >> ASAN_MAPPING_SCALE;
+
+    for shadow_page in (shadow_page..).take(shadow_pages) {
+        let entry = unsafe { unmap_page(shadow_page) };
+        unsafe {
+            allocator.deallocate_frame(entry.frame());
+        }
+    }
+}
+
 /// Check if Cr2 points somewhere to the shadow mapping.
 pub fn page_fault_handler(frame: &InterruptStackFrame) {
     let cr2 = Cr2::read_raw();
@@ -90,10 +123,13 @@ pub fn page_fault_handler(frame: &InterruptStackFrame) {
 
 /// Mark shadow memory as usable or unusable.
 pub unsafe fn mark(ptr: *const c_void, len: usize, usable: bool) {
+    assert!(ptr.is_aligned_to(ASAN_MAPPING_MULTIPLIER));
+    assert_eq!(len % ASAN_MAPPING_MULTIPLIER, 0);
+
     let ptr = map_to_shadow(ptr as u64);
 
     let n = if usable { 0 } else { 0xfd };
     unsafe {
-        interface::set_shadow_n(ptr as *mut u8, len / 8, n);
+        interface::set_shadow_n(ptr as *mut u8, len >> ASAN_MAPPING_SCALE, n);
     }
 }

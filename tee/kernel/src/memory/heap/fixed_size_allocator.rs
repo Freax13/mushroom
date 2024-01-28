@@ -1,34 +1,66 @@
 use core::{
     alloc::{AllocError, Allocator, Layout},
-    cell::Cell,
-    mem::{align_of, size_of},
-    ptr::{addr_of_mut, NonNull},
+    mem::size_of,
+    ptr::NonNull,
 };
 
-use crate::spin::mutex::Mutex;
+use alloc::vec::Vec;
+use constants::physical_address::DYNAMIC;
+use x86_64::{
+    align_down,
+    structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB},
+};
+
+use crate::{spin::mutex::Mutex, supervisor};
 
 use super::fallback_allocator::LimitedAllocator;
 
-pub struct FixedSizeAllocator<A, const N: usize> {
-    allocator: A,
-    block: Mutex<Option<NonNull<Block<N>>>>,
+pub struct FixedSizeAllocator<A, const N: usize>
+where
+    A: Allocator,
+{
+    state: Mutex<FixedSizeAllocatorState<A, N>>,
 }
 
-impl<A, const N: usize> FixedSizeAllocator<A, N> {
+/// The mutable state of a `FixedSizeAllocator`.
+struct FixedSizeAllocatorState<A, const N: usize>
+where
+    A: Allocator,
+{
+    /// A sorted list of chunks.
+    chunks: Vec<NonNull<ChunkHeader<N>>, A>,
+    /// This field contains a hint for a chunk that may have more allocation
+    /// slots available.
+    last_idx: usize,
+    /// This field contains a hint for a chunk that may have more allocation
+    /// slots available. The hint is not none, the chunk has to be valid.
+    good_chunk: Option<NonNull<ChunkHeader<N>>>,
+}
+
+impl<A, const N: usize> FixedSizeAllocator<A, N>
+where
+    A: Allocator,
+{
     pub const fn new(allocator: A) -> Self {
         Self {
-            allocator,
-            block: Mutex::new(None),
+            state: Mutex::new(FixedSizeAllocatorState {
+                chunks: Vec::new_in(allocator),
+                last_idx: 0,
+                good_chunk: None,
+            }),
         }
     }
 }
+
+unsafe impl<A: Send, const N: usize> Send for FixedSizeAllocator<A, N> where A: Allocator {}
+unsafe impl<A: Sync, const N: usize> Sync for FixedSizeAllocator<A, N> where A: Allocator {}
 
 unsafe impl<A, const N: usize> LimitedAllocator for FixedSizeAllocator<A, N>
 where
     A: Allocator,
 {
     fn can_allocate(&self, layout: Layout) -> bool {
-        layout.size() <= N && layout.align() <= align_of::<Entry<N>>()
+        layout.size() <= N && layout.align() <= N
     }
 }
 
@@ -37,167 +69,322 @@ where
     A: Allocator,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        if !self.can_allocate(layout) {
-            return Err(AllocError);
-        }
+        let mut guard = self.state.lock();
 
-        let mut guard = self.block.lock();
-
-        let block = if let Some(block) = &mut *guard {
-            block
-        } else {
-            guard.insert(Block::new(&self.allocator)?)
-        };
-
-        let mut block = unsafe { block.as_mut() };
-        loop {
-            let res = block.allocate(layout);
-            if let Ok(res) = res {
-                break Ok(res);
+        // Try to allocate from a chunk we suspect may be able to serve the
+        // allocation.
+        if let Some(chunk) = guard.good_chunk {
+            let chunk = unsafe { chunk.as_ref() };
+            if let Ok(ptr) = chunk.allocate(layout) {
+                return Ok(ptr);
             } else {
-                block = block.make_mut(&self.allocator)?;
+                guard.good_chunk = None;
             }
         }
+
+        // Iterate over all chunks starting with `last_idx`, but keep their
+        // original indices.
+        let chunks = guard
+            .chunks
+            .iter()
+            .map(|chunk| unsafe { chunk.as_ref() })
+            .enumerate()
+            .cycle()
+            .skip(guard.last_idx)
+            .take(guard.chunks.len());
+        // Try to allocate from existing chunks.
+        for (i, chunk) in chunks {
+            let Ok(ptr) = chunk.allocate(layout) else {
+                continue;
+            };
+            guard.good_chunk = Some(NonNull::from(chunk));
+            guard.last_idx = i;
+            return Ok(ptr);
+        }
+
+        // We'll have to create a new chunk.
+
+        // Allocate a new chunk.
+        let chunk = ChunkHeader::<N>::new()?;
+
+        // Store the chunk in the correct position.
+        let idx = guard.chunks.binary_search(&chunk).unwrap_err();
+        guard.chunks.insert(idx, chunk);
+
+        // Update hints.
+        guard.last_idx = idx;
+        guard.good_chunk = Some(chunk);
+
+        // Allocate from the chunk.
+        let chunk_ref = unsafe { chunk.as_ref() };
+        let ptr = chunk_ref.allocate(layout).unwrap();
+        Ok(ptr)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        let guard = self.block.lock();
+        // Do some pointer match to get a pointer to the chunk that was used to
+        // allocate `ptr`.
+        let chunk_header = align_down(ptr.as_ptr() as u64, Size2MiB::SIZE);
+        let chunk_header = unsafe { &*(chunk_header as *const ChunkHeader<N>) };
+        // Deallocate the memory.
+        let now_unused = unsafe { chunk_header.deallocate(ptr, layout) };
 
-        let mut first_block = guard.unwrap();
-        let mut block = unsafe { first_block.as_mut() };
-        loop {
-            if block.contains(ptr) {
-                unsafe {
-                    block.deallocate(ptr, layout);
+        if now_unused {
+            // The chunk is completly unused. Try to release it.
+
+            let ptr = NonNull::from(chunk_header);
+
+            // Take an allocator-wide lock to prevent racing try_free.
+            let mut guard = self.state.lock();
+            let idx = guard.chunks.binary_search(&ptr).unwrap();
+
+            let res = unsafe { ChunkHeader::try_free(ptr.as_ptr()) };
+            if res.is_ok() {
+                // Deallocation succeeded.
+
+                guard.chunks.remove(idx);
+
+                // Make sure we don't recommend allocating from this chunk
+                // anymore.
+                if guard.good_chunk == Some(ptr) {
+                    guard.good_chunk = None;
                 }
-                return;
+            } else {
+                // Deallocation failed. It's now a good candidate for future
+                // allocations because it has plenty of available spots.
+                guard.last_idx = idx;
+                guard.good_chunk = Some(ptr);
             }
-            block = block.next().unwrap();
         }
     }
-}
 
-unsafe impl<A, const N: usize> Send for FixedSizeAllocator<A, N> {}
-
-unsafe impl<A, const N: usize> Sync for FixedSizeAllocator<A, N> {}
-
-struct Block<const N: usize> {
-    next: Option<NonNull<Self>>,
-    memory: NonNull<[u8]>,
-    free_list: Cell<Option<NonNull<Entry<N>>>>,
-}
-
-impl<const N: usize> Block<N> {
-    pub fn new<A>(allocator: &A) -> Result<NonNull<Self>, AllocError>
-    where
-        A: Allocator,
-    {
-        const MIN_ENTRIES: usize = 128;
-
-        let block_layout = Layout::new::<Self>();
-        let entries_layout = Layout::array::<Entry<N>>(MIN_ENTRIES).unwrap();
-        let (combined, entries_offset) = block_layout.extend(entries_layout).unwrap();
-
-        let ptr = allocator.allocate(combined)?;
-        let total_len = ptr.len();
-        let len_for_entries = total_len - entries_offset;
-        let num_entries = len_for_entries / size_of::<Entry<N>>();
-
-        let block_ptr = ptr.as_ptr().cast::<Self>();
-        let entry_ptr = unsafe { ptr.as_ptr().cast::<Entry<N>>().byte_add(entries_offset) };
-
-        let mut prev = None;
-        for i in 0..num_entries {
-            let entry_ptr = unsafe { entry_ptr.add(i) };
-            let entry_ptr = unsafe { NonNull::new_unchecked(entry_ptr) };
-            let entry = Entry { next: prev };
-            unsafe {
-                entry_ptr.as_ptr().write(entry);
-            }
-            prev = Some(entry_ptr);
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        _old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        // Fail if the new layout exceeds the size.
+        if new_layout.size() > N || new_layout.align() > N {
+            return Err(AllocError);
         }
 
-        let block = Block {
-            next: None,
-            memory: ptr,
-            free_list: Cell::new(prev),
-        };
+        Ok(unsafe { NonNull::new_unchecked(core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), N)) })
+    }
+
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        // Fail if the new layout exceeds the size.
+        if new_layout.size() > N || new_layout.align() > N {
+            return Err(AllocError);
+        }
+
         unsafe {
-            block_ptr.write(block);
+            core::ptr::write_bytes(
+                ptr.as_ptr().add(old_layout.size()),
+                0,
+                N - old_layout.size(),
+            );
         }
-
-        Ok(unsafe { NonNull::new_unchecked(block_ptr) })
+        Ok(unsafe { NonNull::new_unchecked(core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), N)) })
     }
 
-    pub fn next(&mut self) -> Option<&mut Self> {
-        let mut ptr = self.next?;
-        Some(unsafe { ptr.as_mut() })
-    }
-
-    pub fn make_mut<A>(&mut self, allocator: &A) -> Result<&mut Self, AllocError>
-    where
-        A: Allocator,
-    {
-        let ptr = self.next;
-        if let Some(mut ptr) = ptr {
-            return Ok(unsafe { ptr.as_mut() });
+    unsafe fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        _old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        if new_layout.align() > N {
+            return Err(AllocError);
         }
-
-        let mut ptr = Self::new(allocator)?;
-        self.next = Some(ptr);
-        Ok(unsafe { ptr.as_mut() })
-    }
-
-    pub fn contains(&self, ptr: NonNull<u8>) -> bool {
-        let start_ptr = self.memory.as_ptr().cast::<u8>();
-        let end_ptr = unsafe { start_ptr.add(self.memory.len()) };
-        (start_ptr..end_ptr).contains(&ptr.as_ptr())
+        Ok(unsafe { NonNull::new_unchecked(core::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), N)) })
     }
 }
 
-unsafe impl<const N: usize> Allocator for Block<N> {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        assert!(layout.size() <= N);
-        assert!(layout.align() <= align_of::<Entry<N>>());
+impl<A, const N: usize> Drop for FixedSizeAllocator<A, N>
+where
+    A: Allocator,
+{
+    fn drop(&mut self) {
+        unimplemented!()
+    }
+}
 
-        let ptr = self.free_list.get().ok_or(AllocError)?;
-        let next_ptr = unsafe { (*ptr.as_ptr()).next };
-        self.free_list.set(next_ptr);
+#[repr(align(64))]
+struct ChunkHeader<const N: usize> {
+    state: Mutex<ChunkHeaderState<N>>,
+    frame: PhysFrame<Size2MiB>,
+}
 
+impl<const N: usize> ChunkHeader<N> {
+    pub fn new() -> Result<NonNull<Self>, AllocError> {
+        // Allocate physical memory.
+        let frame = (&supervisor::ALLOCATOR)
+            .allocate_frame()
+            .ok_or(AllocError)?;
+
+        // Get a pointer in the mapping of all dynamic memory.
+        let addr = frame.start_address().as_u64() - DYNAMIC.start() + 0xffff_8080_0000_0000;
+
+        // Map shadow memory for the chunk.
         #[cfg(sanitize = "address")]
-        unsafe {
-            crate::sanitize::mark(ptr.as_ptr().cast_const().cast::<_>(), N, true);
-        }
-
-        let ptr = core::ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), N);
-        Ok(NonNull::new(ptr).unwrap())
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
+        crate::sanitize::map_shadow(
+            addr as *mut _,
+            Size2MiB::SIZE as usize,
+            &mut &crate::memory::heap::FRAME_ALLOCATOR,
+        );
+        // Forbid accessing the entries.
         #[cfg(sanitize = "address")]
         unsafe {
             crate::sanitize::mark(
-                ptr.as_ptr().byte_add(8).cast_const().cast::<_>(),
-                N - 8,
+                (addr as usize + Self::first_offset()) as *mut _,
+                Size2MiB::SIZE as usize - Self::first_offset(),
                 false,
             );
         }
 
-        let entry = ptr.cast::<Entry<N>>();
-
-        let current_free_list = self.free_list.get();
-
-        let next_ptr = unsafe { addr_of_mut!((*entry.as_ptr()).next) };
+        // Initialize the header.
+        let ptr = unsafe { NonNull::new_unchecked(addr as *mut Self) };
         unsafe {
-            next_ptr.write(current_free_list);
+            ptr.as_ptr().write(Self {
+                state: Mutex::new(ChunkHeaderState {
+                    init: 0,
+                    next_entry: None,
+                    used: 0,
+                }),
+                frame,
+            })
+        };
+        Ok(ptr)
+    }
+
+    /// Returns the offset of the first allocation in a chunk.
+    const fn first_offset() -> usize {
+        size_of::<ChunkHeader<N>>().next_multiple_of(N)
+    }
+
+    /// Returns the number of allocations that can fit in a chunk.
+    const fn capacity() -> usize {
+        let size = 512 * 4096;
+        let max_entries = size / N;
+        max_entries - Self::first_offset()
+    }
+
+    /// Release the chunk.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that this function isn't called concurrently
+    /// for the same chunk.
+    unsafe fn try_free(ptr: *const Self) -> Result<(), ()> {
+        let this = unsafe { &*ptr };
+
+        {
+            // Double-check that the chunk can be released.
+            let guard = this.state.lock();
+            if guard.used > 0 {
+                return Err(());
+            }
         }
 
-        self.free_list.set(Some(entry));
+        // Release the physical memory.
+        let frame = this.frame;
+        unsafe {
+            (&supervisor::ALLOCATOR).deallocate_frame(frame);
+        }
+
+        // Unmap shadow memory for the chunk.
+        #[cfg(sanitize = "address")]
+        crate::sanitize::unmap_shadow(
+            ptr as *mut _,
+            Size2MiB::SIZE as usize,
+            &mut &crate::memory::heap::FRAME_ALLOCATOR,
+        );
+
+        Ok(())
+    }
+
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() > N || layout.align() > N {
+            return Err(AllocError);
+        }
+
+        let mut guard = self.state.lock();
+        let entry = if let Some(pointer) = guard.next_entry {
+            // Pop and entry from the free list.
+            let entry = unsafe { pointer.as_ref() };
+
+            // Allow accessing the entry.
+            #[cfg(sanitize = "address")]
+            unsafe {
+                crate::sanitize::mark(entry as *const _ as *mut _, N, true);
+            }
+
+            guard.next_entry = unsafe { entry.next };
+            entry
+        } else if guard.init < Self::capacity() {
+            // Use up an uninitialized entry.
+
+            // Get a pointer to the next entry.
+            let pointer = (self as *const Self)
+                .wrapping_byte_add(Self::first_offset())
+                .cast::<Entry<N>>()
+                .wrapping_add(guard.init);
+
+            // Allow accessing the entry.
+            #[cfg(sanitize = "address")]
+            unsafe {
+                crate::sanitize::mark(pointer as *mut _, N, true);
+            }
+
+            guard.init += 1;
+            unsafe { &*pointer }
+        } else {
+            return Err(AllocError);
+        };
+        guard.used += 1;
+        drop(guard);
+
+        Ok(NonNull::from(unsafe { &entry.bytes }))
+    }
+
+    /// Returns `true` if the chunk is completly unused.
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) -> bool {
+        let entry = unsafe { ptr.cast::<Entry<N>>().as_mut() };
+
+        let mut guard = self.state.lock();
+        // Push the entry onto the free list.
+        entry.next = guard.next_entry;
+
+        // Forbid accessing the entry.
+        #[cfg(sanitize = "address")]
+        unsafe {
+            crate::sanitize::mark(entry as *const _ as *mut _, N, false);
+        }
+
+        guard.next_entry = Some(NonNull::from(entry));
+        guard.used -= 1;
+        guard.used == 0
     }
 }
 
-#[repr(C, align(8))]
+struct ChunkHeaderState<const N: usize> {
+    /// Counts how many `Entry`s have been initialized. Starts out as `0` and
+    /// increases over time as the first allocations are served.
+    init: usize,
+    /// An intrusive singly-linked free list.
+    next_entry: Option<NonNull<Entry<N>>>,
+    /// Counts the number of allocations currently in use.
+    used: usize,
+}
+
+#[repr(C)]
 union Entry<const N: usize> {
-    next: Option<NonNull<Self>>,
-    raw: [u8; N],
+    next: Option<NonNull<Entry<N>>>,
+    bytes: [u8; N],
 }
