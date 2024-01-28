@@ -315,24 +315,28 @@ unsafe trait TableLevel {
     type Next;
 
     const CAN_SET_GLOBAL: bool;
+    const CAN_SET_HUGE: bool;
 }
 
 unsafe impl TableLevel for Level4 {
     type Next = Level3;
 
     const CAN_SET_GLOBAL: bool = false;
+    const CAN_SET_HUGE: bool = false;
 }
 
 unsafe impl TableLevel for Level3 {
     type Next = Level2;
 
     const CAN_SET_GLOBAL: bool = true;
+    const CAN_SET_HUGE: bool = true;
 }
 
 unsafe impl TableLevel for Level2 {
     type Next = Level1;
 
     const CAN_SET_GLOBAL: bool = true;
+    const CAN_SET_HUGE: bool = true;
 }
 
 /// A level that has a parent level.
@@ -519,6 +523,10 @@ where
 
         let mut current_entry = atomic_load(&self.entry);
         loop {
+            if L::CAN_SET_HUGE {
+                assert!(!current_entry.get_bit(HUGE_BIT));
+            }
+
             // If the entry is being initialized right now, spin.
             if current_entry.get_bit(INITIALIZING_BIT) {
                 core::hint::spin_loop();
@@ -947,6 +955,7 @@ const PRESENT_BIT: usize = 0;
 const WRITE_BIT: usize = 1;
 const USER_BIT: usize = 2;
 const DIRTY_BIT: usize = 6;
+const HUGE_BIT: usize = 7;
 const GLOBAL_BIT: usize = 8;
 const DISABLE_EXECUTE_BIT: usize = 63;
 
