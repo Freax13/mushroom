@@ -5,6 +5,7 @@ use core::{
 
 use crate::{
     memory::invlpgb::INVLPGB,
+    rt::spawn,
     spin::{lazy::Lazy, mutex::Mutex},
 };
 use alloc::{borrow::Cow, boxed::Box, ffi::CString, sync::Arc, vec::Vec};
@@ -203,6 +204,23 @@ impl Default for VirtualMemory {
             state: Mutex::new(VirtualMemoryState::new()),
             pml4,
             pcid_allocation,
+        }
+    }
+}
+
+impl Drop for VirtualMemory {
+    fn drop(&mut self) {
+        let state = self.state.get_mut();
+        if let VirtualMemoryState::Initialized(s) = state {
+            if !s.mappings.is_empty() {
+                let this = core::mem::take(self);
+                spawn(async move {
+                    VirtualMemoryActivator::use_from_async(Arc::new(this), |a| {
+                        a.unmap(VirtAddr::new(0), !0)
+                    })
+                    .await;
+                });
+            }
         }
     }
 }
@@ -829,8 +847,11 @@ impl InitializedVirtualMemoryState {
             if mapping.start >= start && mapping.start + mapping.num_pages <= end {
                 for page in mapping.start..mapping.end() {
                     if entry_for_page(page).is_some() {
-                        unsafe {
-                            unmap_page(page);
+                        let entry = unsafe { unmap_page(page) };
+                        if !entry.cow() {
+                            unsafe {
+                                (&FRAME_ALLOCATOR).deallocate_frame(entry.frame());
+                            }
                         }
                     }
                 }
