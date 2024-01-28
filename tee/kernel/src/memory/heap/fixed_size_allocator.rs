@@ -187,7 +187,7 @@ unsafe impl<const N: usize> Allocator for Block<N> {
 
         let current_free_list = self.free_list.get();
 
-        let next_ptr = addr_of_mut!((*entry.as_ptr()).next);
+        let next_ptr = unsafe { addr_of_mut!((*entry.as_ptr()).next) };
         unsafe {
             next_ptr.write(current_free_list);
         }

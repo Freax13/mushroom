@@ -11,6 +11,7 @@
     pointer_is_aligned,
     sync_unsafe_cell
 )]
+#![allow(internal_features)]
 
 use core::ops::Deref;
 

@@ -5,10 +5,8 @@
     alloc_error_handler,
     allocator_api,
     asm_const,
-    async_fn_in_trait,
     cfg_sanitize,
     const_mut_refs,
-    const_pointer_byte_offsets,
     core_intrinsics,
     drain_keep_rest,
     extract_if,
@@ -22,8 +20,6 @@
     naked_functions,
     no_sanitize,
     noop_waker,
-    offset_of,
-    pointer_byte_offsets,
     pointer_is_aligned,
     ptr_metadata,
     return_type_notation,
@@ -33,7 +29,7 @@
     try_trait_v2
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
-#![allow(incomplete_features)]
+#![allow(incomplete_features, internal_features)]
 
 extern crate alloc;
 

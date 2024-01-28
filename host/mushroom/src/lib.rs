@@ -1,5 +1,3 @@
-#![feature(pointer_byte_offsets)]
-
 use std::{
     collections::{hash_map::Entry, HashMap},
     mem::size_of,
