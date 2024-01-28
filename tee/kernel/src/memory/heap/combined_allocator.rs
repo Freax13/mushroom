@@ -1,5 +1,6 @@
 use core::{
     alloc::{Allocator, GlobalAlloc, Layout},
+    cmp::Ordering,
     ptr::{null_mut, NonNull},
 };
 
@@ -63,5 +64,25 @@ where
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
         unsafe { self.allocator.deallocate(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let Ok(new_layout) = Layout::from_size_align(new_size, layout.align()) else {
+            return null_mut();
+        };
+
+        match layout.size().cmp(&new_size) {
+            Ordering::Less => unsafe {
+                self.allocator
+                    .grow(NonNull::new_unchecked(ptr), layout, new_layout)
+                    .map_or_else(|_| null_mut(), NonNull::as_mut_ptr)
+            },
+            Ordering::Equal => unreachable!(),
+            Ordering::Greater => unsafe {
+                self.allocator
+                    .shrink(NonNull::new_unchecked(ptr), layout, new_layout)
+                    .map_or_else(|_| null_mut(), NonNull::as_mut_ptr)
+            },
+        }
     }
 }
