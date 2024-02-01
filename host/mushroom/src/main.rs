@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
 use snp_types::guest_policy::GuestPolicy;
@@ -57,6 +57,9 @@ struct ConfigArgs {
     kasan: bool,
     #[command(flatten)]
     policy: PolicyArgs,
+    /// Whether the run the workload in a non-SNP VM.
+    #[arg(long)]
+    insecure: bool,
 }
 
 #[derive(Args)]
@@ -110,9 +113,6 @@ struct RunCommand {
     config: ConfigArgs,
     #[command(flatten)]
     io: IoArgs,
-    /// Whether the run the workload in a non-SNP VM.
-    #[arg(long)]
-    insecure: bool,
 }
 
 fn run(run: RunCommand) -> Result<()> {
@@ -120,7 +120,7 @@ fn run(run: RunCommand) -> Result<()> {
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
 
-    let result = if !run.insecure {
+    let result = if !run.config.insecure {
         let supervisor_path = run.config.supervisor.context("missing supervisor path")?;
         let supervisor =
             std::fs::read(supervisor_path).context("failed to read supervisor file")?;
@@ -162,6 +162,11 @@ struct VerifyCommand {
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
+    ensure!(
+        !run.config.insecure,
+        "Can't verify output produced in insecure mode."
+    );
+
     let supervisor = std::fs::read(run.config.supervisor.context("missing supervisor path")?)
         .context("failed to read supervisor file")?;
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
