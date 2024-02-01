@@ -49,9 +49,7 @@ impl Configuration {
         }
     }
 
-    /// Verify that a input the given hash is attested to have produced a output with the given hash.
-    ///
-    /// The hashes a SHA256 hashes.
+    /// Verify that a input with the given hash is attested to have produced a output with the given hash.
     pub fn verify(
         &self,
         input_hash: InputHash,
