@@ -132,7 +132,6 @@ impl SyscallHandlers {
         core::mem::forget(val);
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn execute(&self, thread: Arc<Thread>, args: SyscallArgs) -> SyscallResult {
         let syscall_no = usize_from(args.no);
 
