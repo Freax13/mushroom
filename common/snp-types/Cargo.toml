@@ -10,4 +10,4 @@ bitflags = "1.3.2"
 bit_field = "0.10.1"
 bytemuck = { version = "1.13.0", features = ["derive", "min_const_generics"] }
 paste = "1.0.12"
-x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "1ba2dec28b0380f4b25cfaa3b62c8400d89ac82c" }
+x86_64 = "0.15.0-beta"

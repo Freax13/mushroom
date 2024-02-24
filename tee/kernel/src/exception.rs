@@ -69,12 +69,12 @@ pub fn load_gdt() {
     let tss = per_cpu.tss.get().unwrap();
 
     let mut gdt = GlobalDescriptorTable::new();
-    let kernel_cs = gdt.add_entry(Descriptor::kernel_code_segment());
-    let kernel_ds = gdt.add_entry(Descriptor::kernel_data_segment());
-    let _user32_cs = gdt.add_entry(Descriptor::UserSegment(DescriptorFlags::USER_CODE32.bits()));
-    let user_ds = gdt.add_entry(Descriptor::user_data_segment());
-    let user_cs = gdt.add_entry(Descriptor::user_code_segment());
-    let tss_seg = gdt.add_entry(Descriptor::tss_segment(tss));
+    let kernel_cs = gdt.append(Descriptor::kernel_code_segment());
+    let kernel_ds = gdt.append(Descriptor::kernel_data_segment());
+    let _user32_cs = gdt.append(Descriptor::UserSegment(DescriptorFlags::USER_CODE32.bits()));
+    let user_ds = gdt.append(Descriptor::user_data_segment());
+    let user_cs = gdt.append(Descriptor::user_code_segment());
+    let tss_seg = gdt.append(Descriptor::tss_segment(tss));
     per_cpu.gdt.set(gdt).unwrap();
     let gdt = per_cpu.gdt.get().unwrap();
 
@@ -254,7 +254,7 @@ struct SwapGsGuard(());
 
 impl SwapGsGuard {
     fn new(frame: &InterruptStackFrame) -> Option<Self> {
-        if frame.code_segment & 3 == 0 {
+        if frame.code_segment.rpl() == PrivilegeLevel::Ring0 {
             return None;
         }
 

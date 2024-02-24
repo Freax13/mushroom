@@ -8,7 +8,7 @@ use bit_field::BitField;
 use x86_64::{
     instructions::tables::{lgdt, sgdt},
     registers::{control::Cr2, xcontrol::XCr0Flags},
-    structures::{idt::PageFaultErrorCode, DescriptorTablePointer},
+    structures::{gdt::Entry, idt::PageFaultErrorCode, DescriptorTablePointer},
     VirtAddr,
 };
 
@@ -30,7 +30,14 @@ pub struct CpuState {
 
 impl CpuState {
     pub fn new(cs: u16, rip: u64, rsp: u64) -> Self {
-        let gdt = PerCpu::get().gdt.get().unwrap().as_raw_slice().to_vec();
+        let gdt = PerCpu::get()
+            .gdt
+            .get()
+            .unwrap()
+            .entries()
+            .iter()
+            .map(Entry::raw)
+            .collect();
         Self {
             registers: Registers {
                 cs,
