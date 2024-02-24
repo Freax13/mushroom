@@ -20,7 +20,7 @@ dependencies = ["build-supervisor-development", "build-supervisor-production"]
 
 [tasks.build-supervisor-development]
 extend = "cargo"
-condition = { profiles = ["development", "kasan"] }
+condition = { profiles = ["development", "kasan", "profiling"] }
 args = [
     "build",
     "-p",
@@ -61,6 +61,7 @@ dependencies = [
     "build-kernel-development",
     "build-kernel-kasan",
     "build-kernel-production",
+    "build-kernel-profiling",
 ]
 
 [tasks.build-kernel-development]
@@ -102,6 +103,24 @@ args = [
 ]
 env = { RUSTFLAGS = { unset = true } }
 
+[tasks.build-kernel-profiling]
+extend = "cargo"
+condition = { profiles = ["profiling"] }
+args = [
+    "build",
+    "-p",
+    "kernel",
+    "--target",
+    "x86_64-unknown-none",
+    "--profile",
+    "kernel-profiling",
+    "-Z",
+    "build-std=core,alloc",
+    "--features",
+    "profiling",
+]
+env = { RUSTFLAGS = { unset = true }, CARGO_TARGET_X86_64_UNKNOWN_NONE_RUSTFLAGS = "-Z instrument-mcount -C passes=ee-instrument<post-inline>" }
+
 [tasks.build-init]
 dependencies = ["build-init-development", "build-init-production"]
 
@@ -112,7 +131,7 @@ args = ["build", "-p", "init", "--target", "x86_64-unknown-linux-musl"]
 
 [tasks.build-init-production]
 extend = "cargo"
-condition = { profiles = ["production"] }
+condition = { profiles = ["production", "profiling"] }
 args = [
     "build",
     "-p",

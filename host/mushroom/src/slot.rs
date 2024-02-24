@@ -4,6 +4,7 @@ use std::{
     num::NonZeroUsize,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
     ptr::{copy_nonoverlapping, NonNull},
+    sync::Arc,
 };
 
 use anyhow::{ensure, Context, Result};
@@ -16,7 +17,7 @@ use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
 
 pub struct Slot {
     gpa: PhysFrame,
-    shared_mapping: AnonymousPrivateMapping,
+    shared_mapping: Arc<AnonymousPrivateMapping>,
     restricted_fd: Option<OwnedFd>,
 }
 
@@ -28,6 +29,7 @@ impl Slot {
         private: bool,
     ) -> Result<Self> {
         let shared_mapping = AnonymousPrivateMapping::for_private_mapping(pages)?;
+        let shared_mapping = Arc::new(shared_mapping);
 
         let len = u64::try_from(pages.len() * 0x1000)?;
         let restricted_fd = private
@@ -47,6 +49,7 @@ impl Slot {
     pub fn new(vm: &VmHandle, gpa: PhysFrame, private: bool) -> Result<Self> {
         let len = 512 * 0x1000;
         let shared_mapping = AnonymousPrivateMapping::new(len)?;
+        let shared_mapping = Arc::new(shared_mapping);
 
         let len = u64::try_from(len)?;
         let restricted_fd = private
@@ -67,7 +70,7 @@ impl Slot {
         self.gpa
     }
 
-    pub fn shared_mapping(&self) -> &AnonymousPrivateMapping {
+    pub fn shared_mapping(&self) -> &Arc<AnonymousPrivateMapping> {
         &self.shared_mapping
     }
 

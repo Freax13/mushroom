@@ -183,6 +183,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "profiler-types"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "constants",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"

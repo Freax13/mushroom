@@ -1,5 +1,5 @@
 [workspace]
-members = ["constants", "io", "loader", "snp-types"]
+members = ["constants", "io", "loader", "profiler-types", "snp-types"]
 resolver = "2"
 
 [workspace.dependencies]

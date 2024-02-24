@@ -95,6 +95,7 @@ impl FrameDeallocator<Size2MiB> for &'_ Allocator {
 static RUNNING_VCPUS: AtomicU64 = AtomicU64::new(1);
 
 /// Halt this vcpu.
+#[inline(never)]
 pub fn halt() -> Result<(), LastRunningVcpuError> {
     // Ensure that this vCPU isn't the last one running.
     let mut running_vcpus = RUNNING_VCPUS.load(Ordering::SeqCst);
@@ -114,6 +115,9 @@ pub fn halt() -> Result<(), LastRunningVcpuError> {
             Err(new_running_vcpus) => running_vcpus = new_running_vcpus,
         }
     }
+
+    #[cfg(feature = "profiling")]
+    crate::profiler::flush();
 
     unsafe {
         PortWriteOnly::new(HALT_PORT).write(0u32);

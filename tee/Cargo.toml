@@ -8,6 +8,7 @@ resolver = "2"
 constants = { path = "../common/constants" }
 io = { path = "../common/io" }
 kernel-macros = { path = "kernel-macros" }
+profiler-types = { path = "../common/profiler-types" }
 snp-types = { path = "../common/snp-types" }
 
 [profile.kernel]
@@ -16,6 +17,11 @@ opt-level = 3
 debug-assertions = true
 overflow-checks = true
 rustflags = ["-Ctarget-cpu=znver3"]
+
+[profile.kernel-profiling]
+inherits = "kernel"
+# LTO may cause multiple `mcount` calls per function.
+lto = "off"
 
 [profile.supervisor]
 inherits = "release"

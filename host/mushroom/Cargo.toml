@@ -21,6 +21,8 @@ libc = "0.2.146"
 loader = { workspace = true }
 mushroom-verify = { workspace = true, optional = true }
 nix = "0.26.1"
+profiler-types = { workspace = true }
+rand = "0.8.5"
 snp-types = { workspace = true }
 tokio = { version = "1.26.0", features = ["fs", "macros", "rt-multi-thread"] }
 tracing = "0.1.37"

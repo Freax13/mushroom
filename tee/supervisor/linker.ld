@@ -8,7 +8,7 @@ PHDRS
     stack        PT_LOAD AT(0x001c0000000);
     secrets      PT_LOAD AT(0x00200000000) FLAGS((1 << 1) | (1 << 2) | (1 << 29));
     shadow_stack PT_LOAD AT(0x00240000000);
-    shared       PT_LOAD AT(0x00280000000) FLAGS((1 << 2) | (1 << 30));
+    shared       PT_LOAD AT(0x00280000000) FLAGS((1 << 30));
     cpuid_page   PT_LOAD FLAGS((1 << 2) | (1 << 28));
     pagetables   PT_LOAD;
     reset_vector PT_LOAD;

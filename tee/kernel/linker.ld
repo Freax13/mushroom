@@ -2,13 +2,15 @@ ENTRY(reset_vector)
 
 PHDRS
 {
-    pagetables   PT_LOAD AT(0x10000000000);
-    reset_vector PT_LOAD AT(0x10040000000);
-    text         PT_LOAD AT(0x10040200000);
-    rodata       PT_LOAD AT(0x10080000000);
-    data         PT_LOAD AT(0x100c0000000);
-    tdata        PT_TLS  AT(0x10100000000);
-    stack        PT_LOAD AT(0x10140000000);
+    pagetables       PT_LOAD AT(0x10000000000);
+    reset_vector     PT_LOAD AT(0x10040000000);
+    text             PT_LOAD AT(0x10040200000);
+    rodata           PT_LOAD AT(0x10080000000);
+    data             PT_LOAD AT(0x100c0000000);
+    tdata            PT_TLS  AT(0x10100000000);
+    stack            PT_LOAD AT(0x10140000000);
+    profiler_control PT_LOAD AT(0x80000000000) FLAGS((1 << 30));
+    profiler_buffer  PT_LOAD AT(0x80040000000) FLAGS((1 << 30));
 }
 
 SECTIONS {
@@ -57,4 +59,14 @@ SECTIONS {
     {
         KEEP(*(.stack .stack.*))
     } :stack
+
+    .profiler_control (0xffff800005000000) :
+    {
+        KEEP(*(.profiler_control .profiler_control.*))
+    } :profiler_control
+
+    .profiler_buffer (0xffff800040000000) :
+    {
+        KEEP(*(.profiler_buffer .profiler_buffer.*))
+    } :profiler_buffer
 }

@@ -8,6 +8,7 @@ default-target = "x86_64-unknown-none"
 
 [features]
 harden = ["log/max_level_off", "log/release_max_level_off"]
+profiling = ["log/max_level_off", "log/release_max_level_off", "dep:profiler-types"]
 
 [dependencies]
 arrayvec = { version = "0.7.2", default-features = false }
@@ -22,4 +23,5 @@ futures = { version = "0.3.28", default-features = false, features = ["async-awa
 goblin = { version = "0.6.0", default-features = false, features = ["elf64", "elf32", "endian_fd"] }
 kernel-macros.workspace = true
 log = { version = "0.4.17", default-features = false }
+profiler-types = { workspace = true, optional = true }
 x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "1ba2dec28b0380f4b25cfaa3b62c8400d89ac82c" }

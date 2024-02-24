@@ -1,3 +1,5 @@
+#![feature(new_uninit)]
+
 use std::{
     collections::{hash_map::Entry, HashMap},
     mem::size_of,
@@ -14,7 +16,8 @@ use constants::{
     physical_address::DYNAMIC, FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT,
     MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
-use kvm::{KvmHandle, Page, VcpuHandle};
+use kvm::{KvmCpuidEntry2, KvmHandle, Page, VcpuHandle};
+use profiler::ProfileFolder;
 use snp_types::{
     ghcb::{
         self,
@@ -38,11 +41,13 @@ use crate::{
     kvm::{
         KvmCap, KvmExit, KvmExitUnknown, KvmExitVmgexit, KvmMemoryAttributes, SevHandle, VmHandle,
     },
+    profiler::start_profile_collection,
     slot::Slot,
 };
 
 pub mod insecure;
 mod kvm;
+pub mod profiler;
 mod slot;
 
 pub fn main(
@@ -52,6 +57,7 @@ pub fn main(
     load_kasan_shadow_mappings: bool,
     input: &[u8],
     policy: GuestPolicy,
+    profiler_folder: Option<ProfileFolder>,
 ) -> Result<MushroomResult> {
     let kvm_handle = KvmHandle::new()?;
     let sev_handle = SevHandle::new()?;
@@ -65,6 +71,7 @@ pub fn main(
         policy,
         &kvm_handle,
         &sev_handle,
+        profiler_folder,
     )?;
     vm_context.run_bsp()
 }
@@ -88,6 +95,7 @@ impl VmContext {
         policy: GuestPolicy,
         kvm_handle: &KvmHandle,
         sev_handle: &SevHandle,
+        profiler_folder: Option<ProfileFolder>,
     ) -> Result<Self> {
         let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
         let piafb = cpuid_entries
@@ -96,6 +104,7 @@ impl VmContext {
             .context("failed to find 'processor info and feature bits' entry")?;
         // Enable CPUID
         piafb.ecx.set_bit(21, true);
+        let cpuid_entries = Arc::from(cpuid_entries);
 
         let vm = kvm_handle.create_snp_vm()?;
         let vm = Arc::new(vm);
@@ -209,10 +218,14 @@ impl VmContext {
         let aps = (0..MAX_APS_COUNT)
             .map(|i| {
                 let id = FIRST_AP + i;
-                let ap_thread = Self::run_ap(id, vm.clone());
+                let ap_thread = Self::run_ap(id, vm.clone(), cpuid_entries.clone());
                 Ok((id, ap_thread))
             })
             .collect::<Result<_>>()?;
+
+        if let Some(profiler_folder) = profiler_folder {
+            start_profile_collection(profiler_folder, &memory_slots)?;
+        }
 
         Ok(Self {
             vm,
@@ -448,9 +461,16 @@ impl VmContext {
         }
     }
 
-    fn run_ap(id: u8, vm: Arc<VmHandle>) -> JoinHandle<()> {
+    fn run_ap(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> JoinHandle<()> {
         std::thread::spawn(move || {
             let ap = vm.create_vcpu(i32::from(id)).unwrap();
+            ap.set_cpuid(&cpuid_entries).unwrap();
+
+            // Allow the kernel to query it's processor id through TSC_AUX.
+            // Note that this doesn't do anything on EPYC Milan.
+            const TSC_AUX: u32 = 0xc0000103;
+            ap.set_msr(TSC_AUX, u64::from(id - FIRST_AP)).unwrap();
+
             let kvm_run = ap.get_kvm_run_block().unwrap();
 
             loop {

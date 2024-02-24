@@ -31,6 +31,9 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![allow(incomplete_features, internal_features)]
 
+#[cfg(all(feature = "harden", feature = "profiling"))]
+compiler_error!("Hardened kernels can't be profiled.");
+
 extern crate alloc;
 
 use exception::switch_stack;
@@ -46,6 +49,8 @@ mod logging;
 mod memory;
 mod panic;
 mod per_cpu;
+#[cfg(feature = "profiling")]
+mod profiler;
 mod reset_vector;
 mod rt;
 #[cfg(sanitize = "address")]
@@ -65,6 +70,13 @@ unsafe fn main() -> ! {
     }
 
     PerCpu::init();
+
+    #[cfg(feature = "profiling")]
+    if PerCpu::get().idx == 0 {
+        unsafe {
+            crate::profiler::init();
+        }
+    }
 
     switch_stack(init)
 }

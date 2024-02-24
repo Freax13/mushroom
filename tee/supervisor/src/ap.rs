@@ -83,7 +83,7 @@ impl Initialized {
             halted: false,
             apic_id,
             log_buffer: LogBuffer::new(),
-            vmsa: InitializedVmsa::new(vmsa_tweak_bitmap()),
+            vmsa: InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id - FIRST_AP)),
         }
     }
 

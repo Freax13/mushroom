@@ -19,12 +19,12 @@ command = "cargo"
 args = ["build", "-p", "mushroom", "--features", "bin"]
 
 [tasks.build-mushroom-production]
-condition = { profiles = ["production"] }
+condition = { profiles = ["production", "profiling"] }
 command = "cargo"
 args = ["build", "-p", "mushroom", "--features", "bin", "--release"]
 
 [tasks.run]
-dependencies = ["run-development", "run-kasan", "run-production"]
+dependencies = ["run-development", "run-kasan", "run-production", "run-profiling"]
 
 [tasks.run-development]
 condition = { profiles = ["development"] }
@@ -53,6 +53,16 @@ script = "target/release/mushroom $@"
 SUPERVISOR = "../tee/target/supervisor/supervisor-release/supervisor"
 KERNEL = "../tee/target/x86_64-unknown-none/kernel/kernel"
 INIT = "../tee/target/x86_64-unknown-linux-musl/release/init"
+
+[tasks.run-profiling]
+condition = { profiles = ["profiling"] }
+dependencies = ["build"]
+script = "target/release/mushroom $@"
+[tasks.run-profiling.env]
+SUPERVISOR = "../tee/target/supervisor/supervisor/supervisor"
+KERNEL = "../tee/target/x86_64-unknown-none/kernel-profiling/kernel"
+INIT = "../tee/target/x86_64-unknown-linux-musl/debug/init"
+PROFILE_FOLDER = "uftrace.data"
 
 [tasks.clean]
 dependencies = ["clean-tee"]

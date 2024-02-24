@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use mushroom::profiler::ProfileFolder;
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
 use snp_types::guest_policy::GuestPolicy;
 use tracing::warn;
@@ -113,10 +114,20 @@ struct RunCommand {
     config: ConfigArgs,
     #[command(flatten)]
     io: IoArgs,
+    /// Collect profile information into the given folder.
+    ///
+    /// The collected data can be analyzed with uftrace.
+    ///
+    /// The kernel has to be compiled with the `profiling` feature enabled. The
+    /// supervisor has to be compiled with the `hardened` feature disabled.
+    ///
+    ///  Profiling is currently incompatible with insecure mode.
+    #[arg(long, value_name = "PATH", env = "PROFILE_FOLDER")]
+    profile_folder: Option<PathBuf>,
 }
 
 fn run(run: RunCommand) -> Result<()> {
-    let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
+    let kernel = std::fs::read(&run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
 
@@ -125,6 +136,12 @@ fn run(run: RunCommand) -> Result<()> {
         let supervisor =
             std::fs::read(supervisor_path).context("failed to read supervisor file")?;
 
+        let profile_folder = run
+            .profile_folder
+            .map(|profile_folder| ProfileFolder::new(profile_folder, run.config.kernel))
+            .transpose()
+            .context("failed to create profile folder")?;
+
         mushroom::main(
             &supervisor,
             &kernel,
@@ -132,10 +149,14 @@ fn run(run: RunCommand) -> Result<()> {
             run.config.kasan,
             &input,
             run.config.policy.policy(),
+            profile_folder,
         )?
     } else {
         if run.io.attestation_report.is_some() {
             warn!("No attestation report will be produced in insecure mode.");
+        }
+        if run.profile_folder.is_some() {
+            warn!("Profiling in insecure mode is currently not supported.");
         }
         mushroom::insecure::main(&kernel, &init, run.config.kasan, &input)?
     };
