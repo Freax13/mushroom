@@ -90,7 +90,7 @@ extern "C" fn init() -> ! {
 
     let mut vm_activator = unsafe { VirtualMemoryActivator::new() };
 
-    // The first AP does some extract initialization work.
+    // The first AP does some extra initialization work.
     if PerCpu::get().idx == 0 {
         user::process::start_init_process(&mut vm_activator);
     }
