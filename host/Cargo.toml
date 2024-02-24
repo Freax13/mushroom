@@ -3,7 +3,6 @@ members = ["mushroom", "mushroom-verify", "vcek-kds"]
 resolver = "2"
 
 [workspace.dependencies]
-mushroom = { path = "mushroom" }
 mushroom-verify = { path = "mushroom-verify" }
 constants = { path = "../common/constants" }
 io = { path = "../common/io" }
