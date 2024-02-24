@@ -5,6 +5,7 @@ use core::{
 };
 
 use constants::virtual_address::HEAP;
+use usize_conversions::FromUsize;
 use x86_64::{
     structures::paging::{FrameAllocator, FrameDeallocator, Page, Size4KiB},
     VirtAddr,
@@ -40,11 +41,11 @@ where
         let pages = units * (min_size / 0x1000);
 
         let size = pages * 0x1000;
-        let len = u64::try_from(size).map_err(|_| AllocError)?;
+        let len = u64::from_usize(size);
         let addr = if layout.align() <= min_size {
             self.bump_addr.fetch_add(len, Ordering::SeqCst)
         } else {
-            let align = u64::try_from(layout.align()).unwrap();
+            let align = u64::from_usize(layout.align());
             let addr = self
                 .bump_addr
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |addr| {

@@ -24,4 +24,5 @@ goblin = { version = "0.6.0", default-features = false, features = ["elf64", "el
 kernel-macros.workspace = true
 log = { version = "0.4.17", default-features = false }
 profiler-types = { workspace = true, optional = true }
+usize_conversions = "0.2.0"
 x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "1ba2dec28b0380f4b25cfaa3b62c8400d89ac82c" }

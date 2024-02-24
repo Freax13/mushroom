@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use arrayvec::ArrayVec;
 use bit_field::BitArray;
 use log::{debug, warn};
+use usize_conversions::usize_from;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB, Size4KiB};
 
 use crate::supervisor;
@@ -234,7 +235,7 @@ impl Bitmap {
         let base_frame = PhysFrame::containing_address(base_addr);
 
         let offset = frame - base_frame;
-        let offset = usize::try_from(offset).unwrap();
+        let offset = usize_from(offset);
         self.bitmap.set_bit(offset, false);
 
         self.used -= 1;

@@ -9,6 +9,7 @@ use alloc::{ffi::CString, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use kernel_macros::syscall;
+use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
@@ -178,14 +179,14 @@ async fn read(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let count = usize::try_from(count)?;
+    let count = usize_from(count);
 
     let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
         fd.read_to_user(vm, buf, count)
     })
     .await?;
 
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
     Ok(len)
 }
 
@@ -199,14 +200,14 @@ async fn write(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let count = usize::try_from(count)?;
+    let count = usize_from(count);
 
     let len = do_io_with_vm(&*fd.clone(), Events::WRITE, virtual_memory, move |vm| {
         fd.write_from_user(vm, buf, count)
     })
     .await?;
 
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
     Ok(len)
 }
 
@@ -354,7 +355,7 @@ fn poll(
     timeout: u64,
 ) -> SyscallResult {
     vm_activator.activate(&virtual_memory, |vm| {
-        for i in 0..usize::try_from(nfds).unwrap() {
+        for i in 0..usize_from(nfds) {
             let _pollfd = vm.read(fds.bytes_offset(i * 8))?;
         }
         Result::<_>::Ok(())
@@ -374,12 +375,12 @@ fn lseek(
     offset: u64,
     whence: Whence,
 ) -> SyscallResult {
-    let offset = usize::try_from(offset)?;
+    let offset = usize_from(offset);
 
     let fd = fdtable.get(fd)?;
     let offset = fd.seek(offset, whence)?;
 
-    let offset = u64::try_from(offset)?;
+    let offset = u64::from_usize(offset);
     Ok(offset)
 }
 
@@ -527,7 +528,7 @@ fn rt_sigaction(
     oldact: Pointer<Sigaction>,
     sigsetsize: u64,
 ) -> SyscallResult {
-    let signum = usize::try_from(signum)?;
+    let signum = usize_from(signum);
 
     // FIXME: SIGKILL and SIGSTOP are special
     // FIXME: sigsetsize
@@ -631,8 +632,8 @@ fn pread64(
     let fd = fdtable.get(fd)?;
 
     let buf = buf.get();
-    let count = usize::try_from(count)?;
-    let pos = usize::try_from(pos)?;
+    let count = usize_from(count);
+    let pos = usize_from(pos);
 
     let mut chunk = [0u8; 8192];
     let max_chunk_len = chunk.len();
@@ -644,7 +645,7 @@ fn pread64(
 
     vm_activator.activate(&virtual_memory, |vm| vm.write_bytes(buf, chunk))?;
 
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
 
     Ok(len)
 }
@@ -662,8 +663,8 @@ fn pwrite64(
     let fd = fdtable.get(fd)?;
 
     let buf = buf.get();
-    let count = usize::try_from(count)?;
-    let pos = usize::try_from(pos)?;
+    let count = usize_from(count);
+    let pos = usize_from(pos);
 
     let mut chunk = [0u8; 8192];
     let max_chunk_len = chunk.len();
@@ -673,7 +674,7 @@ fn pwrite64(
 
     let len = fd.pwrite(pos, chunk)?;
 
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
     Ok(len)
 }
 
@@ -689,7 +690,7 @@ async fn readv(
     if vlen == 0 {
         return SyscallResult::Ok(0);
     }
-    let vlen = usize::try_from(vlen)?;
+    let vlen = usize_from(vlen);
 
     let iovec =
         VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| -> Result<_> {
@@ -721,7 +722,7 @@ async fn writev(
     if vlen == 0 {
         return SyscallResult::Ok(0);
     }
-    let vlen = usize::try_from(vlen)?;
+    let vlen = usize_from(vlen);
 
     let iovec =
         VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| -> Result<_> {
@@ -821,7 +822,7 @@ async fn sendfile(
 ) -> SyscallResult {
     let out = fdtable.get(out)?;
     let r#in = fdtable.get(r#in)?;
-    let count = usize::try_from(count)?;
+    let count = usize_from(count);
 
     if !offset.is_null() {
         todo!();
@@ -843,7 +844,7 @@ async fn sendfile(
         out.write_all(buffer).await?;
     }
 
-    let len = u64::try_from(total_len)?;
+    let len = u64::from_usize(total_len);
     Ok(len)
 }
 
@@ -857,7 +858,7 @@ async fn sendfile64(
 ) -> SyscallResult {
     let out = fdtable.get(out)?;
     let r#in = fdtable.get(r#in)?;
-    let count = usize::try_from(count)?;
+    let count = usize_from(count);
 
     if !offset.is_null() {
         todo!();
@@ -879,7 +880,7 @@ async fn sendfile64(
         out.write_all(buffer).await?;
     }
 
-    let len = u64::try_from(total_len)?;
+    let len = u64::from_usize(total_len);
     Ok(len)
 }
 
@@ -1320,7 +1321,7 @@ fn getdents(
     dirent: Pointer<[OldDirEntry]>,
     count: u64,
 ) -> SyscallResult {
-    let capacity = usize::try_from(count)?;
+    let capacity = usize_from(count);
     let fd = fdtable.get(fd)?;
     let entries = fd.getdents64(capacity, &mut ctx)?;
     let entries = entries.into_iter().map(OldDirEntry).collect::<Vec<_>>();
@@ -1328,7 +1329,7 @@ fn getdents(
     let len = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
         vm.write_with_abi(dirent, &*entries, abi)
     })?;
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
     Ok(len)
 }
 
@@ -1342,7 +1343,7 @@ fn getcwd(
     size: u64,
 ) -> SyscallResult {
     let cwd = thread.cwd.path(&mut ctx)?;
-    if cwd.as_bytes().len() + 1 > usize::try_from(size)? {
+    if cwd.as_bytes().len() + 1 > usize_from(size) {
         return Err(Error::range(()));
     }
 
@@ -1450,7 +1451,7 @@ fn readlink(
     buf: Pointer<[u8]>,
     bufsiz: u64,
 ) -> SyscallResult {
-    let bufsiz = usize::try_from(bufsiz)?;
+    let bufsiz = usize_from(bufsiz);
 
     let len = vm_activator.activate(&virtual_memory, |vm| {
         let pathname = vm.read(pathname)?;
@@ -1466,7 +1467,7 @@ fn readlink(
         Result::<_, Error>::Ok(len)
     })?;
 
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
     Ok(len)
 }
 
@@ -1714,14 +1715,14 @@ fn getdents64(
     dirent: Pointer<[DirEntry]>,
     count: u64,
 ) -> SyscallResult {
-    let capacity = usize::try_from(count)?;
+    let capacity = usize_from(count);
     let fd = fdtable.get(fd)?;
     let entries = fd.getdents64(capacity, &mut ctx)?;
 
     let len = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
         vm.write(dirent, &*entries)
     })?;
-    let len = u64::try_from(len)?;
+    let len = u64::from_usize(len);
     Ok(len)
 }
 
@@ -2225,7 +2226,7 @@ async fn copy_file_range(
         todo!()
     }
 
-    let mut len = usize::try_from(len).unwrap_or(!0);
+    let mut len = usize_from(len);
     let mut copied = 0;
 
     let mut buffer = [0; 128];
@@ -2247,7 +2248,7 @@ async fn copy_file_range(
 
         // Update len and copied.
         len -= num;
-        let num = u64::try_from(num)?;
+        let num = u64::from_usize(num);
         copied += num;
     }
 

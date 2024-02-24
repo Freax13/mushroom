@@ -7,6 +7,7 @@ use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{checked, CheckedBitPattern, NoUninit, Pod, Zeroable};
+use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -192,7 +193,7 @@ impl<T> Pointer<T> {
 
     pub fn bytes_offset(self, len: usize) -> Self {
         Self {
-            value: self.value + u64::try_from(len).unwrap(),
+            value: self.value + u64::from_usize(len),
             _marker: PhantomData,
         }
     }

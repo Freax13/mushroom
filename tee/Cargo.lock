@@ -426,6 +426,7 @@ dependencies = [
  "kernel-macros",
  "log",
  "profiler-types",
+ "usize_conversions",
  "x86_64",
 ]
 
@@ -724,6 +725,12 @@ dependencies = [
  "crypto-common",
  "subtle",
 ]
+
+[[package]]
+name = "usize_conversions"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f70329e2cbe45d6c97a5112daad40c34cd9a4e18edb5a2a18fefeb584d8d25e5"
 
 [[package]]
 name = "version_check"

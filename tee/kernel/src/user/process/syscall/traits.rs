@@ -5,6 +5,7 @@ use core::{
     future::Future,
     pin::Pin,
 };
+use usize_conversions::usize_from;
 
 use log::{trace, warn};
 
@@ -133,7 +134,7 @@ impl SyscallHandlers {
 
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(&self, thread: Arc<Thread>, args: SyscallArgs) -> SyscallResult {
-        let syscall_no = usize::try_from(args.no).unwrap();
+        let syscall_no = usize_from(args.no);
 
         let handlers: &[_] = match args.abi {
             Abi::I386 => &self.i386_handlers,

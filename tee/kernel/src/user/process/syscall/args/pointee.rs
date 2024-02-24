@@ -12,6 +12,7 @@ use bytemuck::{
     bytes_of, bytes_of_mut, cast, checked::try_pod_read_unaligned, CheckedBitPattern, NoUninit,
     Pod, Zeroable,
 };
+use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -190,7 +191,7 @@ where
     fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize> {
         let mut total_len = 0;
         for value in self.iter() {
-            let size = value.write(addr + total_len, vm, abi)?;
+            let size = value.write(addr + u64::from_usize(total_len), vm, abi)?;
             total_len += size;
         }
         Ok(total_len)
@@ -244,7 +245,7 @@ where
         let mut total_len = 0;
         let mut arr = PartiallyInitialized::new();
         for _ in 0..N {
-            let (len, value) = ReadablePointee::read(addr + total_len, vm, abi)?;
+            let (len, value) = ReadablePointee::read(addr + u64::from_usize(total_len), vm, abi)?;
             total_len += len;
             arr.push(value);
         }
@@ -333,7 +334,7 @@ impl ReadablePointee for Path {
 impl WritablePointee for Path {
     fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _abi: Abi) -> Result<usize> {
         vm.write_bytes(addr, self.as_bytes())?;
-        vm.write_bytes(addr + self.as_bytes().len(), b"\0")?;
+        vm.write_bytes(addr + u64::from_usize(self.as_bytes().len()), b"\0")?;
         Ok(self.as_bytes().len() + 1)
     }
 }
@@ -822,7 +823,10 @@ impl WritablePointee for DirEntry {
         };
         vm.write_bytes(addr, bytes_of(&dirent))?;
         vm.write_bytes(addr + 19u64, self.name.as_ref())?;
-        vm.write_bytes(addr + 19u64 + self.name.as_ref().len(), &[0])?;
+        vm.write_bytes(
+            addr + 19u64 + u64::from_usize(self.name.as_ref().len()),
+            &[0],
+        )?;
 
         Ok(self.len())
     }
@@ -838,14 +842,13 @@ impl WritablePointee for OldDirEntry {
 
         let dirent = OldLinuxDirent {
             ino: self.0.ino,
-            off: u64::try_from(len)?,
+            off: u64::from_usize(len),
             reclen: u16::try_from(len)?,
         };
         let base_len = vm.write_with_abi(Pointer::new(addr.as_u64()), dirent, abi)?;
-        // vm.write_bytes(addr, bytes_of(&dirent))?;
-        vm.write_bytes(addr + base_len, self.0.name.as_ref())?;
+        vm.write_bytes(addr + u64::from_usize(base_len), self.0.name.as_ref())?;
         vm.write_bytes(
-            addr + base_len + self.0.name.as_ref().len(),
+            addr + u64::from_usize(base_len + self.0.name.as_ref().len()),
             &[0, self.0.ty as u8],
         )?;
         Ok(len)

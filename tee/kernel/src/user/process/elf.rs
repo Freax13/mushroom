@@ -12,6 +12,7 @@ use goblin::{
         program_header::PT_LOAD,
     },
 };
+use usize_conversions::FromUsize;
 use x86_64::{instructions::random::RdRand, VirtAddr};
 
 use super::{
@@ -157,12 +158,12 @@ impl ActiveVirtualMemory<'_, '_> {
         let mut write_bytes = |value: &[u8]| {
             let addr = str_addr;
             self.write_bytes(str_addr, value)?;
-            str_addr += value.len();
+            str_addr += u64::from_usize(value.len());
             Result::<_>::Ok(addr)
         };
         let mut write_str = |value: &CStr| write_bytes(value.to_bytes_with_nul());
 
-        write(u64::try_from(argv.len()).unwrap()); // argc
+        write(u64::from_usize(argv.len())); // argc
         for arg in argv {
             let arg = write_str(arg.as_ref())?;
             write(arg.as_u64());

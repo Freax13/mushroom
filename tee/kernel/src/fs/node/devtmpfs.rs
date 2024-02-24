@@ -9,6 +9,7 @@ use crate::{
     user::process::syscall::args::OpenFlags,
 };
 use alloc::sync::{Arc, Weak};
+use usize_conversions::{usize_from, FromUsize};
 use x86_64::instructions::random::RdRand;
 
 use crate::{
@@ -248,7 +249,7 @@ impl File for OutputFile {
             supervisor::output(buf);
             guard.offset += buf.len();
 
-            addr += buf.len();
+            addr += u64::from_usize(buf.len());
             remaining_len -= buf.len();
         }
 
@@ -266,7 +267,7 @@ impl File for OutputFile {
 
     fn truncate(&self, len: u64) -> Result<()> {
         let guard = self.internal.lock();
-        if guard.offset != usize::try_from(len)? {
+        if guard.offset != usize_from(len) {
             return Err(Error::io(()));
         }
         Ok(())

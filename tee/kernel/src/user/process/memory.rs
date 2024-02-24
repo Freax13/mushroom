@@ -13,6 +13,7 @@ use bit_field::BitField;
 use bitflags::bitflags;
 use crossbeam_queue::SegQueue;
 use log::debug;
+use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
     instructions::{random::RdRand, tlb::Pcid},
@@ -252,7 +253,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let state = state.initialized();
 
         let start = addr;
-        let end_inclusive = addr + (bytes.len() - 1);
+        let end_inclusive = addr + u64::from_usize(bytes.len() - 1);
 
         let start_page = Page::<Size4KiB>::containing_address(start);
         let end_inclusive_page = Page::<Size4KiB>::containing_address(end_inclusive);
@@ -268,7 +269,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 .ok_or(Error::fault(()))?;
             let ptr = unsafe { mapping.make_readable(page)? };
 
-            let src_offset = usize::try_from(copy_start - addr).unwrap();
+            let src_offset = usize_from(copy_start - addr);
 
             let copy_start_offset = usize::from(copy_start.page_offset());
             let copy_end_inclusive_offset = usize::from(copy_end_inclusive.page_offset());
@@ -344,7 +345,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let state = state.initialized();
 
         let start = addr;
-        let end_inclusive = addr + (bytes.len() - 1);
+        let end_inclusive = addr + u64::from_usize(bytes.len() - 1);
 
         let start_page = Page::<Size4KiB>::containing_address(start);
         let end_inclusive_page = Page::<Size4KiB>::containing_address(end_inclusive);
@@ -360,7 +361,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 .ok_or(Error::fault(()))?;
             let ptr = unsafe { mapping.make_writable(page)? };
 
-            let src_offset = usize::try_from(copy_start - addr).unwrap();
+            let src_offset = usize_from(copy_start - addr);
 
             let copy_start_offset = usize::from(copy_start.page_offset());
             let copy_end_inclusive_offset = usize::from(copy_end_inclusive.page_offset());
@@ -1098,9 +1099,7 @@ impl Mapping {
             match &self.backing {
                 Backing::File(file_backing) => {
                     let aligned_static_bytes = if let Cow::Borrowed(bytes) = &*file_backing.bytes {
-                        let offset =
-                            usize::try_from(file_backing.offset + (page - self.start) * 0x1000)
-                                .unwrap();
+                        let offset = usize_from(file_backing.offset + (page - self.start) * 0x1000);
                         let backing_bytes = &bytes[offset..][..0x1000];
                         let backing_addr =
                             VirtAddr::from_ptr(backing_bytes as *const [u8] as *const u8);
@@ -1130,9 +1129,7 @@ impl Mapping {
                     } else {
                         let frame = (&FRAME_ALLOCATOR).allocate_frame().unwrap();
 
-                        let offset =
-                            usize::try_from(file_backing.offset + (page - self.start) * 0x1000)
-                                .unwrap();
+                        let offset = usize_from(file_backing.offset + (page - self.start) * 0x1000);
                         let bytes = &file_backing.bytes[offset..];
                         if bytes.len() >= 0x1000 {
                             let backing_bytes = &bytes[..0x1000];
@@ -1240,7 +1237,7 @@ impl Backing {
     pub fn copy_initial_memory_to_slice(&self, offset: u64, buf: &mut [u8]) {
         match self {
             Backing::File(backing) => {
-                let offset = usize::try_from(backing.offset + offset).unwrap();
+                let offset = usize_from(backing.offset + offset);
                 if offset > backing.bytes.len() {
                     buf.fill(0);
                 } else {
