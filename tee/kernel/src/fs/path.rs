@@ -62,7 +62,9 @@ impl Path {
 
     pub fn join_segment(&mut self, name: &FileName) -> Self {
         let mut bytes = self.bytes.to_vec();
-        bytes.push(b'/');
+        if !bytes.ends_with(b"/") {
+            bytes.push(b'/');
+        }
         bytes.extend_from_slice(&name.0);
         Self {
             bytes: Arc::from(bytes),
