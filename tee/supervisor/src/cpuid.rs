@@ -154,7 +154,12 @@ const EXTENDED_FUNCTIONS: &[CpuidFunctions] = &[
         fn_8000_0006_ecx,
         fn_8000_0006_edx,
     ),
-    UNIMPLEMENTED,
+    (
+        fn_8000_0007_eax,
+        fn_8000_0007_ebx,
+        fn_8000_0007_ecx,
+        fn_8000_0007_edx,
+    ),
     (
         fn_8000_0008_eax,
         fn_8000_0008_ebx,
@@ -348,6 +353,22 @@ fn fn_8000_0006_ecx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
 // FIXME: Fill in reasonable values.
 fn fn_8000_0006_edx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
     0x20_08_01_40
+}
+
+fn fn_8000_0007_eax(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0
+}
+
+fn fn_8000_0007_ebx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0
+}
+
+fn fn_8000_0007_ecx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0
+}
+
+fn fn_8000_0007_edx(_eax: u32, _ecx: u32, _xcr0: u64, _xss: u64) -> u32 {
+    0
 }
 
 fn fn_8000_0008_eax(eax: u32, _ecx: u32, xcr0: u64, xss: u64) -> u32 {
