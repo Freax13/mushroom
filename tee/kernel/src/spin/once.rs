@@ -69,7 +69,7 @@ impl<T> Once<T> {
             if counter.0 == 0 {
                 warn!("once stalling at {}", Location::caller());
             }
-
+            core::hint::spin_loop();
             state = self.state.load(Ordering::Acquire);
         }
 

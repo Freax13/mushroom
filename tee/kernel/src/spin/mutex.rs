@@ -48,6 +48,8 @@ impl<T> Mutex<T> {
     fn lock_slow_path(&self) -> MutexGuard<'_, T> {
         let mut counter = Wrapping(0u32);
         loop {
+            core::hint::spin_loop();
+
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
