@@ -224,19 +224,23 @@ impl Directory for TmpFsDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Vec<DirEntry> {
+        let parent_ino = Directory::parent(self).ok().map(|parent| parent.stat().ino);
+
         let guard = self.internal.lock();
 
         let mut entries = Vec::with_capacity(2 + guard.items.len());
         entries.push(DirEntry {
-            ino: 0,
+            ino: self.ino,
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         });
-        entries.push(DirEntry {
-            ino: 0,
-            ty: FileType::Dir,
-            name: DirEntryName::DotDot,
-        });
+        if let Some(ino) = parent_ino {
+            entries.push(DirEntry {
+                ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
+        }
         for (name, node) in guard.items.iter() {
             let stat = node.stat();
             entries.push(DirEntry {
