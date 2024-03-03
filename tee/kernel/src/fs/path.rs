@@ -60,7 +60,8 @@ impl Path {
         &self.bytes
     }
 
-    pub fn join_segment(&mut self, name: &FileName) -> Self {
+    #[must_use]
+    pub fn join_segment(&self, name: &FileName) -> Self {
         let mut bytes = self.bytes.to_vec();
         if !bytes.ends_with(b"/") {
             bytes.push(b'/');

@@ -106,7 +106,7 @@ pub trait Directory: INode {
             unreachable!()
         };
 
-        path.join_segment(&name);
+        path = path.join_segment(&name);
 
         Ok(path)
     }
