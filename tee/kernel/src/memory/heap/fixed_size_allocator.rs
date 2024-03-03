@@ -292,11 +292,8 @@ impl<const N: usize> ChunkHeader<N> {
             }
         }
 
-        // Release the physical memory.
+        // Get the frame.
         let frame = this.frame;
-        unsafe {
-            (&supervisor::ALLOCATOR).deallocate_frame(frame);
-        }
 
         // Unmap shadow memory for the chunk.
         #[cfg(sanitize = "address")]
@@ -305,6 +302,11 @@ impl<const N: usize> ChunkHeader<N> {
             Size2MiB::SIZE as usize,
             &mut &crate::memory::heap::FRAME_ALLOCATOR,
         );
+
+        // Release the physical memory.
+        unsafe {
+            (&supervisor::ALLOCATOR).deallocate_frame(frame);
+        }
 
         Ok(())
     }
