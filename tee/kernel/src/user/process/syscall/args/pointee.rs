@@ -28,7 +28,9 @@ use crate::{
     },
 };
 
-use super::{FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Timespec, WStatus};
+use super::{
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Time, Timespec, WStatus,
+};
 
 /// This trait is implemented by types for which userspace pointers can exist.
 pub trait Pointee {
@@ -917,5 +919,32 @@ impl TryFrom<OldLinuxDirent> for OldLinuxDirent64 {
             off: value.off,
             reclen: value.reclen,
         })
+    }
+}
+
+impl Pointee for Time {}
+
+impl AbiDependentPointee for Time {
+    type I386 = Time32;
+    type Amd64 = Time64;
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(transparent)]
+pub struct Time32(u32);
+
+impl From<Time> for Time32 {
+    fn from(value: Time) -> Self {
+        Self(value.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(transparent)]
+pub struct Time64(u64);
+
+impl From<Time> for Time64 {
+    fn from(value: Time) -> Self {
+        Self(u64::from(value.0))
     }
 }

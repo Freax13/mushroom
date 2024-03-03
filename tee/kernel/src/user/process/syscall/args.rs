@@ -921,3 +921,6 @@ bitflags! {
         const AT_EMPTY_PATH = 0x1000;
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct Time(pub u32);

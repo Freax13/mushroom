@@ -28,7 +28,7 @@ use crate::{
         path::Path,
     },
     rt::oneshot,
-    time,
+    time::{self, now},
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{LongOffset, UserDesc, UserDescFlags},
@@ -41,8 +41,8 @@ use self::{
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
         FdNum, FileMode, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags,
         MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow,
-        SocketPairType, Stat, Stat64, SyscallArg, Timespec, UnlinkOptions, WStatus, WaitOptions,
-        Whence,
+        SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus,
+        WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -139,6 +139,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
+    handlers.register(SysTime);
     handlers.register(SysFutex);
     handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
@@ -1600,6 +1601,24 @@ fn mount(
 fn gettid(thread: &mut ThreadGuard) -> SyscallResult {
     let tid = thread.tid();
     Ok(u64::from(tid))
+}
+
+#[syscall(i386 = 13, amd64 = 201)]
+fn time(
+    vm_activator: &mut VirtualMemoryActivator,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    tloc: Pointer<Time>,
+) -> SyscallResult {
+    let now = now();
+    let tv_sec = now.tv_sec;
+
+    if !tloc.is_null() {
+        let time = Time(tv_sec);
+        vm_activator.activate(&virtual_memory, |vm| vm.write_with_abi(tloc, time, abi))?;
+    }
+
+    Ok(u64::from(tv_sec))
 }
 
 #[syscall(i386 = 240, amd64 = 202)]
