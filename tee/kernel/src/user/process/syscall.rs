@@ -39,8 +39,8 @@ use self::{
     args::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
-        FdNum, FileMode, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags,
-        MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow,
+        FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions,
+        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow,
         SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus,
         WaitOptions, Whence,
     },
@@ -1867,10 +1867,17 @@ fn openat(
     };
 
     let fd = if flags.contains(OpenFlags::PATH) {
-        if flags.contains(OpenFlags::NOFOLLOW) {
-            lookup_node(start_dir.clone(), &filename, &mut ctx)?;
+        let node = if flags.contains(OpenFlags::NOFOLLOW) {
+            lookup_node(start_dir.clone(), &filename, &mut ctx)?
         } else {
-            lookup_and_resolve_node(start_dir.clone(), &filename, &mut ctx)?;
+            lookup_and_resolve_node(start_dir.clone(), &filename, &mut ctx)?
+        };
+
+        if flags.contains(OpenFlags::DIRECTORY) {
+            let stat = node.stat();
+            if stat.mode.ty() != FileType::Dir {
+                return Err(Error::not_dir(()));
+            }
         }
 
         let path_fd = PathFd::new(Arc::downgrade(&start_dir), filename);
