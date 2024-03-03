@@ -77,6 +77,15 @@ where
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        #[cfg(sanitize = "address")]
+        crate::sanitize::unmap_shadow(
+            ptr.as_ptr().cast_const().cast(),
+            layout
+                .size()
+                .next_multiple_of(crate::sanitize::MIN_ALLOCATION_SIZE),
+            &mut { self.allocator },
+        );
+
         let pages = layout.size().div_ceil(0x1000);
 
         let addr = VirtAddr::from_ptr(ptr.as_ptr());
