@@ -79,7 +79,7 @@ impl Debug for Path {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum PathSegment<'a> {
     /// The path starts at the root of the file system. Can only be the first
     /// segment in a path.
@@ -107,5 +107,11 @@ impl<'a> FileName<'a> {
 
     pub fn into_owned(self) -> FileName<'static> {
         FileName(Cow::Owned(self.0.into_owned()))
+    }
+}
+
+impl Debug for FileName<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        Display::fmt(&self.as_bytes().escape_ascii(), f)
     }
 }
