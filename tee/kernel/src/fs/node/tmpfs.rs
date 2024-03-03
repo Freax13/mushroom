@@ -32,7 +32,7 @@ use crate::{
 pub struct TmpFsDir {
     ino: u64,
     this: Weak<Self>,
-    parent: Weak<dyn INode>,
+    parent: Mutex<Weak<dyn INode>>,
     internal: Mutex<DevTmpFsDirInternal>,
 }
 
@@ -51,7 +51,7 @@ impl TmpFsDir {
         Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
             this: this_weak.clone(),
-            parent: this_weak.clone(),
+            parent: Mutex::new(this_weak.clone()),
             internal: Mutex::new(DevTmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
@@ -68,7 +68,7 @@ impl TmpFsDir {
         Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
             this: this_weak.clone(),
-            parent,
+            parent: Mutex::new(parent),
             internal: Mutex::new(DevTmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
@@ -113,6 +113,7 @@ impl INode for TmpFsDir {
     }
 
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
+        node.set_parent(self.this.clone());
         self.internal.lock().items.insert(file_name.clone(), node);
         Ok(())
     }
@@ -121,9 +122,14 @@ impl INode for TmpFsDir {
 impl Directory for TmpFsDir {
     fn parent(&self) -> Result<DynINode> {
         self.parent
+            .lock()
             .clone()
             .upgrade()
             .ok_or_else(|| Error::no_ent(()))
+    }
+
+    fn set_parent(&self, parent: Weak<dyn INode>) {
+        *self.parent.lock() = parent;
     }
 
     fn get_node(&self, path_segment: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {

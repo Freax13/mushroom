@@ -6,7 +6,10 @@ use crate::{
     spin::mutex::Mutex,
     user::process::syscall::args::{FileMode, OpenFlags},
 };
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 
 use crate::{
     error::{Error, Result},
@@ -21,6 +24,10 @@ macro_rules! dir_impls {
     () => {
         fn parent(&self) -> Result<DynINode> {
             Directory::parent(self)
+        }
+
+        fn set_parent(&self, parent: Weak<dyn INode>) {
+            Directory::set_parent(self, parent)
         }
 
         fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
@@ -74,6 +81,7 @@ macro_rules! dir_impls {
 
 pub trait Directory: INode {
     fn parent(&self) -> Result<DynINode>;
+    fn set_parent(&self, parent: Weak<dyn INode>);
     fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
         let parent = Directory::parent(self)?;
 

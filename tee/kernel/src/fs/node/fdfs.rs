@@ -24,7 +24,7 @@ pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> DynINode {
     Arc::new_cyclic(|this| FdFsRoot {
         ino: new_ino(),
         this: this.clone(),
-        parent,
+        parent: Mutex::new(parent),
         mode: Mutex::new(mode),
     })
 }
@@ -32,7 +32,7 @@ pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> DynINode {
 struct FdFsRoot {
     ino: u64,
     this: Weak<Self>,
-    parent: Weak<dyn INode>,
+    parent: Mutex<Weak<dyn INode>>,
     mode: Mutex<FileMode>,
 }
 
@@ -76,9 +76,14 @@ impl INode for FdFsRoot {
 impl Directory for FdFsRoot {
     fn parent(&self) -> Result<DynINode> {
         self.parent
+            .lock()
             .clone()
             .upgrade()
             .ok_or_else(|| Error::no_ent(()))
+    }
+
+    fn set_parent(&self, parent: Weak<dyn INode>) {
+        *self.parent.lock() = parent;
     }
 
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {

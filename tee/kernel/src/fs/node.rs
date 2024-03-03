@@ -62,6 +62,10 @@ pub trait INode: Send + Sync + 'static {
         Err(Error::not_dir(()))
     }
 
+    fn set_parent(&self, parent: Weak<dyn INode>) {
+        let _ = parent;
+    }
+
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
         let _ = file_name;
         let _ = ctx;
