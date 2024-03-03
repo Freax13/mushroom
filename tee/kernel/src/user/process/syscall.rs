@@ -1503,7 +1503,8 @@ fn chmod(
 }
 
 #[syscall(i386 = 94, amd64 = 91)]
-fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: FileMode) -> SyscallResult {
+fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: u64) -> SyscallResult {
+    let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
     fd.set_mode(mode)?;
     Ok(0)
