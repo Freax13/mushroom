@@ -1306,7 +1306,7 @@ fn fcntl64(
 #[syscall(i386 = 93, amd64 = 77)]
 fn ftruncate(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, length: u64) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.truncate(length)?;
+    fd.truncate(usize_from(length))?;
     Ok(0)
 }
 

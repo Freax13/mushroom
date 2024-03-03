@@ -81,7 +81,7 @@ pub trait File: INode {
 
         self.append(buf)
     }
-    fn truncate(&self, length: u64) -> Result<()>;
+    fn truncate(&self, length: usize) -> Result<()>;
 }
 
 pub fn open_file(file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -234,7 +234,7 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.write(pos, buf)
     }
 
-    fn truncate(&self, length: u64) -> Result<()> {
+    fn truncate(&self, length: usize) -> Result<()> {
         self.file.truncate(length)
     }
 
@@ -372,7 +372,7 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         self.file.write(pos, buf)
     }
 
-    fn truncate(&self, length: u64) -> Result<()> {
+    fn truncate(&self, length: usize) -> Result<()> {
         self.file.truncate(length)
     }
 

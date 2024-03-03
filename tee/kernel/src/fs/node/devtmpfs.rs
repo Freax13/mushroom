@@ -9,7 +9,7 @@ use crate::{
     user::process::syscall::args::OpenFlags,
 };
 use alloc::sync::{Arc, Weak};
-use usize_conversions::{usize_from, FromUsize};
+use usize_conversions::FromUsize;
 use x86_64::instructions::random::RdRand;
 
 use crate::{
@@ -145,7 +145,7 @@ impl File for NullFile {
         Ok(len)
     }
 
-    fn truncate(&self, _len: u64) -> Result<()> {
+    fn truncate(&self, _len: usize) -> Result<()> {
         Ok(())
     }
 }
@@ -265,9 +265,9 @@ impl File for OutputFile {
         Ok(buf.len())
     }
 
-    fn truncate(&self, len: u64) -> Result<()> {
+    fn truncate(&self, len: usize) -> Result<()> {
         let guard = self.internal.lock();
-        if guard.offset != usize_from(len) {
+        if guard.offset != len {
             return Err(Error::io(()));
         }
         Ok(())
@@ -369,7 +369,7 @@ impl File for RandomFile {
         Ok(len)
     }
 
-    fn truncate(&self, _len: u64) -> Result<()> {
+    fn truncate(&self, _len: usize) -> Result<()> {
         Ok(())
     }
 }

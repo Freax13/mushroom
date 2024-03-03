@@ -431,9 +431,7 @@ impl File for TmpFsFile {
         Ok(len)
     }
 
-    fn truncate(&self, len: u64) -> Result<()> {
-        let len = usize::try_from(len)?;
-
+    fn truncate(&self, len: usize) -> Result<()> {
         let mut guard = self.internal.lock();
         if guard.content.len() != len {
             if len == 0 {
