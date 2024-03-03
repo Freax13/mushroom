@@ -271,8 +271,8 @@ impl<const N: usize> ChunkHeader<N> {
     /// Returns the number of allocations that can fit in a chunk.
     const fn capacity() -> usize {
         let size = 512 * 4096;
-        let max_entries = size / N;
-        max_entries - Self::first_offset()
+        let usable_size = size - Self::first_offset();
+        usable_size / N
     }
 
     /// Release the chunk.
