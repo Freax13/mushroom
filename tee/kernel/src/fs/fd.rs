@@ -5,9 +5,10 @@ use crate::{
         node::{new_ino, DirEntryName, DynINode, FileAccessContext},
         path::FileName,
     },
+    memory::page::KernelPage,
     spin::mutex::Mutex,
     user::process::{
-        memory::{ActiveVirtualMemory, MemoryPermissions, VirtualMemory, VirtualMemoryActivator},
+        memory::{ActiveVirtualMemory, VirtualMemory, VirtualMemoryActivator},
         syscall::args::{EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Whence},
     },
 };
@@ -15,7 +16,6 @@ use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use log::debug;
-use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, ErrorKind, Result},
@@ -280,20 +280,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Err(Error::not_dir(()))
     }
 
-    fn mmap(
-        &self,
-        vm: &mut ActiveVirtualMemory,
-        addr: Option<VirtAddr>,
-        offset: u64,
-        len: u64,
-        permissions: MemoryPermissions,
-    ) -> Result<VirtAddr> {
-        let _ = vm;
-        let _ = addr;
-        let _ = offset;
-        let _ = len;
-        let _ = permissions;
-        Err(Error::io(()))
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        let _ = page_idx;
+        Err(Error::acces(()))
     }
 
     async fn epoll_wait(&self, max_events: usize) -> Result<Vec<EpollEvent>> {

@@ -1,7 +1,4 @@
-use core::{
-    ops::Deref,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     spin::lazy::Lazy,
@@ -11,7 +8,6 @@ use crate::{
     },
 };
 use alloc::{
-    borrow::Cow,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -130,12 +126,6 @@ pub trait INode: Send + Sync + 'static {
         Err(Error::not_dir(()))
     }
 
-    // File related functions
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        Err(Error::acces(()))
-    }
-
     // Symlink related functions
 
     /// Try to follow a symlink. Returns a tuple of where the parent directory
@@ -166,34 +156,6 @@ fn resolve_links(
         (start_dir, node) = next;
     }
     Ok(node)
-}
-
-#[derive(Clone)]
-pub struct FileSnapshot(Arc<Cow<'static, [u8]>>);
-
-impl FileSnapshot {
-    pub fn empty() -> Self {
-        static EMPTY: Lazy<FileSnapshot> = Lazy::new(|| FileSnapshot(Arc::new(Cow::Borrowed(&[]))));
-        EMPTY.clone()
-    }
-}
-
-impl From<Arc<Cow<'static, [u8]>>> for FileSnapshot {
-    fn from(value: Arc<Cow<'static, [u8]>>) -> Self {
-        if value.is_empty() {
-            return Self::empty();
-        }
-
-        Self(value)
-    }
-}
-
-impl Deref for FileSnapshot {
-    type Target = Cow<'static, [u8]>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
 }
 
 pub struct FileAccessContext {

@@ -1,5 +1,3 @@
-use core::cmp;
-
 use crate::{
     dir_impls,
     fs::fd::{
@@ -7,12 +5,12 @@ use crate::{
         file::{open_file, File},
         FileDescriptor,
     },
+    memory::page::{Buffer, KernelPage},
     spin::mutex::Mutex,
     time::now,
     user::process::syscall::args::OpenFlags,
 };
 use alloc::{
-    borrow::Cow,
     collections::{btree_map::Entry, BTreeMap},
     sync::{Arc, Weak},
     vec::Vec,
@@ -20,7 +18,7 @@ use alloc::{
 
 use super::{
     create_file, lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode,
-    FileAccessContext, FileSnapshot, INode,
+    FileAccessContext, INode,
 };
 use crate::{
     error::{Error, Result},
@@ -161,7 +159,7 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(path_segment);
         match entry {
             Entry::Vacant(entry) => {
-                let node = TmpFsFile::new(mode, &[]);
+                let node = TmpFsFile::new(mode);
                 entry.insert(node.clone());
                 Ok(node)
             }
@@ -278,7 +276,7 @@ pub struct TmpFsFile {
 }
 
 struct TmpFsFileInternal {
-    content: Arc<Cow<'static, [u8]>>,
+    buffer: Buffer,
     mode: FileMode,
     atime: Timespec,
     mtime: Timespec,
@@ -286,14 +284,14 @@ struct TmpFsFileInternal {
 }
 
 impl TmpFsFile {
-    pub fn new(mode: FileMode, content: &'static [u8]) -> Arc<Self> {
+    pub fn new(mode: FileMode) -> Arc<Self> {
         let now = now();
 
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             ino: new_ino(),
             internal: Mutex::new(TmpFsFileInternal {
-                content: Arc::new(Cow::Borrowed(content)),
+                buffer: Buffer::new(),
                 mode,
                 atime: now,
                 mtime: now,
@@ -307,7 +305,7 @@ impl INode for TmpFsFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::File, guard.mode);
-        let size = guard.content.len() as i64;
+        let size = guard.buffer.len() as i64;
 
         // FIXME: Fill in more values.
         Stat {
@@ -334,20 +332,17 @@ impl INode for TmpFsFile {
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
-
-    fn read_snapshot(&self) -> Result<FileSnapshot> {
-        let content = self.internal.lock().content.clone();
-        Ok(FileSnapshot(content))
-    }
 }
 
 impl File for TmpFsFile {
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        let mut guard = self.internal.lock();
+        guard.buffer.get_page(page_idx)
+    }
+
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
         let guard = self.internal.lock();
-        let slice = guard.content.get(offset..).ok_or(Error::inval(()))?;
-        let len = cmp::min(slice.len(), buf.len());
-        buf[..len].copy_from_slice(&slice[..len]);
-        Ok(len)
+        guard.buffer.read(offset, buf)
     }
 
     fn read_to_user(
@@ -358,27 +353,12 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let guard = self.internal.lock();
-        let slice = guard.content.get(offset..).ok_or(Error::inval(()))?;
-        let len = cmp::min(slice.len(), len);
-        vm.write_bytes(pointer.get(), &slice[..len])?;
-        Ok(len)
+        guard.buffer.read_to_user(offset, vm, pointer, len)
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.lock();
-        let bytes = Arc::make_mut(&mut guard.content);
-        let bytes = bytes.to_mut();
-
-        // Grow the file to be able to hold at least `offset+buf.len()` bytes.
-        let new_min_len = offset + buf.len();
-        if bytes.len() < new_min_len {
-            bytes.resize(new_min_len, 0);
-        }
-
-        // Copy the buffer into the file.
-        bytes[offset..][..buf.len()].copy_from_slice(buf);
-
-        Ok(buf.len())
+        guard.buffer.write(offset, buf)
     }
 
     fn write_from_user(
@@ -389,27 +369,13 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
-        let bytes = Arc::make_mut(&mut guard.content);
-        let bytes = bytes.to_mut();
-
-        // Grow the file to be able to hold at least `offset+buf.len()` bytes.
-        let new_min_len = offset + len;
-        if bytes.len() < new_min_len {
-            bytes.resize(new_min_len, 0);
-        }
-
-        // Read from userspace into the file.
-        vm.read_bytes(pointer.get(), &mut bytes[offset..][..len])?;
-
-        Ok(len)
+        guard.buffer.write_from_user(offset, vm, pointer, len)
     }
 
     fn append(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.lock();
-        let bytes = Arc::make_mut(&mut guard.content);
-        let bytes = bytes.to_mut();
-        bytes.extend_from_slice(buf);
-        Ok(buf.len())
+        let offset = guard.buffer.len();
+        guard.buffer.write(offset, buf)
     }
 
     fn append_from_user(
@@ -419,35 +385,13 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
-        let bytes = Arc::make_mut(&mut guard.content);
-        let bytes = bytes.to_mut();
-
-        let prev_len = bytes.len();
-        bytes.resize(bytes.len() + len, 0);
-
-        // Copy the buffer into the file.
-        vm.read_bytes(pointer.get(), &mut bytes[prev_len..])?;
-
-        Ok(len)
+        let offset = guard.buffer.len();
+        guard.buffer.write_from_user(offset, vm, pointer, len)
     }
 
     fn truncate(&self, len: usize) -> Result<()> {
         let mut guard = self.internal.lock();
-        if guard.content.len() != len {
-            if len == 0 {
-                guard.content = Arc::new(Cow::Borrowed(&[]));
-            } else if let Some(content) = Arc::get_mut(&mut guard.content) {
-                content.to_mut().resize(len, 0);
-            } else {
-                let mut content = Vec::with_capacity(len);
-                let copy_len = cmp::min(len, guard.content.len());
-                content.extend(&guard.content[..copy_len]);
-                content.resize(len, 0);
-                guard.content = Arc::new(Cow::Owned(content));
-            }
-        }
-
-        Ok(())
+        guard.buffer.truncate(len)
     }
 }
 

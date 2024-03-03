@@ -48,7 +48,7 @@ use self::{
 };
 
 use super::{
-    memory::{VirtualMemory, VirtualMemoryActivator},
+    memory::{Bias, VirtualMemory, VirtualMemoryActivator},
     thread::{new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
     Process,
 };
@@ -397,33 +397,46 @@ fn mmap(
     fd: u64,
     offset: u64,
 ) -> SyscallResult {
-    let addr = if flags.contains(MmapFlags::FIXED) {
-        Some(addr.get())
+    let bias = if flags.contains(MmapFlags::FIXED) {
+        Bias::Fixed(addr.get())
     } else {
-        None
+        Bias::Dynamic(abi)
     };
+
+    if length == 0 {
+        return Err(Error::inval(()));
+    }
+    if flags.contains(MmapFlags::ANONYMOUS) && offset % 1000 != 0 {
+        return Err(Error::inval(()));
+    }
+    if let Bias::Fixed(bias) = bias {
+        if !bias.is_aligned(0x1000u64) {
+            return Err(Error::inval(()));
+        }
+    }
 
     if length > (1 << 47) {
         return Err(Error::no_mem(()));
     }
 
     if flags.contains(MmapFlags::SHARED_VALIDATE) {
-        todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
+        todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::SHARED) {
-        todo!("{addr:?} {length} {prot:?} {flags:?} {fd} {offset}");
+        todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::STACK) {
             assert!(flags.contains(MmapFlags::ANONYMOUS));
             assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
 
-            let addr =
-                vm_activator.activate(&virtual_memory, |vm| vm.allocate_stack(addr, length))?;
+            let addr = vm_activator.activate(&virtual_memory, |vm| {
+                vm.modify().allocate_stack(bias, length)
+            })?;
 
             Ok(addr.as_u64())
         } else if flags.contains(MmapFlags::ANONYMOUS) {
             let permissions = MemoryPermissions::from(prot);
             let addr = vm_activator.activate(&virtual_memory, |vm| {
-                vm.mmap_zero(addr, length, permissions)
+                vm.modify().mmap_zero(bias, length, permissions)
             })?;
 
             Ok(addr.as_u64())
@@ -433,7 +446,8 @@ fn mmap(
 
             let permissions = MemoryPermissions::from(prot);
             let addr = vm_activator.activate(&virtual_memory, |vm| {
-                fd.mmap(vm, addr, offset, length, permissions)
+                vm.modify()
+                    .mmap_file(bias, length, &*fd, offset, permissions)
             })?;
             Ok(addr.as_u64())
         }
@@ -492,7 +506,7 @@ fn munmap(
     if !addr.is_aligned(0x1000u64) || length % 0x1000 != 0 {
         return Err(Error::inval(()));
     }
-    vm_activator.activate(&virtual_memory, |a| a.unmap(addr, length));
+    vm_activator.activate(&virtual_memory, |a| a.modify().unmap(addr, length));
     Ok(0)
 }
 
@@ -506,15 +520,15 @@ fn brk(
         return Err(Error::inval(()));
     }
 
-    vm_activator
-        .activate(&virtual_memory, |vm| -> Result<_> {
-            if brk_value == 0 {
-                return vm.brk_end();
-            }
+    if brk_value == 0 {
+        return Ok(virtual_memory.brk_end().as_u64());
+    }
 
-            vm.set_brk_end(brk_value)
-        })
-        .map(VirtAddr::as_u64)
+    vm_activator.activate(&virtual_memory, |vm| {
+        vm.modify().set_brk_end(VirtAddr::new(brk_value))
+    })?;
+
+    Ok(brk_value)
 }
 
 #[syscall(i386 = 174, amd64 = 13)]

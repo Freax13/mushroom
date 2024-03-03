@@ -3,6 +3,7 @@ use core::{
 };
 
 use bytemuck::checked::CheckedCastError;
+use x86_64::addr::VirtAddrNotValid;
 
 #[derive(Clone, Copy)]
 pub struct Error {
@@ -93,6 +94,13 @@ impl From<CheckedCastError> for Error {
 impl From<Infallible> for Error {
     fn from(err: Infallible) -> Self {
         match err {}
+    }
+}
+
+impl From<VirtAddrNotValid> for Error {
+    #[track_caller]
+    fn from(_: VirtAddrNotValid) -> Self {
+        Error::fault(())
     }
 }
 

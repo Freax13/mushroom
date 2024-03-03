@@ -5,15 +5,15 @@ global_asm!(include_str!("pagetable.s"));
 use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
-    user::process::memory::without_write_protect,
 };
 
 use core::{
     arch::{asm, global_asm},
-    fmt,
+    cmp, fmt,
+    iter::Step,
     marker::{PhantomData, PhantomPinned},
     num::NonZeroU64,
-    ops::{Deref, Index, Range},
+    ops::{Bound, Deref, Index, Range, RangeBounds},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -31,7 +31,7 @@ use x86_64::{
 
 use super::{frame::FRAME_ALLOCATOR, invlpgb::INVLPGB, temporary::copy_into_frame};
 
-const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(510);
+const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
@@ -106,83 +106,40 @@ pub unsafe fn map_page(
     Ok(())
 }
 
-/// Atomically switch out a page table entry for another.
-///
-/// # Panics
-///
-/// Panics if the page isn't mapped.
-///
-/// # Safety
-///
-/// It has to be safe that stale TLB entries exist for a brief time.
-pub unsafe fn remap_page(
+/// Map a page regardless of whether there's already a page mapped there.
+pub unsafe fn set_page(
     page: Page,
-    old_entry: PresentPageTableEntry,
-    new_entry: PresentPageTableEntry,
-) -> Result<(), PresentPageTableEntry> {
-    trace!("remapping page {page:?}");
+    entry: PresentPageTableEntry,
+    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
+) -> Result<()> {
+    trace!("mapping page {page:?}");
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire_existing().unwrap();
+    let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire_existing().unwrap();
+    let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire_existing().unwrap();
-    let level1 = &*level1_guard;
-    let level1_entry = &level1[page.p1_index()];
-
-    unsafe { level1_entry.remap(old_entry, new_entry) }
-}
-
-pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
-    trace!("unmapping page {page:?}");
-
-    let level4 = ActivePageTable::get();
-    let level4_entry = &level4[page.p4_index()];
-
-    let level3_guard = level4_entry.acquire_existing().unwrap();
-    let level3 = &*level3_guard;
-    let level3_entry = &level3[page.p3_index()];
-
-    let level2_guard = level3_entry.acquire_existing().unwrap();
-    let level2 = &*level2_guard;
-    let level2_entry = &level2[page.p2_index()];
-
-    let level1_guard = level2_entry.acquire_existing().unwrap();
-    let level1 = &*level1_guard;
-    let level1_entry = &level1[page.p1_index()];
-
-    unsafe { level1_entry.unmap() }
-}
-
-pub unsafe fn add_flags(page: Page, flags: PageTableFlags) {
-    let level4 = ActivePageTable::get();
-    let level4_entry = &level4[page.p4_index()];
-
-    let level3_guard = level4_entry.acquire_existing().unwrap();
-    let level3 = &*level3_guard;
-    let level3_entry = &level3[page.p3_index()];
-
-    let level2_guard = level3_entry.acquire_existing().unwrap();
-    let level2 = &*level2_guard;
-    let level2_entry = &level2[page.p2_index()];
-
-    let level1_guard = level2_entry.acquire_existing().unwrap();
+    let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
     unsafe {
-        level1_entry.add_flags(flags);
+        level1_entry.set_page(entry);
     }
+
+    Ok(())
 }
 
-pub unsafe fn remove_flags(page: Page, flags: PageTableFlags) {
+/// Update a page, if it's already mapped.
+pub unsafe fn try_set_page(page: Page, entry: PresentPageTableEntry) {
+    trace!("mapping page {page:?}");
+
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
@@ -205,7 +162,177 @@ pub unsafe fn remove_flags(page: Page, flags: PageTableFlags) {
     let level1_entry = &level1[page.p1_index()];
 
     unsafe {
-        level1_entry.remove_flags(flags);
+        level1_entry.set_page(entry);
+    }
+}
+
+/// Remove the write-bit on all mapped userspace pages.
+///
+/// # Safety
+///
+/// The caller has to ensure that no other thread is modifying the page tables
+/// at the same time.
+pub unsafe fn freeze_userspace() {
+    let level4 = ActivePageTable::get();
+    for entry in level4.entries[..256].iter() {
+        unsafe {
+            entry.freeze();
+        }
+    }
+
+    flush_current_pcid();
+}
+
+/// Unmap a page.
+///
+/// # Panics
+///
+/// This function panics if the page is not mapped.
+pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
+    trace!("unmapping page {page:?}");
+
+    let level4 = ActivePageTable::get();
+    let level4_entry = &level4[page.p4_index()];
+
+    let level3_guard = level4_entry.acquire_existing().unwrap();
+    let level3 = &*level3_guard;
+    let level3_entry = &level3[page.p3_index()];
+
+    let level2_guard = level3_entry.acquire_existing().unwrap();
+    let level2 = &*level2_guard;
+    let level2_entry = &level2[page.p2_index()];
+
+    let level1_guard = level2_entry.acquire_existing().unwrap();
+    let level1 = &*level1_guard;
+    let level1_entry = &level1[page.p1_index()];
+
+    unsafe { level1_entry.unmap() }
+}
+
+/// Unmap a page if it's mapped.
+pub fn try_unmap_user_page(page: Page) {
+    try_unmap_user_pages(page..=page)
+}
+
+/// Unmap all pages in the given range. Not all pages have to be mapped.
+pub fn try_unmap_user_pages(pages: impl RangeBounds<Page>) {
+    const LAST_USER_PAGE: Page =
+        unsafe { Page::from_start_address_unchecked(VirtAddr::new(0x7fff_ffff_f000)) };
+
+    // Convert to inclusive range.
+    let start = match pages.start_bound() {
+        Bound::Included(&page) => page,
+        Bound::Excluded(&page) => Step::forward_checked(page, 1).unwrap_or(LAST_USER_PAGE),
+        Bound::Unbounded => Page::containing_address(VirtAddr::zero()),
+    };
+    let start = cmp::min(start, LAST_USER_PAGE);
+    let end = match pages.end_bound() {
+        Bound::Included(&page) => page,
+        Bound::Excluded(&page) => {
+            if let Some(page) = Step::backward_checked(page, 1) {
+                page
+            } else {
+                return;
+            }
+        }
+        Bound::Unbounded => LAST_USER_PAGE,
+    };
+    let end = cmp::min(end, LAST_USER_PAGE);
+
+    // Don't do anything if the range is empty.
+    if start > end {
+        return;
+    }
+
+    let pml4 = ActivePageTable::get();
+    for p4_index in start.p4_index()..=end.p4_index() {
+        let pml4e = &pml4[p4_index];
+        let Some(pdp) = pml4e.acquire_existing() else {
+            continue;
+        };
+
+        let start = cmp::max(
+            start,
+            Page::from_page_table_indices(
+                p4_index,
+                PageTableIndex::new(0),
+                PageTableIndex::new(0),
+                PageTableIndex::new(0),
+            ),
+        );
+        let end = cmp::min(
+            end,
+            Page::from_page_table_indices(
+                p4_index,
+                PageTableIndex::new(511),
+                PageTableIndex::new(511),
+                PageTableIndex::new(511),
+            ),
+        );
+
+        for p3_index in start.p3_index()..=end.p3_index() {
+            let pdpe = &pdp[p3_index];
+            let Some(pd) = pdpe.acquire_existing() else {
+                continue;
+            };
+
+            let start = cmp::max(
+                start,
+                Page::from_page_table_indices(
+                    p4_index,
+                    p3_index,
+                    PageTableIndex::new(0),
+                    PageTableIndex::new(0),
+                ),
+            );
+            let end = cmp::min(
+                end,
+                Page::from_page_table_indices(
+                    p4_index,
+                    p3_index,
+                    PageTableIndex::new(511),
+                    PageTableIndex::new(511),
+                ),
+            );
+
+            for p2_index in start.p2_index()..=end.p2_index() {
+                let pde = &pd[p2_index];
+                let Some(pt) = pde.acquire_existing() else {
+                    continue;
+                };
+
+                let start = cmp::max(
+                    start,
+                    Page::from_page_table_indices(
+                        p4_index,
+                        p3_index,
+                        p2_index,
+                        PageTableIndex::new(0),
+                    ),
+                );
+                let end = cmp::min(
+                    end,
+                    Page::from_page_table_indices(
+                        p4_index,
+                        p3_index,
+                        p2_index,
+                        PageTableIndex::new(511),
+                    ),
+                );
+
+                for p1_index in start.p1_index()..=end.p1_index() {
+                    let pte = &pt[p1_index];
+                    unsafe {
+                        pte.try_unmap();
+                    }
+                }
+            }
+        }
+    }
+
+    let (_, pcid) = Cr3::read_pcid();
+    unsafe {
+        INVLPGB.flush_user_pages(pcid, start..=end);
     }
 }
 
@@ -219,72 +346,6 @@ pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     let pt = pde.acquire_existing()?;
     let pte = &pt[page.p1_index()];
     pte.entry()
-}
-
-/// Call the closure for all dirty userspace pages.
-///
-/// # Safety
-///
-/// The caller must ensure that the closure doesn't modify the active page table.
-pub unsafe fn find_dirty_userspace_pages(mut f: impl FnMut(Page) -> Result<()>) -> Result<()> {
-    freeze_userspace(|| {
-        let pml4 = ActivePageTable::get();
-
-        for p4_index in (0..256).map(PageTableIndex::new) {
-            let pml4e = &pml4[p4_index];
-            let Some(pdp) = pml4e.acquire_existing() else {
-                continue;
-            };
-
-            for p3_index in (0..512).map(PageTableIndex::new) {
-                let pdpe = &pdp[p3_index];
-                let Some(pd) = pdpe.acquire_existing() else {
-                    continue;
-                };
-
-                for p2_index in (0..512).map(PageTableIndex::new) {
-                    let pde = &pd[p2_index];
-                    let Some(pt) = pde.acquire_existing() else {
-                        continue;
-                    };
-
-                    for p1_index in (0..512).map(PageTableIndex::new) {
-                        let pte = &pt[p1_index];
-                        if !pte.is_dirty() {
-                            continue;
-                        }
-
-                        let page = pte.page();
-
-                        f(page)?;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    })
-}
-
-/// Prevent userspace from modifying memory during the runtime of the closure.
-fn freeze_userspace<R>(f: impl FnOnce() -> R) -> R {
-    let pml4 = ActivePageTable::get();
-
-    for p4_index in (0..256).map(PageTableIndex::new) {
-        let pml4e = &pml4[p4_index];
-        pml4e.freeze(true);
-    }
-
-    flush_current_pcid();
-
-    let res = without_write_protect(f);
-
-    for p4_index in (0..256).map(PageTableIndex::new) {
-        let pml4e = &pml4[p4_index];
-        pml4e.freeze(false);
-    }
-
-    res
 }
 
 fn flush_current_pcid() {
@@ -448,22 +509,6 @@ impl ActivePageTableEntry<Level4> {
     pub fn acquire_existing(&self) -> Option<ActivePageTableEntryGuard<'_, Level4>> {
         self.increase_reference_count().ok()?;
         Some(ActivePageTableEntryGuard { entry: self })
-    }
-
-    pub fn freeze(&self, frozen: bool) {
-        let mut entry = atomic_load(&self.entry);
-        while entry.get_bit(PRESENT_BIT) {
-            assert_eq!(entry.get_bit(WRITE_BIT), frozen);
-
-            let mut new_entry = entry;
-            new_entry.set_bit(WRITE_BIT, !frozen);
-
-            let res = atomic_compare_exchange(&self.entry, entry, new_entry);
-            match res {
-                Ok(_) => break,
-                Err(new_entry) => entry = new_entry,
-            }
-        }
     }
 }
 
@@ -722,7 +767,7 @@ where
         let p4_index = addr.p3_index();
         let p3_index = addr.p2_index();
         let p2_index = addr.p1_index();
-        let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
+        let p1_index = PageTableIndex::new(u16::from(addr.page_offset()) >> 3);
         let page = Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index);
         let addr = page.start_address();
         addr.as_ptr()
@@ -739,7 +784,7 @@ impl<L> ActivePageTableEntry<L> {
         let p4_index = addr.p3_index();
         let p3_index = addr.p2_index();
         let p2_index = addr.p1_index();
-        let p1_index = PageTableIndex::new_truncate(u16::from(addr.page_offset()) >> 3);
+        let p1_index = PageTableIndex::new(u16::from(addr.page_offset()) >> 3);
         Page::from_page_table_indices(p4_index, p3_index, p2_index, p1_index)
     }
 
@@ -761,10 +806,6 @@ impl<L> ActivePageTableEntry<L> {
         );
         (start..=end).contains(&self.page())
     }
-
-    pub fn is_dirty(&self) -> bool {
-        atomic_load(&self.entry).get_bit(DIRTY_BIT)
-    }
 }
 
 impl ActivePageTableEntry<Level1> {
@@ -784,26 +825,16 @@ impl ActivePageTableEntry<Level1> {
             .unwrap();
     }
 
-    /// Atomically switch out a page table entry for another.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the page isn't mapped.
-    ///
-    /// # Safety
-    ///
-    /// It has to be safe that stale TLB entries exist for a brief time.
-    pub unsafe fn remap(
-        &self,
-        old_entry: PresentPageTableEntry,
-        new_entry: PresentPageTableEntry,
-    ) -> Result<(), PresentPageTableEntry> {
-        let _ = atomic_compare_exchange(&self.entry, old_entry.0.get(), new_entry.0.get())
-            .map_err(|entry| PresentPageTableEntry::try_from(entry).unwrap())?;
-
-        self.flush(old_entry.global());
-
-        Ok(())
+    /// Map a new page or replace an existing page.
+    pub unsafe fn set_page(&self, entry: PresentPageTableEntry) {
+        let res = atomic_swap(&self.entry, entry.0.get());
+        if res == 0 {
+            self.parent_table_entry()
+                .increase_reference_count()
+                .unwrap();
+        } else {
+            self.flush(res.get_bit(GLOBAL_BIT));
+        }
     }
 
     /// # Panics
@@ -821,56 +852,13 @@ impl ActivePageTableEntry<Level1> {
         old_entry
     }
 
-    pub unsafe fn add_flags(&self, flags: PageTableFlags) {
-        let mut add_mask = 0;
-        let mut remove_mask = 0;
-
-        let writable = flags.contains(PageTableFlags::WRITABLE);
-        add_mask.set_bit(WRITE_BIT, writable);
-        add_mask.set_bit(USER_BIT, flags.contains(PageTableFlags::USER));
-        let global = flags.contains(PageTableFlags::GLOBAL);
-        add_mask.set_bit(GLOBAL_BIT, global);
-        let cow = flags.contains(PageTableFlags::COW);
-        add_mask.set_bit(COW_BIT, cow);
-        remove_mask.set_bit(
-            DISABLE_EXECUTE_BIT,
-            flags.contains(PageTableFlags::EXECUTABLE),
-        );
-
-        if cow {
-            assert!(!writable);
+    /// Unmap a page if it's mapped or do nothing if it isn't.
+    pub unsafe fn try_unmap(&self) {
+        let old_entry = atomic_swap(&self.entry, 0);
+        if PresentPageTableEntry::try_from(old_entry).is_ok() {
+            let frame = unsafe { self.parent_table_entry().release_reference_count() };
+            assert_eq!(frame, None);
         }
-
-        atomic_fetch_or(&self.entry, add_mask);
-        atomic_fetch_and(&self.entry, !remove_mask);
-
-        self.flush(global);
-    }
-
-    pub unsafe fn remove_flags(&self, flags: PageTableFlags) {
-        let mut add_mask = 0;
-        let mut remove_mask = 0;
-
-        let writable = flags.contains(PageTableFlags::WRITABLE);
-        remove_mask.set_bit(WRITE_BIT, writable);
-        remove_mask.set_bit(USER_BIT, flags.contains(PageTableFlags::USER));
-        let global = flags.contains(PageTableFlags::GLOBAL);
-        remove_mask.set_bit(GLOBAL_BIT, global);
-        let cow = flags.contains(PageTableFlags::COW);
-        remove_mask.set_bit(COW_BIT, cow);
-        add_mask.set_bit(
-            DISABLE_EXECUTE_BIT,
-            flags.contains(PageTableFlags::EXECUTABLE),
-        );
-
-        if cow {
-            assert!(!writable);
-        }
-
-        atomic_fetch_or(&self.entry, add_mask);
-        atomic_fetch_and(&self.entry, !remove_mask);
-
-        self.flush(global);
     }
 
     pub fn entry(&self) -> Option<PresentPageTableEntry> {
@@ -948,6 +936,60 @@ where
                 self.entry.release_parent();
             }
         }
+    }
+}
+
+pub trait Clear {
+    /// Clear the write bit for all mapped pages.
+    ///
+    /// Note that this function doesn't flush any entries from the TLB.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that no other thread is modifying the
+    /// pagetables at the same time.
+    unsafe fn freeze(&self);
+}
+
+impl<L> Clear for ActivePageTableEntry<L>
+where
+    L: TableLevel,
+    ActivePageTableEntry<L::Next>: Clear,
+{
+    /// Clear the write bit for all mapped pages.
+    ///
+    /// Note that this function doesn't flush any entries from the TLB.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that no other thread is modifying the
+    /// pagetables at the same time.
+    unsafe fn freeze(&self) {
+        // Skip empty entries.
+        let value = unsafe { load(&self.entry) };
+        if value == 0 {
+            return;
+        }
+
+        // Recursively clear each entry.
+        let ptr = self.as_table_ptr();
+        let table = unsafe { &*ptr };
+        table.entries.iter().for_each(|e| unsafe { e.freeze() });
+    }
+}
+
+impl Clear for ActivePageTableEntry<Level1> {
+    /// Clear the write bit for all mapped pages.
+    ///
+    /// Note that this function doesn't flush any entries from the TLB.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that no other thread is modifying the
+    /// pagetables at the same time.
+    #[inline]
+    unsafe fn freeze(&self) {
+        atomic_fetch_and(&self.entry, !(1 << WRITE_BIT));
     }
 }
 
@@ -1223,24 +1265,6 @@ fn atomic_compare_exchange(entry: &AtomicU64, current: u64, new: u64) -> Result<
     }
 }
 
-/// Wrapper around `AtomicU64::fetch_or` without address sanitizer checks.
-#[inline(always)]
-fn atomic_fetch_or(entry: &AtomicU64, val: u64) -> u64 {
-    if cfg!(sanitize = "address") {
-        let mut current = atomic_load(entry);
-        loop {
-            let new = current | val;
-            let res = atomic_compare_exchange(entry, current, new);
-            match res {
-                Ok(current) => return current,
-                Err(new) => current = new,
-            }
-        }
-    } else {
-        entry.fetch_or(val, Ordering::SeqCst)
-    }
-}
-
 /// Wrapper around `AtomicU64::fetch_and` without address sanitizer checks.
 #[inline(always)]
 fn atomic_fetch_and(entry: &AtomicU64, val: u64) -> u64 {
@@ -1256,5 +1280,27 @@ fn atomic_fetch_and(entry: &AtomicU64, val: u64) -> u64 {
         }
     } else {
         entry.fetch_and(val, Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `core::ptr::read` without address sanitizer checks.
+///
+/// # Safety
+///
+/// The caller has to ensure that the read isn't subject to a data race.
+#[inline(always)]
+unsafe fn load(entry: &AtomicU64) -> u64 {
+    if cfg!(sanitize = "address") {
+        let out;
+        unsafe {
+            asm! {
+                "mov {out}, [{ptr}]",
+                out = out(reg) out,
+                ptr = in(reg) entry.as_ptr(),
+            }
+        }
+        out
+    } else {
+        unsafe { core::ptr::read(entry.as_ptr()) }
     }
 }

@@ -5,6 +5,7 @@ use crate::{
         file::{open_file, File},
         FileDescriptor,
     },
+    memory::page::KernelPage,
     spin::{lazy::Lazy, mutex::Mutex},
     user::process::syscall::args::OpenFlags,
 };
@@ -32,7 +33,8 @@ pub fn new(parent: Weak<dyn INode>) -> Result<DynINode> {
     let tmp_fs_dir = TmpFsDir::new(parent, FileMode::from_bits_truncate(0o755));
 
     let input_name = FileName::new(b"input").unwrap();
-    let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444), *INPUT);
+    let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444));
+    input_file.write(0, *INPUT)?;
     tmp_fs_dir.mount(input_name, input_file)?;
 
     let output_name = FileName::new(b"output").unwrap();
@@ -104,6 +106,10 @@ impl INode for NullFile {
 }
 
 impl File for NullFile {
+    fn get_page(&self, _: usize) -> Result<KernelPage> {
+        Err(Error::no_dev(()))
+    }
+
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
         Ok(0)
     }
@@ -205,6 +211,10 @@ impl INode for OutputFile {
 }
 
 impl File for OutputFile {
+    fn get_page(&self, _: usize) -> Result<KernelPage> {
+        Err(Error::no_dev(()))
+    }
+
     fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
         Err(Error::inval(()))
     }
@@ -332,6 +342,10 @@ impl INode for RandomFile {
 }
 
 impl File for RandomFile {
+    fn get_page(&self, _: usize) -> Result<KernelPage> {
+        Err(Error::no_dev(()))
+    }
+
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize> {
         let mut len = 0;
         for (buf, random) in buf.iter_mut().zip(Self::random_bytes()) {

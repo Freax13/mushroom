@@ -1,14 +1,16 @@
 use core::any::type_name;
 
-use crate::{fs::node::INode, spin::mutex::Mutex, user::process::syscall::args::OpenFlags};
+use crate::{
+    fs::node::INode, memory::page::KernelPage, spin::mutex::Mutex,
+    user::process::syscall::args::OpenFlags,
+};
 use alloc::sync::Arc;
 use log::debug;
-use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
     user::process::{
-        memory::{ActiveVirtualMemory, MemoryPermissions},
+        memory::ActiveVirtualMemory,
         syscall::args::{FileMode, Pointer, Stat, Whence},
     },
 };
@@ -16,6 +18,7 @@ use crate::{
 use super::{FileDescriptor, OpenFileDescription};
 
 pub trait File: INode {
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage>;
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
     fn read_to_user(
         &self,
@@ -176,16 +179,8 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         self.file.stat()
     }
 
-    fn mmap(
-        &self,
-        vm: &mut ActiveVirtualMemory,
-        addr: Option<VirtAddr>,
-        offset: u64,
-        len: u64,
-        permissions: MemoryPermissions,
-    ) -> Result<VirtAddr> {
-        let snapshot = self.file.read_snapshot()?;
-        vm.mmap_into(addr, len, offset, snapshot, permissions)
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
     }
 }
 

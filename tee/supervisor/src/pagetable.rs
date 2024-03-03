@@ -169,7 +169,7 @@ struct PageTable<L> {
 
 impl PageTable<Level4> {
     pub fn get() -> &'static Self {
-        const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new_truncate(511);
+        const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(511);
 
         let addr = Page::from_page_table_indices(
             RECURSIVE_INDEX,

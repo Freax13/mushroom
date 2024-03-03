@@ -28,49 +28,6 @@ fn get_fast_mapping(frame: PhysFrame) -> Option<*mut [u8; 4096]> {
     })
 }
 
-/// Fill a frame with zeros.
-///
-/// # Safety
-///
-/// Writing to the frame must be safe.
-#[inline(always)]
-pub unsafe fn zero_frame(frame: PhysFrame) -> Result<()> {
-    if let Some(dst) = get_fast_mapping(frame) {
-        unsafe { zero_frame_direct(dst) };
-        Ok(())
-    } else {
-        unsafe { zero_frame_slow(frame) }
-    }
-}
-
-#[inline(never)]
-#[cold]
-unsafe fn zero_frame_slow(frame: PhysFrame) -> Result<()> {
-    let mut mapping = TemporaryMapping::new(frame)?;
-    unsafe {
-        zero_frame_direct(mapping.as_mut_ptr());
-    }
-    Ok(())
-}
-
-#[inline(always)]
-unsafe fn zero_frame_direct(dst: *mut [u8; 4096]) {
-    unsafe {
-        asm! {
-            "vpxor ymm0, ymm0, ymm0",
-            "66:",
-            "vmovntdq [{dst}], ymm0",
-            "vmovntdq [{dst}+32], ymm0",
-            "add {dst}, 64",
-            "loop 66b",
-            "sfence",
-            dst = inout(reg) dst => _,
-            inout("ecx") 4096 / 64 => _,
-            options(nostack),
-        }
-    }
-}
-
 /// Copy bytes into a frame.
 ///
 /// # Safety

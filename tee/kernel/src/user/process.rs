@@ -1,15 +1,16 @@
 use core::ffi::CStr;
 
-use alloc::{borrow::Cow, sync::Arc};
+use alloc::sync::Arc;
 
 use crate::{
     fs::{
-        node::{FileAccessContext, FileSnapshot},
+        fd::file::File,
+        node::{tmpfs::TmpFsFile, FileAccessContext, INode},
         INIT,
     },
     rt::once::OnceCell,
     supervisor,
-    user::process::syscall::args::ExtractableThreadState,
+    user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
 };
 
 use self::{
@@ -18,7 +19,7 @@ use self::{
     thread::{new_tid, Thread},
 };
 
-mod elf;
+mod exec;
 mod futex;
 pub mod memory;
 pub mod syscall;
@@ -69,12 +70,12 @@ pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
         let mut guard = thread.lock();
         let mut ctx = FileAccessContext::extract_from_thread(&guard);
 
-        let bytes = Cow::Borrowed(*INIT);
-        let bytes = Arc::new(bytes);
-        let bytes = FileSnapshot::from(bytes);
+        let file = TmpFsFile::new(FileMode::all());
+        file.write(0, *INIT)?;
+        let file = file.open(OpenFlags::empty())?;
 
         guard.start_executable(
-            bytes,
+            &*file,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
             &mut ctx,

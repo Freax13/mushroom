@@ -20,9 +20,8 @@ constants = { workspace = true }
 crossbeam-queue = { version = "0.3.8", default-features = false, features = ["alloc"] }
 crossbeam-utils = { version = "0.8.16", default-features = false }
 futures = { version = "0.3.28", default-features = false, features = ["async-await", "alloc"] }
-goblin = { version = "0.6.0", default-features = false, features = ["elf64", "elf32", "endian_fd"] }
 kernel-macros.workspace = true
 log = { version = "0.4.17", default-features = false }
 profiler-types = { workspace = true, optional = true }
 usize_conversions = "0.2.0"
-x86_64 = "0.15.0-beta"
+x86_64 = "0.15.0"

@@ -8,7 +8,7 @@ use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSi
 
 macro_rules! with_buckets {
     ($macro:ident) => {
-        $macro!(8, 16, 24, 32, 40, 48, 64, 96, 128, 256, 512, 1024)
+        $macro!(8, 16, 24, 32, 40, 48, 64, 96, 128, 256, 512, 1024, 4096)
     };
 }
 

@@ -1,154 +1,121 @@
-use core::{ffi::CStr, iter::from_fn};
+use core::{cmp, ffi::CStr, iter::from_fn};
 
 use crate::{
-    fs::node::{DynINode, FileAccessContext},
+    fs::{
+        fd::OpenFileDescription,
+        node::{DynINode, FileAccessContext},
+    },
     spin::lazy::Lazy,
 };
 use alloc::{borrow::ToOwned, ffi::CString, vec};
-use goblin::{
-    elf::Elf,
-    elf64::{
-        header::{ET_DYN, ET_EXEC},
-        program_header::PT_LOAD,
-    },
-};
+use bytemuck::{bytes_of_mut, Zeroable};
 use usize_conversions::FromUsize;
-use x86_64::{instructions::random::RdRand, VirtAddr};
+use x86_64::{
+    instructions::random::RdRand,
+    structures::paging::{PageSize, Size4KiB},
+};
+
+use self::elf::{ElfIdent, ElfLoaderParams};
 
 use super::{
-    memory::{ActiveVirtualMemory, MemoryPermissions, VmSize},
-    syscall::{args::FileMode, cpu_state::CpuState},
+    memory::{ActiveVirtualMemory, Bias, MemoryPermissions},
+    syscall::{
+        args::{FileMode, OpenFlags},
+        cpu_state::CpuState,
+        traits::Abi,
+    },
 };
 use crate::{
     error::{Error, Result},
-    fs::{
-        node::{lookup_and_resolve_node, FileSnapshot},
-        path::Path,
-    },
+    fs::{node::lookup_and_resolve_node, path::Path},
 };
 
+mod elf;
+
 impl ActiveVirtualMemory<'_, '_> {
-    fn load_elf(&mut self, mut base: u64, elf_bytes: FileSnapshot) -> Result<LoadInfo> {
-        let elf = Elf::parse(&elf_bytes).unwrap();
-        match elf.header.e_type {
-            ET_DYN => {}
-            ET_EXEC => base = 0,
-            ty => unimplemented!("unimplemented type: {ty:#x}"),
-        }
-
-        let mut phdr = None;
-
-        for ph in elf.program_headers.iter().filter(|ph| ph.p_type == PT_LOAD) {
-            let addr = VirtAddr::new(base + ph.p_vaddr);
-            let len = ph.p_filesz;
-            let offset = ph.p_offset;
-
-            let mut permissions = MemoryPermissions::empty();
-            if ph.is_executable() {
-                permissions |= MemoryPermissions::EXECUTE;
-            }
-            if ph.is_write() {
-                permissions |= MemoryPermissions::WRITE;
-            }
-            if ph.is_read() {
-                permissions |= MemoryPermissions::READ;
-            }
-
-            self.mmap_into(Some(addr), len, offset, elf_bytes.clone(), permissions)?;
-
-            let zero_len = ph.p_memsz - ph.p_filesz;
-            if zero_len != 0 {
-                self.mmap_zero(Some(addr + ph.p_filesz), zero_len, permissions)?;
-            }
-
-            if (ph.p_offset..ph.p_offset + ph.p_filesz).contains(&elf.header.e_phoff) {
-                phdr = Some(base + ph.p_vaddr + (elf.header.e_phoff - ph.p_offset));
-            }
-        }
-
-        Ok(LoadInfo {
-            phdr,
-            phentsize: elf.header.e_phentsize,
-            phnum: elf.header.e_phnum,
-            base,
-            entry: base + elf.entry,
-            bits: if elf.is_64 {
-                Bits::SixtyFour
-            } else {
-                Bits::ThirtyTwo
-            },
-        })
-    }
-
     pub fn start_executable(
         &mut self,
-        bytes: FileSnapshot,
+        file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
     ) -> Result<CpuState> {
-        match &**bytes {
-            [0x7f, b'E', b'L', b'F', ..] => self.start_elf(bytes, argv, envp, ctx, cwd),
-            [b'#', b'!', ..] => self.start_shebang(bytes, argv, envp, ctx, cwd),
+        let mut header = [0; 4];
+        file.pread(0, &mut header)?;
+
+        match header {
+            elf::MAGIC => {
+                let mut header = ElfIdent::zeroed();
+                file.pread(0, bytes_of_mut(&mut header))?;
+
+                match header.verify()? {
+                    Abi::I386 => {
+                        self.start_elf::<elf::ElfLoaderParams32>(file, argv, envp, ctx, cwd)
+                    }
+                    Abi::Amd64 => {
+                        self.start_elf::<elf::ElfLoaderParams64>(file, argv, envp, ctx, cwd)
+                    }
+                }
+            }
+            [b'#', b'!', ..] => self.start_shebang(file, argv, envp, ctx, cwd),
             _ => Err(Error::no_exec(())),
         }
     }
 
-    fn start_elf(
+    fn start_elf<E>(
         &mut self,
-        elf_bytes: FileSnapshot,
+        file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
-    ) -> Result<CpuState> {
-        let elf = Elf::parse(&elf_bytes).map_err(|_| Error::inval(()))?;
-        let interpreter = elf.interpreter.map(ToOwned::to_owned);
+    ) -> Result<CpuState>
+    where
+        E: ElfLoaderParams,
+    {
+        let info = elf::load_elf::<E>(file, self.modify(), 0x2000_0000)?;
 
-        let vm_size = if elf.is_64 {
-            VmSize::FourtySeven
-        } else {
-            VmSize::ThirtyTwo
-        };
-        self.init(vm_size);
-
-        let info = self.load_elf(0x4000_0000_0000, elf_bytes)?;
         let mut entrypoint = info.entry;
+        let mut brk_start = info.end;
 
         let mut at_base = None;
 
-        if let Some(interpreter) = interpreter {
-            let path = Path::new(interpreter.into_bytes())?;
-            let node = lookup_and_resolve_node(cwd.clone(), &path, ctx)?;
+        if let Some(interpreter_path) = info.interpreter_path {
+            let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
             if !node.mode().contains(FileMode::EXECUTE) {
                 return Err(Error::acces(()));
             }
-            let interpreter = node.read_snapshot()?;
-            let loader_info = self.load_elf(0x5000_0000_0000, interpreter)?;
-            assert_eq!(loader_info.bits, info.bits);
-            entrypoint = loader_info.entry;
-            at_base = Some(loader_info.base);
+
+            let file = node.open(OpenFlags::empty())?;
+            let info = elf::load_elf::<E>(&*file, self.modify(), info.base + 0x2000_0000)?;
+
+            entrypoint = info.entry;
+            brk_start = cmp::max(brk_start, info.end);
+            at_base = Some(info.base);
         }
+
+        let brk_start = brk_start.align_up(Size4KiB::SIZE);
+        self.modify().init_brk(brk_start);
 
         // Create stack.
         let len = 0x10_0000;
-        let stack = self.allocate_stack(None, len)? + len;
+        let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len)? + len;
 
-        self.mmap_zero(
-            Some(stack),
+        self.modify().mmap_zero(
+            Bias::Fixed(stack),
             0x4000,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
         )?;
 
         let mut addr = stack;
-        let mut write = |value: u64| match vm_size {
-            VmSize::ThirtyTwo => {
+        let mut write = |value: u64| match E::ABI {
+            Abi::I386 => {
                 let value = u32::try_from(value).unwrap();
                 self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
                 addr += 4u64;
             }
-            VmSize::FourtySeven => {
+            Abi::Amd64 => {
                 self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
                 addr += 8u64;
             }
@@ -189,6 +156,9 @@ impl ActiveVirtualMemory<'_, '_> {
         if let Some(at_base) = at_base {
             write(7); // AT_BASE
             write(at_base);
+        } else {
+            write(7); // AT_BASE
+            write(0);
         }
         write(9); // AT_ENTRY
         write(info.entry);
@@ -196,9 +166,9 @@ impl ActiveVirtualMemory<'_, '_> {
         write(write_bytes(&random_bytes())?.as_u64());
         write(0); // AT_NULL
 
-        let cs = match vm_size {
-            VmSize::ThirtyTwo => 0x1b,
-            VmSize::FourtySeven => 0x2b,
+        let cs = match E::ABI {
+            Abi::I386 => 0x1b,
+            Abi::Amd64 => 0x2b,
         };
         let cpu_state = CpuState::new(cs, entrypoint, stack.as_u64());
         Ok(cpu_state)
@@ -206,12 +176,18 @@ impl ActiveVirtualMemory<'_, '_> {
 
     fn start_shebang(
         &mut self,
-        bytes: FileSnapshot,
+        file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
     ) -> Result<CpuState> {
+        let mut bytes = [0; 128];
+        let len = file.pread(0, &mut bytes)?;
+        let bytes = &bytes[..len];
+
+        log::debug!("{bytes:02x?}");
+
         // Strip shebang.
         let bytes = bytes.strip_prefix(b"#!").ok_or_else(|| Error::inval(()))?;
 
@@ -248,7 +224,7 @@ impl ActiveVirtualMemory<'_, '_> {
         if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
-        let interpreter = node.read_snapshot()?;
+        let interpreter = node.open(OpenFlags::empty())?;
 
         let mut new_argv = vec![interpreter_path];
         for arg in args {
@@ -256,24 +232,8 @@ impl ActiveVirtualMemory<'_, '_> {
         }
         new_argv.extend(argv.iter().map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(interpreter, &new_argv, envp, ctx, cwd)
+        self.start_executable(&*interpreter, &new_argv, envp, ctx, cwd)
     }
-}
-
-#[derive(Debug)]
-struct LoadInfo {
-    pub phdr: Option<u64>,
-    pub phentsize: u16,
-    pub phnum: u16,
-    pub base: u64,
-    pub entry: u64,
-    pub bits: Bits,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Bits {
-    ThirtyTwo,
-    SixtyFour,
 }
 
 fn random_bytes() -> [u8; 16] {

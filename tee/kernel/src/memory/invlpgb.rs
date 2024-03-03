@@ -1,4 +1,4 @@
-use core::{arch::asm, iter::Step};
+use core::{arch::asm, iter::Step, ops::RangeInclusive};
 
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -57,6 +57,29 @@ impl InvlpgbCompat {
                 if global {
                     flush.include_global();
                 }
+                flush.flush();
+                invlpgb.tlbsync();
+            }
+            InvlpgbCompat::HyperV => hv_flush_all(),
+        }
+    }
+
+    /// Flush a range of pages.
+    pub unsafe fn flush_user_pages(&self, pcid: Pcid, pages: RangeInclusive<Page>) {
+        match self {
+            InvlpgbCompat::Invlpgb(invlpgb) => {
+                let mut flush = invlpgb.build();
+
+                unsafe {
+                    flush.pcid(pcid);
+                }
+
+                if pages.clone().count() < 64 {
+                    let exlusive_end = Step::forward(*pages.end(), 1);
+                    let page_range = Page::range(*pages.start(), exlusive_end);
+                    flush = flush.pages(page_range);
+                }
+
                 flush.flush();
                 invlpgb.tlbsync();
             }

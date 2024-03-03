@@ -6,7 +6,7 @@ use core::{
 
 use crate::{
     fs::{
-        fd::FileDescriptorTable,
+        fd::{FileDescriptorTable, OpenFileDescription},
         node::{DynINode, FileAccessContext},
     },
     spin::mutex::{Mutex, MutexGuard},
@@ -23,7 +23,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::{
-        node::{lookup_and_resolve_node, FileSnapshot, ROOT_NODE},
+        node::{lookup_and_resolve_node, ROOT_NODE},
         path::Path,
     },
     rt::{mpmc, once::OnceCell, oneshot, spawn},
@@ -32,7 +32,7 @@ use crate::{
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
-        args::{FileMode, Pointer},
+        args::{FileMode, OpenFlags, Pointer},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
@@ -370,14 +370,14 @@ impl ThreadGuard<'_> {
         if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
-        let bytes = node.read_snapshot()?;
 
-        self.start_executable(bytes, argv, envp, ctx, vm_activator)
+        let file = node.open(OpenFlags::empty())?;
+        self.start_executable(&*file, argv, envp, ctx, vm_activator)
     }
 
     pub fn start_executable(
         &mut self,
-        bytes: FileSnapshot,
+        file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
@@ -387,7 +387,7 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let cpu_state = vm_activator.activate(&virtual_memory, |vm| {
-            vm.start_executable(bytes, argv, envp, ctx, self.cwd.clone())
+            vm.start_executable(file, argv, envp, ctx, self.cwd.clone())
         })?;
 
         // Success! Commit the new state to the thread.
