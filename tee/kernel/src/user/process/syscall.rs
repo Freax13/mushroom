@@ -1914,8 +1914,27 @@ fn newfstatat(
     dfd: FdNum,
     pathname: Pointer<Path>,
     statbuf: Pointer<Stat>,
-    flags: u64,
+    flags: AtFlags,
 ) -> SyscallResult {
+    if flags.contains(AtFlags::AT_EMPTY_PATH) {
+        // Check if the path is empty by checking if the first character is the
+        // null-terminator.
+        let pathname =
+            vm_activator.activate(&virtual_memory, |vm| vm.read(pathname.cast::<u8>()))?;
+        if pathname == 0 {
+            let stat = if dfd == FdNum::CWD {
+                thread.cwd.stat()
+            } else {
+                let fd = fdtable.get(dfd)?;
+                fd.stat()
+            };
+
+            vm_activator.activate(&virtual_memory, |vm| vm.write_with_abi(statbuf, stat, abi))?;
+
+            return Ok(0);
+        }
+    }
+
     let start_dir = if dfd == FdNum::CWD {
         thread.cwd.clone()
     } else {

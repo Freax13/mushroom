@@ -191,6 +191,13 @@ impl<T> Pointer<T> {
         }
     }
 
+    pub const fn cast<U>(self) -> Pointer<U> {
+        Pointer {
+            value: self.value,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn bytes_offset(self, len: usize) -> Self {
         Self {
             value: self.value + u64::from_usize(len),
