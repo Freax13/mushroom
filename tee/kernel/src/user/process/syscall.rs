@@ -1848,6 +1848,12 @@ fn openat(
     };
 
     let fd = if flags.contains(OpenFlags::PATH) {
+        if flags.contains(OpenFlags::NOFOLLOW) {
+            lookup_node(start_dir.clone(), &filename, &mut ctx)?;
+        } else {
+            lookup_and_resolve_node(start_dir.clone(), &filename, &mut ctx)?;
+        }
+
         let path_fd = PathFd::new(Arc::downgrade(&start_dir), filename);
         FileDescriptor::from(path_fd)
     } else {
