@@ -1959,7 +1959,11 @@ fn newfstatat(
     vm_activator.activate(&virtual_memory, |vm| {
         let pathname = vm.read(pathname)?;
 
-        let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
+        let node = if flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
+            lookup_node(start_dir, &pathname, &mut ctx)?
+        } else {
+            lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?
+        };
         let stat = node.stat();
 
         vm.write_with_abi(statbuf, stat, abi)
