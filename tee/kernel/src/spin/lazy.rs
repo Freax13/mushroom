@@ -22,6 +22,16 @@ impl<T> Lazy<T> {
     pub fn force(this: &Self) -> &T {
         this
     }
+
+    /// Get the value without initializing it.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that the value was already initialized.
+    #[inline]
+    pub unsafe fn get_unchecked(&self) -> &T {
+        unsafe { self.cell.get_unchecked() }
+    }
 }
 
 impl<T> Deref for Lazy<T> {

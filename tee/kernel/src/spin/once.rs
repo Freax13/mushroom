@@ -90,6 +90,16 @@ impl<T> Once<T> {
             (*self.cell.get()).assume_init_ref()
         })
     }
+
+    /// Get the value without initializing it.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that the value was already initialized.
+    #[inline]
+    pub unsafe fn get_unchecked(&self) -> &T {
+        unsafe { (*self.cell.get()).assume_init_ref() }
+    }
 }
 
 unsafe impl<T> Send for Once<T> where T: Send {}
