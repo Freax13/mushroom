@@ -918,6 +918,7 @@ pub struct LongOffset(pub i64);
 bitflags! {
     pub struct AtFlags {
         const AT_SYMLINK_NOFOLLOW = 0x100;
+        const AT_NO_AUTOMOUNT = 0x800;
         const AT_EMPTY_PATH = 0x1000;
     }
 }
