@@ -22,8 +22,8 @@ use crate::{
         node::{
             self, create_directory, create_file, create_link,
             devtmpfs::{self, RandomFile},
-            hard_link, lookup_and_resolve_node, lookup_node, read_link, rename, set_mode,
-            unlink_dir, unlink_file, DirEntry, FileAccessContext, OldDirEntry,
+            hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
+            unlink_file, DirEntry, FileAccessContext, OldDirEntry,
         },
         path::Path,
     },
@@ -128,6 +128,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetcwd);
     handlers.register(SysChdir);
     handlers.register(SysFchdir);
+    handlers.register(SysRename);
     handlers.register(SysMkdir);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
@@ -1391,6 +1392,29 @@ fn fchdir(
     Ok(0)
 }
 
+#[syscall(i386 = 38, amd64 = 82)]
+fn rename(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    oldname: Pointer<Path>,
+    newname: Pointer<Path>,
+) -> SyscallResult {
+    renameat(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        oldname,
+        FdNum::CWD,
+        newname,
+    )
+}
+
 #[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
     thread: &mut ThreadGuard,
@@ -2253,7 +2277,7 @@ fn renameat2(
         Ok((vm.read(oldname)?, vm.read(newname)?))
     })?;
 
-    rename(oldd, &oldname, newd, &newname, &mut ctx)?;
+    node::rename(oldd, &oldname, newd, &newname, &mut ctx)?;
 
     Ok(0)
 }
