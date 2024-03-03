@@ -161,10 +161,25 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
                     .ok_or_else(|| Error::inval(()))?
             }
             Whence::End => todo!(),
-            Whence::Data => todo!(),
+            Whence::Data => {
+                // Ensure that `offset` doesn't point past the file.
+                if offset >= self.file.stat().size as usize {
+                    return Err(Error::x_io(()));
+                }
+
+                // We don't support holes so we always jump to `offset`.
+                *guard = offset;
+            }
             Whence::Hole => {
+                let size = usize::try_from(self.file.stat().size)?;
+
+                // Ensure that `offset` doesn't point past the file.
+                if offset >= size {
+                    return Err(Error::x_io(()));
+                }
+
                 // We don't support holes so we always jump to the end of the file.
-                *guard = usize::try_from(self.file.stat().size)?;
+                *guard = size;
             }
         }
         Ok(*guard)

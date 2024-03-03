@@ -55,6 +55,7 @@ errors! {
     Perm perm 1,
     NoEnt no_ent 2,
     Io io 5,
+    XIo x_io 6,
     NoExec no_exec 8,
     BadF bad_f 9,
     Child child 10,
