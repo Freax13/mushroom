@@ -1172,6 +1172,10 @@ fn exit(
 ) -> SyscallResult {
     let status = status as u8;
 
+    if let Some(vfork_parent) = thread.vfork_done.take() {
+        let _ = vfork_parent.send(());
+    }
+
     thread.close_all_fds();
 
     let clear_child_tid = core::mem::take(&mut thread.clear_child_tid);
