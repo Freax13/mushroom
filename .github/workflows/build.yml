@@ -1,0 +1,70 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "main"
+    tags:
+      - "*"
+  pull_request:
+
+jobs:
+  check_formatting:
+    name: "Check Formatting"
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --all -- --check
+        working-directory: common
+      - run: cargo fmt --all -- --check
+        working-directory: host
+      - run: cargo fmt --all -- --check
+        working-directory: tee
+
+  build:
+    strategy:
+      matrix:
+        profile:
+          - development
+          - production
+          - kasan
+          - profiling
+    name: "Build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.profile }}
+          workspaces: |
+            common
+            host
+            tee
+      - name: "Install cargo-make"
+        run: cargo install cargo-make
+      - name: "Build"
+        run: cargo make --profile ${{ matrix.profile }} build
+        working-directory: host
+
+  clippy:
+    name: "Clippy"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+          workspaces: |
+            common
+            host
+            tee
+      - name: "Check common"
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: common
+      - name: "Check host"
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: host
+      - name: "Check tee"
+        run: cargo clippy --workspace --exclude init -- -D warnings
+        working-directory: tee
