@@ -33,7 +33,6 @@ script = "target/debug/mushroom $@"
 [tasks.run-development.env]
 SUPERVISOR = "../tee/target/supervisor/supervisor/supervisor"
 KERNEL = "../tee/target/x86_64-unknown-none/kernel/kernel"
-INIT = "../tee/target/x86_64-unknown-linux-musl/debug/init"
 
 [tasks.run-kasan]
 condition = { profiles = ["kasan"] }
@@ -42,7 +41,6 @@ script = "target/debug/mushroom $@"
 [tasks.run-kasan.env]
 SUPERVISOR = "../tee/target/supervisor/supervisor/supervisor"
 KERNEL = "../tee/target/x86_64-unknown-none/kernel/kernel"
-INIT = "../tee/target/x86_64-unknown-linux-musl/debug/init"
 KASAN = true
 
 [tasks.run-production]
@@ -52,7 +50,6 @@ script = "target/release/mushroom $@"
 [tasks.run-production.env]
 SUPERVISOR = "../tee/target/supervisor/supervisor-release/supervisor"
 KERNEL = "../tee/target/x86_64-unknown-none/kernel/kernel"
-INIT = "../tee/target/x86_64-unknown-linux-musl/release/init"
 
 [tasks.run-profiling]
 condition = { profiles = ["profiling"] }
@@ -61,7 +58,6 @@ script = "target/release/mushroom $@"
 [tasks.run-profiling.env]
 SUPERVISOR = "../tee/target/supervisor/supervisor/supervisor"
 KERNEL = "../tee/target/x86_64-unknown-none/kernel-profiling/kernel"
-INIT = "../tee/target/x86_64-unknown-linux-musl/debug/init"
 PROFILE_FOLDER = "uftrace.data"
 
 [tasks.clean]
