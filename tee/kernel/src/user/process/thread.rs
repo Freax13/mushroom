@@ -32,7 +32,7 @@ use crate::{
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
-        args::{FileMode, OpenFlags, Pointer},
+        args::{FileMode, OpenFlags, Pointer, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
@@ -284,7 +284,7 @@ impl ThreadGuard<'_> {
         fdtable: Arc<FileDescriptorTable>,
         stack: VirtAddr,
         new_clear_child_tid: Option<Pointer<u32>>,
-        new_tls: Option<u64>,
+        new_tls: Option<NewTls>,
         vfork_done: Option<oneshot::Sender<()>>,
     ) -> Thread {
         let process = new_process.unwrap_or_else(|| self.process().clone());
@@ -321,7 +321,12 @@ impl ThreadGuard<'_> {
         }
 
         if let Some(tls) = new_tls {
-            guard.set_tls(tls).unwrap();
+            match tls {
+                NewTls::Fs(tls) => guard.set_fs_base(tls),
+                NewTls::UserDesc(u_info) => {
+                    guard.add_user_desc(u_info).unwrap();
+                }
+            }
         }
 
         drop(guard);
@@ -474,4 +479,9 @@ bitflags! {
         const DISABLE = 1 << 1;
         const AUTODISARM = 1 << 31;
     }
+}
+
+pub enum NewTls {
+    Fs(u64),
+    UserDesc(UserDesc),
 }

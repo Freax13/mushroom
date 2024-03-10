@@ -5,6 +5,7 @@ use core::{
 
 use alloc::{vec, vec::Vec};
 use bit_field::BitField;
+use usize_conversions::usize_from;
 use x86_64::{
     instructions::tables::{lgdt, sgdt},
     registers::{control::Cr2, xcontrol::XCr0Flags},
@@ -16,9 +17,13 @@ use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
+    user::process::syscall::args::UserDescFlags,
 };
 
-use super::traits::{Abi, SyscallArgs, SyscallResult};
+use super::{
+    args::UserDesc,
+    traits::{Abi, SyscallArgs, SyscallResult},
+};
 
 #[derive(Clone)]
 pub struct CpuState {
@@ -418,15 +423,44 @@ impl CpuState {
         Ok(())
     }
 
-    pub fn set_tls(&mut self, tls: u64) -> Result<()> {
+    pub fn set_fs_base(&mut self, tls: u64) {
         self.registers.fs_base = tls;
-        Ok(())
     }
 
-    pub fn add_gd(&mut self, desc: u64) -> Result<u16> {
-        self.gdt.push(desc);
-        let num = u16::try_from(self.gdt.len() - 1)?;
-        Ok(num)
+    pub fn add_user_desc(&mut self, u_info: UserDesc) -> Result<Option<u16>> {
+        let mut access_byte = 0u8;
+        access_byte.set_bit(7, !u_info.flags.contains(UserDescFlags::SEG_NOT_PRESENT)); // present bit
+        access_byte.set_bits(5..=6, 3); // DPL
+        access_byte.set_bit(4, true); // descriptor type bit
+        access_byte.set_bit(3, u_info.flags.contains(UserDescFlags::READ_EXEC_ONLY)); // executable bit
+        access_byte.set_bit(2, false); // DC bit
+        access_byte.set_bit(1, true); // RW bit
+        access_byte.set_bit(0, true); // accessed bit
+
+        let mut flags = 0u8;
+        flags.set_bit(0, false); // reserved
+        flags.set_bit(1, u_info.flags.contains(UserDescFlags::LM)); // L bit
+        flags.set_bit(2, u_info.flags.contains(UserDescFlags::SEG_32BIT)); // DB bit
+        flags.set_bit(3, u_info.flags.contains(UserDescFlags::LIMIT_IN_PAGES)); // DB bit
+
+        let mut desc = 0;
+        desc.set_bits(0..=15, u64::from(u_info.limit.get_bits(0..=15)));
+        desc.set_bits(48..=51, u64::from(u_info.limit.get_bits(16..=19)));
+        desc.set_bits(16..=39, u64::from(u_info.base_addr.get_bits(0..=23)));
+        desc.set_bits(56..=63, u64::from(u_info.base_addr.get_bits(24..=31)));
+        desc.set_bits(40..=47, u64::from(access_byte));
+        desc.set_bits(52..=55, u64::from(flags));
+
+        if u_info.entry_number == !0 {
+            self.gdt.push(desc);
+            let num = u16::try_from(self.gdt.len() - 1)?;
+            Ok(Some(num))
+        } else {
+            let idx = usize_from(u64::from(u_info.entry_number));
+            let entry = self.gdt.get_mut(idx).ok_or(Error::inval(()))?;
+            *entry = desc;
+            Ok(None)
+        }
     }
 }
 

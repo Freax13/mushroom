@@ -6,7 +6,6 @@ use core::{
 };
 
 use alloc::{ffi::CString, sync::Arc, vec::Vec};
-use bit_field::BitField;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use kernel_macros::syscall;
 use usize_conversions::{usize_from, FromUsize};
@@ -31,7 +30,7 @@ use crate::{
     time::{self, now},
     user::process::{
         memory::MemoryPermissions,
-        syscall::args::{LongOffset, UserDesc, UserDescFlags},
+        syscall::args::{LongOffset, UserDesc},
     },
 };
 
@@ -49,7 +48,7 @@ use self::{
 
 use super::{
     memory::{Bias, VirtualMemory, VirtualMemoryActivator},
-    thread::{new_tid, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
+    thread::{new_tid, NewTls, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
     Process,
 };
 
@@ -992,7 +991,14 @@ async fn clone(
         };
 
         let new_tls = if flags.contains(CloneFlags::SETTLS) {
-            Some(tls)
+            Some(match abi {
+                Abi::I386 => {
+                    let pointer = Pointer::new(tls);
+                    let u_info = vm_activator.activate(&virtual_memory, |vm| vm.read(pointer))?;
+                    NewTls::UserDesc(u_info)
+                }
+                Abi::Amd64 => NewTls::Fs(tls),
+            })
         } else {
             None
         };
@@ -1595,7 +1601,7 @@ fn arch_prctl(
                 .thread
                 .cpu_state
                 .lock()
-                .set_tls(addr.get().as_u64())?;
+                .set_fs_base(addr.get().as_u64());
             Ok(0)
         }
     }
@@ -1725,7 +1731,7 @@ async fn futex(
 }
 
 #[syscall(i386 = 243, amd64 = 205)]
-fn set_thread_area(
+pub fn set_thread_area(
     thread: &mut ThreadGuard,
     vm_activator: &mut VirtualMemoryActivator,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1734,39 +1740,14 @@ fn set_thread_area(
     let u_info_pointer = u_info;
     let mut u_info = vm_activator.activate(&virtual_memory, |vm| vm.read(u_info_pointer))?;
 
-    let mut access_byte = 0u8;
-    access_byte.set_bit(7, !u_info.flags.contains(UserDescFlags::SEG_NOT_PRESENT)); // present bit
-    access_byte.set_bits(5..=6, 3); // DPL
-    access_byte.set_bit(4, true); // descriptor type bit
-    access_byte.set_bit(3, u_info.flags.contains(UserDescFlags::READ_EXEC_ONLY)); // executable bit
-    access_byte.set_bit(2, false); // DC bit
-    access_byte.set_bit(1, true); // RW bit
-    access_byte.set_bit(0, true); // accessed bit
-
-    let mut flags = 0u8;
-    flags.set_bit(0, false); // reserved
-    flags.set_bit(1, u_info.flags.contains(UserDescFlags::LM)); // L bit
-    flags.set_bit(2, u_info.flags.contains(UserDescFlags::SEG_32BIT)); // DB bit
-    flags.set_bit(3, u_info.flags.contains(UserDescFlags::LIMIT_IN_PAGES)); // DB bit
-
-    let mut desc = 0;
-    desc.set_bits(0..=15, u64::from(u_info.limit.get_bits(0..=15)));
-    desc.set_bits(48..=51, u64::from(u_info.limit.get_bits(16..=19)));
-    desc.set_bits(16..=39, u64::from(u_info.base_addr.get_bits(0..=23)));
-    desc.set_bits(56..=63, u64::from(u_info.base_addr.get_bits(24..=31)));
-    desc.set_bits(40..=47, u64::from(access_byte));
-    desc.set_bits(52..=55, u64::from(flags));
-
-    assert_eq!(
-        u_info.entry_number, !0,
-        "we only support adding entries for now"
-    );
-
     let mut cpu_state = thread.thread.cpu_state.lock();
-    u_info.entry_number = u32::from(cpu_state.add_gd(desc)?);
+    let new_entry_number = cpu_state.add_user_desc(u_info)?;
     drop(cpu_state);
 
-    vm_activator.activate(&virtual_memory, |vm| vm.write(u_info_pointer, u_info))?;
+    if let Some(new_entry_number) = new_entry_number {
+        u_info.entry_number = u32::from(new_entry_number);
+        vm_activator.activate(&virtual_memory, |vm| vm.write(u_info_pointer, u_info))?;
+    }
 
     Ok(0)
 }
