@@ -240,12 +240,12 @@ fn run_ap(
             match exit {
                 KvmExit::Io(io) => match io.port {
                     LOG_PORT => {
-                    let regs = ap.get_regs().unwrap();
-                    let fpu = ap.get_fpu().unwrap();
-                    let bytes = &bytes_of(&fpu.xmm)[..regs.rax as usize];
-                    let str = String::from_utf8_lossy(bytes);
-                    print!("{str}");
-                }
+                        let regs = ap.get_regs().unwrap();
+                        let fpu = ap.get_fpu().unwrap();
+                        let bytes = &bytes_of(&fpu.xmm)[..regs.rax as usize];
+                        let str = String::from_utf8_lossy(bytes);
+                        print!("{str}");
+                    }
                     SCHEDULE_PORT => run_scheduler.schedule(),
                     KICK_AP_PORT => init_scheduler.schedule(),
                     HALT_PORT => run_scheduler.wait(),
