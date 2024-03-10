@@ -260,7 +260,7 @@ pub fn extract_response(msg_seqno: u64, message: &mut Message) -> (u8, u8, &[u8]
     assert_eq!(content.msg_vmpck, 0);
     assert_eq!({ content.hdr_size }, 0x60);
 
-    let msg_size = usize::try_from(content.msg_size).unwrap();
+    let msg_size = usize::from(content.msg_size);
     let payload = &mut content.payload[..msg_size];
 
     let Secrets::V3(secrets) = &**SECRETS;
