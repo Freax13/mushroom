@@ -68,3 +68,18 @@ jobs:
       - name: "Check tee"
         run: cargo clippy --workspace --exclude init -- -D warnings
         working-directory: tee
+
+  test:
+    strategy:
+      matrix:
+        profile:
+          - development
+          - production
+          - kasan
+    name: "Test"
+    runs-on: [snp]
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Test"
+        run: cargo make --profile ${{ matrix.profile }} test
+        working-directory: host
