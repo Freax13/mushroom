@@ -61,41 +61,81 @@ KERNEL = "../tee/target/x86_64-unknown-none/kernel-profiling/kernel"
 PROFILE_FOLDER = "uftrace.data"
 
 [tasks.test]
-dependencies = ["test-development", "test-kasan", "test-production"]
+dependencies = ["test-amd64", "test-i386"]
 
-[tasks.test-development]
+[tasks.test-amd64]
+dependencies = ["test-amd64-development", "test-amd64-kasan", "test-amd64-production"]
+
+[tasks.test-amd64-development]
 condition = { profiles = ["development"] }
 dependencies = ["build"]
 command = "cargo"
 args = ["test", "--target", "x86_64-unknown-linux-musl", "-p", "tests"]
 cwd = "../tee"
-[tasks.test-development.env]
+[tasks.test-amd64-development.env]
 SUPERVISOR = "../target/supervisor/supervisor/supervisor"
 KERNEL = "../target/x86_64-unknown-none/kernel/kernel"
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/debug/mushroom run --input /dev/null --output /dev/null --attestation-report /dev/null --init"
 
-[tasks.test-kasan]
+[tasks.test-amd64-kasan]
 condition = { profiles = ["kasan"] }
 dependencies = ["build"]
 command = "cargo"
 args = ["test", "--target", "x86_64-unknown-linux-musl", "-p", "tests"]
 cwd = "../tee"
-[tasks.test-kasan.env]
+[tasks.test-amd64-kasan.env]
 SUPERVISOR = "../target/supervisor/supervisor/supervisor"
 KERNEL = "../target/x86_64-unknown-none/kernel/kernel"
 KASAN = true
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/debug/mushroom run --input /dev/null --output /dev/null --attestation-report /dev/null --init"
 
-[tasks.test-production]
+[tasks.test-amd64-production]
 condition = { profiles = ["production"] }
 dependencies = ["build"]
 command = "cargo"
 args = ["test", "--target", "x86_64-unknown-linux-musl", "-p", "tests"]
 cwd = "../tee"
-[tasks.test-production.env]
+[tasks.test-amd64-production.env]
 SUPERVISOR = "../target/supervisor/supervisor-release/supervisor"
 KERNEL = "../target/x86_64-unknown-none/kernel/kernel"
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/release/mushroom run --input /dev/null --output /dev/null --attestation-report /dev/null --init"
+
+[tasks.test-i386]
+dependencies = ["test-i386-development", "test-i386-kasan", "test-i386-production"]
+
+[tasks.test-i386-development]
+condition = { profiles = ["development"] }
+dependencies = ["build"]
+command = "cargo"
+args = ["test", "--target", "i686-unknown-linux-musl", "-p", "tests"]
+cwd = "../tee"
+[tasks.test-i386-development.env]
+SUPERVISOR = "../target/supervisor/supervisor/supervisor"
+KERNEL = "../target/x86_64-unknown-none/kernel/kernel"
+CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/debug/mushroom run --input /dev/null --output /dev/null --attestation-report /dev/null --init"
+
+[tasks.test-i386-kasan]
+condition = { profiles = ["kasan"] }
+dependencies = ["build"]
+command = "cargo"
+args = ["test", "--target", "i686-unknown-linux-musl", "-p", "tests"]
+cwd = "../tee"
+[tasks.test-i386-kasan.env]
+SUPERVISOR = "../target/supervisor/supervisor/supervisor"
+KERNEL = "../target/x86_64-unknown-none/kernel/kernel"
+KASAN = true
+CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/debug/mushroom run --input /dev/null --output /dev/null --attestation-report /dev/null --init"
+
+[tasks.test-i386-production]
+condition = { profiles = ["production"] }
+dependencies = ["build"]
+command = "cargo"
+args = ["test", "--target", "i686-unknown-linux-musl", "-p", "tests"]
+cwd = "../tee"
+[tasks.test-i386-production.env]
+SUPERVISOR = "../target/supervisor/supervisor-release/supervisor"
+KERNEL = "../target/x86_64-unknown-none/kernel/kernel"
+CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/release/mushroom run --input /dev/null --output /dev/null --attestation-report /dev/null --init"
 
 [tasks.clean]
 dependencies = ["clean-tee"]
