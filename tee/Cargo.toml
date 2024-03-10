@@ -1,7 +1,7 @@
 cargo-features = ["profile-rustflags"]
 
 [workspace]
-members = ["init", "kernel", "kernel-macros", "supervisor"]
+members = ["init", "kernel", "kernel-macros", "supervisor", "tests"]
 resolver = "2"
 
 [workspace.dependencies]
