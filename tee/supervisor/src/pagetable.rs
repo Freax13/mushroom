@@ -69,7 +69,7 @@ where
     let size = core::mem::size_of_val_raw(value);
     let sizem1 = size.checked_sub(1).ok_or(TranslationError::ZeroSized)? as u64;
 
-    let start_addr = VirtAddr::from_ptr(value as *const T as *const u8);
+    let start_addr = VirtAddr::from_ptr(value);
     let end_addr = start_addr + sizem1;
 
     let start_page = Page::containing_address(start_addr);

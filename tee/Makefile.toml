@@ -13,7 +13,7 @@ alias = "build"
 dependencies = ["build-tee"]
 
 [tasks.build-tee]
-dependencies = ["build-supervisor", "build-kernel", "build-init"]
+dependencies = ["build-supervisor", "build-kernel"]
 
 [tasks.build-supervisor]
 dependencies = ["build-supervisor-development", "build-supervisor-production"]
