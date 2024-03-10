@@ -76,10 +76,13 @@ jobs:
           - development
           - production
           - kasan
+        abi:
+          - amd64
+          - i386
     name: "Test"
     runs-on: [snp]
     steps:
       - uses: actions/checkout@v4
       - name: "Test"
-        run: cargo make --profile ${{ matrix.profile }} test
+        run: cargo make --profile ${{ matrix.profile }} test-${{ matrix.abi }}
         working-directory: host
