@@ -943,6 +943,7 @@ fn socketpair(
 #[syscall(i386 = 120, amd64 = 56)]
 async fn clone(
     thread: Arc<Thread>,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     flags: CloneFlags,
@@ -951,6 +952,13 @@ async fn clone(
     child_tid: Pointer<u32>,
     tls: u64,
 ) -> SyscallResult {
+    let mut child_tid = child_tid;
+    let mut tls = tls;
+    // For i386 child_tid and tls are swapped.
+    if let Abi::I386 = abi {
+        (child_tid, tls) = (Pointer::new(tls), child_tid.get().as_u64());
+    }
+
     let new_tid = new_tid();
 
     let (tid, vfork_receiver) = VirtualMemoryActivator::r#do(move |vm_activator| -> Result<_> {
