@@ -24,7 +24,10 @@ use crate::{
     user::process::{
         memory::{ActiveVirtualMemory, VirtualMemoryActivator},
         syscall::traits::Abi,
-        thread::{Sigaction, Sigset, Stack, StackFlags, ThreadGuard},
+        thread::{
+            SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, ThreadGuard,
+            UContext,
+        },
     },
 };
 
@@ -63,6 +66,10 @@ pub trait WritablePointee<T = Custom>: Pointee {
     fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize>;
 }
 
+pub trait SizedPointee<T = Custom>: Pointee {
+    fn size(&self, abi: Abi) -> usize;
+}
+
 /// A marker type used for the custom impls of `Pointee` traits.
 pub struct Custom;
 
@@ -97,6 +104,15 @@ where
     fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _: Abi) -> Result<usize> {
         vm.write_bytes(addr, bytes_of(self))?;
         Ok(size_of::<Self>())
+    }
+}
+
+impl<T> SizedPointee<Primitive> for T
+where
+    T: PrimitivePointee,
+{
+    fn size(&self, _: Abi) -> usize {
+        size_of::<T>()
     }
 }
 
@@ -168,6 +184,18 @@ where
                 vm.write_bytes(addr, bytes_of(&value))?;
                 Ok(size_of::<T::Amd64>())
             }
+        }
+    }
+}
+
+impl<T> SizedPointee<ArchitectureDependent> for T
+where
+    T: AbiDependentPointee,
+{
+    fn size(&self, abi: Abi) -> usize {
+        match abi {
+            Abi::I386 => size_of::<T::I386>(),
+            Abi::Amd64 => size_of::<T::Amd64>(),
         }
     }
 }
@@ -347,23 +375,39 @@ impl<T> AbiDependentPointee for Pointer<T>
 where
     T: ?Sized,
 {
-    type I386 = Pointer32;
-    type Amd64 = Pointer64;
+    type I386 = Pointer32<T>;
+    type Amd64 = Pointer64<T>;
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(transparent)]
-pub struct Pointer32(u32);
+pub struct Pointer32<T>(u32, PhantomData<T>)
+where
+    T: ?Sized;
 
-#[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(transparent)]
-pub struct Pointer64(u64);
+pub struct Pointer64<T>(u64, PhantomData<T>)
+where
+    T: ?Sized;
 
-impl<T> From<Pointer32> for Pointer<T>
+impl<T> Clone for Pointer32<T>
 where
     T: ?Sized,
 {
-    fn from(value: Pointer32) -> Self {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Pointer32<T> where T: ?Sized {}
+
+unsafe impl<T> Pod for Pointer32<T> where T: ?Sized + 'static {}
+unsafe impl<T> Zeroable for Pointer32<T> where T: ?Sized {}
+
+impl<T> From<Pointer32<T>> for Pointer<T>
+where
+    T: ?Sized,
+{
+    fn from(value: Pointer32<T>) -> Self {
         Self {
             value: u64::from(value.0),
             _marker: PhantomData,
@@ -371,22 +415,36 @@ where
     }
 }
 
-impl<T> TryFrom<Pointer<T>> for Pointer32
+impl<T> TryFrom<Pointer<T>> for Pointer32<T>
 where
     T: ?Sized,
 {
     type Error = Error;
 
     fn try_from(value: Pointer<T>) -> Result<Self> {
-        Ok(Self(value.value.try_into()?))
+        Ok(Self(value.value.try_into()?, PhantomData))
     }
 }
 
-impl<T> From<Pointer64> for Pointer<T>
+impl<T> Clone for Pointer64<T>
 where
     T: ?Sized,
 {
-    fn from(value: Pointer64) -> Self {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Pointer64<T> where T: ?Sized {}
+
+unsafe impl<T> Pod for Pointer64<T> where T: ?Sized + 'static {}
+unsafe impl<T> Zeroable for Pointer64<T> where T: ?Sized {}
+
+impl<T> From<Pointer64<T>> for Pointer<T>
+where
+    T: ?Sized,
+{
+    fn from(value: Pointer64<T>) -> Self {
         Self {
             value: value.0,
             _marker: PhantomData,
@@ -394,14 +452,12 @@ where
     }
 }
 
-impl<T> TryFrom<Pointer<T>> for Pointer64
+impl<T> From<Pointer<T>> for Pointer64<T>
 where
     T: ?Sized,
 {
-    type Error = Error;
-
-    fn try_from(value: Pointer<T>) -> Result<Self> {
-        Ok(Self(value.value))
+    fn from(value: Pointer<T>) -> Self {
+        Self(value.value, PhantomData)
     }
 }
 
@@ -420,18 +476,18 @@ impl AbiDependentPointee for Sigaction {
 #[repr(C)]
 pub struct Sigaction32 {
     sa_handler_or_sigaction: u32,
-    sa_mask: [u32; 2],
-    flags: u32,
+    sa_flags: u32,
     sa_restorer: u32,
+    sa_mask: [u32; 2],
 }
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Sigaction64 {
     sa_handler_or_sigaction: u64,
-    sa_mask: Sigset,
-    flags: u64,
+    sa_flags: u64,
     sa_restorer: u64,
+    sa_mask: Sigset,
 }
 
 impl TryFrom<Sigaction> for Sigaction32 {
@@ -440,9 +496,9 @@ impl TryFrom<Sigaction> for Sigaction32 {
     fn try_from(value: Sigaction) -> Result<Self> {
         Ok(Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction.try_into()?,
-            sa_mask: cast(value.sa_mask),
-            flags: value.flags.try_into()?,
+            sa_flags: value.sa_flags.bits(),
             sa_restorer: value.sa_restorer.try_into()?,
+            sa_mask: cast(value.sa_mask),
         })
     }
 }
@@ -451,9 +507,9 @@ impl From<Sigaction> for Sigaction64 {
     fn from(value: Sigaction) -> Self {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
-            sa_mask: value.sa_mask,
-            flags: value.flags,
+            sa_flags: u64::from(value.sa_flags.bits()),
             sa_restorer: value.sa_restorer,
+            sa_mask: value.sa_mask,
         }
     }
 }
@@ -462,9 +518,9 @@ impl From<Sigaction32> for Sigaction {
     fn from(value: Sigaction32) -> Self {
         Self {
             sa_handler_or_sigaction: u64::from(value.sa_handler_or_sigaction),
-            sa_mask: cast(value.sa_mask),
-            flags: u64::from(value.flags),
+            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags),
             sa_restorer: u64::from(value.sa_restorer),
+            sa_mask: cast(value.sa_mask),
         }
     }
 }
@@ -474,7 +530,7 @@ impl From<Sigaction64> for Sigaction {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
             sa_mask: value.sa_mask,
-            flags: value.flags,
+            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags as u32),
             sa_restorer: value.sa_restorer,
         }
     }
@@ -947,4 +1003,325 @@ impl From<Time> for Time64 {
     fn from(value: Time) -> Self {
         Self(u64::from(value.0))
     }
+}
+
+impl Pointee for SigInfo {}
+
+impl PrimitivePointee for SigInfo {}
+
+impl Pointee for UContext {}
+
+impl AbiDependentPointee for UContext {
+    type I386 = UContext32;
+    type Amd64 = UContext64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct UContext32 {
+    flags: u32,
+    link: Pointer32<UContext32>,
+    stack: Stack32,
+    mcontext: SigContext32,
+    sigmask: Sigset32,
+}
+
+impl TryFrom<UContext> for UContext32 {
+    type Error = Error;
+
+    fn try_from(value: UContext) -> Result<Self> {
+        Ok(Self {
+            flags: 0,
+            link: Pointer32(0, PhantomData),
+            stack: value.stack.try_into()?,
+            mcontext: SigContext32 {
+                gs: value.mcontext.gs,
+                __gsh: 0,
+                fs: value.mcontext.fs,
+                __fsh: 0,
+                es: value.mcontext.es,
+                __esh: 0,
+                ds: value.mcontext.ds,
+                __dsh: 0,
+                edi: value.mcontext.rdi as u32,
+                esi: value.mcontext.rsi as u32,
+                ebp: value.mcontext.rbp as u32,
+                esp: value.mcontext.rsp as u32,
+                ebx: value.mcontext.rbx as u32,
+                edx: value.mcontext.rdx as u32,
+                ecx: value.mcontext.rcx as u32,
+                eax: value.mcontext.rax as u32,
+                trapno: value.mcontext.trapno as u32,
+                err: value.mcontext.err as u32,
+                eip: value.mcontext.rip as u32,
+                cs: value.mcontext.cs,
+                __csh: 0,
+                eflags: value.mcontext.eflags as u32,
+                esp_at_signal: value.mcontext.rsp as u32,
+                ss: value.mcontext.ss,
+                __ssh: 0,
+                fpstate: value.mcontext.fpstate.cast().try_into()?,
+                oldmask: value.mcontext.oldmask as u32,
+                cr2: value.mcontext.cr2 as u32,
+            },
+            sigmask: value.sigmask.into(),
+        })
+    }
+}
+
+impl From<UContext32> for UContext {
+    fn from(value: UContext32) -> Self {
+        Self {
+            stack: value.stack.into(),
+            mcontext: SigContext {
+                r8: 0,
+                r9: 0,
+                r10: 0,
+                r11: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+                rdi: u64::from(value.mcontext.edi),
+                rsi: u64::from(value.mcontext.esi),
+                rbp: u64::from(value.mcontext.ebp),
+                rbx: u64::from(value.mcontext.ebx),
+                rdx: u64::from(value.mcontext.edx),
+                rax: u64::from(value.mcontext.eax),
+                rcx: u64::from(value.mcontext.ecx),
+                rsp: u64::from(value.mcontext.esp),
+                rip: u64::from(value.mcontext.eip),
+                eflags: u64::from(value.mcontext.eflags),
+                cs: value.mcontext.cs,
+                ds: value.mcontext.ds,
+                es: value.mcontext.es,
+                gs: value.mcontext.gs,
+                fs: value.mcontext.fs,
+                ss: value.mcontext.ss,
+                err: u64::from(value.mcontext.err),
+                trapno: u64::from(value.mcontext.trapno),
+                oldmask: u64::from(value.mcontext.oldmask),
+                cr2: u64::from(value.mcontext.cr2),
+                fpstate: Pointer::from(value.mcontext.fpstate).cast(),
+            },
+            sigmask: value.sigmask.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct SigContext32 {
+    gs: u16,
+    __gsh: u16,
+    fs: u16,
+    __fsh: u16,
+    es: u16,
+    __esh: u16,
+    ds: u16,
+    __dsh: u16,
+    edi: u32,
+    esi: u32,
+    ebp: u32,
+    esp: u32,
+    ebx: u32,
+    edx: u32,
+    ecx: u32,
+    eax: u32,
+    trapno: u32,
+    err: u32,
+    eip: u32,
+    cs: u16,
+    __csh: u16,
+    eflags: u32,
+    esp_at_signal: u32,
+    ss: u16,
+    __ssh: u16,
+    fpstate: Pointer32<FpState32>,
+    oldmask: u32,
+    cr2: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct FpState32 {
+    cw: u32,
+    sw: u32,
+    tag: u32,
+    ipoff: u32,
+    cssel: u32,
+    dataoff: u32,
+    datasel: u32,
+    _st: [FpReg; 8],
+    status: u16,
+    magic: u16,
+    _fxsr_env: [u32; 6],
+    mxcsr: u32,
+    reserved: u32,
+    _fxsr_st: [FpxReg; 8],
+    _xmm: [XmmReg; 8],
+    padding1: [u32; 44],
+    padding2: [u32; 12],
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct FpReg {
+    significand: [u16; 4],
+    exponent: u16,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct FpxReg {
+    significand: [u16; 4],
+    exponent: u16,
+    padding: [u16; 3],
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct XmmReg {
+    element: [u32; 4],
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct UContext64 {
+    flags: u64,
+    link: Pointer64<UContext64>,
+    stack: Stack64,
+    mcontext: SigContext64,
+    sigmask: Sigset64,
+}
+
+impl From<UContext> for UContext64 {
+    fn from(value: UContext) -> Self {
+        Self {
+            flags: 0,
+            link: Pointer64(0, PhantomData),
+            stack: value.stack.into(),
+            mcontext: SigContext64 {
+                r8: value.mcontext.r8,
+                r9: value.mcontext.r9,
+                r10: value.mcontext.r10,
+                r11: value.mcontext.r11,
+                r12: value.mcontext.r12,
+                r13: value.mcontext.r13,
+                r14: value.mcontext.r14,
+                r15: value.mcontext.r15,
+                rdi: value.mcontext.rdi,
+                rsi: value.mcontext.rsi,
+                rbp: value.mcontext.rbp,
+                rbx: value.mcontext.rbx,
+                rdx: value.mcontext.rdx,
+                rax: value.mcontext.rax,
+                rcx: value.mcontext.rcx,
+                rsp: value.mcontext.rsp,
+                rip: value.mcontext.rip,
+                eflags: value.mcontext.eflags,
+                cs: value.mcontext.cs,
+                gs: value.mcontext.gs,
+                fs: value.mcontext.fs,
+                ss: value.mcontext.ss,
+                err: value.mcontext.err,
+                trapno: value.mcontext.trapno,
+                oldmask: value.mcontext.oldmask,
+                cr2: value.mcontext.cr2,
+                fpstate: value.mcontext.fpstate.cast().into(),
+                reserved1: [0; 8],
+            },
+            sigmask: value.sigmask.into(),
+        }
+    }
+}
+
+impl From<UContext64> for UContext {
+    fn from(value: UContext64) -> Self {
+        Self {
+            stack: value.stack.into(),
+            mcontext: SigContext {
+                r8: value.mcontext.r8,
+                r9: value.mcontext.r9,
+                r10: value.mcontext.r10,
+                r11: value.mcontext.r11,
+                r12: value.mcontext.r12,
+                r13: value.mcontext.r13,
+                r14: value.mcontext.r14,
+                r15: value.mcontext.r15,
+                rdi: value.mcontext.rdi,
+                rsi: value.mcontext.rsi,
+                rbp: value.mcontext.rbp,
+                rbx: value.mcontext.rbx,
+                rdx: value.mcontext.rdx,
+                rax: value.mcontext.rax,
+                rcx: value.mcontext.rcx,
+                rsp: value.mcontext.rsp,
+                rip: value.mcontext.rip,
+                eflags: value.mcontext.eflags,
+                cs: value.mcontext.cs,
+                ds: 0x23,
+                es: 0x23,
+                gs: value.mcontext.gs,
+                fs: value.mcontext.fs,
+                ss: value.mcontext.ss,
+                err: value.mcontext.err,
+                trapno: value.mcontext.trapno,
+                oldmask: value.mcontext.oldmask,
+                cr2: value.mcontext.cr2,
+                fpstate: Pointer::from(value.mcontext.fpstate).cast(),
+            },
+            sigmask: value.sigmask.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct SigContext64 {
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    rdi: u64,
+    rsi: u64,
+    rbp: u64,
+    rbx: u64,
+    rdx: u64,
+    rax: u64,
+    rcx: u64,
+    rsp: u64,
+    rip: u64,
+    eflags: u64,
+    cs: u16,
+    gs: u16,
+    fs: u16,
+    ss: u16,
+    err: u64,
+    trapno: u64,
+    oldmask: u64,
+    cr2: u64,
+    fpstate: Pointer64<FpState64>,
+    reserved1: [u64; 8],
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct FpState64 {
+    cwd: u16,
+    swd: u16,
+    twd: u16,
+    fop: u16,
+    rip: u64,
+    rdp: u64,
+    mxcsr: u32,
+    mxcsr_mask: u32,
+    st_space: [u32; 32],
+    xmm_space: [u32; 64],
+    reserved2: [u32; 12],
+    reserved3: [u32; 12],
 }

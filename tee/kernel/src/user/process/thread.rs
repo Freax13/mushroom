@@ -1,5 +1,5 @@
 use core::{
-    ffi::CStr,
+    ffi::{c_void, CStr},
     ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -18,6 +18,7 @@ use alloc::{
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
+use usize_conversions::usize_from;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -93,7 +94,7 @@ pub struct ThreadState {
 
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
-    pub sigaltstack: Option<Stack>,
+    pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
     pub cwd: DynINode,
@@ -130,7 +131,7 @@ impl Thread {
                 virtual_memory,
                 sigmask: Sigset(0),
                 sigaction: [Sigaction::DEFAULT; 64],
-                sigaltstack: None,
+                sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 notified_parent_about_exit: false,
                 cwd,
@@ -257,14 +258,43 @@ impl Thread {
         })
     }
 
-    async fn handle_page_fault(&self, page_fault: PageFaultExit) {
+    async fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
         let virtual_memory = self.lock().virtual_memory().clone();
         let handled =
             VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |_| unsafe {
                 virtual_memory.handle_page_fault(page_fault.addr, page_fault.code)
             })
             .await;
-        assert!(handled);
+
+        if !handled {
+            self.clone().deliver_signal(11).await.unwrap();
+        }
+    }
+
+    async fn deliver_signal(self: Arc<Self>, signum: u64) -> Result<()> {
+        let mut state = self.state.lock();
+        let virtual_memory = state.virtual_memory.clone();
+        let sigaction = state.sigaction[usize_from(signum)];
+        let sigaltstack = state.sigaltstack;
+        if sigaltstack.flags.contains(StackFlags::AUTODISARM)
+            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+        {
+            state.sigaltstack.flags |= StackFlags::DISABLE;
+        }
+        drop(state);
+
+        let sig_info = SigInfo {
+            si_signo: signum as i32,
+            si_errno: 0,
+            si_code: 0,
+            __pad: [0; 29],
+        };
+
+        VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
+            let mut cpu_state = self.cpu_state.lock();
+            cpu_state.start_signal_handler(signum, sig_info, sigaction, sigaltstack, vm)
+        })
+        .await
     }
 }
 
@@ -317,7 +347,7 @@ impl ThreadGuard<'_> {
 
         // Switch to a new stack if one is provided.
         if !stack.is_null() {
-            guard.set_stack_pointer(stack.as_u64()).unwrap();
+            guard.set_stack_pointer(stack.as_u64());
         }
 
         if let Some(tls) = new_tls {
@@ -426,17 +456,17 @@ impl DerefMut for ThreadGuard<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct Sigaction {
     pub sa_handler_or_sigaction: u64,
-    pub sa_mask: Sigset,
-    pub flags: u64,
+    pub sa_flags: SigactionFlags,
     pub sa_restorer: u64,
+    pub sa_mask: Sigset,
 }
 
 impl Sigaction {
     const DEFAULT: Self = Self {
         sa_handler_or_sigaction: 0,
-        sa_mask: Sigset(0),
-        flags: 0,
+        sa_flags: SigactionFlags::empty(),
         sa_restorer: 0,
+        sa_mask: Sigset(0),
     };
 }
 
@@ -464,11 +494,27 @@ impl Not for Sigset {
     }
 }
 
-#[derive(Default, Debug, Clone, Copy)]
+bitflags! {
+    pub struct SigactionFlags: u32 {
+        const SA_ONSTACK = 0x08000000;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Stack {
     pub sp: u64,
     pub flags: StackFlags,
     pub size: u64,
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Self {
+            sp: Default::default(),
+            flags: StackFlags::DISABLE,
+            size: Default::default(),
+        }
+    }
 }
 
 bitflags! {
@@ -484,4 +530,53 @@ bitflags! {
 pub enum NewTls {
     Fs(u64),
     UserDesc(UserDesc),
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct SigInfo {
+    pub si_signo: i32,
+    pub si_errno: i32,
+    pub si_code: i32,
+    pub __pad: [i32; 29],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UContext {
+    pub stack: Stack,
+    pub mcontext: SigContext,
+    pub sigmask: Sigset,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigContext {
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub rdx: u64,
+    pub rax: u64,
+    pub rcx: u64,
+    pub rsp: u64,
+    pub rip: u64,
+    pub eflags: u64,
+    pub cs: u16,
+    pub ds: u16,
+    pub es: u16,
+    pub gs: u16,
+    pub fs: u16,
+    pub ss: u16,
+    pub err: u64,
+    pub trapno: u64,
+    pub oldmask: u64,
+    pub cr2: u64,
+    pub fpstate: Pointer<c_void>,
 }
