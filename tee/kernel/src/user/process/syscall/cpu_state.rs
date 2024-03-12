@@ -1,12 +1,14 @@
 use core::{
     arch::{asm, x86_64::__cpuid_count},
+    ffi::c_void,
     mem::offset_of,
 };
 
 use alloc::{vec, vec::Vec};
 use bit_field::BitField;
-use usize_conversions::usize_from;
+use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
+    align_down,
     instructions::tables::{lgdt, sgdt},
     registers::{control::Cr2, xcontrol::XCr0Flags},
     structures::{gdt::Entry, idt::PageFaultErrorCode, DescriptorTablePointer},
@@ -17,11 +19,15 @@ use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
-    user::process::syscall::args::UserDescFlags,
+    user::process::{
+        memory::{ActiveVirtualMemory, SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386},
+        syscall::args::UserDescFlags,
+        thread::{SigContext, SigInfo, Sigset, Stack, StackFlags, UContext},
+    },
 };
 
 use super::{
-    args::UserDesc,
+    args::{pointee::SizedPointee, Pointer, UserDesc},
     traits::{Abi, SyscallArgs, SyscallResult},
 };
 
@@ -31,6 +37,7 @@ pub struct CpuState {
     gdt: Vec<u64>,
     xsave_area: XSaveArea,
     last_exit_was_syscall: bool,
+    ignore_syscall_result: bool,
 }
 
 impl CpuState {
@@ -53,6 +60,7 @@ impl CpuState {
             gdt,
             xsave_area: XSaveArea::new(),
             last_exit_was_syscall: false,
+            ignore_syscall_result: false,
         }
     }
 
@@ -404,6 +412,10 @@ impl CpuState {
     }
 
     pub fn set_syscall_result(&mut self, result: SyscallResult) -> Result<()> {
+        if core::mem::take(&mut self.ignore_syscall_result) {
+            return Ok(());
+        }
+
         let result = match result {
             Ok(result) => {
                 let is_error = (-4095..=-1).contains(&(result as i64));
@@ -460,6 +472,156 @@ impl CpuState {
             *entry = desc;
             Ok(None)
         }
+    }
+
+    /// Guess the ABI to be used for signal handling based on the CS register
+    /// and GDT entry.
+    pub fn abi_from_cs(&self) -> Abi {
+        let cs = self.registers.cs;
+        let idx = usize::from(cs >> 3);
+        let entry = self.gdt.get(idx).copied().unwrap_or_default();
+        let l_bit = entry.get_bit(53);
+        if l_bit {
+            Abi::Amd64
+        } else {
+            Abi::I386
+        }
+    }
+
+    pub fn create_sig_context(&self) -> SigContext {
+        SigContext {
+            r8: self.registers.r8,
+            r9: self.registers.r9,
+            r10: self.registers.r10,
+            r11: self.registers.r11,
+            r12: self.registers.r12,
+            r13: self.registers.r13,
+            r14: self.registers.r14,
+            r15: self.registers.r15,
+            rdi: self.registers.rdi,
+            rsi: self.registers.rsi,
+            rbp: self.registers.rbp,
+            rbx: self.registers.rbx,
+            rdx: self.registers.rdx,
+            rax: self.registers.rax,
+            rcx: self.registers.rcx,
+            rsp: self.registers.rsp,
+            rip: self.registers.rip,
+            eflags: self.registers.rflags,
+            cs: self.registers.cs,
+            ds: self.registers.ds,
+            es: self.registers.es,
+            gs: self.registers.gs,
+            fs: self.registers.fs,
+            ss: self.registers.ss,
+            err: 0,
+            trapno: 0,
+            oldmask: 0,
+            cr2: 0,
+            fpstate: Pointer::NULL,
+        }
+    }
+
+    pub fn load_sig_context(&mut self, sig_context: &SigContext) {
+        self.registers.r8 = sig_context.r8;
+        self.registers.r9 = sig_context.r9;
+        self.registers.r10 = sig_context.r10;
+        self.registers.r11 = sig_context.r11;
+        self.registers.r12 = sig_context.r12;
+        self.registers.r13 = sig_context.r13;
+        self.registers.r14 = sig_context.r14;
+        self.registers.r15 = sig_context.r15;
+        self.registers.rdi = sig_context.rdi;
+        self.registers.rsi = sig_context.rsi;
+        self.registers.rbp = sig_context.rbp;
+        self.registers.rbx = sig_context.rbx;
+        self.registers.rdx = sig_context.rdx;
+        self.registers.rax = sig_context.rax;
+        self.registers.rcx = sig_context.rcx;
+        self.registers.rsp = sig_context.rsp;
+        self.registers.rip = sig_context.rip;
+        self.registers.rflags = sig_context.eflags;
+        self.registers.cs = sig_context.cs;
+        self.registers.ds = sig_context.ds;
+        self.registers.es = sig_context.es;
+        self.registers.gs = sig_context.gs;
+        self.registers.fs = sig_context.fs;
+        self.registers.ss = sig_context.ss;
+
+        self.last_exit_was_syscall = false;
+        self.ignore_syscall_result = true;
+    }
+
+    pub fn start_signal_handler(
+        &mut self,
+        handler: Pointer<c_void>,
+        signum: u64,
+        sig_info: SigInfo,
+        mut restorer: Pointer<c_void>,
+        vm: &mut ActiveVirtualMemory,
+    ) -> Result<()> {
+        let abi = self.abi_from_cs();
+        let mcontext = self.create_sig_context();
+        let ucontext = UContext {
+            stack: Stack {
+                sp: 0,
+                flags: StackFlags::empty(),
+                size: 0,
+            },
+            mcontext,
+            sigmask: Sigset(0),
+        };
+        if restorer.is_null() {
+            restorer = Pointer::new(match abi {
+                Abi::I386 => SIGRETURN_TRAMPOLINE_I386,
+                Abi::Amd64 => SIGRETURN_TRAMPOLINE_AMD64,
+            });
+        }
+        // Push information for the signal handler onto the stack.
+        self.registers.rsp = align_down(self.registers.rsp, 16);
+        // Write sig_info.
+        self.registers.rsp -= u64::from_usize(sig_info.size(abi));
+        let sig_info_ptr = Pointer::new(self.registers.rsp);
+        vm.write_with_abi(sig_info_ptr, sig_info, abi)?;
+        // Write ucontext.
+        self.registers.rsp -= u64::from_usize(ucontext.size(abi));
+        let ucontext_ptr = Pointer::new(self.registers.rsp);
+        vm.write_with_abi(ucontext_ptr, ucontext, abi)?;
+
+        match abi {
+            Abi::I386 => {
+                self.registers.rsp = align_down(self.registers.rsp, 16) - 4;
+                self.registers.rsp -= 12;
+                vm.write_with_abi(Pointer::new(self.registers.rsp + 8), ucontext_ptr, abi)?;
+                vm.write_with_abi(Pointer::new(self.registers.rsp + 4), sig_info_ptr, abi)?;
+                vm.write_with_abi(Pointer::new(self.registers.rsp), signum as u32, abi)?;
+            }
+            Abi::Amd64 => {
+                self.registers.rdi = signum;
+                self.registers.rsi = sig_info_ptr.get().as_u64();
+                self.registers.rdx = ucontext_ptr.get().as_u64();
+
+                // Also write ucontext to the stack, so that it's easier to restore.
+                self.registers.rsp = align_down(self.registers.rsp, 16);
+                self.registers.rsp -= 16;
+                vm.write_with_abi(Pointer::new(self.registers.rsp + 8), ucontext_ptr, abi)?;
+            }
+        }
+
+        self.registers.rsp -= u64::from_usize(restorer.size(abi));
+        vm.write_with_abi(Pointer::new(self.registers.rsp), restorer, abi)?;
+
+        self.registers.rip = handler.get().as_u64();
+
+        Ok(())
+    }
+
+    pub fn finish_signal_handler(&mut self, vm: &mut ActiveVirtualMemory, abi: Abi) -> Result<()> {
+        let ucontext_ptr_ptr = Pointer::<Pointer<UContext>>::new(self.registers.rsp + 8);
+        let ucontext_ptr = vm.read_with_abi(ucontext_ptr_ptr, abi)?;
+        let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
+        self.load_sig_context(&ucontext.mcontext);
+        Ok(())
     }
 }
 

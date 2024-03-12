@@ -1,5 +1,5 @@
 use core::{
-    ffi::CStr,
+    ffi::{c_void, CStr},
     ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -18,6 +18,7 @@ use alloc::{
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
+use usize_conversions::usize_from;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -257,14 +258,39 @@ impl Thread {
         })
     }
 
-    async fn handle_page_fault(&self, page_fault: PageFaultExit) {
+    async fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
         let virtual_memory = self.lock().virtual_memory().clone();
         let handled =
             VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |_| unsafe {
                 virtual_memory.handle_page_fault(page_fault.addr, page_fault.code)
             })
             .await;
-        assert!(handled);
+
+        if !handled {
+            self.clone().deliver_signal(11).await.unwrap();
+        }
+    }
+
+    async fn deliver_signal(self: Arc<Self>, signum: u64) -> Result<()> {
+        let state = self.state.lock();
+        let virtual_memory = state.virtual_memory.clone();
+        let sigaction = state.sigaction[usize_from(signum)];
+        drop(state);
+
+        let handler = Pointer::new(sigaction.sa_handler_or_sigaction);
+        let sig_info = SigInfo {
+            si_signo: signum as i32,
+            si_errno: 0,
+            si_code: 0,
+            __pad: [0; 29],
+        };
+        let restorer = Pointer::new(sigaction.sa_restorer);
+
+        VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
+            let mut cpu_state = self.cpu_state.lock();
+            cpu_state.start_signal_handler(handler, signum, sig_info, restorer, vm)
+        })
+        .await
     }
 }
 
@@ -484,4 +510,53 @@ bitflags! {
 pub enum NewTls {
     Fs(u64),
     UserDesc(UserDesc),
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct SigInfo {
+    pub si_signo: i32,
+    pub si_errno: i32,
+    pub si_code: i32,
+    pub __pad: [i32; 29],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UContext {
+    pub stack: Stack,
+    pub mcontext: SigContext,
+    pub sigmask: Sigset,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigContext {
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub rdx: u64,
+    pub rax: u64,
+    pub rcx: u64,
+    pub rsp: u64,
+    pub rip: u64,
+    pub eflags: u64,
+    pub cs: u16,
+    pub ds: u16,
+    pub es: u16,
+    pub gs: u16,
+    pub fs: u16,
+    pub ss: u16,
+    pub err: u64,
+    pub trapno: u64,
+    pub oldmask: u64,
+    pub cr2: u64,
+    pub fpstate: Pointer<c_void>,
 }

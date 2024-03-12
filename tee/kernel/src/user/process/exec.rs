@@ -41,6 +41,8 @@ impl ActiveVirtualMemory<'_, '_> {
         ctx: &mut FileAccessContext,
         cwd: DynINode,
     ) -> Result<CpuState> {
+        self.modify().map_sigreturn_trampoline()?;
+
         let mut header = [0; 4];
         file.pread(0, &mut header)?;
 

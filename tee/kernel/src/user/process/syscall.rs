@@ -99,6 +99,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysRtSigreturn);
     handlers.register(SysIoctl);
     handlers.register(SysPread64);
     handlers.register(SysPwrite64);
@@ -627,6 +628,20 @@ impl Syscall for SysRtSigprocmask {
         Pointer::<Sigset>::display(f, oldset, syscall_args.abi, thread, vm_activator)?;
         write!(f, ")")
     }
+}
+
+#[syscall(i386 = 173, amd64 = 15)]
+fn rt_sigreturn(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+) -> SyscallResult {
+    vm_activator.activate(&virtual_memory, |vm| {
+        let mut cpu_state = thread.thread.cpu_state.lock();
+        cpu_state.finish_signal_handler(vm, abi)
+    })?;
+    Ok(0)
 }
 
 #[syscall(i386 = 54, amd64 = 16)]

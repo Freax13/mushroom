@@ -18,6 +18,7 @@ use crate::{
     },
     rt::spawn,
     spin::{
+        lazy::Lazy,
         mutex::Mutex,
         rwlock::{RwLock, WriteRwLockGuard},
     },
@@ -64,6 +65,10 @@ use super::syscall::{
     },
     traits::Abi,
 };
+
+const SIGRETURN_TRAMPOLINE_PAGE: u64 = 0x7fff_f000;
+pub const SIGRETURN_TRAMPOLINE_I386: u64 = SIGRETURN_TRAMPOLINE_PAGE;
+pub const SIGRETURN_TRAMPOLINE_AMD64: u64 = SIGRETURN_TRAMPOLINE_PAGE + 0x10;
 
 type DynVirtualMemoryOp = Box<dyn FnOnce(&mut VirtualMemoryActivator) + Send>;
 static PENDING_VIRTUAL_MEMORY_OPERATIONS: SegQueue<DynVirtualMemoryOp> = SegQueue::new();
@@ -577,6 +582,39 @@ impl ActiveVirtualMemoryWriteGuard<'_> {
             len,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
         )
+    }
+
+    pub fn map_sigreturn_trampoline(&mut self) -> Result<()> {
+        static PAGE: Lazy<Mutex<KernelPage>> = Lazy::new(|| {
+            let sigreturn_trampoline = &[
+                // i386 sigreturn trampoline
+                0xb8, 0xad, 0x00, 0x00, 0x00, // mov eax,0xad
+                0xcd, 0x80, // int 0x80
+                0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, // padding
+                // amd64 sigreturn trampoline
+                0xb8, 0x0f, 0x00, 0x00, 0x00, // mov eax,0xf
+                0x0f, 0x05, // syscall
+            ];
+
+            let mut page = KernelPage::zeroed();
+            page.make_mut().unwrap();
+            let ptr = page.index(..sigreturn_trampoline.len());
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    sigreturn_trampoline.as_ptr(),
+                    ptr.as_mut_ptr(),
+                    sigreturn_trampoline.len(),
+                );
+            }
+            Mutex::new(page)
+        });
+
+        let user_page = UserPage::new(
+            PAGE.lock().clone()?,
+            MemoryPermissions::READ | MemoryPermissions::EXECUTE,
+        );
+        let page = Page::from_start_address(VirtAddr::new(SIGRETURN_TRAMPOLINE_PAGE)).unwrap();
+        self.add_user_page(page, user_page, ..)
     }
 
     pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
