@@ -63,6 +63,10 @@ pub trait WritablePointee<T = Custom>: Pointee {
     fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize>;
 }
 
+pub trait SizedPointee<T = Custom>: Pointee {
+    fn size(&self, abi: Abi) -> usize;
+}
+
 /// A marker type used for the custom impls of `Pointee` traits.
 pub struct Custom;
 
@@ -97,6 +101,15 @@ where
     fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _: Abi) -> Result<usize> {
         vm.write_bytes(addr, bytes_of(self))?;
         Ok(size_of::<Self>())
+    }
+}
+
+impl<T> SizedPointee<Primitive> for T
+where
+    T: PrimitivePointee,
+{
+    fn size(&self, _: Abi) -> usize {
+        size_of::<T>()
     }
 }
 
@@ -168,6 +181,18 @@ where
                 vm.write_bytes(addr, bytes_of(&value))?;
                 Ok(size_of::<T::Amd64>())
             }
+        }
+    }
+}
+
+impl<T> SizedPointee<ArchitectureDependent> for T
+where
+    T: AbiDependentPointee,
+{
+    fn size(&self, abi: Abi) -> usize {
+        match abi {
+            Abi::I386 => size_of::<T::I386>(),
+            Abi::Amd64 => size_of::<T::Amd64>(),
         }
     }
 }
