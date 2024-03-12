@@ -1584,11 +1584,7 @@ fn sigaltstack(
     old_ss: Pointer<Stack>,
 ) -> SyscallResult {
     if !old_ss.is_null() {
-        let old_ss_value = thread.sigaltstack.unwrap_or_else(|| Stack {
-            flags: StackFlags::DISABLE,
-            ..Stack::default()
-        });
-
+        let old_ss_value = thread.sigaltstack;
         vm_activator.activate(&virtual_memory, |vm| {
             vm.write_with_abi(old_ss, old_ss_value, abi)
         })?;
@@ -1602,7 +1598,7 @@ fn sigaltstack(
             return Err(Error::inval(()));
         }
 
-        thread.sigaltstack = Some(ss_value);
+        thread.sigaltstack = ss_value;
     }
 
     Ok(0)

@@ -94,7 +94,7 @@ pub struct ThreadState {
 
     pub sigmask: Sigset,
     pub sigaction: [Sigaction; 64],
-    pub sigaltstack: Option<Stack>,
+    pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
     pub cwd: DynINode,
@@ -131,7 +131,7 @@ impl Thread {
                 virtual_memory,
                 sigmask: Sigset(0),
                 sigaction: [Sigaction::DEFAULT; 64],
-                sigaltstack: None,
+                sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 notified_parent_about_exit: false,
                 cwd,
@@ -496,11 +496,21 @@ bitflags! {
     }
 }
 
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Stack {
     pub sp: u64,
     pub flags: StackFlags,
     pub size: u64,
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Self {
+            sp: Default::default(),
+            flags: StackFlags::DISABLE,
+            size: Default::default(),
+        }
+    }
 }
 
 bitflags! {
