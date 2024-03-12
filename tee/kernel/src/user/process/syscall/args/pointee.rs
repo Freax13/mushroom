@@ -372,23 +372,39 @@ impl<T> AbiDependentPointee for Pointer<T>
 where
     T: ?Sized,
 {
-    type I386 = Pointer32;
-    type Amd64 = Pointer64;
+    type I386 = Pointer32<T>;
+    type Amd64 = Pointer64<T>;
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(transparent)]
-pub struct Pointer32(u32);
+pub struct Pointer32<T>(u32, PhantomData<T>)
+where
+    T: ?Sized;
 
-#[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(transparent)]
-pub struct Pointer64(u64);
+pub struct Pointer64<T>(u64, PhantomData<T>)
+where
+    T: ?Sized;
 
-impl<T> From<Pointer32> for Pointer<T>
+impl<T> Clone for Pointer32<T>
 where
     T: ?Sized,
 {
-    fn from(value: Pointer32) -> Self {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Pointer32<T> where T: ?Sized {}
+
+unsafe impl<T> Pod for Pointer32<T> where T: ?Sized + 'static {}
+unsafe impl<T> Zeroable for Pointer32<T> where T: ?Sized {}
+
+impl<T> From<Pointer32<T>> for Pointer<T>
+where
+    T: ?Sized,
+{
+    fn from(value: Pointer32<T>) -> Self {
         Self {
             value: u64::from(value.0),
             _marker: PhantomData,
@@ -396,22 +412,36 @@ where
     }
 }
 
-impl<T> TryFrom<Pointer<T>> for Pointer32
+impl<T> TryFrom<Pointer<T>> for Pointer32<T>
 where
     T: ?Sized,
 {
     type Error = Error;
 
     fn try_from(value: Pointer<T>) -> Result<Self> {
-        Ok(Self(value.value.try_into()?))
+        Ok(Self(value.value.try_into()?, PhantomData))
     }
 }
 
-impl<T> From<Pointer64> for Pointer<T>
+impl<T> Clone for Pointer64<T>
 where
     T: ?Sized,
 {
-    fn from(value: Pointer64) -> Self {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Pointer64<T> where T: ?Sized {}
+
+unsafe impl<T> Pod for Pointer64<T> where T: ?Sized + 'static {}
+unsafe impl<T> Zeroable for Pointer64<T> where T: ?Sized {}
+
+impl<T> From<Pointer64<T>> for Pointer<T>
+where
+    T: ?Sized,
+{
+    fn from(value: Pointer64<T>) -> Self {
         Self {
             value: value.0,
             _marker: PhantomData,
@@ -419,14 +449,12 @@ where
     }
 }
 
-impl<T> TryFrom<Pointer<T>> for Pointer64
+impl<T> From<Pointer<T>> for Pointer64<T>
 where
     T: ?Sized,
 {
-    type Error = Error;
-
-    fn try_from(value: Pointer<T>) -> Result<Self> {
-        Ok(Self(value.value))
+    fn from(value: Pointer<T>) -> Self {
+        Self(value.value, PhantomData)
     }
 }
 
