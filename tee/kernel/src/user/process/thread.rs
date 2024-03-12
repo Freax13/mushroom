@@ -272,23 +272,27 @@ impl Thread {
     }
 
     async fn deliver_signal(self: Arc<Self>, signum: u64) -> Result<()> {
-        let state = self.state.lock();
+        let mut state = self.state.lock();
         let virtual_memory = state.virtual_memory.clone();
         let sigaction = state.sigaction[usize_from(signum)];
+        let sigaltstack = state.sigaltstack;
+        if sigaltstack.flags.contains(StackFlags::AUTODISARM)
+            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+        {
+            state.sigaltstack.flags |= StackFlags::DISABLE;
+        }
         drop(state);
 
-        let handler = Pointer::new(sigaction.sa_handler_or_sigaction);
         let sig_info = SigInfo {
             si_signo: signum as i32,
             si_errno: 0,
             si_code: 0,
             __pad: [0; 29],
         };
-        let restorer = Pointer::new(sigaction.sa_restorer);
 
         VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
             let mut cpu_state = self.cpu_state.lock();
-            cpu_state.start_signal_handler(handler, signum, sig_info, restorer, vm)
+            cpu_state.start_signal_handler(signum, sig_info, sigaction, sigaltstack, vm)
         })
         .await
     }

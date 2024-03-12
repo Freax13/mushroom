@@ -22,7 +22,9 @@ use crate::{
     user::process::{
         memory::{ActiveVirtualMemory, SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386},
         syscall::args::UserDescFlags,
-        thread::{SigContext, SigInfo, Sigset, Stack, StackFlags, UContext},
+        thread::{
+            SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
+        },
     },
 };
 
@@ -554,29 +556,35 @@ impl CpuState {
 
     pub fn start_signal_handler(
         &mut self,
-        handler: Pointer<c_void>,
         signum: u64,
         sig_info: SigInfo,
-        mut restorer: Pointer<c_void>,
+        sigaction: Sigaction,
+        stack: Stack,
         vm: &mut ActiveVirtualMemory,
     ) -> Result<()> {
         let abi = self.abi_from_cs();
         let mcontext = self.create_sig_context();
         let ucontext = UContext {
-            stack: Stack {
-                sp: 0,
-                flags: StackFlags::empty(),
-                size: 0,
-            },
+            stack,
             mcontext,
             sigmask: Sigset(0),
         };
-        if restorer.is_null() {
-            restorer = Pointer::new(match abi {
+        let restorer = if sigaction.sa_restorer != 0 {
+            sigaction.sa_restorer
+        } else {
+            match abi {
                 Abi::I386 => SIGRETURN_TRAMPOLINE_I386,
                 Abi::Amd64 => SIGRETURN_TRAMPOLINE_AMD64,
-            });
+            }
+        };
+        let restorer = Pointer::<c_void>::new(restorer);
+
+        if !stack.flags.contains(StackFlags::DISABLE)
+            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+        {
+            self.registers.rsp = stack.sp + stack.size;
         }
+
         // Push information for the signal handler onto the stack.
         self.registers.rsp = align_down(self.registers.rsp, 16);
         // Write sig_info.
@@ -611,17 +619,21 @@ impl CpuState {
         self.registers.rsp -= u64::from_usize(restorer.size(abi));
         vm.write_with_abi(Pointer::new(self.registers.rsp), restorer, abi)?;
 
-        self.registers.rip = handler.get().as_u64();
+        self.registers.rip = sigaction.sa_handler_or_sigaction;
 
         Ok(())
     }
 
-    pub fn finish_signal_handler(&mut self, vm: &mut ActiveVirtualMemory, abi: Abi) -> Result<()> {
+    pub fn finish_signal_handler(
+        &mut self,
+        vm: &mut ActiveVirtualMemory,
+        abi: Abi,
+    ) -> Result<Stack> {
         let ucontext_ptr_ptr = Pointer::<Pointer<UContext>>::new(self.registers.rsp + 8);
         let ucontext_ptr = vm.read_with_abi(ucontext_ptr_ptr, abi)?;
         let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
         self.load_sig_context(&ucontext.mcontext);
-        Ok(())
+        Ok(ucontext.stack)
     }
 }
 
