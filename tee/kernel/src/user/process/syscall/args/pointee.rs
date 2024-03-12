@@ -473,18 +473,18 @@ impl AbiDependentPointee for Sigaction {
 #[repr(C)]
 pub struct Sigaction32 {
     sa_handler_or_sigaction: u32,
-    sa_mask: [u32; 2],
-    flags: u32,
+    sa_flags: u32,
     sa_restorer: u32,
+    sa_mask: [u32; 2],
 }
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Sigaction64 {
     sa_handler_or_sigaction: u64,
-    sa_mask: Sigset,
-    flags: u64,
+    sa_flags: u64,
     sa_restorer: u64,
+    sa_mask: Sigset,
 }
 
 impl TryFrom<Sigaction> for Sigaction32 {
@@ -493,9 +493,9 @@ impl TryFrom<Sigaction> for Sigaction32 {
     fn try_from(value: Sigaction) -> Result<Self> {
         Ok(Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction.try_into()?,
-            sa_mask: cast(value.sa_mask),
-            flags: value.flags.try_into()?,
+            sa_flags: value.sa_flags.try_into()?,
             sa_restorer: value.sa_restorer.try_into()?,
+            sa_mask: cast(value.sa_mask),
         })
     }
 }
@@ -504,9 +504,9 @@ impl From<Sigaction> for Sigaction64 {
     fn from(value: Sigaction) -> Self {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
-            sa_mask: value.sa_mask,
-            flags: value.flags,
+            sa_flags: value.sa_flags,
             sa_restorer: value.sa_restorer,
+            sa_mask: value.sa_mask,
         }
     }
 }
@@ -515,9 +515,9 @@ impl From<Sigaction32> for Sigaction {
     fn from(value: Sigaction32) -> Self {
         Self {
             sa_handler_or_sigaction: u64::from(value.sa_handler_or_sigaction),
-            sa_mask: cast(value.sa_mask),
-            flags: u64::from(value.flags),
+            sa_flags: u64::from(value.sa_flags),
             sa_restorer: u64::from(value.sa_restorer),
+            sa_mask: cast(value.sa_mask),
         }
     }
 }
@@ -527,7 +527,7 @@ impl From<Sigaction64> for Sigaction {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
             sa_mask: value.sa_mask,
-            flags: value.flags,
+            sa_flags: value.sa_flags,
             sa_restorer: value.sa_restorer,
         }
     }

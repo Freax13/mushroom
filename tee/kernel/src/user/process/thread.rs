@@ -426,17 +426,17 @@ impl DerefMut for ThreadGuard<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct Sigaction {
     pub sa_handler_or_sigaction: u64,
-    pub sa_mask: Sigset,
-    pub flags: u64,
+    pub sa_flags: u64,
     pub sa_restorer: u64,
+    pub sa_mask: Sigset,
 }
 
 impl Sigaction {
     const DEFAULT: Self = Self {
         sa_handler_or_sigaction: 0,
-        sa_mask: Sigset(0),
-        flags: 0,
+        sa_flags: 0,
         sa_restorer: 0,
+        sa_mask: Sigset(0),
     };
 }
 
