@@ -25,7 +25,8 @@ use crate::{
         memory::{ActiveVirtualMemory, VirtualMemoryActivator},
         syscall::traits::Abi,
         thread::{
-            SigContext, SigInfo, Sigaction, Sigset, Stack, StackFlags, ThreadGuard, UContext,
+            SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, ThreadGuard,
+            UContext,
         },
     },
 };
@@ -495,7 +496,7 @@ impl TryFrom<Sigaction> for Sigaction32 {
     fn try_from(value: Sigaction) -> Result<Self> {
         Ok(Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction.try_into()?,
-            sa_flags: value.sa_flags.try_into()?,
+            sa_flags: value.sa_flags.bits(),
             sa_restorer: value.sa_restorer.try_into()?,
             sa_mask: cast(value.sa_mask),
         })
@@ -506,7 +507,7 @@ impl From<Sigaction> for Sigaction64 {
     fn from(value: Sigaction) -> Self {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
-            sa_flags: value.sa_flags,
+            sa_flags: u64::from(value.sa_flags.bits()),
             sa_restorer: value.sa_restorer,
             sa_mask: value.sa_mask,
         }
@@ -517,7 +518,7 @@ impl From<Sigaction32> for Sigaction {
     fn from(value: Sigaction32) -> Self {
         Self {
             sa_handler_or_sigaction: u64::from(value.sa_handler_or_sigaction),
-            sa_flags: u64::from(value.sa_flags),
+            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags),
             sa_restorer: u64::from(value.sa_restorer),
             sa_mask: cast(value.sa_mask),
         }
@@ -529,7 +530,7 @@ impl From<Sigaction64> for Sigaction {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
             sa_mask: value.sa_mask,
-            sa_flags: value.sa_flags,
+            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags as u32),
             sa_restorer: value.sa_restorer,
         }
     }
