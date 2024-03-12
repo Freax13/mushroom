@@ -317,7 +317,7 @@ impl ThreadGuard<'_> {
 
         // Switch to a new stack if one is provided.
         if !stack.is_null() {
-            guard.set_stack_pointer(stack.as_u64()).unwrap();
+            guard.set_stack_pointer(stack.as_u64());
         }
 
         if let Some(tls) = new_tls {

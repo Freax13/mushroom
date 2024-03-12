@@ -418,9 +418,8 @@ impl CpuState {
         Ok(())
     }
 
-    pub fn set_stack_pointer(&mut self, sp: u64) -> Result<()> {
+    pub fn set_stack_pointer(&mut self, sp: u64) {
         self.registers.rsp = sp;
-        Ok(())
     }
 
     pub fn set_fs_base(&mut self, tls: u64) {
