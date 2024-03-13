@@ -71,6 +71,8 @@ impl INode for FdFsRoot {
     fn mount(&self, _file_name: FileName<'static>, _node: DynINode) -> Result<()> {
         Err(Error::no_ent(()))
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }
 
 impl Directory for FdFsRoot {
@@ -148,4 +150,6 @@ impl INode for FdINode {
     }
 
     fn set_mode(&self, _mode: FileMode) {}
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }

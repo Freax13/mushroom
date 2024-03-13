@@ -117,6 +117,17 @@ impl INode for TmpFsDir {
         self.internal.lock().items.insert(file_name.clone(), node);
         Ok(())
     }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let mut guard = self.internal.lock();
+        guard.ctime = ctime;
+        if let Some(atime) = atime {
+            guard.atime = atime;
+        }
+        if let Some(mtime) = mtime {
+            guard.mtime = mtime;
+        }
+    }
 }
 
 impl Directory for TmpFsDir {
@@ -340,7 +351,20 @@ impl INode for TmpFsFile {
     }
 
     fn set_mode(&self, mode: FileMode) {
-        self.internal.lock().mode = mode;
+        let mut guard = self.internal.lock();
+        guard.ctime = now();
+        guard.mode = mode;
+    }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let mut guard = self.internal.lock();
+        guard.ctime = ctime;
+        if let Some(atime) = atime {
+            guard.atime = atime;
+        }
+        if let Some(mtime) = mtime {
+            guard.mtime = mtime;
+        }
     }
 }
 
@@ -351,7 +375,8 @@ impl File for TmpFsFile {
     }
 
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
-        let guard = self.internal.lock();
+        let mut guard = self.internal.lock();
+        guard.atime = now();
         guard.buffer.read(offset, buf)
     }
 
@@ -362,12 +387,16 @@ impl File for TmpFsFile {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let guard = self.internal.lock();
+        let mut guard = self.internal.lock();
+        guard.atime = now();
         guard.buffer.read_to_user(offset, vm, pointer, len)
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.lock();
+        let now = now();
+        guard.ctime = now;
+        guard.mtime = now;
         guard.buffer.write(offset, buf)
     }
 
@@ -379,11 +408,17 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
+        let now = now();
+        guard.ctime = now;
+        guard.mtime = now;
         guard.buffer.write_from_user(offset, vm, pointer, len)
     }
 
     fn append(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.lock();
+        let now = now();
+        guard.ctime = now;
+        guard.mtime = now;
         let offset = guard.buffer.len();
         guard.buffer.write(offset, buf)
     }
@@ -395,12 +430,18 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
+        let now = now();
+        guard.ctime = now;
+        guard.mtime = now;
         let offset = guard.buffer.len();
         guard.buffer.write_from_user(offset, vm, pointer, len)
     }
 
     fn truncate(&self, len: usize) -> Result<()> {
         let mut guard = self.internal.lock();
+        let now = now();
+        guard.ctime = now;
+        guard.mtime = now;
         guard.buffer.truncate(len)
     }
 }
@@ -450,4 +491,6 @@ impl INode for TmpFsSymlink {
         ctx.follow_symlink()?;
         lookup_node_with_parent(start_dir, &self.target, ctx).map(Some)
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }

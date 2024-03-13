@@ -1,8 +1,10 @@
 use core::any::type_name;
 
 use crate::{
-    fs::node::INode, memory::page::KernelPage, spin::mutex::Mutex,
-    user::process::syscall::args::OpenFlags,
+    fs::node::INode,
+    memory::page::KernelPage,
+    spin::mutex::Mutex,
+    user::process::syscall::args::{OpenFlags, Timespec},
 };
 use alloc::sync::Arc;
 use log::debug;
@@ -190,6 +192,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         Ok(())
     }
 
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        self.file.update_times(ctime, atime, mtime);
+    }
+
     fn stat(&self) -> Stat {
         self.file.stat()
     }
@@ -269,6 +275,10 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         Ok(())
     }
 
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        self.file.update_times(ctime, atime, mtime);
+    }
+
     fn stat(&self) -> Stat {
         self.file.stat()
     }
@@ -307,6 +317,10 @@ impl OpenFileDescription for AppendFileFileDescription {
     fn set_mode(&self, mode: FileMode) -> Result<()> {
         self.file.set_mode(mode);
         Ok(())
+    }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        self.file.update_times(ctime, atime, mtime);
     }
 
     fn stat(&self) -> Stat {
@@ -405,6 +419,10 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
     fn set_mode(&self, mode: FileMode) -> Result<()> {
         self.file.set_mode(mode);
         Ok(())
+    }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        self.file.update_times(ctime, atime, mtime);
     }
 
     fn stat(&self) -> Stat {

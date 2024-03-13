@@ -32,7 +32,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Time, Timespec, WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Time, Timespec, Timeval,
+    WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -622,11 +623,20 @@ impl From<Timespec32> for Timespec {
     }
 }
 
-impl From<Timespec64> for Timespec {
-    fn from(value: Timespec64) -> Self {
-        Self {
-            tv_sec: u32::try_from(value.tv_sec).unwrap(),
-            tv_nsec: u32::try_from(value.tv_nsec).unwrap(),
+impl TryFrom<Timespec64> for Timespec {
+    type Error = Error;
+
+    fn try_from(value: Timespec64) -> Result<Self> {
+        let tv_nsec = u32::try_from(value.tv_nsec)?;
+
+        if matches!(tv_nsec, Self::UTIME_NOW | Self::UTIME_OMIT) {
+            // If tv_nsec is set to one of these special values ignore tv_sec.
+            Ok(Self { tv_sec: 0, tv_nsec })
+        } else {
+            Ok(Self {
+                tv_sec: u32::try_from(value.tv_sec)?,
+                tv_nsec,
+            })
         }
     }
 }
@@ -975,6 +985,45 @@ impl TryFrom<OldLinuxDirent> for OldLinuxDirent64 {
             off: value.off,
             reclen: value.reclen,
         })
+    }
+}
+
+impl Pointee for Timeval {}
+
+impl AbiDependentPointee for Timeval {
+    type I386 = Timeval32;
+    type Amd64 = Timeval64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Timeval32 {
+    tv_sec: u32,
+    tv_usec: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Timeval64 {
+    tv_sec: u64,
+    tv_usec: u64,
+}
+
+impl From<Timeval32> for Timeval {
+    fn from(value: Timeval32) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_usec: value.tv_usec,
+        }
+    }
+}
+
+impl From<Timeval64> for Timeval {
+    fn from(value: Timeval64) -> Self {
+        Self {
+            tv_sec: value.tv_sec as u32,
+            tv_usec: value.tv_usec as u32,
+        }
     }
 }
 

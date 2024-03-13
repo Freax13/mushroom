@@ -9,7 +9,9 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::{ActiveVirtualMemory, VirtualMemory, VirtualMemoryActivator},
-        syscall::args::{EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Whence},
+        syscall::args::{
+            EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
+        },
     },
 };
 use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
@@ -262,6 +264,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn set_mode(&self, mode: FileMode) -> Result<()> {
         let _ = mode;
         Err(Error::io(()))
+    }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let _ = ctime;
+        let _ = atime;
+        let _ = mtime;
     }
 
     fn stat(&self) -> Stat;

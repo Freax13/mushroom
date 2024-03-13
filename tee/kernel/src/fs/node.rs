@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::{
     spin::lazy::Lazy,
     user::process::{
-        syscall::args::{ExtractableThreadState, OpenFlags},
+        syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
         thread::ThreadGuard,
     },
 };
@@ -51,6 +51,8 @@ pub trait INode: Send + Sync + 'static {
     }
 
     fn set_mode(&self, mode: FileMode);
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>);
 
     // Directory related functions.
 

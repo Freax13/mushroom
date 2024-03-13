@@ -773,6 +773,24 @@ impl Timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
+
+    pub const UTIME_NOW: u32 = 0x3FFFFFFF;
+    pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct Timeval {
+    pub tv_sec: u32,
+    pub tv_usec: u32,
+}
+
+impl From<Timeval> for Timespec {
+    fn from(value: Timeval) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_nsec: value.tv_usec * 1000,
+        }
+    }
 }
 
 enum_arg! {
