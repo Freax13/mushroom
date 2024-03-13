@@ -1593,12 +1593,15 @@ fn sigaltstack(
     if !ss.is_null() {
         let ss_value = vm_activator.activate(&virtual_memory, |vm| vm.read_with_abi(ss, abi))?;
 
-        let allowed_flags = StackFlags::AUTODISARM;
-        if !allowed_flags.contains(ss_value.flags) {
-            return Err(Error::inval(()));
+        if ss_value.flags.contains(StackFlags::DISABLE) {
+            thread.sigaltstack = Stack::default();
+        } else {
+            let allowed_flags = StackFlags::AUTODISARM;
+            if !allowed_flags.contains(ss_value.flags) {
+                return Err(Error::inval(()));
+            }
+            thread.sigaltstack = ss_value;
         }
-
-        thread.sigaltstack = ss_value;
     }
 
     Ok(0)
