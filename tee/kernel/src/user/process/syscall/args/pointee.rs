@@ -623,11 +623,20 @@ impl From<Timespec32> for Timespec {
     }
 }
 
-impl From<Timespec64> for Timespec {
-    fn from(value: Timespec64) -> Self {
-        Self {
-            tv_sec: u32::try_from(value.tv_sec).unwrap(),
-            tv_nsec: u32::try_from(value.tv_nsec).unwrap(),
+impl TryFrom<Timespec64> for Timespec {
+    type Error = Error;
+
+    fn try_from(value: Timespec64) -> Result<Self> {
+        let tv_nsec = u32::try_from(value.tv_nsec)?;
+
+        if matches!(tv_nsec, Self::UTIME_NOW | Self::UTIME_OMIT) {
+            // If tv_nsec is set to one of these special values ignore tv_sec.
+            Ok(Self { tv_sec: 0, tv_nsec })
+        } else {
+            Ok(Self {
+                tv_sec: u32::try_from(value.tv_sec)?,
+                tv_nsec,
+            })
         }
     }
 }

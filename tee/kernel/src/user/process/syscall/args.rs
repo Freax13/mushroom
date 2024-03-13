@@ -773,6 +773,9 @@ impl Timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
+
+    pub const UTIME_NOW: u32 = 0x3FFFFFFF;
+    pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
