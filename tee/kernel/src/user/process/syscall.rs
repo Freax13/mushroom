@@ -1,9 +1,4 @@
-use core::{
-    cmp,
-    ffi::{c_void, CStr},
-    fmt,
-    num::NonZeroU32,
-};
+use core::{cmp, ffi::c_void, fmt, num::NonZeroU32};
 
 use alloc::{ffi::CString, sync::Arc, vec::Vec};
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
@@ -30,7 +25,7 @@ use crate::{
     time::{self, now},
     user::process::{
         memory::MemoryPermissions,
-        syscall::args::{LongOffset, UserDesc},
+        syscall::args::{LongOffset, Timeval, UserDesc},
     },
 };
 
@@ -1973,11 +1968,43 @@ fn fchownat(
 
 #[syscall(i386 = 299, amd64 = 261)]
 fn futimesat(
-    dirfd: FdNum,
-    pathname: Pointer<CStr>,
-    times: Pointer<c_void>, // FIXME: use correct type
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    abi: Abi,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    times: Pointer<[Timeval; 2]>,
 ) -> SyscallResult {
-    // FIXME: Implement this.
+    let start_dir = if dfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let now = now();
+
+    let (path, times) = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
+        let path = vm.read(pathname)?;
+        let times = if !times.is_null() {
+            let [atime, mtime] = vm.read_with_abi(times, abi)?;
+            [atime.into(), mtime.into()]
+        } else {
+            [now; 2]
+        };
+        Ok((path, times))
+    })?;
+
+    let ctime = now;
+    let atime = Some(times[0]);
+    let mtime = Some(times[1]);
+
+    let node = lookup_and_resolve_node(start_dir, &path, &mut ctx)?;
+    node.update_times(ctime, atime, mtime);
+
     Ok(0)
 }
 
