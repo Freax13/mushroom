@@ -4,7 +4,7 @@ use crate::{
         path::{FileName, Path},
     },
     spin::mutex::Mutex,
-    user::process::syscall::args::{FileMode, OpenFlags},
+    user::process::syscall::args::{FileMode, OpenFlags, Timespec},
 };
 use alloc::{
     sync::{Arc, Weak},
@@ -148,6 +148,10 @@ struct DirectoryFileDescription {
 impl OpenFileDescription for DirectoryFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        self.dir.update_times(ctime, atime, mtime);
     }
 
     fn stat(&self) -> Stat {

@@ -103,6 +103,8 @@ impl INode for NullFile {
     fn set_mode(&self, mode: FileMode) {
         *self.mode.lock() = mode;
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }
 
 impl File for NullFile {
@@ -208,6 +210,8 @@ impl INode for OutputFile {
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }
 
 impl File for OutputFile {
@@ -339,6 +343,8 @@ impl INode for RandomFile {
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }
 
 impl File for RandomFile {

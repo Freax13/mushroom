@@ -117,6 +117,17 @@ impl INode for TmpFsDir {
         self.internal.lock().items.insert(file_name.clone(), node);
         Ok(())
     }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let mut guard = self.internal.lock();
+        guard.ctime = ctime;
+        if let Some(atime) = atime {
+            guard.atime = atime;
+        }
+        if let Some(mtime) = mtime {
+            guard.mtime = mtime;
+        }
+    }
 }
 
 impl Directory for TmpFsDir {
@@ -342,6 +353,17 @@ impl INode for TmpFsFile {
     fn set_mode(&self, mode: FileMode) {
         self.internal.lock().mode = mode;
     }
+
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let mut guard = self.internal.lock();
+        guard.ctime = ctime;
+        if let Some(atime) = atime {
+            guard.atime = atime;
+        }
+        if let Some(mtime) = mtime {
+            guard.mtime = mtime;
+        }
+    }
 }
 
 impl File for TmpFsFile {
@@ -450,4 +472,6 @@ impl INode for TmpFsSymlink {
         ctx.follow_symlink()?;
         lookup_node_with_parent(start_dir, &self.target, ctx).map(Some)
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }
