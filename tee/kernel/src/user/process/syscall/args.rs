@@ -775,6 +775,21 @@ impl Timespec {
     };
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct Timeval {
+    pub tv_sec: u32,
+    pub tv_usec: u32,
+}
+
+impl From<Timeval> for Timespec {
+    fn from(value: Timeval) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_nsec: value.tv_usec * 1000,
+        }
+    }
+}
+
 enum_arg! {
     pub enum Domain {
         Unix = 1,

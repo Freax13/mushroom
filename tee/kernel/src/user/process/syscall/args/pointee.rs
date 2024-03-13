@@ -32,7 +32,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Time, Timespec, WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Time, Timespec, Timeval,
+    WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -975,6 +976,45 @@ impl TryFrom<OldLinuxDirent> for OldLinuxDirent64 {
             off: value.off,
             reclen: value.reclen,
         })
+    }
+}
+
+impl Pointee for Timeval {}
+
+impl AbiDependentPointee for Timeval {
+    type I386 = Timeval32;
+    type Amd64 = Timeval64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Timeval32 {
+    tv_sec: u32,
+    tv_usec: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Timeval64 {
+    tv_sec: u64,
+    tv_usec: u64,
+}
+
+impl From<Timeval32> for Timeval {
+    fn from(value: Timeval32) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_usec: value.tv_usec,
+        }
+    }
+}
+
+impl From<Timeval64> for Timeval {
+    fn from(value: Timeval64) -> Self {
+        Self {
+            tv_sec: value.tv_sec as u32,
+            tv_usec: value.tv_usec as u32,
+        }
     }
 }
 
