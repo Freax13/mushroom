@@ -2225,12 +2225,59 @@ fn faccessat(dfd: FdNum, pathname: Pointer<Path>, mode: FileMode, flags: u64) ->
 
 #[syscall(i386 = 320, amd64 = 280)]
 fn utimensat(
-    dirfd: FdNum,
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
     pathname: Pointer<Path>,
-    times: Pointer<c_void>,
+    times: Pointer<[Timespec; 2]>,
     flags: i32,
 ) -> SyscallResult {
-    // FIXME: implement this
+    let now = now();
+
+    let (path, times) = vm_activator.activate(&virtual_memory, |vm| -> Result<_> {
+        let path = if !pathname.is_null() {
+            Some(vm.read(pathname)?)
+        } else {
+            None
+        };
+        let times = if !times.is_null() {
+            vm.read_with_abi(times, abi)?
+        } else {
+            [now; 2]
+        };
+        Ok((path, times))
+    })?;
+
+    let ctime = now;
+    let atime = match times[0].tv_nsec {
+        Timespec::UTIME_NOW => Some(now),
+        Timespec::UTIME_OMIT => None,
+        _ => Some(times[0]),
+    };
+    let mtime = match times[1].tv_nsec {
+        Timespec::UTIME_NOW => Some(now),
+        Timespec::UTIME_OMIT => None,
+        _ => Some(times[1]),
+    };
+
+    if let Some(path) = path {
+        let start_dir = if dfd == FdNum::CWD {
+            thread.cwd.clone()
+        } else {
+            let fd = fdtable.get(dfd)?;
+            fd.as_dir(&mut ctx)?
+        };
+        let node = lookup_and_resolve_node(start_dir, &path, &mut ctx)?;
+        node.update_times(ctime, atime, mtime);
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.update_times(ctime, atime, mtime);
+    }
+
     Ok(0)
 }
 
