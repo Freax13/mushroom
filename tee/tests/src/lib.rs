@@ -286,4 +286,40 @@ fn rename() {
     std::fs::rename(src.join(""), dst).unwrap_err();
     std::fs::rename(src, dst.join("")).unwrap_err();
     std::fs::rename(src.join(""), dst.join("")).unwrap_err();
+
+    // Rename a dir to an existing empty dir.
+    let src = &base.join("src-7");
+    let dst = &base.join("dst-7");
+    create_dir(src).unwrap();
+    create_dir(dst).unwrap();
+    std::fs::rename(src, dst).unwrap();
+
+    // Fail to rename a dir to an existing non-empty dir.
+    let src = &base.join("src-8");
+    let dst = &base.join("dst-8");
+    create_dir(src).unwrap();
+    create_dir(dst).unwrap();
+    std::fs::write(dst.join("file"), "").unwrap();
+    std::fs::rename(src, dst).unwrap_err();
+
+    // Fail to rename a dir to an existing file.
+    let src = &base.join("src-9");
+    let dst = &base.join("dst-9");
+    create_dir(src).unwrap();
+    std::fs::write(dst, "").unwrap();
+    std::fs::rename(src, dst).unwrap_err();
+
+    // Fail to rename a file to an existing dir.
+    let src = &base.join("src-10");
+    let dst = &base.join("dst-10");
+    std::fs::write(src, "").unwrap();
+    create_dir(dst).unwrap();
+    std::fs::rename(src, dst).unwrap_err();
+
+    // Rename a file to an existing file.
+    let src = &base.join("src-11");
+    let dst = &base.join("dst-11");
+    std::fs::write(src, "").unwrap();
+    std::fs::write(dst, "").unwrap();
+    std::fs::rename(src, dst).unwrap();
 }
