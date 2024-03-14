@@ -4,8 +4,10 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
     arch::asm,
-    ffi::c_void,
+    ffi::{c_void, OsStr},
+    fs::create_dir,
     mem::size_of,
+    path::{Path, PathBuf},
     ptr::{null_mut, NonNull},
     sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
 };
@@ -219,4 +221,69 @@ fn stack_switch() {
     unsafe {
         dealloc(alternate_stack, layout);
     }
+}
+
+// Return a path for use in a test.
+fn get_temp_dir(test_name: &'static str) -> PathBuf {
+    //  Get the directory meant to be used by tests (found in
+    // CARGO_TARGET_TMPDIR). This environment variable won't be set in mushroom
+    // so we'll default to a different directory if the variable is not set.
+    let var = std::env::var_os("CARGO_TARGET_TMPDIR");
+    let base_path = var
+        .as_deref()
+        .unwrap_or_else(|| OsStr::new("/tmp/mushroom-tests"));
+    let base_path: &Path = base_path.as_ref();
+
+    // Create a path for the test.
+    let path = base_path.join(test_name);
+
+    // Reset the directory.
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+
+    path
+}
+
+#[test]
+fn rename() {
+    let base = get_temp_dir("rename");
+
+    // Rename a directory.
+    let src = &base.join("src-1");
+    let dst = &base.join("dst-1");
+    create_dir(src).unwrap();
+    std::fs::rename(src, dst).unwrap();
+
+    // Rename a directory (source with trailing slash).
+    let src = &base.join("src-2");
+    let dst = &base.join("dst-2");
+    create_dir(src).unwrap();
+    std::fs::rename(src.join(""), dst).unwrap();
+
+    // Rename a directory (destination with trailing slash).
+    let src = &base.join("src-3");
+    let dst = &base.join("dst-3");
+    create_dir(src).unwrap();
+    std::fs::rename(src, dst.join("")).unwrap();
+
+    // Rename a directory (source and destination with trailing slash).
+    let src = &base.join("src-4");
+    let dst = &base.join("dst-4");
+    create_dir(src).unwrap();
+    std::fs::rename(src.join(""), dst.join("")).unwrap();
+
+    // Rename a file.
+    let src = &base.join("src-5");
+    let dst = &base.join("dst-5");
+    std::fs::write(src, "").unwrap();
+    std::fs::rename(src, dst).unwrap();
+
+    // Fail to rename a file if the source or destination have a trailing
+    // slash.
+    let src = &base.join("src-6");
+    let dst = &base.join("dst-6");
+    std::fs::write(src, "").unwrap();
+    std::fs::rename(src.join(""), dst).unwrap_err();
+    std::fs::rename(src, dst.join("")).unwrap_err();
+    std::fs::rename(src.join(""), dst.join("")).unwrap_err();
 }
