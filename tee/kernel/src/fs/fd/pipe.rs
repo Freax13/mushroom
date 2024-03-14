@@ -1,8 +1,15 @@
 use core::iter::from_fn;
 
-use crate::{spin::mutex::Mutex, user::process::syscall::args::OpenFlags};
+use crate::{
+    spin::mutex::Mutex,
+    user::process::{
+        memory::ActiveVirtualMemory,
+        syscall::args::{OpenFlags, Pointer},
+    },
+};
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
 use async_trait::async_trait;
+use usize_conversions::FromUsize;
 
 use super::{Events, OpenFileDescription};
 use crate::{
@@ -112,6 +119,48 @@ impl OpenFileDescription for WriteHalf {
         self.notify.notify();
 
         Ok(buf.len())
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.state.buffer.lock();
+
+        let start_idx = guard.len();
+        // Reserve some space for the new bytes.
+        guard.resize(start_idx + len, 0);
+
+        let (first, second) = guard.as_mut_slices();
+        let res = {
+            if second.len() >= len {
+                let second_len = second.len();
+                vm.read_bytes(pointer.get(), &mut second[second_len - len..])
+            } else {
+                let first_write_len = len - second.len();
+                let first_len = first.len();
+                vm.read_bytes(pointer.get(), &mut first[first_len - first_write_len..])
+                    .and_then(|_| {
+                        vm.read_bytes(pointer.get() + u64::from_usize(first_write_len), second)
+                    })
+            }
+        };
+
+        // Rollback all bytes if an error occured.
+        // FIXME: We should not roll back all bytes.
+        if res.is_err() {
+            guard.truncate(start_idx);
+        }
+
+        drop(guard);
+
+        if res.is_ok() {
+            self.notify.notify();
+        }
+
+        Ok(len)
     }
 
     fn stat(&self) -> Stat {
