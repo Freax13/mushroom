@@ -9,8 +9,9 @@ use crate::{
     error::{Error, Result},
     fs::node::new_ino,
     rt::notify::Notify,
-    user::process::syscall::args::{
-        FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+    user::process::{
+        memory::ActiveVirtualMemory,
+        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
     },
 };
 
@@ -79,6 +80,21 @@ impl OpenFileDescription for EventFd {
         }
 
         Ok(8)
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        if len != 8 {
+            return Err(Error::inval(()));
+        }
+
+        let mut buf = [0; 8];
+        vm.read_bytes(pointer.get(), &mut buf)?;
+        self.write(&buf)
     }
 
     fn poll_ready(&self, events: Events) -> Result<Events> {
