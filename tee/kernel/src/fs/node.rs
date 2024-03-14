@@ -122,6 +122,11 @@ pub trait INode: Send + Sync + 'static {
         Err(Error::not_dir(()))
     }
 
+    fn delete(&self, file_name: FileName<'static>) -> Result<()> {
+        let _ = file_name;
+        Err(Error::not_dir(()))
+    }
+
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let _ = file_name;
         Err(Error::not_dir(()))

@@ -128,6 +128,10 @@ impl Directory for FdFsRoot {
         ctx.fdtable.list_entries()
     }
 
+    fn delete(&self, _file_name: FileName<'static>) -> Result<()> {
+        Err(Error::no_ent(()))
+    }
+
     fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
         Err(Error::no_ent(()))
     }

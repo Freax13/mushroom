@@ -263,6 +263,15 @@ impl Directory for TmpFsDir {
         entries
     }
 
+    fn delete(&self, file_name: FileName<'static>) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard
+            .items
+            .remove(&file_name)
+            .ok_or_else(|| Error::no_ent(()))?;
+        Ok(())
+    }
+
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
