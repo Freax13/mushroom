@@ -60,6 +60,10 @@ impl Path {
         &self.bytes
     }
 
+    pub fn has_trailing_slash(&self) -> bool {
+        self.as_bytes().ends_with(b"/")
+    }
+
     #[must_use]
     pub fn join_segment(&self, name: &FileName) -> Self {
         let mut bytes = self.bytes.to_vec();

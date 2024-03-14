@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
+    error::ErrorKind,
     spin::lazy::Lazy,
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
@@ -122,6 +123,11 @@ pub trait INode: Send + Sync + 'static {
         Err(Error::not_dir(()))
     }
 
+    fn delete(&self, file_name: FileName<'static>) -> Result<()> {
+        let _ = file_name;
+        Err(Error::not_dir(()))
+    }
+
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let _ = file_name;
         Err(Error::not_dir(()))
@@ -213,7 +219,13 @@ fn lookup_node_with_parent(
 
             match segment {
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
-                PathSegment::Empty | PathSegment::Dot => Ok((start_dir, node)),
+                PathSegment::Empty | PathSegment::Dot => {
+                    // Make sure that the node is a directory.
+                    if node.stat().mode.ty() != FileType::Dir {
+                        return Err(Error::not_dir(()));
+                    }
+                    Ok((start_dir, node))
+                }
                 PathSegment::DotDot => {
                     let parent = node.parent()?;
                     Ok((parent.clone(), parent))
@@ -245,18 +257,33 @@ fn find_parent<'a>(
 ) -> Result<(DynINode, PathSegment<'a>)> {
     let mut segments = path.segments();
     let first = segments.next().ok_or_else(|| Error::inval(()))?;
-    segments.try_fold((start_dir, first), |(dir, segment), next_segment| {
-        let dir = match segment {
-            PathSegment::Root => ROOT_NODE.clone(),
-            PathSegment::Empty | PathSegment::Dot => dir,
-            PathSegment::DotDot => unreachable!(),
-            PathSegment::FileName(file_name) => {
-                let node = dir.get_node(&file_name, ctx)?;
-                resolve_links(node, dir, ctx)?
+    let (parent, segment) = segments.try_fold(
+        (start_dir, first),
+        |(dir, segment), next_segment| -> Result<_> {
+            // Don't do anything if the next segment is emtpty or a dot.
+            if let PathSegment::Empty | PathSegment::Dot = next_segment {
+                return Ok((dir, segment));
             }
-        };
-        Ok((dir, next_segment))
-    })
+
+            let dir = match segment {
+                PathSegment::Root => ROOT_NODE.clone(),
+                PathSegment::Empty | PathSegment::Dot => dir,
+                PathSegment::DotDot => unreachable!(),
+                PathSegment::FileName(ref file_name) => {
+                    let node = dir.get_node(file_name, ctx)?;
+                    resolve_links(node, dir, ctx)?
+                }
+            };
+            Ok((dir, next_segment))
+        },
+    )?;
+
+    // Make sure that the parent is a directory.
+    if parent.stat().mode.ty() != FileType::Dir {
+        return Err(Error::not_dir(()));
+    }
+
+    Ok((parent, segment))
 }
 
 pub fn create_file(
@@ -391,31 +418,64 @@ pub fn hard_link(
 
 pub fn rename(
     oldd: DynINode,
-    oldname: &Path,
+    old_path: &Path,
     newd: DynINode,
-    newname: &Path,
+    new_path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (old_parent, segment) = find_parent(oldd, oldname, ctx)?;
-    let oldname = match segment {
+    let (old_parent, segment) = find_parent(oldd, old_path, ctx)?;
+    let old_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             return Err(Error::is_dir(()))
         }
         PathSegment::FileName(filename) => filename,
     };
 
-    let (new_parent, segment) = find_parent(newd, newname, ctx)?;
-    let newname = match segment {
+    let (new_parent, segment) = find_parent(newd, new_path, ctx)?;
+    let new_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             return Err(Error::is_dir(()))
         }
         PathSegment::FileName(filename) => filename,
     };
 
-    if !Arc::ptr_eq(&old_parent, &new_parent) || newname != oldname {
-        let node = old_parent.get_node(&oldname, ctx)?;
-        new_parent.mount(newname.into_owned(), node)?;
-        old_parent.delete_non_dir(oldname.into_owned())?;
+    let old_node = old_parent.get_node(&old_name, ctx)?;
+    let old_stat = old_node.stat();
+
+    // If either path has a trailing slash, ensure that the node is a directory.
+    if (old_path.has_trailing_slash() || new_path.has_trailing_slash())
+        && old_stat.mode.ty() != FileType::Dir
+    {
+        return Err(Error::not_dir(()));
+    }
+
+    // Check if the node already exists.
+    match new_parent.get_node(&new_name, ctx) {
+        Ok(new_node) => {
+            // Make sure that the new node can be replaced by the old one.
+            let new_stat = new_node.stat();
+            match (old_stat.mode.ty(), new_stat.mode.ty()) {
+                (FileType::Dir, FileType::Dir) => {
+                    if new_stat.size > 2 {
+                        return Err(Error::not_empty(()));
+                    }
+                }
+                (FileType::Dir, _) => {
+                    return Err(Error::not_dir(()));
+                }
+                (_, FileType::Dir) => {
+                    return Err(Error::is_dir(()));
+                }
+                _ => {}
+            }
+        }
+        Err(err) if err.kind() == ErrorKind::NoEnt => {}
+        Err(err) => return Err(err),
+    }
+
+    if !Arc::ptr_eq(&old_parent, &new_parent) || new_name != old_name {
+        new_parent.mount(new_name.into_owned(), old_node)?;
+        old_parent.delete(old_name.into_owned())?;
     }
 
     Ok(())

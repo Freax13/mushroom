@@ -95,7 +95,7 @@ impl INode for TmpFsDir {
             uid: 0,
             gid: 0,
             rdev: 0,
-            size: 0,
+            size: (2 + guard.items.len()) as i64,
             blksize: 0,
             blocks: 0,
             atime: guard.atime,
@@ -261,6 +261,15 @@ impl Directory for TmpFsDir {
             })
         }
         entries
+    }
+
+    fn delete(&self, file_name: FileName<'static>) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard
+            .items
+            .remove(&file_name)
+            .ok_or_else(|| Error::no_ent(()))?;
+        Ok(())
     }
 
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {

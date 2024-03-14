@@ -69,6 +69,10 @@ macro_rules! dir_impls {
             Ok(Directory::list_entries(self, ctx))
         }
 
+        fn delete(&self, file_name: FileName<'static>) -> Result<()> {
+            Directory::delete(self, file_name)
+        }
+
         fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
             Directory::delete_non_dir(self, file_name)
         }
@@ -127,6 +131,7 @@ pub trait Directory: INode {
     ) -> Result<DynINode>;
     fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()>;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry>;
+    fn delete(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
 }
