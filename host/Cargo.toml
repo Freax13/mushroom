@@ -10,6 +10,3 @@ loader = { path = "../common/loader" }
 profiler-types = { path = "../common/profiler-types" }
 snp-types = { path = "../common/snp-types" }
 vcek-kds = { path = "vcek-kds" }
-
-[patch.crates-io]
-bytemuck = { git = "https://github.com/Freax13/bytemuck.git", rev = "e63ffe8d10129a70a28fcad2bf656782bec8d4bb" }

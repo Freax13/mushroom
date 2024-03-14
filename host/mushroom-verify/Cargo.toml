@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytemuck = { version = "1.13.0", features = ["derive", "min_const_generics"] }
+bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"] }
 loader = { workspace = true }
 io = { workspace = true }
-openssl = "0.10.45"
-sha2 = "0.10.6"
+openssl = "0.10.64"
+sha2 = "0.10.8"
 snp-types = { workspace = true }
 vcek-kds = { workspace = true }

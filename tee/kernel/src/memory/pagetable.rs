@@ -1083,6 +1083,7 @@ impl<'a> ReservedFrameAllocation<'a> {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct PageTableFlags: u8 {
         const WRITABLE = 1 << 0;
         const EXECUTABLE = 1 << 1;

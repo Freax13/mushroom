@@ -63,6 +63,7 @@ macro_rules! bitflags {
         )*
     }) => {
         bitflags::bitflags! {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
             pub struct $strukt: u64 {
                 $(
                     const $constant = $expr;
@@ -832,7 +833,7 @@ impl pointee::Pointee for EpollEvent {}
 impl PrimitivePointee for EpollEvent {}
 
 bitflags::bitflags! {
-    #[derive(NoUninit)]
+    #[derive(Debug, Clone, Copy, NoUninit)]
     #[repr(transparent)]
     pub struct EpollEvents: u32 {
         const IN = 0x00000001;
@@ -908,7 +909,7 @@ impl pointee::Pointee for UserDesc {}
 impl PrimitivePointee for UserDesc {}
 
 bitflags::bitflags! {
-    #[derive(NoUninit)]
+    #[derive(Debug, Clone, Copy, NoUninit)]
     #[repr(transparent)]
     pub struct UserDescFlags: u32 {
         const SEG_32BIT = 1 << 0;

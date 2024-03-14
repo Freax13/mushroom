@@ -9,7 +9,6 @@ use std::{
         fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
         unix::prelude::OpenOptionsExt,
     },
-    ptr::NonNull,
 };
 
 use anyhow::{anyhow, ensure, Context, Result};
@@ -934,12 +933,12 @@ impl VcpuHandle {
                 NonZeroUsize::new(size_of::<KvmRun>()).unwrap(),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED,
-                self.fd.as_raw_fd(),
+                &self.fd,
                 0,
             )
         };
         let ptr = res.context("failed to map vcpu kvm_run block")?;
-        let ptr = unsafe { VolatilePtr::new(NonNull::new_unchecked(ptr.cast())) };
+        let ptr = unsafe { VolatilePtr::new(ptr.cast()) };
         Ok(ptr)
     }
 
@@ -1381,7 +1380,7 @@ pub struct KvmExitMsr {
 }
 
 bitflags! {
-    #[derive(Pod, Zeroable)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct KvmMsrExitReason: u32 {
         const INVAL = 1 << 0;
@@ -1399,7 +1398,7 @@ pub struct KvmExitMemoryFault {
 }
 
 bitflags! {
-    #[derive(Pod, Zeroable)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct KvmExitMemoryFaultFlags: u64 {
         const PRIVATE = 1 << 0;
@@ -1467,6 +1466,7 @@ pub struct KvmUserspaceMemoryRegion {
 }
 
 bitflags! {
+    #[derive(Clone, Copy)]
     #[repr(transparent)]
     pub struct KvmUserspaceMemoryRegionFlags: u32 {
         const KVM_MEM_LOG_DIRTY_PAGES = 1 << 0;
@@ -1533,6 +1533,7 @@ pub struct KvmSnpInit {
 }
 
 bitflags! {
+    #[derive(Clone, Copy)]
     #[repr(transparent)]
     pub struct KvmSnpInitFlags: u64 {
         const KVM_SEV_SNP_RESTRICTED_INJET = 1 << 0;
@@ -1613,6 +1614,7 @@ pub struct KvmSetMemoryAttributes {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     #[repr(transparent)]
     pub struct KvmMemoryAttributes: u64 {
         const READ = 1 << 0;
@@ -1623,6 +1625,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     #[repr(transparent)]
     pub struct KvmGuestMemFdFlags: u64 {
         const HUGE_PMD = 1 << 0;
@@ -1754,6 +1757,7 @@ impl<'a> KvmIrqfd<'a> {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct KvmIrqfdFlags: u32 {
         const DEASSIGN = 1 << 0;
         const RESAMPLE = 1 << 1;
