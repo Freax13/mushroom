@@ -95,7 +95,7 @@ impl INode for TmpFsDir {
             uid: 0,
             gid: 0,
             rdev: 0,
-            size: 0,
+            size: (2 + guard.items.len()) as i64,
             blksize: 0,
             blocks: 0,
             atime: guard.atime,
