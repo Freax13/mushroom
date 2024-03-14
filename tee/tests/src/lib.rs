@@ -323,3 +323,16 @@ fn rename() {
     std::fs::write(dst, "").unwrap();
     std::fs::rename(src, dst).unwrap();
 }
+
+#[test]
+fn mkdir() {
+    let base = get_temp_dir("mkdir");
+
+    // Create directory.
+    let src = &base.join("dir-1");
+    create_dir(src).unwrap();
+
+    // Create directory with trailing slash.
+    let src = &base.join("dir-2");
+    create_dir(src.join("")).unwrap();
+}
