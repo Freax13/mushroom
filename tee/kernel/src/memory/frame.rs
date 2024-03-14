@@ -22,7 +22,7 @@ pub struct BitmapFrameAllocator {
 }
 
 impl BitmapFrameAllocator {
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self {
             is_donating: AtomicBool::new(false),
             state: Mutex::new(BitmapFrameAllocatorState {

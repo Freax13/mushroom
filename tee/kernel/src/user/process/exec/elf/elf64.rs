@@ -105,8 +105,4 @@ impl ProgramHeaderEntry for ProgramHeaderEntry64 {
     fn p_flags(&self) -> u32 {
         self.p_flags
     }
-
-    fn p_align(&self) -> u64 {
-        self.p_align
-    }
 }
