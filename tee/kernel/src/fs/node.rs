@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
+    error::ErrorKind,
     spin::lazy::Lazy,
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
@@ -439,13 +440,37 @@ pub fn rename(
     };
 
     let old_node = old_parent.get_node(&old_name, ctx)?;
+    let old_stat = old_node.stat();
 
     // If either path has a trailing slash, ensure that the node is a directory.
-    if old_path.has_trailing_slash() || new_path.has_trailing_slash() {
-        let stat = old_node.stat();
-        if stat.mode.ty() != FileType::Dir {
-            return Err(Error::not_dir(()));
+    if (old_path.has_trailing_slash() || new_path.has_trailing_slash())
+        && old_stat.mode.ty() != FileType::Dir
+    {
+        return Err(Error::not_dir(()));
+    }
+
+    // Check if the node already exists.
+    match new_parent.get_node(&new_name, ctx) {
+        Ok(new_node) => {
+            // Make sure that the new node can be replaced by the old one.
+            let new_stat = new_node.stat();
+            match (old_stat.mode.ty(), new_stat.mode.ty()) {
+                (FileType::Dir, FileType::Dir) => {
+                    if new_stat.size > 2 {
+                        return Err(Error::not_empty(()));
+                    }
+                }
+                (FileType::Dir, _) => {
+                    return Err(Error::not_dir(()));
+                }
+                (_, FileType::Dir) => {
+                    return Err(Error::is_dir(()));
+                }
+                _ => {}
+            }
         }
+        Err(err) if err.kind() == ErrorKind::NoEnt => {}
+        Err(err) => return Err(err),
     }
 
     if !Arc::ptr_eq(&old_parent, &new_parent) || new_name != old_name {

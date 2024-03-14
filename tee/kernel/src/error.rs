@@ -73,6 +73,7 @@ errors! {
     SPipe s_pipe 29,
     Range range 34,
     NoSys no_sys 38,
+    NotEmpty not_empty 39,
     NameTooLong name_too_long 78,
     Loop r#loop 90,
     TimedOut timed_out 110,
