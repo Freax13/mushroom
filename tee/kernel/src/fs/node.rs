@@ -218,7 +218,13 @@ fn lookup_node_with_parent(
 
             match segment {
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
-                PathSegment::Empty | PathSegment::Dot => Ok((start_dir, node)),
+                PathSegment::Empty | PathSegment::Dot => {
+                    // Make sure that the node is a directory.
+                    if node.stat().mode.ty() != FileType::Dir {
+                        return Err(Error::not_dir(()));
+                    }
+                    Ok((start_dir, node))
+                }
                 PathSegment::DotDot => {
                     let parent = node.parent()?;
                     Ok((parent.clone(), parent))
@@ -250,18 +256,33 @@ fn find_parent<'a>(
 ) -> Result<(DynINode, PathSegment<'a>)> {
     let mut segments = path.segments();
     let first = segments.next().ok_or_else(|| Error::inval(()))?;
-    segments.try_fold((start_dir, first), |(dir, segment), next_segment| {
-        let dir = match segment {
-            PathSegment::Root => ROOT_NODE.clone(),
-            PathSegment::Empty | PathSegment::Dot => dir,
-            PathSegment::DotDot => unreachable!(),
-            PathSegment::FileName(file_name) => {
-                let node = dir.get_node(&file_name, ctx)?;
-                resolve_links(node, dir, ctx)?
+    let (parent, segment) = segments.try_fold(
+        (start_dir, first),
+        |(dir, segment), next_segment| -> Result<_> {
+            // Don't do anything if the next segment is emtpty or a dot.
+            if let PathSegment::Empty | PathSegment::Dot = next_segment {
+                return Ok((dir, segment));
             }
-        };
-        Ok((dir, next_segment))
-    })
+
+            let dir = match segment {
+                PathSegment::Root => ROOT_NODE.clone(),
+                PathSegment::Empty | PathSegment::Dot => dir,
+                PathSegment::DotDot => unreachable!(),
+                PathSegment::FileName(ref file_name) => {
+                    let node = dir.get_node(file_name, ctx)?;
+                    resolve_links(node, dir, ctx)?
+                }
+            };
+            Ok((dir, next_segment))
+        },
+    )?;
+
+    // Make sure that the parent is a directory.
+    if parent.stat().mode.ty() != FileType::Dir {
+        return Err(Error::not_dir(()));
+    }
+
+    Ok((parent, segment))
 }
 
 pub fn create_file(
