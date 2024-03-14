@@ -727,6 +727,7 @@ impl VirtualMemoryState {
 }
 
 bitflags! {
+    #[derive(Clone, Copy)]
     pub struct MemoryPermissions: u8 {
         const EXECUTE = 1 << 0;
         const WRITE = 1 << 1;

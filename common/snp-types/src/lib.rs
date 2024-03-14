@@ -71,7 +71,7 @@ pub enum PageType {
 }
 
 bitflags! {
-    #[derive(NoUninit)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, NoUninit)]
     #[repr(transparent)]
     pub struct VmplPermissions: u8 {
         const READ = 1 << 0;

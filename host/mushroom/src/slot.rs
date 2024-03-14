@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{CheckedBitPattern, Pod};
-use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
+use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
 use volatile::VolatilePtr;
 use x86_64::{structures::paging::PhysFrame, PhysAddr};
 
@@ -139,17 +139,14 @@ impl AnonymousPrivateMapping {
         let len = NonZeroUsize::new(len).context("cannot create empty mmap")?;
 
         let res = unsafe {
-            mmap(
+            mmap_anonymous(
                 None,
                 len,
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_ANONYMOUS | MapFlags::MAP_PRIVATE,
-                0,
-                0,
             )
         };
         let ptr = res.context("failed to mmap memory")?;
-        let ptr = NonNull::new(ptr).unwrap();
 
         Ok(Self { ptr, len })
     }
@@ -168,7 +165,7 @@ unsafe impl Sync for AnonymousPrivateMapping {}
 
 impl Drop for AnonymousPrivateMapping {
     fn drop(&mut self) {
-        let res = unsafe { munmap(self.ptr.as_ptr(), self.len.get()) };
+        let res = unsafe { munmap(self.ptr, self.len.get()) };
         res.unwrap();
     }
 }

@@ -436,7 +436,7 @@ enum AddressSize {
 }
 
 bitflags! {
-    #[derive(NoUninit)]
+    #[derive(Clone, Copy, NoUninit)]
     #[repr(transparent)]
     struct FeatMask: u64 {
         const TASK_SESSION = 1 << 1;
@@ -444,7 +444,7 @@ bitflags! {
 }
 
 bitflags! {
-    #[derive(NoUninit)]
+    #[derive(Clone, Copy, NoUninit)]
     #[repr(transparent)]
     struct InfoMask: u64 {
         const TASKINFO = 1 << 7;

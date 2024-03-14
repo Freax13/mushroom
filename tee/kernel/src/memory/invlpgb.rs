@@ -117,6 +117,7 @@ fn hv_flush_all() {
 }
 
 bitflags! {
+    #[derive(Clone, Copy)]
     #[repr(transparent)]
     pub struct HvCallFlushVirtualAddressSpaceFlags: u64 {
         const HV_FLUSH_ALL_PROCESSORS = 1 << 0;

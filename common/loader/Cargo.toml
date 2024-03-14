@@ -5,12 +5,12 @@ edition = "2021"
 
 [dependencies]
 constants = { workspace = true }
-bit_field = "0.10.1"
-bytemuck = { version = "1.13.0", features = ["min_const_generics"] }
-goblin = "0.6.0"
+bit_field = "0.10.2"
+bytemuck = { version = "1.15.0", features = ["min_const_generics"] }
+goblin = "0.8.0"
 io = { workspace = true }
-itertools = { version = "0.10.5", default-features = false }
+itertools = { version = "0.12.1", default-features = false }
 snp-types = { workspace = true }
-thiserror = { version = "1.0.37" }
-raw-cpuid = "10.6.0"
+thiserror = { version = "1.0.58" }
+raw-cpuid = "11.0.1"
 x86_64 = "0.15.0"

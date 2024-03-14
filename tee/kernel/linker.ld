@@ -26,12 +26,14 @@ SECTIONS {
     
     .text (0xffff800000200000) :
     {
-        KEEP(*(.text .text.*))
+        *(.text .text.*)
+        *(.ltext .ltext.*)
     } :text
 
     .rodata (0xffff800001000000) :
     {
         *(.rodata .rodata.*)
+        *(.lrodata .lrodata.*)
         *(.eh_frame .eh_frame.*)
         *(.eh_frame_hdr .eh_frame_hdr.*)
         __recoverable_start = .;
@@ -45,6 +47,7 @@ SECTIONS {
         *(.ldata .ldata.*)
         *(.got .got.*)
         *(.bss .bss.*)
+        *(.lbss .lbss.*)
     } :data
 
     .tdata (0xffff800003000000) :

@@ -1,4 +1,4 @@
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::AtomicU8;
 
@@ -41,8 +41,19 @@ pub unsafe fn init() {
     const GUEST_TSC_FREQ: u32 = 0xC001_0134;
     let guest_tsc_freq = Msr::new(GUEST_TSC_FREQ);
     let guest_tsc_freq = unsafe { guest_tsc_freq.read() };
+
+    // Write guest_tsc_freq into PROFILER_CONTROL.tsc_mhz.
+    // FIXME: This is a hack to prevent the compiler from creating a relocation
+    // to `PROFILER_CONTROL`. Otherwise the compiler will try to use a 32-bit
+    // relocation even though `PROFILER_CONTROL` cannot be referenced using a
+    // 32-bit address.
     unsafe {
-        PROFILER_CONTROL.tsc_mhz = guest_tsc_freq;
+        asm!(
+            "mov [rip + {PROFILER_CONTROL} + {tsc_mhz_offset}], {guest_tsc_freq}",
+            guest_tsc_freq = in(reg) guest_tsc_freq,
+            PROFILER_CONTROL = sym PROFILER_CONTROL,
+            tsc_mhz_offset = const offset_of!(ProfilerControl, tsc_mhz),
+        );
     }
 }
 

@@ -101,7 +101,6 @@ pub trait ProgramHeaderEntry: Pod {
     fn p_filesz(&self) -> u64;
     fn p_memsz(&self) -> u64;
     fn p_flags(&self) -> u32;
-    fn p_align(&self) -> u64;
 }
 
 pub fn load_elf<E>(

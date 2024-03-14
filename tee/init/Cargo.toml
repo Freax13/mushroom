@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.69"
-flate2 = "1.0.26"
-nix = { version = "0.26.2", default-features = false, features = ["mount"] }
-tar = "0.4.38"
+anyhow = "1.0.81"
+flate2 = "1.0.28"
+nix = { version = "0.28.0", default-features = false, features = ["mount"] }
+tar = "0.4.40"

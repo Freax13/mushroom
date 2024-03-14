@@ -3,7 +3,7 @@ rustflags = [
     "-C",
     "relocation-model=static",
     "-C",
-    "code-model=medium",
+    "code-model=large",
     "--cfg",
     "polyval_force_soft",
     "--cfg",

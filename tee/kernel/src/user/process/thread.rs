@@ -495,6 +495,7 @@ impl Not for Sigset {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct SigactionFlags: u32 {
         const SA_ONSTACK = 0x08000000;
     }
@@ -518,7 +519,7 @@ impl Default for Stack {
 }
 
 bitflags! {
-    #[derive(Default, Pod, Zeroable)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct StackFlags: i32 {
         const ONSTACK = 1 << 0;

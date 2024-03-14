@@ -6,6 +6,3 @@ resolver = "2"
 constants = { path = "constants" }
 io = { path = "io" }
 snp-types = { path = "snp-types" }
-
-[patch.crates-io]
-bytemuck = { git = "https://github.com/Freax13/bytemuck.git", rev = "e63ffe8d10129a70a28fcad2bf656782bec8d4bb" }

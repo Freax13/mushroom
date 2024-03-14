@@ -271,7 +271,7 @@ impl Segment {
 }
 
 bitflags! {
-    #[derive(Pod, Zeroable)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct SevFeatures: u64 {
         const SNP_ACTIVE = 1 << 0;

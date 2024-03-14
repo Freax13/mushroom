@@ -316,6 +316,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct Events: u8 {
         const READ = 1 << 0;
         const WRITE = 1 << 1;

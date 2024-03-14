@@ -36,6 +36,3 @@ opt-level = "z"
 lto = "thin"
 debug-assertions = true
 overflow-checks = true
-
-[patch.crates-io]
-bytemuck = { git = "https://github.com/Freax13/bytemuck.git", rev = "e63ffe8d10129a70a28fcad2bf656782bec8d4bb" }
