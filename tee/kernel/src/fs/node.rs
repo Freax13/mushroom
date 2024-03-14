@@ -417,31 +417,40 @@ pub fn hard_link(
 
 pub fn rename(
     oldd: DynINode,
-    oldname: &Path,
+    old_path: &Path,
     newd: DynINode,
-    newname: &Path,
+    new_path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (old_parent, segment) = find_parent(oldd, oldname, ctx)?;
-    let oldname = match segment {
+    let (old_parent, segment) = find_parent(oldd, old_path, ctx)?;
+    let old_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             return Err(Error::is_dir(()))
         }
         PathSegment::FileName(filename) => filename,
     };
 
-    let (new_parent, segment) = find_parent(newd, newname, ctx)?;
-    let newname = match segment {
+    let (new_parent, segment) = find_parent(newd, new_path, ctx)?;
+    let new_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             return Err(Error::is_dir(()))
         }
         PathSegment::FileName(filename) => filename,
     };
 
-    if !Arc::ptr_eq(&old_parent, &new_parent) || newname != oldname {
-        let node = old_parent.get_node(&oldname, ctx)?;
-        new_parent.mount(newname.into_owned(), node)?;
-        old_parent.delete(oldname.into_owned())?;
+    let old_node = old_parent.get_node(&old_name, ctx)?;
+
+    // If either path has a trailing slash, ensure that the node is a directory.
+    if old_path.has_trailing_slash() || new_path.has_trailing_slash() {
+        let stat = old_node.stat();
+        if stat.mode.ty() != FileType::Dir {
+            return Err(Error::not_dir(()));
+        }
+    }
+
+    if !Arc::ptr_eq(&old_parent, &new_parent) || new_name != old_name {
+        new_parent.mount(new_name.into_owned(), old_node)?;
+        old_parent.delete(old_name.into_owned())?;
     }
 
     Ok(())
