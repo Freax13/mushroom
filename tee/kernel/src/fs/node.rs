@@ -412,7 +412,7 @@ pub fn rename(
         PathSegment::FileName(filename) => filename,
     };
 
-    if !Arc::ptr_eq(&old_parent, &new_parent) && newname == oldname {
+    if !Arc::ptr_eq(&old_parent, &new_parent) || newname != oldname {
         let node = old_parent.get_node(&oldname, ctx)?;
         new_parent.mount(newname.into_owned(), node)?;
         old_parent.delete_non_dir(oldname.into_owned())?;
