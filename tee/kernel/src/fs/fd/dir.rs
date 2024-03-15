@@ -42,10 +42,8 @@ macro_rules! dir_impls {
             &self,
             file_name: FileName<'static>,
             mode: FileMode,
-            create_new: bool,
-            ctx: &mut FileAccessContext,
-        ) -> Result<DynINode> {
-            Directory::create_file(self, file_name, mode, create_new, ctx)
+        ) -> Result<Result<DynINode, DynINode>> {
+            Directory::create_file(self, file_name, mode)
         }
 
         fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
@@ -115,13 +113,12 @@ pub trait Directory: INode {
         Ok(path)
     }
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode>;
+    /// Atomically create a new file or return the existing node.
     fn create_file(
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        create_new: bool,
-        ctx: &mut FileAccessContext,
-    ) -> Result<DynINode>;
+    ) -> Result<Result<DynINode, DynINode>>;
     fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode>;
     fn create_link(
         &self,

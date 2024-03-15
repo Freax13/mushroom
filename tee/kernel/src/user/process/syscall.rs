@@ -1937,9 +1937,9 @@ fn openat(
         let node = if flags.contains(OpenFlags::CREAT) {
             create_file(
                 start_dir,
-                &filename,
+                filename.clone(),
                 FileMode::from_bits_truncate(mode),
-                flags.contains(OpenFlags::EXCL),
+                flags,
                 &mut ctx,
             )?
         } else if flags.contains(OpenFlags::NOFOLLOW) {

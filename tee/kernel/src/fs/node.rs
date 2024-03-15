@@ -75,16 +75,14 @@ pub trait INode: Send + Sync + 'static {
         Err(Error::not_dir(()))
     }
 
+    /// Atomically create a new file or return the existing node.
     fn create_file(
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        create_new: bool,
-        _ctx: &mut FileAccessContext,
-    ) -> Result<DynINode> {
+    ) -> Result<Result<DynINode, DynINode>> {
         let _ = file_name;
         let _ = mode;
-        let _ = create_new;
         Err(Error::not_dir(()))
     }
 
@@ -287,22 +285,52 @@ fn find_parent<'a>(
 }
 
 pub fn create_file(
-    start_dir: DynINode,
-    path: &Path,
+    mut start_dir: DynINode,
+    mut path: Path,
     mode: FileMode,
-    create_new: bool,
+    flags: OpenFlags,
     ctx: &mut FileAccessContext,
 ) -> Result<DynINode> {
-    let (dir, last) = find_parent(start_dir, path, ctx)?;
-    let file_name = match last {
-        PathSegment::Root => todo!(),
-        PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
-        PathSegment::FileName(file_name) => file_name,
-    };
-    let file = dir.create_file(file_name.into_owned(), mode, create_new, ctx)?;
-    Ok(file)
+    loop {
+        let (dir, last) = find_parent(start_dir, &path, ctx)?;
+        let file_name = match last {
+            PathSegment::Root => todo!(),
+            PathSegment::Empty => todo!(),
+            PathSegment::Dot => todo!(),
+            PathSegment::DotDot => todo!(),
+            PathSegment::FileName(file_name) => file_name,
+        };
+
+        match dir.create_file(file_name.into_owned(), mode)? {
+            Ok(file) => return Ok(file),
+            Err(existing) => {
+                let stat = existing.stat();
+
+                // If the node is a symlink start over with the destination
+                // path.
+                if stat.mode.ty() == FileType::Link {
+                    if flags.contains(OpenFlags::NOFOLLOW) {
+                        return Err(Error::r#loop(()));
+                    }
+
+                    path = existing.read_link()?;
+                    ctx.follow_symlink()?;
+                    start_dir = dir;
+                    continue;
+                }
+
+                if stat.mode.ty() != FileType::File {
+                    return Err(Error::exist(()));
+                }
+
+                if flags.contains(OpenFlags::EXCL) {
+                    return Err(Error::exist(()));
+                }
+
+                return Ok(existing);
+            }
+        }
+    }
 }
 
 pub fn create_directory(

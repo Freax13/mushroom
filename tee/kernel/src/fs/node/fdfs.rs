@@ -101,9 +101,7 @@ impl Directory for FdFsRoot {
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
-        _create_new: bool,
-        _ctx: &mut FileAccessContext,
-    ) -> Result<DynINode> {
+    ) -> Result<Result<DynINode, DynINode>> {
         Err(Error::no_ent(()))
     }
 
