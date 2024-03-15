@@ -69,18 +69,22 @@ impl FileDescriptorTable {
     pub fn with_standard_io() -> Self {
         let this = Self::empty();
 
-        let stdin = this.insert(std::Stdin::new()).unwrap();
+        let stdin = this.insert(std::Stdin::new(), FdFlags::empty()).unwrap();
         assert_eq!(stdin.get(), 0);
-        let stdout = this.insert(std::Stdout::new()).unwrap();
+        let stdout = this.insert(std::Stdout::new(), FdFlags::empty()).unwrap();
         assert_eq!(stdout.get(), 1);
-        let stderr = this.insert(std::Stderr::new()).unwrap();
+        let stderr = this.insert(std::Stderr::new(), FdFlags::empty()).unwrap();
         assert_eq!(stderr.get(), 2);
 
         this
     }
 
-    pub fn insert(&self, fd: impl Into<FileDescriptor>) -> Result<FdNum> {
-        self.insert_after(0, fd)
+    pub fn insert(
+        &self,
+        fd: impl Into<FileDescriptor>,
+        flags: impl Into<FdFlags>,
+    ) -> Result<FdNum> {
+        self.insert_after(0, fd, flags)
     }
 
     fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptorTableEntry>, min: i32) -> Result<i32> {
@@ -97,30 +101,57 @@ impl FileDescriptorTable {
             .ok_or_else(|| Error::mfile(()))
     }
 
-    pub fn insert_after(&self, min: i32, fd: impl Into<FileDescriptor>) -> Result<FdNum> {
+    pub fn insert_after(
+        &self,
+        min: i32,
+        fd: impl Into<FileDescriptor>,
+        flags: impl Into<FdFlags>,
+    ) -> Result<FdNum> {
         let mut guard = self.table.lock();
         let fd_num = Self::find_free_fd_num(&guard, min)?;
-        guard.insert(fd_num, FileDescriptorTableEntry::new(fd.into()));
+        guard.insert(
+            fd_num,
+            FileDescriptorTableEntry::new(fd.into(), flags.into()),
+        );
         Ok(FdNum::new(fd_num))
     }
 
-    pub fn replace(&self, fd_num: FdNum, fd: impl Into<FileDescriptor>) -> Result<()> {
+    pub fn replace(
+        &self,
+        fd_num: FdNum,
+        fd: impl Into<FileDescriptor>,
+        flags: impl Into<FdFlags>,
+    ) -> Result<()> {
         if fd_num.get() >= Self::MAX_FD {
             return Err(Error::bad_f(()));
         }
 
         let mut guard = self.table.lock();
-        guard.insert(fd_num.get(), FileDescriptorTableEntry::new(fd.into()));
+        guard.insert(
+            fd_num.get(),
+            FileDescriptorTableEntry::new(fd.into(), flags.into()),
+        );
 
         Ok(())
     }
 
     pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
+        self.get_with_flags(fd_num).map(|(fd, _flags)| fd)
+    }
+
+    pub fn get_with_flags(&self, fd_num: FdNum) -> Result<(FileDescriptor, FdFlags)> {
         self.table
             .lock()
             .get(&fd_num.get())
-            .map(|fd| fd.fd.clone())
+            .map(|fd| (fd.fd.clone(), fd.flags))
             .ok_or(Error::bad_f(()))
+    }
+
+    pub fn set_flags(&self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
+        let mut guard = self.table.lock();
+        let entry = guard.get_mut(&fd_num.get()).ok_or(Error::bad_f(()))?;
+        entry.flags = flags;
+        Ok(())
     }
 
     pub fn close(&self, fd_num: FdNum) -> Result<()> {
@@ -130,6 +161,11 @@ impl FileDescriptorTable {
             .remove(&fd_num.get())
             .ok_or(Error::bad_f(()))?;
         fd.fd.close()
+    }
+
+    pub fn close_after_exec(&self) {
+        let mut guard = self.table.lock();
+        guard.retain(|_, entry| !entry.flags.contains(FdFlags::CLOEXEC));
     }
 
     pub fn list_entries(&self) -> Vec<DirEntry> {
@@ -152,11 +188,16 @@ impl FileDescriptorTable {
 struct FileDescriptorTableEntry {
     ino: u64,
     fd: FileDescriptor,
+    flags: FdFlags,
 }
 
 impl FileDescriptorTableEntry {
-    fn new(fd: FileDescriptor) -> Self {
-        Self { ino: new_ino(), fd }
+    fn new(fd: FileDescriptor, flags: FdFlags) -> Self {
+        Self {
+            ino: new_ino(),
+            fd,
+            flags,
+        }
     }
 }
 
@@ -167,11 +208,18 @@ impl Clone for FileDescriptorTable {
             .table
             .lock()
             .iter()
-            .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone())))
+            .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone(), fd.flags)))
             .collect();
         Self {
             table: Mutex::new(table),
         }
+    }
+}
+
+bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct FdFlags: u64 {
+        const CLOEXEC = 1;
     }
 }
 

@@ -12,7 +12,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result},
-    fs::fd::{Events, FileDescriptorTable},
+    fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{
         memory::{VirtualMemory, VirtualMemoryActivator},
         thread::ThreadGuard,
@@ -348,8 +348,17 @@ bitflags! {
         const LARGEFILE = 1 << 15;
         const DIRECTORY = 1 << 16;
         const NOFOLLOW = 1 << 17;
-        const SYNC = 1 << 19;
+        const CLOEXEC = 1 << 19;
+        const SYNC = 1 << 20;
         const PATH = 1 << 21;
+    }
+}
+
+impl From<OpenFlags> for FdFlags {
+    fn from(value: OpenFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(OpenFlags::CLOEXEC));
+        flags
     }
 }
 
@@ -469,6 +478,7 @@ enum_arg! {
         GetFd = 1,
         SetFd = 2,
         GetFl = 3,
+        DupFdCloExec = 1030,
     }
 }
 
@@ -572,6 +582,14 @@ bitflags! {
     pub struct Pipe2Flags {
         const DIRECT = 1 << 14;
         const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<Pipe2Flags> for FdFlags {
+    fn from(value: Pipe2Flags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(Pipe2Flags::CLOEXEC));
+        flags
     }
 }
 
@@ -888,10 +906,26 @@ bitflags! {
     }
 }
 
+impl From<EpollCreate1Flags> for FdFlags {
+    fn from(value: EpollCreate1Flags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(EpollCreate1Flags::CLOEXEC));
+        flags
+    }
+}
+
 bitflags! {
     pub struct EventFdFlags {
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
+    }
+}
+
+impl From<EventFdFlags> for FdFlags {
+    fn from(value: EventFdFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(EventFdFlags::CLOEXEC));
+        flags
     }
 }
 
