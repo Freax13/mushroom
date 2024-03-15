@@ -825,7 +825,7 @@ fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) 
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
-        fdtable.replace(newfd, fd);
+        fdtable.replace(newfd, fd)?;
     }
 
     Ok(newfd.get() as u64)
