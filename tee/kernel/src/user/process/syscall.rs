@@ -1307,6 +1307,9 @@ fn fcntl(
     match cmd {
         FcntlCmd::DupFd => {
             let min = i32::try_from(arg)?;
+            if min >= FileDescriptorTable::MAX_FD {
+                return Err(Error::inval(()));
+            }
             let fd_num = fdtable.insert_after(min, fd, FdFlags::empty())?;
             Ok(fd_num.get().try_into()?)
         }
@@ -1331,6 +1334,9 @@ fn fcntl64(
     match cmd {
         FcntlCmd::DupFd => {
             let min = i32::try_from(arg)?;
+            if min >= FileDescriptorTable::MAX_FD {
+                return Err(Error::inval(()));
+            }
             let fd_num = fdtable.insert_after(min, fd, FdFlags::empty())?;
             Ok(fd_num.get().try_into()?)
         }
