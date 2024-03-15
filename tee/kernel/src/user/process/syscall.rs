@@ -25,7 +25,7 @@ use crate::{
     time::{self, now},
     user::process::{
         memory::MemoryPermissions,
-        syscall::args::{LongOffset, Timeval, UserDesc},
+        syscall::args::{LongOffset, Resource, Timeval, UserDesc},
     },
 };
 
@@ -34,9 +34,9 @@ use self::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
         FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions,
-        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RtSigprocmaskHow,
-        SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus,
-        WaitOptions, Whence,
+        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RLimit, RLimit64,
+        RtSigprocmaskHow, SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions,
+        WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -131,6 +131,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysChmod);
     handlers.register(SysFchmod);
     handlers.register(SysUmask);
+    handlers.register(SysGetrlimit);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -159,6 +160,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysPipe2);
+    handlers.register(SysPrlimit64);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
@@ -825,7 +827,7 @@ fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) 
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
-        fdtable.replace(newfd, fd);
+        fdtable.replace(newfd, fd)?;
     }
 
     Ok(newfd.get() as u64)
@@ -1567,6 +1569,20 @@ fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
     let old = core::mem::replace(&mut thread.umask, umask);
     SyscallResult::Ok(old.bits())
+}
+
+#[syscall(i386 = 76, amd64 = 97)]
+fn getrlimit(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    resource: Resource,
+    rlim: Pointer<RLimit>,
+) -> SyscallResult {
+    let value = thread.getrlimit(resource);
+    vm_activator.activate(&virtual_memory, |vm| vm.write_with_abi(rlim, value, abi))?;
+    Ok(0)
 }
 
 #[syscall(i386 = 186, amd64 = 131)]
@@ -2323,6 +2339,29 @@ fn pipe2(
     vm_activator.activate(&virtual_memory, |vm| {
         vm.write(pipefd, [read_half, write_half])
     })?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 340, amd64 = 302)]
+fn prlimit64(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: i32,
+    resource: Resource,
+    new_rlim: Pointer<RLimit64>,
+    old_rlim: Pointer<RLimit64>,
+) -> SyscallResult {
+    if !new_rlim.is_null() {
+        return Err(Error::perm(()));
+    }
+
+    if !old_rlim.is_null() {
+        let value = thread.getrlimit(resource);
+        let value = RLimit64::from(value);
+        vm_activator.activate(&virtual_memory, |vm| vm.write(old_rlim, value))?;
+    }
 
     Ok(0)
 }

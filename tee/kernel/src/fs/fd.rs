@@ -58,6 +58,8 @@ pub struct FileDescriptorTable {
 }
 
 impl FileDescriptorTable {
+    pub const MAX_FD: i32 = 0x10000;
+
     pub const fn empty() -> Self {
         Self {
             table: Mutex::new(BTreeMap::new()),
@@ -82,12 +84,10 @@ impl FileDescriptorTable {
     }
 
     fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptorTableEntry>, min: i32) -> Result<i32> {
-        const MAX_FD: i32 = i32::MAX;
-
         let min = cmp::max(0, min);
 
         let fd_iter = table.keys().copied().skip_while(|i| *i < min);
-        let mut counter_iter = min..MAX_FD;
+        let mut counter_iter = min..Self::MAX_FD;
 
         fd_iter
             .zip(counter_iter.by_ref())
@@ -104,9 +104,15 @@ impl FileDescriptorTable {
         Ok(FdNum::new(fd_num))
     }
 
-    pub fn replace(&self, fd_num: FdNum, fd: impl Into<FileDescriptor>) {
+    pub fn replace(&self, fd_num: FdNum, fd: impl Into<FileDescriptor>) -> Result<()> {
+        if fd_num.get() >= Self::MAX_FD {
+            return Err(Error::bad_f(()));
+        }
+
         let mut guard = self.table.lock();
         guard.insert(fd_num.get(), FileDescriptorTableEntry::new(fd.into()));
+
+        Ok(())
     }
 
     pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {

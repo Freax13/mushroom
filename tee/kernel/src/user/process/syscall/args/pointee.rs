@@ -32,8 +32,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, Stat, Time, Timespec, Timeval,
-    WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, RLimit, Stat, Time, Timespec,
+    Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1374,3 +1374,46 @@ struct FpState64 {
     reserved2: [u32; 12],
     reserved3: [u32; 12],
 }
+
+impl Pointee for RLimit {}
+
+impl AbiDependentPointee for RLimit {
+    type I386 = RLimit32;
+    type Amd64 = RLimit64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct RLimit32 {
+    rlim_cur: u32,
+    rlim_max: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct RLimit64 {
+    rlim_cur: u64,
+    rlim_max: u64,
+}
+
+impl From<RLimit> for RLimit32 {
+    fn from(value: RLimit) -> Self {
+        Self {
+            rlim_cur: value.rlim_cur,
+            rlim_max: value.rlim_max,
+        }
+    }
+}
+
+impl From<RLimit> for RLimit64 {
+    fn from(value: RLimit) -> Self {
+        Self {
+            rlim_cur: u64::from(value.rlim_cur),
+            rlim_max: u64::from(value.rlim_max),
+        }
+    }
+}
+
+impl Pointee for super::RLimit64 {}
+
+impl PrimitivePointee for super::RLimit64 {}
