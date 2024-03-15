@@ -366,9 +366,11 @@ impl File for TmpFsFile {
         guard.buffer.get_page(page_idx)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize> {
         let mut guard = self.internal.lock();
-        guard.atime = now();
+        if !no_atime {
+            guard.atime = now();
+        }
         guard.buffer.read(offset, buf)
     }
 
@@ -378,9 +380,12 @@ impl File for TmpFsFile {
         vm: &mut ActiveVirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
+        no_atime: bool,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
-        guard.atime = now();
+        if !no_atime {
+            guard.atime = now();
+        }
         guard.buffer.read_to_user(offset, vm, pointer, len)
     }
 

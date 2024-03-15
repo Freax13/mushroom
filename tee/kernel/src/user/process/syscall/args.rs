@@ -348,6 +348,7 @@ bitflags! {
         const LARGEFILE = 1 << 15;
         const DIRECTORY = 1 << 16;
         const NOFOLLOW = 1 << 17;
+        const NOATIME = 1 << 18;
         const CLOEXEC = 1 << 19;
         const SYNC = 1 << 20;
         const PATH = 1 << 21;
