@@ -17,8 +17,7 @@ use alloc::{
 };
 
 use super::{
-    create_file, lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode,
-    FileAccessContext, INode,
+    lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext, INode,
 };
 use crate::{
     error::{Error, Result},
@@ -169,32 +168,16 @@ impl Directory for TmpFsDir {
         &self,
         path_segment: FileName<'static>,
         mode: FileMode,
-        create_new: bool,
-        ctx: &mut FileAccessContext,
-    ) -> Result<DynINode> {
+    ) -> Result<Result<DynINode, DynINode>> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(path_segment);
         match entry {
             Entry::Vacant(entry) => {
                 let node = TmpFsFile::new(mode);
                 entry.insert(node.clone());
-                Ok(node)
+                Ok(Ok(node))
             }
-            Entry::Occupied(entry) => {
-                if create_new {
-                    return Err(Error::exist(()));
-                }
-                let entry = entry.get();
-                if entry.ty() == FileType::Link {
-                    let this = self.this.upgrade().unwrap();
-                    let link = entry.read_link()?;
-                    return create_file(this, &link, mode, create_new, ctx);
-                }
-                if entry.ty() != FileType::File {
-                    return Err(Error::exist(()));
-                }
-                Ok(entry.clone())
-            }
+            Entry::Occupied(entry) => Ok(Err(entry.get().clone())),
         }
     }
 
@@ -383,9 +366,11 @@ impl File for TmpFsFile {
         guard.buffer.get_page(page_idx)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize> {
         let mut guard = self.internal.lock();
-        guard.atime = now();
+        if !no_atime {
+            guard.atime = now();
+        }
         guard.buffer.read(offset, buf)
     }
 
@@ -395,9 +380,12 @@ impl File for TmpFsFile {
         vm: &mut ActiveVirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
+        no_atime: bool,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
-        guard.atime = now();
+        if !no_atime {
+            guard.atime = now();
+        }
         guard.buffer.read_to_user(offset, vm, pointer, len)
     }
 

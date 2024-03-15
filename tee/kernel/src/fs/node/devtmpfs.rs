@@ -112,7 +112,7 @@ impl File for NullFile {
         Err(Error::no_dev(()))
     }
 
-    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, _offset: usize, _buf: &mut [u8], _no_atime: bool) -> Result<usize> {
         Ok(0)
     }
 
@@ -122,6 +122,7 @@ impl File for NullFile {
         _vm: &mut ActiveVirtualMemory,
         _pointer: Pointer<[u8]>,
         _len: usize,
+        _no_atime: bool,
     ) -> Result<usize> {
         Ok(0)
     }
@@ -219,7 +220,7 @@ impl File for OutputFile {
         Err(Error::no_dev(()))
     }
 
-    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, _offset: usize, _buf: &mut [u8], _no_atime: bool) -> Result<usize> {
         Err(Error::inval(()))
     }
 
@@ -352,7 +353,7 @@ impl File for RandomFile {
         Err(Error::no_dev(()))
     }
 
-    fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, _offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
         let mut len = 0;
         for (buf, random) in buf.iter_mut().zip(Self::random_bytes()) {
             *buf = random;

@@ -21,13 +21,14 @@ use super::{FileDescriptor, OpenFileDescription};
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize) -> Result<KernelPage>;
-    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
+    fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize>;
     fn read_to_user(
         &self,
         offset: usize,
         vm: &mut ActiveVirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
+        no_atime: bool,
     ) -> Result<usize> {
         const MAX_BUFFER_LEN: usize = 8192;
         if len > MAX_BUFFER_LEN {
@@ -38,7 +39,7 @@ pub trait File: INode {
         let mut buf = [0; MAX_BUFFER_LEN];
         let buf = &mut buf[..len];
 
-        let count = self.read(offset, buf)?;
+        let count = self.read(offset, buf, no_atime)?;
 
         let buf = &buf[..count];
         vm.write_bytes(pointer.get(), buf)?;
@@ -131,8 +132,9 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
         let mut guard = self.cursor_idx.lock();
-        let len = self.file.read(*guard, buf)?;
+        let len = self.file.read(*guard, buf, no_atime)?;
         *guard += len;
         Ok(len)
     }
@@ -143,14 +145,16 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
         let mut guard = self.cursor_idx.lock();
-        let len = self.file.read_to_user(*guard, vm, pointer, len)?;
+        let len = self.file.read_to_user(*guard, vm, pointer, len, no_atime)?;
         *guard += len;
         Ok(len)
     }
 
     fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
-        self.file.read(pos, buf)
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
+        self.file.read(pos, buf, no_atime)
     }
 
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
@@ -351,8 +355,9 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
         let mut guard = self.cursor_idx.lock();
-        let len = self.file.read(*guard, buf)?;
+        let len = self.file.read(*guard, buf, no_atime)?;
         *guard += len;
         Ok(len)
     }
@@ -363,8 +368,9 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
         let mut guard = self.cursor_idx.lock();
-        let len = self.file.read_to_user(*guard, vm, pointer, len)?;
+        let len = self.file.read_to_user(*guard, vm, pointer, len, no_atime)?;
         *guard += len;
         Ok(len)
     }
@@ -389,7 +395,8 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
     }
 
     fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
-        self.file.read(pos, buf)
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
+        self.file.read(pos, buf, no_atime)
     }
 
     fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
