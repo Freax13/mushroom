@@ -1342,10 +1342,7 @@ fn fcntl64(
             // FIXME: implement this
             Ok(0)
         }
-        FcntlCmd::GetFl => {
-            // FIXME: implement this
-            Ok(0)
-        }
+        FcntlCmd::GetFl => Ok(fd.flags().bits()),
     }
 }
 
