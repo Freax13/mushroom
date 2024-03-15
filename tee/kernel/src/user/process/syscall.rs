@@ -11,7 +11,7 @@ use crate::{
     fs::{
         fd::{
             do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
-            unix_socket::UnixSocket, Events, FileDescriptor, FileDescriptorTable,
+            unix_socket::UnixSocket, Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
             self, create_directory, create_file, create_link,
@@ -813,7 +813,7 @@ fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
 #[syscall(i386 = 41, amd64 = 32)]
 fn dup(#[state] fdtable: Arc<FileDescriptorTable>, fildes: FdNum) -> SyscallResult {
     let fd = fdtable.get(fildes)?;
-    let newfd = fdtable.insert(fd)?;
+    let newfd = fdtable.insert(fd, FdFlags::empty())?;
 
     Ok(newfd.get() as u64)
 }
@@ -827,7 +827,7 @@ fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) 
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
-        fdtable.replace(newfd, fd)?;
+        fdtable.replace(newfd, fd, FdFlags::empty())?;
     }
 
     Ok(newfd.get() as u64)
@@ -931,8 +931,8 @@ fn socketpair(
             }
 
             let (half1, half2) = UnixSocket::new_pair();
-            res1 = fdtable.insert(half1);
-            res2 = fdtable.insert(half2);
+            res1 = fdtable.insert(half1, FdFlags::empty());
+            res2 = fdtable.insert(half2, FdFlags::empty());
         }
     }
 
@@ -1295,24 +1295,21 @@ fn uname(
 #[syscall(i386 = 55, amd64 = 72)]
 fn fcntl(
     #[state] fdtable: Arc<FileDescriptorTable>,
-    fd: FdNum,
+    fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
 ) -> SyscallResult {
-    let fd = fdtable.get(fd)?;
+    let (fd, flags) = fdtable.get_with_flags(fd_num)?;
 
     match cmd {
         FcntlCmd::DupFd => {
             let min = i32::try_from(arg)?;
-            let fd_num = fdtable.insert_after(min, fd)?;
+            let fd_num = fdtable.insert_after(min, fd, FdFlags::empty())?;
             Ok(fd_num.get().try_into()?)
         }
-        FcntlCmd::GetFd => {
-            // FIXME: implement this
-            Ok(0)
-        }
+        FcntlCmd::GetFd => Ok(flags.bits()),
         FcntlCmd::SetFd => {
-            // FIXME: implement this
+            fdtable.set_flags(fd_num, FdFlags::from_bits_truncate(arg))?;
             Ok(0)
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
@@ -1322,24 +1319,21 @@ fn fcntl(
 #[syscall(i386 = 221)]
 fn fcntl64(
     #[state] fdtable: Arc<FileDescriptorTable>,
-    fd: FdNum,
+    fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
 ) -> SyscallResult {
-    let fd = fdtable.get(fd)?;
+    let (fd, flags) = fdtable.get_with_flags(fd_num)?;
 
     match cmd {
         FcntlCmd::DupFd => {
             let min = i32::try_from(arg)?;
-            let fd_num = fdtable.insert_after(min, fd)?;
+            let fd_num = fdtable.insert_after(min, fd, FdFlags::empty())?;
             Ok(fd_num.get().try_into()?)
         }
-        FcntlCmd::GetFd => {
-            // FIXME: implement this
-            Ok(0)
-        }
+        FcntlCmd::GetFd => Ok(flags.bits()),
         FcntlCmd::SetFd => {
-            // FIXME: implement this
+            fdtable.set_flags(fd_num, FdFlags::from_bits_truncate(arg))?;
             Ok(0)
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
@@ -1939,7 +1933,7 @@ fn openat(
         node.open(flags)?
     };
 
-    let fd = fdtable.insert(fd)?;
+    let fd = fdtable.insert(fd, flags)?;
     Ok(fd.get() as u64)
 }
 
@@ -2300,7 +2294,7 @@ fn eventfd(
     initval: u32,
     flags: EventFdFlags,
 ) -> SyscallResult {
-    let fd_num = fdtable.insert(EventFd::new(initval))?;
+    let fd_num = fdtable.insert(EventFd::new(initval), flags)?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
@@ -2309,7 +2303,7 @@ fn epoll_create1(
     #[state] fdtable: Arc<FileDescriptorTable>,
     flags: EpollCreate1Flags,
 ) -> SyscallResult {
-    let fd_num = fdtable.insert(Epoll::new())?;
+    let fd_num = fdtable.insert(Epoll::new(), flags)?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
@@ -2324,9 +2318,9 @@ fn pipe2(
     let (read_half, write_half) = pipe::new();
 
     // Insert the first read half.
-    let read_half = fdtable.insert(read_half)?;
+    let read_half = fdtable.insert(read_half, flags)?;
     // Insert the second write half.
-    let res = fdtable.insert(write_half);
+    let res = fdtable.insert(write_half, flags);
     // Ensure that we close the first fd, if inserting the second failed.
     if res.is_err() {
         let _ = fdtable.close(read_half);
