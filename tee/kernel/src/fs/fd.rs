@@ -163,6 +163,11 @@ impl FileDescriptorTable {
         fd.fd.close()
     }
 
+    pub fn close_after_exec(&self) {
+        let mut guard = self.table.lock();
+        guard.retain(|_, entry| !entry.flags.contains(FdFlags::CLOEXEC));
+    }
+
     pub fn list_entries(&self) -> Vec<DirEntry> {
         let guard = self.table.lock();
         guard

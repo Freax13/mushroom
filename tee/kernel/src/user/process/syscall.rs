@@ -1128,6 +1128,7 @@ fn execve(
     vm_activator: &mut VirtualMemoryActivator,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
     pathname: Pointer<Path>,
     argv: Pointer<Pointer<CString>>,
@@ -1167,6 +1168,8 @@ fn execve(
     log::info!("execve({pathname:?}, {args:?}, {envs:?})");
 
     thread.execve(&pathname, &args, &envs, &mut ctx, vm_activator)?;
+
+    fdtable.close_after_exec();
 
     if let Some(vfork_parent) = thread.vfork_done.take() {
         let _ = vfork_parent.send(());
