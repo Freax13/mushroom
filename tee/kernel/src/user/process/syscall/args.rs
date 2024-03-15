@@ -478,6 +478,7 @@ enum_arg! {
         GetFd = 1,
         SetFd = 2,
         GetFl = 3,
+        DupFdCloExec = 1030,
     }
 }
 

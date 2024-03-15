@@ -1305,12 +1305,16 @@ fn fcntl(
     let (fd, flags) = fdtable.get_with_flags(fd_num)?;
 
     match cmd {
-        FcntlCmd::DupFd => {
+        FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
             if min >= FileDescriptorTable::MAX_FD {
                 return Err(Error::inval(()));
             }
-            let fd_num = fdtable.insert_after(min, fd, FdFlags::empty())?;
+
+            let mut flags = FdFlags::empty();
+            flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
+
+            let fd_num = fdtable.insert_after(min, fd, flags)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => Ok(flags.bits()),
@@ -1332,12 +1336,16 @@ fn fcntl64(
     let (fd, flags) = fdtable.get_with_flags(fd_num)?;
 
     match cmd {
-        FcntlCmd::DupFd => {
+        FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
             if min >= FileDescriptorTable::MAX_FD {
                 return Err(Error::inval(()));
             }
-            let fd_num = fdtable.insert_after(min, fd, FdFlags::empty())?;
+
+            let mut flags = FdFlags::empty();
+            flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
+
+            let fd_num = fdtable.insert_after(min, fd, flags)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => Ok(flags.bits()),
