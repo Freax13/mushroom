@@ -944,3 +944,35 @@ bitflags! {
 
 #[derive(Clone, Copy)]
 pub struct Time(pub u32);
+
+enum_arg! {
+    pub enum Resource {
+        NoFile = 7,
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RLimit {
+    /// Soft limit
+    pub rlim_cur: u32,
+    /// Hard limit (ceiling for rlim_cur)
+    pub rlim_max: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct RLimit64 {
+    /// Soft limit
+    pub rlim_cur: u64,
+    /// Hard limit (ceiling for rlim_cur)
+    pub rlim_max: u64,
+}
+
+impl From<RLimit> for RLimit64 {
+    fn from(value: RLimit) -> Self {
+        Self {
+            rlim_cur: u64::from(value.rlim_cur),
+            rlim_max: u64::from(value.rlim_max),
+        }
+    }
+}

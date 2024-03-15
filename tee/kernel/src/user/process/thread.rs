@@ -33,7 +33,7 @@ use crate::{
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
-        args::{FileMode, OpenFlags, Pointer, UserDesc},
+        args::{FileMode, OpenFlags, Pointer, RLimit, Resource, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
@@ -436,6 +436,18 @@ impl ThreadGuard<'_> {
 
     pub fn set_exit_status(&self, status: u8) {
         self.thread.exit_status.set(status);
+    }
+
+    pub fn getrlimit(&self, resource: Resource) -> RLimit {
+        match resource {
+            Resource::NoFile => {
+                let limit = u32::try_from(FileDescriptorTable::MAX_FD).unwrap();
+                RLimit {
+                    rlim_cur: limit,
+                    rlim_max: limit,
+                }
+            }
+        }
     }
 }
 
