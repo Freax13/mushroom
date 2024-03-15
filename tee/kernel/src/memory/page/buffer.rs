@@ -76,7 +76,7 @@ impl Buffer {
         let end = offset + len - 1;
 
         let start_page = start / 0x1000;
-        let end_page = end.div_ceil(0x1000);
+        let end_page = (end + 1).div_ceil(0x1000);
 
         for (i, page) in self
             .pages
@@ -129,7 +129,7 @@ impl Buffer {
         let end = offset + len - 1;
 
         let start_page = start / 0x1000;
-        let end_page = end.div_ceil(0x1000);
+        let end_page = (end + 1).div_ceil(0x1000);
 
         for (i, page) in self
             .pages
@@ -181,7 +181,7 @@ impl Buffer {
         let end = offset + len - 1;
 
         let start_page = start / 0x1000;
-        let end_page = end.div_ceil(0x1000);
+        let end_page = (end + 1).div_ceil(0x1000);
 
         for (i, page) in self
             .pages
@@ -245,7 +245,7 @@ impl Buffer {
         let end = offset + len - 1;
 
         let start_page = start / 0x1000;
-        let end_page = end.div_ceil(0x1000);
+        let end_page = (end + 1).div_ceil(0x1000);
 
         for (i, page) in self
             .pages
