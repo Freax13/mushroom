@@ -1323,6 +1323,11 @@ fn fcntl(
             Ok(0)
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
+        FcntlCmd::SetFl => {
+            let flags = OpenFlags::from_bits(arg).ok_or_else(|| Error::inval(()))?;
+            fd.set_flags(flags);
+            Ok(0)
+        }
     }
 }
 
@@ -1354,6 +1359,11 @@ fn fcntl64(
             Ok(0)
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
+        FcntlCmd::SetFl => {
+            let flags = OpenFlags::from_bits(arg).ok_or_else(|| Error::inval(()))?;
+            fd.set_flags(flags);
+            Ok(0)
+        }
     }
 }
 
@@ -2332,7 +2342,7 @@ fn pipe2(
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
-    let (read_half, write_half) = pipe::new();
+    let (read_half, write_half) = pipe::new(flags);
 
     // Insert the first read half.
     let read_half = fdtable.insert(read_half, flags)?;

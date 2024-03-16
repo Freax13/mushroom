@@ -355,6 +355,16 @@ bitflags! {
     }
 }
 
+impl OpenFlags {
+    /// Change only the mutable flags.
+    pub fn update(&mut self, flags: Self) {
+        // FIXME: Add more bits.
+        for bit in [Self::APPEND, Self::NOATIME, Self::NONBLOCK] {
+            self.set(bit, flags.contains(bit));
+        }
+    }
+}
+
 impl From<OpenFlags> for FdFlags {
     fn from(value: OpenFlags) -> Self {
         let mut flags = Self::empty();
@@ -479,6 +489,7 @@ enum_arg! {
         GetFd = 1,
         SetFd = 2,
         GetFl = 3,
+        SetFl = 4,
         DupFdCloExec = 1030,
     }
 }
@@ -583,6 +594,12 @@ bitflags! {
     pub struct Pipe2Flags {
         const DIRECT = 1 << 14;
         const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<Pipe2Flags> for OpenFlags {
+    fn from(value: Pipe2Flags) -> Self {
+        OpenFlags::from_bits(value.bits()).unwrap()
     }
 }
 

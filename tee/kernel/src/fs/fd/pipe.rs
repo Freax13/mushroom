@@ -4,7 +4,7 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::ActiveVirtualMemory,
-        syscall::args::{OpenFlags, Pointer},
+        syscall::args::{OpenFlags, Pipe2Flags, Pointer},
     },
 };
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
@@ -25,12 +25,17 @@ struct State {
 pub struct ReadHalf {
     notify: Arc<Notify>,
     state: Arc<State>,
+    flags: Mutex<OpenFlags>,
 }
 
 #[async_trait]
 impl OpenFileDescription for ReadHalf {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        *self.flags.lock()
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.flags.lock().update(flags);
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -104,11 +109,16 @@ impl OpenFileDescription for ReadHalf {
 pub struct WriteHalf {
     state: Arc<State>,
     notify: NotifyOnDrop,
+    flags: Mutex<OpenFlags>,
 }
 
 impl OpenFileDescription for WriteHalf {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        *self.flags.lock()
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.flags.lock().update(flags);
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -182,20 +192,23 @@ impl OpenFileDescription for WriteHalf {
     }
 }
 
-pub fn new() -> (ReadHalf, WriteHalf) {
+pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
     let state = Arc::new(State {
         buffer: Mutex::new(VecDeque::new()),
     });
     let notify = Arc::new(Notify::new());
+    let flags = flags.into();
 
     (
         ReadHalf {
             state: state.clone(),
             notify: notify.clone(),
+            flags: Mutex::new(flags),
         },
         WriteHalf {
             state,
             notify: NotifyOnDrop(notify),
+            flags: Mutex::new(flags),
         },
     )
 }

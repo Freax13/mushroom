@@ -227,6 +227,10 @@ bitflags! {
 pub trait OpenFileDescription: Send + Sync + 'static {
     fn flags(&self) -> OpenFlags;
 
+    fn set_flags(&self, flags: OpenFlags) {
+        let _ = flags;
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::inval(()))
