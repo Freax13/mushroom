@@ -24,6 +24,8 @@ use crate::{
     fs::node::DirEntry,
 };
 
+use super::node::fdfs::FdINode;
+
 pub mod dir;
 pub mod epoll;
 pub mod eventfd;
@@ -182,6 +184,12 @@ impl FileDescriptorTable {
                 ),
             })
             .collect()
+    }
+
+    pub fn get_node(&self, fd_num: FdNum) -> Result<DynINode> {
+        let guard = self.table.lock();
+        let entry = guard.get(&fd_num.get()).ok_or_else(|| Error::no_ent(()))?;
+        Ok(Arc::new(FdINode::new(entry.ino, entry.fd.clone())))
     }
 }
 

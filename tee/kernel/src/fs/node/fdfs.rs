@@ -93,8 +93,7 @@ impl Directory for FdFsRoot {
         let file_name = core::str::from_utf8(file_name).map_err(|_| Error::no_ent(()))?;
         let fd_num = file_name.parse().map_err(|_| Error::no_ent(()))?;
         let fd_num = FdNum::new(fd_num);
-        let fd = ctx.fdtable.get(fd_num)?;
-        Ok(Arc::new(FdINode(fd)))
+        ctx.fdtable.get_node(fd_num)
     }
 
     fn create_file(
@@ -140,15 +139,38 @@ impl Directory for FdFsRoot {
 }
 
 #[derive(Clone)]
-pub struct FdINode(FileDescriptor);
+pub struct FdINode {
+    ino: u64,
+    fd: FileDescriptor,
+}
+
+impl FdINode {
+    pub fn new(ino: u64, fd: FileDescriptor) -> Self {
+        Self { ino, fd }
+    }
+}
 
 impl INode for FdINode {
     fn stat(&self) -> Stat {
-        todo!()
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Link, FileMode::OWNER_ALL),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        }
     }
 
     fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
-        Ok(self.0.clone())
+        Ok(self.fd.clone())
     }
 
     fn set_mode(&self, _mode: FileMode) {}
