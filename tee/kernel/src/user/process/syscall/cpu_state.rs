@@ -378,6 +378,7 @@ impl CpuState {
                 })
             }
             RawExit::Exception => match PerCpu::get().vector.get() {
+                0xd => Exit::GeneralProtectionFault,
                 0xe => {
                     let code =
                         PageFaultErrorCode::from_bits(PerCpu::get().error_code.get()).unwrap();
@@ -762,6 +763,7 @@ pub enum RawExit {
 
 pub enum Exit {
     Syscall(SyscallArgs),
+    GeneralProtectionFault,
     PageFault(PageFaultExit),
 }
 

@@ -106,6 +106,8 @@ pub fn load_idt() {
     static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
         let mut idt = InterruptDescriptorTable::new();
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.general_protection_fault
+            .set_handler_fn(general_protection_fault_handler);
         idt.double_fault.set_handler_fn(double_fault_handler);
         idt[0x80]
             .set_handler_fn(int0x80_handler)
@@ -224,6 +226,45 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
         "page fault {error_code:?} trying to access {cr2:#018x} at ip {:#018x}",
         frame.instruction_pointer
     );
+}
+
+#[naked]
+#[no_sanitize(address)]
+extern "x86-interrupt" fn general_protection_fault_handler(
+    frame: InterruptStackFrame,
+    error_code: u64,
+) {
+    unsafe {
+        asm!(
+            // Check whether the exception happened in userspace.
+            "test word ptr [rsp+16], 3",
+            "je {kernel_general_protection_fault_handler}",
+
+            // Userspace code path:
+            "swapgs",
+            // Store the error code.
+            "mov byte ptr gs:[{VECTOR_OFFSET}], 0xd",
+            "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
+            // Jump to the userspace exit point.
+            "jmp gs:[{HANDLER_OFFSET}]",
+
+            kernel_general_protection_fault_handler = sym kernel_general_protection_fault_handler,
+            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+            ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
+            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            options(noreturn),
+        );
+    }
+}
+
+#[no_sanitize(address)]
+extern "x86-interrupt" fn kernel_general_protection_fault_handler(
+    frame: InterruptStackFrame,
+    code: u64,
+) {
+    let _guard = SwapGsGuard::new(&frame);
+
+    panic!("general protection fault {frame:x?} {code:x?}");
 }
 
 #[no_sanitize(address)]
