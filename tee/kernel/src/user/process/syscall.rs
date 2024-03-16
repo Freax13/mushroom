@@ -423,16 +423,7 @@ fn mmap(
     } else if flags.contains(MmapFlags::SHARED) {
         todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::PRIVATE) {
-        if flags.contains(MmapFlags::STACK) {
-            assert!(flags.contains(MmapFlags::ANONYMOUS));
-            assert_eq!(prot, ProtFlags::READ | ProtFlags::WRITE);
-
-            let addr = vm_activator.activate(&virtual_memory, |vm| {
-                vm.modify().allocate_stack(bias, length)
-            })?;
-
-            Ok(addr.as_u64())
-        } else if flags.contains(MmapFlags::ANONYMOUS) {
+        if flags.contains(MmapFlags::ANONYMOUS) {
             let permissions = MemoryPermissions::from(prot);
             let addr = vm_activator.activate(&virtual_memory, |vm| {
                 vm.modify().mmap_zero(bias, length, permissions)
