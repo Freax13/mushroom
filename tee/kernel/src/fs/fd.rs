@@ -227,6 +227,10 @@ bitflags! {
 pub trait OpenFileDescription: Send + Sync + 'static {
     fn flags(&self) -> OpenFlags;
 
+    fn set_flags(&self, flags: OpenFlags) {
+        let _ = flags;
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::inval(()))
@@ -406,6 +410,9 @@ where
     R: Send + 'static,
     F: FnMut(&mut ActiveVirtualMemory) -> Result<R> + Send + 'static,
 {
+    let flags = fd.flags();
+    let non_blocking = flags.contains(OpenFlags::NONBLOCK);
+
     loop {
         // Try to execute the closure.
         let (res, f) = VirtualMemoryActivator::use_from_async(vm.clone(), move |vm| {
@@ -417,7 +424,7 @@ where
 
         match res {
             Ok(value) => return Ok(value),
-            Err(err) if err.kind() == ErrorKind::Again => {
+            Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
                 fd.ready(events).await?;
             }

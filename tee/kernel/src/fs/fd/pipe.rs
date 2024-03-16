@@ -1,10 +1,10 @@
-use core::iter::from_fn;
+use core::{cmp, iter::from_fn};
 
 use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::ActiveVirtualMemory,
-        syscall::args::{OpenFlags, Pointer},
+        syscall::args::{OpenFlags, Pipe2Flags, Pointer},
     },
 };
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
@@ -25,12 +25,17 @@ struct State {
 pub struct ReadHalf {
     notify: Arc<Notify>,
     state: Arc<State>,
+    flags: Mutex<OpenFlags>,
 }
 
 #[async_trait]
 impl OpenFileDescription for ReadHalf {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        *self.flags.lock()
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.flags.lock().update(flags);
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -53,6 +58,43 @@ impl OpenFileDescription for ReadHalf {
         }
 
         Ok(read)
+    }
+
+    fn read_to_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.state.buffer.lock();
+
+        // Check if there is data to receive.
+        if guard.is_empty() {
+            // Check if the write half has been closed.
+            if Arc::strong_count(&self.state) == 1 {
+                return Ok(0);
+            }
+
+            return Err(Error::again(()));
+        }
+
+        let len = cmp::min(len, guard.len());
+        let (slice1, slice2) = guard.as_slices();
+        let len1 = cmp::min(len, slice1.len());
+        let len2 = len - len1;
+        let slice1 = &slice1[..len1];
+        let slice2 = &slice2[..len2];
+
+        // Copy the bytes to userspace.
+        vm.write_bytes(pointer.get(), slice1)?;
+        if !slice2.is_empty() {
+            vm.write_bytes(pointer.get() + u64::from_usize(len1), slice2)?;
+        }
+
+        // Remove the bytes from the VecDeque.
+        guard.drain(..len);
+
+        Ok(len)
     }
 
     fn poll_ready(&self, events: Events) -> Result<Events> {
@@ -104,11 +146,16 @@ impl OpenFileDescription for ReadHalf {
 pub struct WriteHalf {
     state: Arc<State>,
     notify: NotifyOnDrop,
+    flags: Mutex<OpenFlags>,
 }
 
 impl OpenFileDescription for WriteHalf {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        *self.flags.lock()
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.flags.lock().update(flags);
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -182,20 +229,23 @@ impl OpenFileDescription for WriteHalf {
     }
 }
 
-pub fn new() -> (ReadHalf, WriteHalf) {
+pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
     let state = Arc::new(State {
         buffer: Mutex::new(VecDeque::new()),
     });
     let notify = Arc::new(Notify::new());
+    let flags = flags.into();
 
     (
         ReadHalf {
             state: state.clone(),
             notify: notify.clone(),
+            flags: Mutex::new(flags),
         },
         WriteHalf {
             state,
             notify: NotifyOnDrop(notify),
+            flags: Mutex::new(flags),
         },
     )
 }
