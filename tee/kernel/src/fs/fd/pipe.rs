@@ -1,4 +1,4 @@
-use core::iter::from_fn;
+use core::{cmp, iter::from_fn};
 
 use crate::{
     spin::mutex::Mutex,
@@ -58,6 +58,43 @@ impl OpenFileDescription for ReadHalf {
         }
 
         Ok(read)
+    }
+
+    fn read_to_user(
+        &self,
+        vm: &mut ActiveVirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.state.buffer.lock();
+
+        // Check if there is data to receive.
+        if guard.is_empty() {
+            // Check if the write half has been closed.
+            if Arc::strong_count(&self.state) == 1 {
+                return Ok(0);
+            }
+
+            return Err(Error::again(()));
+        }
+
+        let len = cmp::min(len, guard.len());
+        let (slice1, slice2) = guard.as_slices();
+        let len1 = cmp::min(len, slice1.len());
+        let len2 = len - len1;
+        let slice1 = &slice1[..len1];
+        let slice2 = &slice2[..len2];
+
+        // Copy the bytes to userspace.
+        vm.write_bytes(pointer.get(), slice1)?;
+        if !slice2.is_empty() {
+            vm.write_bytes(pointer.get() + u64::from_usize(len1), slice2)?;
+        }
+
+        // Remove the bytes from the VecDeque.
+        guard.drain(..len);
+
+        Ok(len)
     }
 
     fn poll_ready(&self, events: Events) -> Result<Events> {
