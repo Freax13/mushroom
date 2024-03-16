@@ -6,6 +6,7 @@ use crate::{
     fs::{
         fd::file::File,
         node::{tmpfs::TmpFsFile, FileAccessContext, INode},
+        path::Path,
         INIT,
     },
     rt::once::OnceCell,
@@ -75,6 +76,7 @@ pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
         let file = file.open(OpenFlags::empty())?;
 
         guard.start_executable(
+            &Path::new(b"/bin/init".to_vec()).unwrap(),
             &*file,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
