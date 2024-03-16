@@ -214,6 +214,7 @@ impl Thread {
 
                 match exit {
                     Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+                    Exit::GeneralProtectionFault => self.clone().deliver_signal(11).await.unwrap(),
                     Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                 }
             }
