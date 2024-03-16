@@ -35,6 +35,7 @@ mod elf;
 impl ActiveVirtualMemory<'_, '_> {
     pub fn start_executable(
         &mut self,
+        path: &Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -60,7 +61,7 @@ impl ActiveVirtualMemory<'_, '_> {
                     }
                 }
             }
-            [b'#', b'!', ..] => self.start_shebang(file, argv, envp, ctx, cwd),
+            [b'#', b'!', ..] => self.start_shebang(path, file, argv, envp, ctx, cwd),
             _ => Err(Error::no_exec(())),
         }
     }
@@ -178,6 +179,7 @@ impl ActiveVirtualMemory<'_, '_> {
 
     fn start_shebang(
         &mut self,
+        path: &Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -220,21 +222,22 @@ impl ActiveVirtualMemory<'_, '_> {
             Some(Ok(arg))
         });
 
-        let interpreter_path = args.next().ok_or_else(|| Error::inval(()))??;
-        let path = Path::new(interpreter_path.as_bytes().to_vec())?;
-        let node = lookup_and_resolve_node(cwd.clone(), &path, ctx)?;
+        let interpreter_path_str = args.next().ok_or_else(|| Error::inval(()))??;
+        let interpreter_path = Path::new(interpreter_path_str.as_bytes().to_vec())?;
+        let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
         if !node.mode().contains(FileMode::EXECUTE) {
             return Err(Error::acces(()));
         }
         let interpreter = node.open(OpenFlags::empty())?;
 
-        let mut new_argv = vec![interpreter_path];
+        let mut new_argv = vec![interpreter_path_str];
         for arg in args {
             new_argv.push(arg?);
         }
-        new_argv.extend(argv.iter().map(AsRef::as_ref).map(CStr::to_owned));
+        new_argv.push(CString::new(path.as_bytes()).map_err(|_| Error::inval(()))?);
+        new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(&*interpreter, &new_argv, envp, ctx, cwd)
+        self.start_executable(&interpreter_path, &*interpreter, &new_argv, envp, ctx, cwd)
     }
 }
 

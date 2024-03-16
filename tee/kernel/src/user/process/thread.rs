@@ -407,11 +407,12 @@ impl ThreadGuard<'_> {
         }
 
         let file = node.open(OpenFlags::empty())?;
-        self.start_executable(&*file, argv, envp, ctx, vm_activator)
+        self.start_executable(path, &*file, argv, envp, ctx, vm_activator)
     }
 
     pub fn start_executable(
         &mut self,
+        path: &Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -422,7 +423,7 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let cpu_state = vm_activator.activate(&virtual_memory, |vm| {
-            vm.start_executable(file, argv, envp, ctx, self.cwd.clone())
+            vm.start_executable(path, file, argv, envp, ctx, self.cwd.clone())
         })?;
 
         // Success! Commit the new state to the thread.
