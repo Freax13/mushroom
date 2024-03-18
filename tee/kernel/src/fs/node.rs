@@ -266,7 +266,7 @@ fn find_parent<'a>(
             let dir = match segment {
                 PathSegment::Root => ROOT_NODE.clone(),
                 PathSegment::Empty | PathSegment::Dot => dir,
-                PathSegment::DotDot => unreachable!(),
+                PathSegment::DotDot => dir.parent()?,
                 PathSegment::FileName(ref file_name) => {
                     let node = dir.get_node(file_name, ctx)?;
                     resolve_links(node, dir, ctx)?
@@ -319,7 +319,7 @@ pub fn create_file(
                     continue;
                 }
 
-                if stat.mode.ty() != FileType::File {
+                if stat.mode.ty() == FileType::Dir {
                     return Err(Error::exist(()));
                 }
 

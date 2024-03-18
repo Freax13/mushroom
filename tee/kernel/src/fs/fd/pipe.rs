@@ -253,7 +253,7 @@ pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
         WriteHalf {
             state,
             notify: NotifyOnDrop(notify),
-            flags: Mutex::new(flags),
+            flags: Mutex::new(flags | OpenFlags::WRONLY),
         },
     )
 }
