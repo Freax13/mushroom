@@ -83,7 +83,7 @@ impl INode for NullFile {
             dev: 0,
             ino: self.ino,
             nlink: 1,
-            mode: FileTypeAndMode::new(FileType::File, *self.mode.lock()),
+            mode: FileTypeAndMode::new(FileType::Char, *self.mode.lock()),
             uid: 0,
             gid: 0,
             rdev: 0,
@@ -186,7 +186,7 @@ impl OutputFile {
 impl INode for OutputFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
-        let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        let mode = FileTypeAndMode::new(FileType::Char, guard.mode);
         Stat {
             dev: 0,
             ino: self.ino,
@@ -319,7 +319,7 @@ impl RandomFile {
 impl INode for RandomFile {
     fn stat(&self) -> Stat {
         let guard = self.internal.lock();
-        let mode = FileTypeAndMode::new(FileType::File, guard.mode);
+        let mode = FileTypeAndMode::new(FileType::Char, guard.mode);
         Stat {
             dev: 0,
             ino: self.ino,
