@@ -130,6 +130,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysReadlink);
     handlers.register(SysChmod);
     handlers.register(SysFchmod);
+    handlers.register(SysFchown);
     handlers.register(SysUmask);
     handlers.register(SysGetrlimit);
     handlers.register(SysGetuid);
@@ -1575,6 +1576,18 @@ fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: u64) -> S
     let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
     fd.set_mode(mode)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 207, amd64 = 93)]
+fn fchown(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    user: u32,
+    group: u32,
+) -> SyscallResult {
+    // FIXME: implement this
+    let _fd = fdtable.get(fd)?;
     Ok(0)
 }
 
