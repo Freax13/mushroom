@@ -682,10 +682,14 @@ impl VirtualMemoryState {
                 let candidate = align_down(candidate, 0x1000);
 
                 let candidate = VirtAddr::new(candidate);
+                let end = Step::forward_checked(candidate, usize_from(size - 1))?;
+                if end.as_u64().get_bit(47) {
+                    return None;
+                }
 
                 // Check if there are already pages in the range.
                 let start = Page::containing_address(candidate);
-                let end = Page::containing_address(candidate + (size - 1));
+                let end = Page::containing_address(end);
                 if self.pages.range(start..=end).next().is_some() {
                     return None;
                 }
