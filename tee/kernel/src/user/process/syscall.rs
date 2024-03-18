@@ -2281,8 +2281,52 @@ fn fchmodat(
 }
 
 #[syscall(i386 = 307, amd64 = 269)]
-fn faccessat(dfd: FdNum, pathname: Pointer<Path>, mode: FileMode, flags: u64) -> SyscallResult {
-    // FIXME: implement this
+fn faccessat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    mode: FileMode,
+    flags: u64,
+) -> SyscallResult {
+    let start_dir = if dfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
+
+    let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
+    let stat = node.stat();
+    let file_mode = stat.mode.mode();
+
+    let groups = {
+        [
+            (
+                FileMode::EXECUTE,
+                [FileMode::GROUP_EXECUTE, FileMode::OWNER_EXECUTE],
+            ),
+            (
+                FileMode::WRITE,
+                [FileMode::GROUP_WRITE, FileMode::OWNER_WRITE],
+            ),
+            (FileMode::READ, [FileMode::GROUP_READ, FileMode::OWNER_READ]),
+        ]
+    };
+    for (bit, alternatives) in groups {
+        if mode.contains(bit)
+            && !(file_mode.contains(bit)
+                || alternatives.into_iter().any(|bit| file_mode.contains(bit)))
+        {
+            return Err(Error::acces(()));
+        }
+    }
+
     Ok(0)
 }
 
