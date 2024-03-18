@@ -132,6 +132,10 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchmod);
     handlers.register(SysUmask);
     handlers.register(SysGetrlimit);
+    handlers.register(SysGetuid);
+    handlers.register(SysGetgid);
+    handlers.register(SysGeteuid);
+    handlers.register(SysGetegid);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -1592,6 +1596,26 @@ fn getrlimit(
 ) -> SyscallResult {
     let value = thread.getrlimit(resource);
     vm_activator.activate(&virtual_memory, |vm| vm.write_with_abi(rlim, value, abi))?;
+    Ok(0)
+}
+
+#[syscall(i386 = 199, amd64 = 102)]
+fn getuid() -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 200, amd64 = 104)]
+fn getgid() -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 201, amd64 = 107)]
+fn geteuid() -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 202, amd64 = 108)]
+fn getegid() -> SyscallResult {
     Ok(0)
 }
 
