@@ -1986,7 +1986,7 @@ fn openat(
             }
         }
 
-        let path_fd = PathFd::new(Arc::downgrade(&start_dir), filename);
+        let path_fd = PathFd::new(node);
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
