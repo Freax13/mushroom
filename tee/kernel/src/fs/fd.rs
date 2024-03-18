@@ -370,6 +370,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Err(Error::inval(()))
     }
 
+    fn poll_ready(&self, events: Events) -> Events;
+
     fn epoll_ready(&self, events: Events) -> Result<Events> {
         let _ = events;
         Err(Error::perm(()))

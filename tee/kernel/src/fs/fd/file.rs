@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-use super::{FileDescriptor, OpenFileDescription};
+use super::{Events, FileDescriptor, OpenFileDescription};
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize) -> Result<KernelPage>;
@@ -207,6 +207,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
     fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
         self.file.get_page(page_idx)
     }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::READ
+    }
 }
 
 /// A file description for files opened as write-only.
@@ -286,6 +290,10 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
     fn stat(&self) -> Stat {
         self.file.stat()
     }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::WRITE
+    }
 }
 
 /// A file description for files opened as write-only.
@@ -329,6 +337,10 @@ impl OpenFileDescription for AppendFileFileDescription {
 
     fn stat(&self) -> Stat {
         self.file.stat()
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::WRITE
     }
 }
 
@@ -434,5 +446,9 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn stat(&self) -> Stat {
         self.file.stat()
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & (Events::READ | Events::WRITE)
     }
 }

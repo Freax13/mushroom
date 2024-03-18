@@ -97,7 +97,7 @@ impl OpenFileDescription for ReadHalf {
         Ok(len)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn poll_ready(&self, events: Events) -> Events {
         let guard = self.state.buffer.lock();
 
         let mut ready_events = Events::empty();
@@ -108,7 +108,11 @@ impl OpenFileDescription for ReadHalf {
         );
 
         ready_events &= events;
-        Ok(ready_events)
+        ready_events
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Events> {
+        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
@@ -226,6 +230,10 @@ impl OpenFileDescription for WriteHalf {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         }
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::WRITE
     }
 }
 

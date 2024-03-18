@@ -73,6 +73,10 @@ impl OpenFileDescription for Epoll {
             ctime: Timespec::ZERO,
         }
     }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::empty()
+    }
 }
 
 struct InterestListEntry {

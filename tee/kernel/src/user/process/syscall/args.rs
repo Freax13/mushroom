@@ -421,12 +421,50 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Pollfd {
-    fd: i32,
-    events: u16,
-    revents: u16,
+    pub fd: FdNum,
+    pub events: PollEvents,
+    pub revents: PollEvents,
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[repr(transparent)]
+    pub struct PollEvents: u16 {
+        const IN = 0x0001;
+        const PRI = 0x0002;
+        const OUT = 0x0004;
+        const ERR = 0x0008;
+        const HUP = 0x0010;
+        const NVAL = 0x0020;
+        const RDNORM = 0x0040;
+        const RDBAND = 0x0080;
+        const WRNORM = 0x0100;
+        const WRBAND = 0x0200;
+        const MSG = 0x0400;
+        const REMOVE = 0x1000;
+        const RDHUP = 0x2000;
+    }
+}
+
+impl From<PollEvents> for Events {
+    fn from(value: PollEvents) -> Self {
+        let mut events = Events::empty();
+        events.set(Events::READ, value.contains(PollEvents::IN));
+        events.set(Events::WRITE, value.contains(PollEvents::OUT));
+        events
+    }
+}
+
+impl From<Events> for PollEvents {
+    fn from(value: Events) -> Self {
+        let mut events = PollEvents::empty();
+        events.set(PollEvents::IN, value.contains(Events::READ));
+        events.set(PollEvents::OUT, value.contains(Events::WRITE));
+        events
+    }
 }
 
 impl Pointee for Pollfd {}

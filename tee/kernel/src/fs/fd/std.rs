@@ -1,6 +1,6 @@
 use log::debug;
 
-use super::OpenFileDescription;
+use super::{Events, OpenFileDescription};
 use crate::{
     error::Result,
     fs::node::new_ino,
@@ -40,6 +40,10 @@ impl OpenFileDescription for Stdin {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         }
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::empty()
     }
 }
 
@@ -81,6 +85,10 @@ impl OpenFileDescription for Stdout {
             ctime: Timespec::ZERO,
         }
     }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::WRITE
+    }
 }
 
 pub struct Stderr {
@@ -120,5 +128,9 @@ impl OpenFileDescription for Stderr {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         }
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::WRITE
     }
 }
