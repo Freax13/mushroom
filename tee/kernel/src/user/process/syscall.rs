@@ -1925,7 +1925,7 @@ fn epoll_ctl(
     match op {
         EpollCtlOp::Add => {
             // Poll the fd once to check if it supports epoll.
-            let _ = fd.poll_ready(Events::empty())?;
+            let _ = fd.epoll_ready(Events::empty())?;
 
             let event = event.ok_or_else(|| Error::inval(()))?;
             epoll.epoll_add(fd, event)?

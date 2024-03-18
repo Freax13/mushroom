@@ -97,7 +97,7 @@ impl OpenFileDescription for ReadHalf {
         Ok(len)
     }
 
-    fn poll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Events> {
         let guard = self.state.buffer.lock();
 
         let mut ready_events = Events::empty();
@@ -115,7 +115,7 @@ impl OpenFileDescription for ReadHalf {
         loop {
             let wait = self.notify.wait();
 
-            let events = self.poll_ready(events)?;
+            let events = self.epoll_ready(events)?;
             if !events.is_empty() {
                 return Ok(events);
             }

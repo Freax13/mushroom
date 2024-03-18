@@ -97,7 +97,7 @@ impl OpenFileDescription for EventFd {
         self.write(&buf)
     }
 
-    fn poll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Events> {
         let counter_value = self.counter.load(Ordering::SeqCst);
 
         let mut ready_events = Events::empty();
@@ -113,7 +113,7 @@ impl OpenFileDescription for EventFd {
         loop {
             let wait = self.notify.wait();
 
-            let ready_events = self.poll_ready(events)?;
+            let ready_events = self.epoll_ready(events)?;
             if !ready_events.is_empty() {
                 return Ok(ready_events);
             }
