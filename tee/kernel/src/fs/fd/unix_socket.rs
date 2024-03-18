@@ -35,9 +35,13 @@ impl OpenFileDescription for UnixSocket {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Result<Events> {
+    fn poll_ready(&self, events: Events) -> Events {
         debug!("{events:?}");
-        Ok(Events::empty())
+        events & Events::empty()
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Events> {
+        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {

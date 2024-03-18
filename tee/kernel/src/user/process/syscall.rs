@@ -1,4 +1,4 @@
-use core::{cmp, ffi::c_void, fmt, num::NonZeroU32};
+use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32};
 
 use alloc::{ffi::CString, sync::Arc, vec::Vec};
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
@@ -25,7 +25,7 @@ use crate::{
     time::{self, now},
     user::process::{
         memory::MemoryPermissions,
-        syscall::args::{LongOffset, Resource, SpliceFlags, Timeval, UserDesc},
+        syscall::args::{LongOffset, Pollfd, Resource, SpliceFlags, Timeval, UserDesc},
     },
 };
 
@@ -34,9 +34,9 @@ use self::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
         FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions,
-        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, ProtFlags, RLimit, RLimit64,
-        RtSigprocmaskHow, SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions,
-        WStatus, WaitOptions, Whence,
+        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags,
+        RLimit, RLimit64, RtSigprocmaskHow, SocketPairType, Stat, Stat64, SyscallArg, Time,
+        Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -355,22 +355,38 @@ fn lstat64(
 fn poll(
     vm_activator: &mut VirtualMemoryActivator,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    fds: Pointer<FdNum>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fds: Pointer<Pollfd>,
     nfds: u64,
     timeout: u64,
 ) -> SyscallResult {
-    vm_activator.activate(&virtual_memory, |vm| {
-        for i in 0..usize_from(nfds) {
-            let _pollfd = vm.read(fds.bytes_offset(i * 8))?;
-        }
-        Result::<_>::Ok(())
-    })?;
-
     if timeout != 0 {
         todo!()
     }
 
-    Ok(0)
+    vm_activator.activate(&virtual_memory, |vm| {
+        let mut num_non_zero = 0;
+
+        for i in 0..usize_from(nfds) {
+            let mut pollfd = vm.read(fds.bytes_offset(i * size_of::<Pollfd>()))?;
+
+            if let Ok(fd) = fdtable.get(pollfd.fd) {
+                let events = Events::from(pollfd.events);
+                let revents = fd.poll_ready(events);
+                pollfd.revents = PollEvents::from(revents);
+            } else {
+                pollfd.revents = PollEvents::NVAL;
+            }
+
+            vm.write(fds.bytes_offset(i * size_of::<Pollfd>()), pollfd)?;
+
+            if !pollfd.revents.is_empty() {
+                num_non_zero += 1;
+            }
+        }
+
+        Ok(num_non_zero)
+    })
 }
 
 #[syscall(i386 = 19, amd64 = 8)]
@@ -1925,7 +1941,7 @@ fn epoll_ctl(
     match op {
         EpollCtlOp::Add => {
             // Poll the fd once to check if it supports epoll.
-            let _ = fd.poll_ready(Events::empty())?;
+            let _ = fd.epoll_ready(Events::empty())?;
 
             let event = event.ok_or_else(|| Error::inval(()))?;
             epoll.epoll_add(fd, event)?

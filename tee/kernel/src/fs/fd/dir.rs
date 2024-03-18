@@ -17,7 +17,7 @@ use crate::{
     user::process::syscall::args::Stat,
 };
 
-use super::{FileDescriptor, OpenFileDescription};
+use super::{Events, FileDescriptor, OpenFileDescription};
 
 #[macro_export]
 macro_rules! dir_impls {
@@ -186,5 +186,9 @@ impl OpenFileDescription for DirectoryFileDescription {
         }
 
         Ok(ret)
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::READ
     }
 }

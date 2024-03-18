@@ -9,7 +9,7 @@ use crate::{
     user::process::syscall::args::{OpenFlags, Stat},
 };
 
-use super::OpenFileDescription;
+use super::{Events, OpenFileDescription};
 
 pub struct PathFd {
     start_node: Weak<dyn INode>,
@@ -37,5 +37,9 @@ impl OpenFileDescription for PathFd {
             &self.path,
             ctx,
         )
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & Events::empty()
     }
 }
