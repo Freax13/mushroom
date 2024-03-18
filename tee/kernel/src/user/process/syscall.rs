@@ -130,8 +130,13 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysReadlink);
     handlers.register(SysChmod);
     handlers.register(SysFchmod);
+    handlers.register(SysFchown);
     handlers.register(SysUmask);
     handlers.register(SysGetrlimit);
+    handlers.register(SysGetuid);
+    handlers.register(SysGetgid);
+    handlers.register(SysGeteuid);
+    handlers.register(SysGetegid);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -1574,6 +1579,18 @@ fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: u64) -> S
     Ok(0)
 }
 
+#[syscall(i386 = 207, amd64 = 93)]
+fn fchown(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    user: u32,
+    group: u32,
+) -> SyscallResult {
+    // FIXME: implement this
+    let _fd = fdtable.get(fd)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 60, amd64 = 95)]
 fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
@@ -1592,6 +1609,26 @@ fn getrlimit(
 ) -> SyscallResult {
     let value = thread.getrlimit(resource);
     vm_activator.activate(&virtual_memory, |vm| vm.write_with_abi(rlim, value, abi))?;
+    Ok(0)
+}
+
+#[syscall(i386 = 199, amd64 = 102)]
+fn getuid() -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 200, amd64 = 104)]
+fn getgid() -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 201, amd64 = 107)]
+fn geteuid() -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 202, amd64 = 108)]
+fn getegid() -> SyscallResult {
     Ok(0)
 }
 
@@ -2244,8 +2281,52 @@ fn fchmodat(
 }
 
 #[syscall(i386 = 307, amd64 = 269)]
-fn faccessat(dfd: FdNum, pathname: Pointer<Path>, mode: FileMode, flags: u64) -> SyscallResult {
-    // FIXME: implement this
+fn faccessat(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    mode: FileMode,
+    flags: u64,
+) -> SyscallResult {
+    let start_dir = if dfd == FdNum::CWD {
+        thread.cwd.clone()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let pathname = vm_activator.activate(&virtual_memory, |vm| vm.read(pathname))?;
+
+    let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
+    let stat = node.stat();
+    let file_mode = stat.mode.mode();
+
+    let groups = {
+        [
+            (
+                FileMode::EXECUTE,
+                [FileMode::GROUP_EXECUTE, FileMode::OWNER_EXECUTE],
+            ),
+            (
+                FileMode::WRITE,
+                [FileMode::GROUP_WRITE, FileMode::OWNER_WRITE],
+            ),
+            (FileMode::READ, [FileMode::GROUP_READ, FileMode::OWNER_READ]),
+        ]
+    };
+    for (bit, alternatives) in groups {
+        if mode.contains(bit)
+            && !(file_mode.contains(bit)
+                || alternatives.into_iter().any(|bit| file_mode.contains(bit)))
+        {
+            return Err(Error::acces(()));
+        }
+    }
+
     Ok(0)
 }
 
