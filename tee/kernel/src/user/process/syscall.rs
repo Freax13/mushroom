@@ -25,7 +25,7 @@ use crate::{
     time::{self, now},
     user::process::{
         memory::MemoryPermissions,
-        syscall::args::{LongOffset, Resource, Timeval, UserDesc},
+        syscall::args::{LongOffset, Resource, SpliceFlags, Timeval, UserDesc},
     },
 };
 
@@ -156,6 +156,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSymlinkat);
     handlers.register(SysFchmodat);
     handlers.register(SysFaccessat);
+    handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
@@ -2248,6 +2249,52 @@ fn faccessat(dfd: FdNum, pathname: Pointer<Path>, mode: FileMode, flags: u64) ->
     Ok(0)
 }
 
+#[syscall(i386 = 313, amd64 = 275)]
+async fn splice(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd_in: FdNum,
+    off_in: Pointer<LongOffset>,
+    fd_out: FdNum,
+    off_out: Pointer<LongOffset>,
+    len: u64,
+    flags: SpliceFlags,
+) -> SyscallResult {
+    let fd_in = fdtable.get(fd_in)?;
+    let fd_out = fdtable.get(fd_out)?;
+
+    if !off_in.is_null() || !off_out.is_null() {
+        todo!()
+    }
+
+    let mut len = usize_from(len);
+    let mut copied = 0;
+
+    let mut buffer = [0; 128];
+
+    while len > 0 {
+        // Setup buffer.
+        let chunk_len = cmp::min(buffer.len(), len);
+        let buffer = &mut buffer[..chunk_len];
+
+        // Read from fd_in.
+        let num = do_io(&*fd_in, Events::READ, || fd_in.read(buffer)).await?;
+        if num == 0 {
+            break;
+        }
+
+        // Write to fd_out.
+        let buffer = &buffer[..num];
+        fd_out.write_all(buffer).await?;
+
+        // Update len and copied.
+        len -= num;
+        let num = u64::from_usize(num);
+        copied += num;
+    }
+
+    Ok(copied)
+}
+
 #[syscall(i386 = 320, amd64 = 280)]
 fn utimensat(
     thread: &mut ThreadGuard,
@@ -2442,38 +2489,14 @@ async fn copy_file_range(
     len: u64,
     flags: CopyFileRangeFlags,
 ) -> SyscallResult {
-    let fd_in = fdtable.get(fd_in)?;
-    let fd_out = fdtable.get(fd_out)?;
-
-    if !off_in.is_null() || !off_out.is_null() {
-        todo!()
-    }
-
-    let mut len = usize_from(len);
-    let mut copied = 0;
-
-    let mut buffer = [0; 128];
-
-    while len > 0 {
-        // Setup buffer.
-        let chunk_len = cmp::min(buffer.len(), len);
-        let buffer = &mut buffer[..chunk_len];
-
-        // Read from fd_in.
-        let num = do_io(&*fd_in, Events::READ, || fd_in.read(buffer)).await?;
-        if num == 0 {
-            break;
-        }
-
-        // Write to fd_out.
-        let buffer = &buffer[..num];
-        fd_out.write_all(buffer).await?;
-
-        // Update len and copied.
-        len -= num;
-        let num = u64::from_usize(num);
-        copied += num;
-    }
-
-    Ok(copied)
+    splice(
+        fdtable,
+        fd_in,
+        off_in,
+        fd_out,
+        off_out,
+        len,
+        SpliceFlags::empty(),
+    )
+    .await
 }

@@ -1028,3 +1028,7 @@ impl From<RLimit> for RLimit64 {
         }
     }
 }
+
+bitflags! {
+    pub struct SpliceFlags {}
+}
