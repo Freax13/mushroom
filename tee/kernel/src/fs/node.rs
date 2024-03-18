@@ -266,7 +266,7 @@ fn find_parent<'a>(
             let dir = match segment {
                 PathSegment::Root => ROOT_NODE.clone(),
                 PathSegment::Empty | PathSegment::Dot => dir,
-                PathSegment::DotDot => unreachable!(),
+                PathSegment::DotDot => dir.parent()?,
                 PathSegment::FileName(ref file_name) => {
                     let node = dir.get_node(file_name, ctx)?;
                     resolve_links(node, dir, ctx)?
