@@ -125,6 +125,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchdir);
     handlers.register(SysRename);
     handlers.register(SysMkdir);
+    handlers.register(SysLink);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
     handlers.register(SysReadlink);
@@ -1495,6 +1496,30 @@ fn mkdir(
         FdNum::CWD,
         pathname,
         mode,
+    )
+}
+
+#[syscall(i386 = 9, amd64 = 86)]
+fn link(
+    thread: &mut ThreadGuard,
+    vm_activator: &mut VirtualMemoryActivator,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    oldpath: Pointer<Path>,
+    newpath: Pointer<Path>,
+) -> SyscallResult {
+    linkat(
+        thread,
+        vm_activator,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        oldpath,
+        FdNum::CWD,
+        newpath,
+        LinkOptions::empty(),
     )
 }
 
