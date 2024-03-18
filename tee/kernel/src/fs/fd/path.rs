@@ -1,24 +1,18 @@
-use alloc::sync::Weak;
-
 use crate::{
-    error::{Error, Result},
-    fs::{
-        node::{lookup_and_resolve_node, DynINode, FileAccessContext, INode},
-        path::Path,
-    },
+    error::Result,
+    fs::node::{DynINode, FileAccessContext},
     user::process::syscall::args::{OpenFlags, Stat},
 };
 
 use super::{Events, OpenFileDescription};
 
 pub struct PathFd {
-    start_node: Weak<dyn INode>,
-    path: Path,
+    node: DynINode,
 }
 
 impl PathFd {
-    pub fn new(start_node: Weak<dyn INode>, path: Path) -> Self {
-        Self { start_node, path }
+    pub fn new(node: DynINode) -> Self {
+        Self { node }
     }
 }
 
@@ -28,15 +22,11 @@ impl OpenFileDescription for PathFd {
     }
 
     fn stat(&self) -> Stat {
-        todo!()
+        self.node.stat()
     }
 
-    fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
-        lookup_and_resolve_node(
-            self.start_node.upgrade().ok_or(Error::no_ent(()))?,
-            &self.path,
-            ctx,
-        )
+    fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {
+        Ok(self.node.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
