@@ -141,3 +141,17 @@ CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER = "../host/target/release/mushroom r
 dependencies = ["clean-tee"]
 command = "cargo"
 args = ["clean"]
+
+[env]
+# Unset some environment variables to improve cacheability with sccache.
+CARGO_MAKE_CURRENT_TASK_NAME = { unset = true }
+CARGO_MAKE_GIT_BRANCH = { unset = true }
+CARGO_MAKE_GIT_HEAD_LAST_COMMIT_HASH = { unset = true }
+CARGO_MAKE_GIT_HEAD_LAST_COMMIT_HASH_PREFIX = { unset = true }
+CARGO_MAKE_MAKEFILE_PATH = { unset = true }
+CARGO_MAKE_PR = { unset = true }
+CARGO_MAKE_PROFILE = { unset = true }
+CARGO_MAKE_PROJECT_NAME = { unset = true }
+CARGO_MAKE_PROJECT_VERSION_MEMBER = { unset = true }
+CARGO_MAKE_TASK = { unset = true }
+CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY = { unset = true }
