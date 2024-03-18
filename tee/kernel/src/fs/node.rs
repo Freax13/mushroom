@@ -319,7 +319,7 @@ pub fn create_file(
                     continue;
                 }
 
-                if stat.mode.ty() != FileType::File {
+                if stat.mode.ty() == FileType::Dir {
                     return Err(Error::exist(()));
                 }
 
