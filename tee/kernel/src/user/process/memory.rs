@@ -790,9 +790,11 @@ struct PcidAllocations {
 
 impl PcidAllocations {
     const fn new() -> Self {
+        let mut in_use = [false; 4096];
+        in_use[0] = true; // Reserve the first PCID for the kernel.
         Self {
             last_idx: 0,
-            in_use: [false; 4096],
+            in_use,
         }
     }
 
