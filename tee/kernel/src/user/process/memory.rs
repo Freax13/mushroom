@@ -124,7 +124,7 @@ impl VirtualMemoryActivator {
         // Switch the page tables.
         if let Some(pcid_allocation) = virtual_memory.pcid_allocation.as_ref() {
             unsafe {
-                Cr3::write_pcid(virtual_memory.pml4, pcid_allocation.pcid);
+                Cr3::write_pcid_no_flush(virtual_memory.pml4, pcid_allocation.pcid);
             }
         } else {
             unsafe {
@@ -141,8 +141,15 @@ impl VirtualMemoryActivator {
         let res = f(&mut active_virtual_memory);
 
         // Restore the page tables.
-        unsafe {
-            Cr3::write_raw(prev_pml4, bits);
+        if virtual_memory.pcid_allocation.is_some() {
+            let pcid = Pcid::new(bits).unwrap();
+            unsafe {
+                Cr3::write_pcid_no_flush(prev_pml4, pcid);
+            }
+        } else {
+            unsafe {
+                Cr3::write_raw(prev_pml4, bits);
+            }
         }
 
         res

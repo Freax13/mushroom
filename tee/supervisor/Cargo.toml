@@ -19,4 +19,4 @@ log = { version = "0.4.21", default-features = false }
 sha2 = { version = "0.10.8", default-features = false }
 snp-types = { workspace = true }
 volatile = { version = "0.5.1", features = ["unstable"] }
-x86_64 = "0.15.0"
+x86_64 = "0.15.1"

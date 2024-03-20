@@ -24,4 +24,4 @@ kernel-macros.workspace = true
 log = { version = "0.4.21", default-features = false }
 profiler-types = { workspace = true, optional = true }
 usize_conversions = "0.2.0"
-x86_64 = "0.15.0"
+x86_64 = "0.15.1"
