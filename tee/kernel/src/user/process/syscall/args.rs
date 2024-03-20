@@ -1087,6 +1087,20 @@ bitflags! {
 }
 
 bitflags! {
+    pub struct Dup3Flags {
+        const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<Dup3Flags> for FdFlags {
+    fn from(value: Dup3Flags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(Dup3Flags::CLOEXEC));
+        flags
+    }
+}
+
+bitflags! {
     pub struct ClockNanosleepFlags {
         const TIMER_ABSTIME = 1;
     }

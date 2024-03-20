@@ -26,7 +26,8 @@ use crate::{
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{
-            ClockNanosleepFlags, LongOffset, Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
+            ClockNanosleepFlags, Dup3Flags, LongOffset, Pollfd, Resource, SpliceFlags, Timeval,
+            UserDesc,
         },
         thread::SignalHandlerTable,
     },
@@ -171,6 +172,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUtimensat);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
+    handlers.register(SysDup3);
     handlers.register(SysPipe2);
     handlers.register(SysPrlimit64);
     handlers.register(SysRenameat2);
@@ -2564,6 +2566,26 @@ fn epoll_create1(
 ) -> SyscallResult {
     let fd_num = fdtable.insert(Epoll::new(), flags)?;
     Ok(fd_num.get().try_into().unwrap())
+}
+
+#[syscall(i386 = 330, amd64 = 292)]
+fn dup3(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    oldfd: FdNum,
+    newfd: FdNum,
+    flags: Dup3Flags,
+) -> SyscallResult {
+    if oldfd == newfd {
+        return Err(Error::inval(()));
+    }
+
+    if !(0..FileDescriptorTable::MAX_FD).contains(&newfd.get()) {
+        return Err(Error::bad_f(()));
+    }
+
+    let fd = fdtable.get(oldfd)?;
+    fdtable.replace(newfd, fd, flags)?;
+    Ok(newfd.get() as u64)
 }
 
 #[syscall(i386 = 331, amd64 = 293)]
