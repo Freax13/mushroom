@@ -219,6 +219,9 @@ impl Thread {
                 .await;
 
                 match exit {
+                    Exit::DivideError => {
+                        assert!(self.queue_signal(Signal::FPE));
+                    }
                     Exit::Syscall(args) => self.clone().execute_syscall(args).await,
                     Exit::GeneralProtectionFault => {
                         assert!(self.queue_signal(Signal::SEGV));

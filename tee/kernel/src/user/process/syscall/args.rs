@@ -1076,6 +1076,7 @@ bitflags! {
 pub struct Signal(u8);
 
 impl Signal {
+    pub const FPE: Self = Self(8);
     pub const SEGV: Self = Self(11);
 
     pub fn new(value: u8) -> Result<Self> {
