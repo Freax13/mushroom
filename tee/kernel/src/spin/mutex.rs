@@ -70,6 +70,15 @@ impl<T> Mutex<T> {
 unsafe impl<T> Send for Mutex<T> where T: Send {}
 unsafe impl<T> Sync for Mutex<T> where T: Send {}
 
+impl<T> Clone for Mutex<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self::new(self.lock().clone())
+    }
+}
+
 pub struct MutexGuard<'a, T> {
     mutex: &'a Mutex<T>,
 }

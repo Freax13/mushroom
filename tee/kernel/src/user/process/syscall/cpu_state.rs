@@ -378,6 +378,7 @@ impl CpuState {
                 })
             }
             RawExit::Exception => match PerCpu::get().vector.get() {
+                0x0 => Exit::DivideError,
                 0xd => Exit::GeneralProtectionFault,
                 0xe => {
                     let code =
@@ -561,6 +562,7 @@ impl CpuState {
         sig_info: SigInfo,
         sigaction: Sigaction,
         stack: Stack,
+        sigmask: Sigset,
         vm: &mut ActiveVirtualMemory,
     ) -> Result<()> {
         let abi = self.abi_from_cs();
@@ -568,7 +570,7 @@ impl CpuState {
         let ucontext = UContext {
             stack,
             mcontext,
-            sigmask: Sigset(0),
+            sigmask,
         };
         let restorer = if sigaction.sa_restorer != 0 {
             sigaction.sa_restorer
@@ -581,7 +583,7 @@ impl CpuState {
         let restorer = Pointer::<c_void>::new(restorer);
 
         if !stack.flags.contains(StackFlags::DISABLE)
-            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+            && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
         {
             self.registers.rsp = stack.sp + stack.size;
         }
@@ -629,12 +631,12 @@ impl CpuState {
         &mut self,
         vm: &mut ActiveVirtualMemory,
         abi: Abi,
-    ) -> Result<Stack> {
+    ) -> Result<(Stack, Sigset)> {
         let ucontext_ptr_ptr = Pointer::<Pointer<UContext>>::new(self.registers.rsp + 8);
         let ucontext_ptr = vm.read_with_abi(ucontext_ptr_ptr, abi)?;
         let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
         self.load_sig_context(&ucontext.mcontext);
-        Ok(ucontext.stack)
+        Ok((ucontext.stack, ucontext.sigmask))
     }
 }
 
@@ -763,6 +765,7 @@ pub enum RawExit {
 
 pub enum Exit {
     Syscall(SyscallArgs),
+    DivideError,
     GeneralProtectionFault,
     PageFault(PageFaultExit),
 }

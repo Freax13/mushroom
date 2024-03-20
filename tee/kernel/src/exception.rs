@@ -105,10 +105,12 @@ pub fn load_gdt() {
 pub fn load_idt() {
     static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
         let mut idt = InterruptDescriptorTable::new();
-        idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.divide_error.set_handler_fn(divide_error_handler);
+        idt.double_fault.set_handler_fn(double_fault_handler);
         idt.general_protection_fault
             .set_handler_fn(general_protection_fault_handler);
-        idt.double_fault.set_handler_fn(double_fault_handler);
+        idt.page_fault.set_handler_fn(page_fault_handler);
+
         idt[0x80]
             .set_handler_fn(int0x80_handler)
             .set_privilege_level(PrivilegeLevel::Ring3);
@@ -117,6 +119,37 @@ pub fn load_idt() {
 
     debug!("loading interrupt descriptor table");
     IDT.load();
+}
+
+#[naked]
+#[no_sanitize(address)]
+extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
+    unsafe {
+        asm!(
+            // Check whether the exception happened in userspace.
+            "test word ptr [rsp+16], 3",
+            "je {kernel_divide_error_handler}",
+
+            // Userspace code path:
+            "swapgs",
+            // Store the error code.
+            "mov byte ptr gs:[{VECTOR_OFFSET}], 0x0",
+            // Jump to the userspace exit point.
+            "jmp gs:[{HANDLER_OFFSET}]",
+
+            kernel_divide_error_handler = sym kernel_divide_error_handler,
+            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            options(noreturn),
+        );
+    }
+}
+
+#[no_sanitize(address)]
+extern "x86-interrupt" fn kernel_divide_error_handler(frame: InterruptStackFrame) {
+    let _guard = SwapGsGuard::new(&frame);
+
+    panic!("divide error {frame:x?}");
 }
 
 #[naked]

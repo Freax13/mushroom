@@ -1,6 +1,6 @@
 use core::{
     ffi::{c_void, CStr},
-    ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
+    ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -18,7 +18,7 @@ use alloc::{
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
-use usize_conversions::usize_from;
+use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -33,7 +33,7 @@ use crate::{
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
-        args::{FileMode, OpenFlags, Pointer, RLimit, Resource, UserDesc},
+        args::{FileMode, OpenFlags, Pointer, RLimit, Resource, Signal, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
@@ -92,8 +92,9 @@ pub struct Thread {
 pub struct ThreadState {
     virtual_memory: Arc<VirtualMemory>,
 
+    pub signal_handler_table: Arc<SignalHandlerTable>,
     pub sigmask: Sigset,
-    pub sigaction: [Sigaction; 64],
+    pub pending_signals: Sigset,
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
@@ -113,6 +114,7 @@ impl Thread {
         self_weak: WeakThread,
         parent: WeakThread,
         process: Arc<Process>,
+        signal_handler_table: Arc<SignalHandlerTable>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
         cwd: DynINode,
@@ -129,8 +131,9 @@ impl Thread {
             exit_status: OnceCell::new(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
+                signal_handler_table,
                 sigmask: Sigset(0),
-                sigaction: [Sigaction::DEFAULT; 64],
+                pending_signals: Sigset(0),
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 notified_parent_about_exit: false,
@@ -177,6 +180,7 @@ impl Thread {
             self_weak,
             Weak::new(),
             Arc::new(Process::new(tid)),
+            Arc::new(SignalHandlerTable::new()),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::with_standard_io()),
             ROOT_NODE.clone(),
@@ -206,6 +210,8 @@ impl Thread {
         let process_exit_future = self.process.exit_status();
         let run_future = async {
             loop {
+                self.try_deliver_signal().await.unwrap();
+
                 let clone = self.clone();
                 let exit = VirtualMemoryActivator::r#do(move |vm_activator| {
                     clone.run_userspace(vm_activator).unwrap()
@@ -213,8 +219,13 @@ impl Thread {
                 .await;
 
                 match exit {
+                    Exit::DivideError => {
+                        assert!(self.queue_signal(Signal::FPE));
+                    }
                     Exit::Syscall(args) => self.clone().execute_syscall(args).await,
-                    Exit::GeneralProtectionFault => self.clone().deliver_signal(11).await.unwrap(),
+                    Exit::GeneralProtectionFault => {
+                        assert!(self.queue_signal(Signal::SEGV));
+                    }
                     Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                 }
             }
@@ -268,32 +279,60 @@ impl Thread {
             .await;
 
         if !handled {
-            self.clone().deliver_signal(11).await.unwrap();
+            assert!(self.queue_signal(Signal::SEGV));
         }
     }
 
-    async fn deliver_signal(self: Arc<Self>, signum: u64) -> Result<()> {
-        let mut state = self.state.lock();
+    /// Returns true if the signal was not already queued.
+    pub fn queue_signal(&self, signum: Signal) -> bool {
+        let mut guard = self.lock();
+        let new_sigset = Sigset(1 << signum.get());
+        if guard.pending_signals & new_sigset != Sigset(0) {
+            return false;
+        }
+        guard.pending_signals |= new_sigset;
+        true
+    }
+
+    async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
+        let mut state = self.lock();
+        let Some(signal) = state.pop_signal() else {
+            return Ok(());
+        };
+
         let virtual_memory = state.virtual_memory.clone();
-        let sigaction = state.sigaction[usize_from(signum)];
+        let sigaction = state.signal_handler_table.get(signal);
+        let thread_sigmask = state.sigmask;
+        state.sigmask |= sigaction.sa_mask;
+        if !sigaction.sa_flags.contains(SigactionFlags::NODEFER) {
+            state.sigmask |= Sigset(1 << signal.get());
+        }
         let sigaltstack = state.sigaltstack;
         if sigaltstack.flags.contains(StackFlags::AUTODISARM)
-            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+            && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
         {
             state.sigaltstack.flags |= StackFlags::DISABLE;
         }
         drop(state);
 
         let sig_info = SigInfo {
-            si_signo: signum as i32,
+            si_signo: signal.get() as i32,
             si_errno: 0,
             si_code: 0,
             __pad: [0; 29],
         };
 
+        let this = self.clone();
         VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
-            let mut cpu_state = self.cpu_state.lock();
-            cpu_state.start_signal_handler(signum, sig_info, sigaction, sigaltstack, vm)
+            let mut cpu_state = this.cpu_state.lock();
+            cpu_state.start_signal_handler(
+                u64::from_usize(signal.get()),
+                sig_info,
+                sigaction,
+                sigaltstack,
+                thread_sigmask,
+                vm,
+            )
         })
         .await
     }
@@ -312,6 +351,7 @@ impl ThreadGuard<'_> {
         self_weak: WeakThread,
         new_process: Option<Arc<Process>>,
         new_virtual_memory: Option<Arc<VirtualMemory>>,
+        new_signal_handler_table: Option<Arc<SignalHandlerTable>>,
         fdtable: Arc<FileDescriptorTable>,
         stack: VirtAddr,
         new_clear_child_tid: Option<Pointer<u32>>,
@@ -320,6 +360,8 @@ impl ThreadGuard<'_> {
     ) -> Thread {
         let process = new_process.unwrap_or_else(|| self.process().clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory().clone());
+        let signal_handler_table =
+            new_signal_handler_table.unwrap_or_else(|| self.signal_handler_table.clone());
         let cpu_state = self.thread.cpu_state.lock().clone();
 
         let thread = Thread::new(
@@ -327,6 +369,7 @@ impl ThreadGuard<'_> {
             self_weak,
             self.weak().clone(),
             process,
+            signal_handler_table,
             virtual_memory,
             fdtable,
             self.cwd.clone(),
@@ -451,6 +494,17 @@ impl ThreadGuard<'_> {
             }
         }
     }
+
+    fn pop_signal(&mut self) -> Option<Signal> {
+        let signals = !self.sigmask & self.pending_signals;
+        if signals.0 == 0 {
+            return None;
+        }
+
+        let signal = signals.0.trailing_zeros() as u8;
+        self.pending_signals &= Sigset(!(1 << signal));
+        Some(Signal::new(signal).unwrap())
+    }
 }
 
 impl Deref for ThreadGuard<'_> {
@@ -484,7 +538,7 @@ impl Sigaction {
     };
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct Sigset(pub u64);
 
@@ -494,9 +548,17 @@ impl BitOrAssign for Sigset {
     }
 }
 
+impl BitAnd for Sigset {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
 impl BitAndAssign for Sigset {
     fn bitand_assign(&mut self, rhs: Self) {
-        self.0 &= rhs.0;
+        *self = *self & rhs;
     }
 }
 
@@ -511,7 +573,8 @@ impl Not for Sigset {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct SigactionFlags: u32 {
-        const SA_ONSTACK = 0x08000000;
+        const ONSTACK = 0x08000000;
+        const NODEFER = 0x40000000;
     }
 }
 
@@ -594,4 +657,25 @@ pub struct SigContext {
     pub oldmask: u64,
     pub cr2: u64,
     pub fpstate: Pointer<c_void>,
+}
+
+#[derive(Clone)]
+pub struct SignalHandlerTable {
+    sigactions: Mutex<[Sigaction; 64]>,
+}
+
+impl SignalHandlerTable {
+    pub fn new() -> Self {
+        Self {
+            sigactions: Mutex::new([Sigaction::DEFAULT; 64]),
+        }
+    }
+
+    pub fn get(&self, signal: Signal) -> Sigaction {
+        self.sigactions.lock()[signal.get()]
+    }
+
+    pub fn set(&self, signal: Signal, sigaction: Sigaction) -> Sigaction {
+        core::mem::replace(&mut self.sigactions.lock()[signal.get()], sigaction)
+    }
 }
