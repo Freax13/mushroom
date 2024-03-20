@@ -22,10 +22,12 @@ use crate::{
         path::Path,
     },
     rt::oneshot,
-    time::{self, now},
+    time::{self, now, sleep_until},
     user::process::{
         memory::MemoryPermissions,
-        syscall::args::{LongOffset, Pollfd, Resource, SpliceFlags, Timeval, UserDesc},
+        syscall::args::{
+            ClockNanosleepFlags, LongOffset, Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
+        },
         thread::SignalHandlerTable,
     },
 };
@@ -106,6 +108,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
+    handlers.register(SysNanosleep);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
@@ -149,6 +152,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetdents64);
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockGettime);
+    handlers.register(SysClockNanosleep);
     handlers.register(SysOpenat);
     handlers.register(SysMkdirat);
     handlers.register(SysExitGroup);
@@ -856,6 +860,24 @@ fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) 
     }
 
     Ok(newfd.get() as u64)
+}
+
+#[syscall(i386 = 162, amd64 = 35)]
+async fn nanosleep(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    rqtp: Pointer<Timespec>,
+    rmtp: Pointer<Timespec>,
+) -> SyscallResult {
+    let rqtp = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+        vm.read_with_abi(rqtp, abi)
+    })
+    .await?;
+
+    let now = time::now();
+    let deadline = now + rqtp;
+    sleep_until(deadline).await;
+    Ok(0)
 }
 
 #[syscall(i386 = 20, amd64 = 39)]
@@ -1932,6 +1954,33 @@ fn clock_gettime(
     };
 
     vm_activator.activate(&virtual_memory, |vm| vm.write_with_abi(tp, time, abi))?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 407, amd64 = 230)]
+async fn clock_nanosleep(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    flags: ClockNanosleepFlags,
+    request: Pointer<Timespec>,
+    remain: Pointer<Timespec>,
+) -> SyscallResult {
+    let request = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+        vm.read_with_abi(request, abi)
+    })
+    .await?;
+
+    let (ClockId::Realtime | ClockId::Monotonic) = clock_id;
+
+    let deadline = if flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
+        request
+    } else {
+        time::now() + request
+    };
+
+    sleep_until(deadline).await;
 
     Ok(0)
 }

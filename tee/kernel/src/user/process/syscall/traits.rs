@@ -73,7 +73,7 @@ pub trait Syscall {
     ) -> fmt::Result;
 }
 
-const MAX_SYSCALL_I386_HANDLER: usize = 385;
+const MAX_SYSCALL_I386_HANDLER: usize = 408;
 const MAX_SYSCALL_AMD64_HANDLER: usize = 327;
 
 #[derive(Clone, Copy)]
