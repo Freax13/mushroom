@@ -1,6 +1,6 @@
 use core::{
     ffi::{c_void, CStr},
-    ops::{BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
+    ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -498,7 +498,7 @@ impl Sigaction {
     };
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct Sigset(pub u64);
 
@@ -508,9 +508,17 @@ impl BitOrAssign for Sigset {
     }
 }
 
+impl BitAnd for Sigset {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
 impl BitAndAssign for Sigset {
     fn bitand_assign(&mut self, rhs: Self) {
-        self.0 &= rhs.0;
+        *self = *self & rhs;
     }
 }
 
