@@ -26,6 +26,7 @@ use crate::{
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{LongOffset, Pollfd, Resource, SpliceFlags, Timeval, UserDesc},
+        thread::SignalHandlerTable,
     },
 };
 
@@ -35,7 +36,7 @@ use self::{
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
         FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions,
         MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags,
-        RLimit, RLimit64, RtSigprocmaskHow, SocketPairType, Stat, Stat64, SyscallArg, Time,
+        RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time,
         Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
@@ -555,24 +556,27 @@ fn rt_sigaction(
     oldact: Pointer<Sigaction>,
     sigsetsize: u64,
 ) -> SyscallResult {
-    let signum = usize_from(signum);
+    let signum = u8::try_from(signum)?;
+    let signum = Signal::new(signum)?;
 
     // FIXME: SIGKILL and SIGSTOP are special
     // FIXME: sigsetsize
 
+    let signal_handler_table = &thread.signal_handler_table;
+
+    let mut old_sigaction = None;
+    if !act.is_null() {
+        let sigaction_in =
+            vm_activator.activate(&virtual_memory, |vm| vm.read_with_abi(act, abi))?;
+        old_sigaction = Some(signal_handler_table.set(signum, sigaction_in));
+    }
+
     if !oldact.is_null() {
-        let sigaction = thread.sigaction.get(signum).ok_or(Error::inval(()))?;
+        let sigaction = old_sigaction.unwrap_or_else(|| thread.signal_handler_table.get(signum));
         vm_activator.activate(&virtual_memory, |vm| {
             vm.write_with_abi(oldact, sigaction, abi)
         })?;
     }
-    if !act.is_null() {
-        let sigaction = thread.sigaction.get_mut(signum).ok_or(Error::inval(()))?;
-        let sigaction_in =
-            vm_activator.activate(&virtual_memory, |vm| vm.read_with_abi(act, abi))?;
-        *sigaction = sigaction_in;
-    }
-
     Ok(0)
 }
 
@@ -1002,6 +1006,12 @@ async fn clone(
             Some(Arc::new((**thread.virtual_memory()).clone(vm_activator)?))
         };
 
+        let new_signal_handler_table = if flags.contains(CloneFlags::SIGHAND) {
+            None
+        } else {
+            Some(Arc::new((*thread.signal_handler_table).clone()))
+        };
+
         let new_fdtable = if flags.contains(CloneFlags::FILES) {
             // Reuse the same files.
             fdtable
@@ -1042,6 +1052,7 @@ async fn clone(
                 weak_thread,
                 new_process,
                 new_virtual_memory,
+                new_signal_handler_table,
                 new_fdtable,
                 stack.get(),
                 new_clear_child_tid,
@@ -1087,6 +1098,7 @@ fn fork(
         let new_process = Some(Arc::new(Process::new(new_tid)));
         let virtual_memory = (*virtual_memory).clone(vm_activator)?;
         let new_virtual_memory = Some(Arc::new(virtual_memory));
+        let new_signal_handler_table = Some(Arc::new((*thread.signal_handler_table).clone()));
         let new_fdtable = Arc::new((*fdtable).clone());
 
         Result::Ok(thread.clone(
@@ -1094,6 +1106,7 @@ fn fork(
             self_weak,
             new_process,
             new_virtual_memory,
+            new_signal_handler_table,
             new_fdtable,
             VirtAddr::zero(),
             None,
@@ -1115,6 +1128,7 @@ async fn vfork(thread: Arc<Thread>, #[state] fdtable: Arc<FileDescriptorTable>) 
     let tid = Thread::spawn(|self_weak| {
         let new_tid = new_tid();
         let new_process = Some(Arc::new(Process::new(new_tid)));
+        let new_signal_handler_table = Some(Arc::new((*guard.signal_handler_table).clone()));
         let new_fdtable = Arc::new((*fdtable).clone());
 
         Result::Ok(guard.clone(
@@ -1122,6 +1136,7 @@ async fn vfork(thread: Arc<Thread>, #[state] fdtable: Arc<FileDescriptorTable>) 
             self_weak,
             new_process,
             None,
+            new_signal_handler_table,
             new_fdtable,
             VirtAddr::zero(),
             None,
@@ -1184,6 +1199,7 @@ fn execve(
     thread.execve(&pathname, &args, &envs, &mut ctx, vm_activator)?;
 
     fdtable.close_after_exec();
+    thread.signal_handler_table = Arc::new(SignalHandlerTable::new());
 
     if let Some(vfork_parent) = thread.vfork_done.take() {
         let _ = vfork_parent.send(());

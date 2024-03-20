@@ -18,7 +18,7 @@ use alloc::{
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
-use usize_conversions::usize_from;
+use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -33,7 +33,7 @@ use crate::{
 use super::{
     memory::{VirtualMemory, VirtualMemoryActivator},
     syscall::{
-        args::{FileMode, OpenFlags, Pointer, RLimit, Resource, UserDesc},
+        args::{FileMode, OpenFlags, Pointer, RLimit, Resource, Signal, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
@@ -92,8 +92,8 @@ pub struct Thread {
 pub struct ThreadState {
     virtual_memory: Arc<VirtualMemory>,
 
+    pub signal_handler_table: Arc<SignalHandlerTable>,
     pub sigmask: Sigset,
-    pub sigaction: [Sigaction; 64],
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
@@ -113,6 +113,7 @@ impl Thread {
         self_weak: WeakThread,
         parent: WeakThread,
         process: Arc<Process>,
+        signal_handler_table: Arc<SignalHandlerTable>,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
         cwd: DynINode,
@@ -129,8 +130,8 @@ impl Thread {
             exit_status: OnceCell::new(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
+                signal_handler_table,
                 sigmask: Sigset(0),
-                sigaction: [Sigaction::DEFAULT; 64],
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 notified_parent_about_exit: false,
@@ -177,6 +178,7 @@ impl Thread {
             self_weak,
             Weak::new(),
             Arc::new(Process::new(tid)),
+            Arc::new(SignalHandlerTable::new()),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::with_standard_io()),
             ROOT_NODE.clone(),
@@ -214,7 +216,9 @@ impl Thread {
 
                 match exit {
                     Exit::Syscall(args) => self.clone().execute_syscall(args).await,
-                    Exit::GeneralProtectionFault => self.clone().deliver_signal(11).await.unwrap(),
+                    Exit::GeneralProtectionFault => {
+                        self.clone().deliver_signal(Signal::SEGV).await.unwrap()
+                    }
                     Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                 }
             }
@@ -268,14 +272,14 @@ impl Thread {
             .await;
 
         if !handled {
-            self.clone().deliver_signal(11).await.unwrap();
+            self.clone().deliver_signal(Signal::SEGV).await.unwrap();
         }
     }
 
-    async fn deliver_signal(self: Arc<Self>, signum: u64) -> Result<()> {
+    async fn deliver_signal(self: Arc<Self>, signal: Signal) -> Result<()> {
         let mut state = self.state.lock();
         let virtual_memory = state.virtual_memory.clone();
-        let sigaction = state.sigaction[usize_from(signum)];
+        let sigaction = state.signal_handler_table.get(signal);
         let sigaltstack = state.sigaltstack;
         if sigaltstack.flags.contains(StackFlags::AUTODISARM)
             && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
@@ -285,7 +289,7 @@ impl Thread {
         drop(state);
 
         let sig_info = SigInfo {
-            si_signo: signum as i32,
+            si_signo: signal.get() as i32,
             si_errno: 0,
             si_code: 0,
             __pad: [0; 29],
@@ -293,7 +297,13 @@ impl Thread {
 
         VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
             let mut cpu_state = self.cpu_state.lock();
-            cpu_state.start_signal_handler(signum, sig_info, sigaction, sigaltstack, vm)
+            cpu_state.start_signal_handler(
+                u64::from_usize(signal.get()),
+                sig_info,
+                sigaction,
+                sigaltstack,
+                vm,
+            )
         })
         .await
     }
@@ -312,6 +322,7 @@ impl ThreadGuard<'_> {
         self_weak: WeakThread,
         new_process: Option<Arc<Process>>,
         new_virtual_memory: Option<Arc<VirtualMemory>>,
+        new_signal_handler_table: Option<Arc<SignalHandlerTable>>,
         fdtable: Arc<FileDescriptorTable>,
         stack: VirtAddr,
         new_clear_child_tid: Option<Pointer<u32>>,
@@ -320,6 +331,8 @@ impl ThreadGuard<'_> {
     ) -> Thread {
         let process = new_process.unwrap_or_else(|| self.process().clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory().clone());
+        let signal_handler_table =
+            new_signal_handler_table.unwrap_or_else(|| self.signal_handler_table.clone());
         let cpu_state = self.thread.cpu_state.lock().clone();
 
         let thread = Thread::new(
@@ -327,6 +340,7 @@ impl ThreadGuard<'_> {
             self_weak,
             self.weak().clone(),
             process,
+            signal_handler_table,
             virtual_memory,
             fdtable,
             self.cwd.clone(),
@@ -594,4 +608,25 @@ pub struct SigContext {
     pub oldmask: u64,
     pub cr2: u64,
     pub fpstate: Pointer<c_void>,
+}
+
+#[derive(Clone)]
+pub struct SignalHandlerTable {
+    sigactions: Mutex<[Sigaction; 64]>,
+}
+
+impl SignalHandlerTable {
+    pub fn new() -> Self {
+        Self {
+            sigactions: Mutex::new([Sigaction::DEFAULT; 64]),
+        }
+    }
+
+    pub fn get(&self, signal: Signal) -> Sigaction {
+        self.sigactions.lock()[signal.get()]
+    }
+
+    pub fn set(&self, signal: Signal, sigaction: Sigaction) -> Sigaction {
+        core::mem::replace(&mut self.sigactions.lock()[signal.get()], sigaction)
+    }
 }
