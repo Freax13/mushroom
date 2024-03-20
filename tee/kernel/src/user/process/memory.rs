@@ -283,6 +283,14 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
         let mut guard = user_page.lock();
 
+        // Check whether the page should be mapped at all.
+        if !guard
+            .perms()
+            .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
+        {
+            return Err(Error::fault(()));
+        }
+
         if required_flags.contains(PageTableFlags::WRITABLE)
             && guard.perms().contains(MemoryPermissions::WRITE)
         {
@@ -451,10 +459,18 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
             let mut guard = user_page.lock();
             guard.set_perms(MemoryPermissions::from(prot));
-            let entry = guard.entry();
 
-            unsafe {
-                try_set_page(page, entry);
+            if guard
+                .perms()
+                .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
+            {
+                let entry = guard.entry();
+
+                unsafe {
+                    try_set_page(page, entry);
+                }
+            } else {
+                try_unmap_user_page(page);
             }
 
             drop(guard);
