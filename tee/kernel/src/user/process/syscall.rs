@@ -529,7 +529,7 @@ fn munmap(
     length: u64,
 ) -> SyscallResult {
     let addr = addr.get();
-    if !addr.is_aligned(0x1000u64) || length % 0x1000 != 0 {
+    if !addr.is_aligned(0x1000u64) {
         return Err(Error::inval(()));
     }
     vm_activator.activate(&virtual_memory, |a| a.modify().unmap(addr, length));
