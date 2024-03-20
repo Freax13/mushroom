@@ -654,7 +654,7 @@ fn rt_sigreturn(
 ) -> SyscallResult {
     vm_activator.activate(&virtual_memory, |vm| {
         let mut cpu_state = thread.thread.cpu_state.lock();
-        thread.sigaltstack = cpu_state.finish_signal_handler(vm, abi)?;
+        (thread.sigaltstack, thread.sigmask) = cpu_state.finish_signal_handler(vm, abi)?;
         Ok(0)
     })
 }

@@ -561,6 +561,7 @@ impl CpuState {
         sig_info: SigInfo,
         sigaction: Sigaction,
         stack: Stack,
+        sigmask: Sigset,
         vm: &mut ActiveVirtualMemory,
     ) -> Result<()> {
         let abi = self.abi_from_cs();
@@ -568,7 +569,7 @@ impl CpuState {
         let ucontext = UContext {
             stack,
             mcontext,
-            sigmask: Sigset(0),
+            sigmask,
         };
         let restorer = if sigaction.sa_restorer != 0 {
             sigaction.sa_restorer
@@ -629,12 +630,12 @@ impl CpuState {
         &mut self,
         vm: &mut ActiveVirtualMemory,
         abi: Abi,
-    ) -> Result<Stack> {
+    ) -> Result<(Stack, Sigset)> {
         let ucontext_ptr_ptr = Pointer::<Pointer<UContext>>::new(self.registers.rsp + 8);
         let ucontext_ptr = vm.read_with_abi(ucontext_ptr_ptr, abi)?;
         let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
         self.load_sig_context(&ucontext.mcontext);
-        Ok(ucontext.stack)
+        Ok((ucontext.stack, ucontext.sigmask))
     }
 }
 

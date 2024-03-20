@@ -299,6 +299,7 @@ impl Thread {
 
         let virtual_memory = state.virtual_memory.clone();
         let sigaction = state.signal_handler_table.get(signal);
+        let thread_sigmask = state.sigmask;
         state.sigmask |= sigaction.sa_mask;
         let sigaltstack = state.sigaltstack;
         if sigaltstack.flags.contains(StackFlags::AUTODISARM)
@@ -323,6 +324,7 @@ impl Thread {
                 sig_info,
                 sigaction,
                 sigaltstack,
+                thread_sigmask,
                 vm,
             )
         })
