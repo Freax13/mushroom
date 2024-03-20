@@ -71,6 +71,7 @@ errors! {
     Mfile mfile 24,
     NoTty no_tty 25,
     SPipe s_pipe 29,
+    Pipe pipe 32,
     Range range 34,
     NoSys no_sys 38,
     NotEmpty not_empty 39,

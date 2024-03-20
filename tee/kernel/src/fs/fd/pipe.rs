@@ -18,13 +18,15 @@ use crate::{
     user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
 
+const CAPACITY: usize = 0x10000;
+
 struct State {
     buffer: Mutex<VecDeque<u8>>,
 }
 
 pub struct ReadHalf {
-    notify: Arc<Notify>,
     state: Arc<State>,
+    notify: NotifyOnDrop,
     flags: Mutex<OpenFlags>,
 }
 
@@ -51,10 +53,17 @@ impl OpenFileDescription for ReadHalf {
             return Err(Error::again(()));
         }
 
+        let was_full = guard.len() == CAPACITY;
+
         let mut read = 0;
         for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.pop_front())) {
             *dest = src;
             read += 1;
+        }
+
+        let is_full = guard.len() == CAPACITY;
+        if was_full && !is_full {
+            self.notify.notify();
         }
 
         Ok(read)
@@ -78,6 +87,8 @@ impl OpenFileDescription for ReadHalf {
             return Err(Error::again(()));
         }
 
+        let was_full = guard.len() == CAPACITY;
+
         let len = cmp::min(len, guard.len());
         let (slice1, slice2) = guard.as_slices();
         let len1 = cmp::min(len, slice1.len());
@@ -93,6 +104,11 @@ impl OpenFileDescription for ReadHalf {
 
         // Remove the bytes from the VecDeque.
         guard.drain(..len);
+
+        let is_full = guard.len() == CAPACITY;
+        if was_full && !is_full {
+            self.notify.notify();
+        }
 
         Ok(len)
     }
@@ -153,6 +169,7 @@ pub struct WriteHalf {
     flags: Mutex<OpenFlags>,
 }
 
+#[async_trait::async_trait]
 impl OpenFileDescription for WriteHalf {
     fn flags(&self) -> OpenFlags {
         *self.flags.lock()
@@ -163,7 +180,24 @@ impl OpenFileDescription for WriteHalf {
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
+        // Check if the write half has been closed.
+        if Arc::strong_count(&self.state) == 1 {
+            return Err(Error::pipe(()));
+        }
+
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
         let mut guard = self.state.buffer.lock();
+
+        let max_remaining_capacity = CAPACITY - guard.len();
+        if max_remaining_capacity == 0 {
+            return Err(Error::again(()));
+        }
+        let len = cmp::min(buf.len(), max_remaining_capacity);
+        let buf = &buf[..len];
+
         guard.extend(buf.iter().copied());
         drop(guard);
 
@@ -178,7 +212,22 @@ impl OpenFileDescription for WriteHalf {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
+        // Check if the write half has been closed.
+        if Arc::strong_count(&self.state) == 1 {
+            return Err(Error::pipe(()));
+        }
+
+        if len == 0 {
+            return Ok(0);
+        }
+
         let mut guard = self.state.buffer.lock();
+
+        let max_remaining_capacity = CAPACITY - guard.len();
+        if max_remaining_capacity == 0 {
+            return Err(Error::again(()));
+        }
+        let len = cmp::min(len, max_remaining_capacity);
 
         let start_idx = guard.len();
         // Reserve some space for the new bytes.
@@ -233,7 +282,34 @@ impl OpenFileDescription for WriteHalf {
     }
 
     fn poll_ready(&self, events: Events) -> Events {
-        events & Events::WRITE
+        let mut ready_events = Events::empty();
+
+        let guard = self.state.buffer.lock();
+        ready_events.set(
+            Events::WRITE,
+            guard.len() < CAPACITY || Arc::strong_count(&self.state) == 1,
+        );
+        drop(guard);
+
+        ready_events &= events;
+        ready_events
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Events> {
+        Ok(self.poll_ready(events))
+    }
+
+    async fn ready(&self, events: Events) -> Result<Events> {
+        loop {
+            let wait = self.notify.wait();
+
+            let events = self.epoll_ready(events)?;
+            if !events.is_empty() {
+                return Ok(events);
+            }
+
+            wait.await;
+        }
     }
 }
 
@@ -247,7 +323,7 @@ pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
     (
         ReadHalf {
             state: state.clone(),
-            notify: notify.clone(),
+            notify: NotifyOnDrop(notify.clone()),
             flags: Mutex::new(flags),
         },
         WriteHalf {
