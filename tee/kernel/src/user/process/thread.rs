@@ -94,6 +94,7 @@ pub struct ThreadState {
 
     pub signal_handler_table: Arc<SignalHandlerTable>,
     pub sigmask: Sigset,
+    pub pending_signals: Sigset,
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub notified_parent_about_exit: bool,
@@ -132,6 +133,7 @@ impl Thread {
                 virtual_memory,
                 signal_handler_table,
                 sigmask: Sigset(0),
+                pending_signals: Sigset(0),
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 notified_parent_about_exit: false,
@@ -208,6 +210,8 @@ impl Thread {
         let process_exit_future = self.process.exit_status();
         let run_future = async {
             loop {
+                self.try_deliver_signal().await.unwrap();
+
                 let clone = self.clone();
                 let exit = VirtualMemoryActivator::r#do(move |vm_activator| {
                     clone.run_userspace(vm_activator).unwrap()
@@ -217,7 +221,7 @@ impl Thread {
                 match exit {
                     Exit::Syscall(args) => self.clone().execute_syscall(args).await,
                     Exit::GeneralProtectionFault => {
-                        self.clone().deliver_signal(Signal::SEGV).await.unwrap()
+                        assert!(self.queue_signal(Signal::SEGV));
                     }
                     Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                 }
@@ -272,14 +276,30 @@ impl Thread {
             .await;
 
         if !handled {
-            self.clone().deliver_signal(Signal::SEGV).await.unwrap();
+            assert!(self.queue_signal(Signal::SEGV));
         }
     }
 
-    async fn deliver_signal(self: Arc<Self>, signal: Signal) -> Result<()> {
-        let mut state = self.state.lock();
+    /// Returns true if the signal was not already queued.
+    pub fn queue_signal(&self, signum: Signal) -> bool {
+        let mut guard = self.lock();
+        let new_sigset = Sigset(1 << signum.get());
+        if guard.pending_signals & new_sigset != Sigset(0) {
+            return false;
+        }
+        guard.pending_signals |= new_sigset;
+        true
+    }
+
+    async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
+        let mut state = self.lock();
+        let Some(signal) = state.pop_signal() else {
+            return Ok(());
+        };
+
         let virtual_memory = state.virtual_memory.clone();
         let sigaction = state.signal_handler_table.get(signal);
+        state.sigmask |= sigaction.sa_mask;
         let sigaltstack = state.sigaltstack;
         if sigaltstack.flags.contains(StackFlags::AUTODISARM)
             && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
@@ -295,8 +315,9 @@ impl Thread {
             __pad: [0; 29],
         };
 
+        let this = self.clone();
         VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
-            let mut cpu_state = self.cpu_state.lock();
+            let mut cpu_state = this.cpu_state.lock();
             cpu_state.start_signal_handler(
                 u64::from_usize(signal.get()),
                 sig_info,
@@ -464,6 +485,17 @@ impl ThreadGuard<'_> {
                 }
             }
         }
+    }
+
+    fn pop_signal(&mut self) -> Option<Signal> {
+        let signals = !self.sigmask & self.pending_signals;
+        if signals.0 == 0 {
+            return None;
+        }
+
+        let signal = signals.0.trailing_zeros() as u8;
+        self.pending_signals &= Sigset(!(1 << signal));
+        Some(Signal::new(signal).unwrap())
     }
 }
 
