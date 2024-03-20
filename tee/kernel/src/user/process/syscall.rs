@@ -108,6 +108,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
+    handlers.register(SysNanosleep);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
@@ -859,6 +860,24 @@ fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) 
     }
 
     Ok(newfd.get() as u64)
+}
+
+#[syscall(i386 = 162, amd64 = 35)]
+async fn nanosleep(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    rqtp: Pointer<Timespec>,
+    rmtp: Pointer<Timespec>,
+) -> SyscallResult {
+    let rqtp = VirtualMemoryActivator::use_from_async(virtual_memory, move |vm| {
+        vm.read_with_abi(rqtp, abi)
+    })
+    .await?;
+
+    let now = time::now();
+    let deadline = now + rqtp;
+    sleep_until(deadline).await;
+    Ok(0)
 }
 
 #[syscall(i386 = 20, amd64 = 39)]
