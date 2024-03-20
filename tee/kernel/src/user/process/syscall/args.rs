@@ -1126,3 +1126,7 @@ impl Signal {
         usize::from(self.0)
     }
 }
+
+pub struct FdSet {}
+
+impl Pointee for FdSet {}

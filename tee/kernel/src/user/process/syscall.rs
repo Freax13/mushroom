@@ -1,7 +1,9 @@
-use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32};
+use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32, pin::pin};
 
-use alloc::{ffi::CString, sync::Arc, vec::Vec};
+use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
+use bit_field::BitArray;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
+use futures::{future::select, stream::FuturesUnordered, StreamExt};
 use kernel_macros::syscall;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
@@ -26,8 +28,8 @@ use crate::{
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{
-            ClockNanosleepFlags, Dup3Flags, LongOffset, Pollfd, Resource, SpliceFlags, Timeval,
-            UserDesc,
+            ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, Pollfd, Resource, SpliceFlags,
+            Timeval, UserDesc,
         },
         thread::SignalHandlerTable,
     },
@@ -168,6 +170,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSymlinkat);
     handlers.register(SysFchmodat);
     handlers.register(SysFaccessat);
+    handlers.register(SysPselect6);
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEventfd);
@@ -2443,6 +2446,135 @@ fn faccessat(
     }
 
     Ok(0)
+}
+
+#[syscall(i386 = 308, amd64 = 270)]
+async fn pselect6(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    numfds: i64,
+    readfds: Pointer<FdSet>,
+    writefds: Pointer<FdSet>,
+    exceptfds: Pointer<FdSet>,
+    timeout: Pointer<Timespec>,
+    sigmask: Pointer<Sigset>,
+) -> SyscallResult {
+    // TODO: Implement the signal mask related features.
+
+    let numfds = usize::try_from(numfds)?;
+
+    let (req_readfds, req_writefds, req_exceptfds, timeout) =
+        VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| -> Result<_> {
+            let req_readfds = if !readfds.is_null() {
+                let mut req_readfds = vec![0; numfds.div_ceil(8)];
+                vm.read_bytes(readfds.get(), &mut req_readfds)?;
+                Some(req_readfds)
+            } else {
+                None
+            };
+            let req_writefds = if !writefds.is_null() {
+                let mut req_writefds = vec![0; numfds.div_ceil(8)];
+                vm.read_bytes(writefds.get(), &mut req_writefds)?;
+                Some(req_writefds)
+            } else {
+                None
+            };
+            let req_exceptfds = if !exceptfds.is_null() {
+                let mut req_exceptfds = vec![0; numfds.div_ceil(8)];
+                vm.read_bytes(exceptfds.get(), &mut req_exceptfds)?;
+                Some(req_exceptfds)
+            } else {
+                None
+            };
+            let timeout = if !timeout.is_null() {
+                Some(vm.read_with_abi(timeout, abi)?)
+            } else {
+                None
+            };
+            Ok((req_readfds, req_writefds, req_exceptfds, timeout))
+        })
+        .await?;
+
+    let mut result_readfds = req_readfds
+        .as_ref()
+        .map(|req_readfds| vec![0; req_readfds.len()]);
+    let mut result_writefds = req_writefds
+        .as_ref()
+        .map(|req_writefds| vec![0; req_writefds.len()]);
+    let result_exceptfds = req_exceptfds
+        .as_ref()
+        .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
+
+    let deadline = timeout.map(|timeout| now() + timeout);
+    let mut futures = FuturesUnordered::new();
+
+    let set = loop {
+        futures.clear();
+
+        let mut set = 0;
+
+        for i in 0..numfds {
+            let read = req_readfds
+                .as_ref()
+                .map_or(false, |readfds| readfds.get_bit(i));
+            let write = req_writefds
+                .as_ref()
+                .map_or(false, |writefds| writefds.get_bit(i));
+            let except = req_exceptfds
+                .as_ref()
+                .map_or(false, |exceptfds| exceptfds.get_bit(i));
+
+            if !read && !write && !except {
+                continue;
+            }
+
+            let mut events = Events::empty();
+            events.set(Events::READ, read);
+            events.set(Events::WRITE, write);
+
+            let fd = fdtable.get(FdNum::new(i as i32))?;
+            let ready_events = fd.poll_ready(events);
+
+            if ready_events.contains(Events::READ) {
+                result_readfds.as_mut().unwrap().set_bit(i, true);
+                set += 1;
+            }
+            if ready_events.contains(Events::WRITE) {
+                result_writefds.as_mut().unwrap().set_bit(i, true);
+                set += 1;
+            }
+
+            futures.push(async move { fd.ready(events).await });
+        }
+
+        if set != 0 {
+            break set;
+        }
+
+        if let Some(deadline) = deadline {
+            let sleep_until = pin!(sleep_until(deadline));
+            select(sleep_until, futures.next()).await;
+        } else {
+            futures.next().await;
+        }
+    };
+
+    VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| -> Result<_> {
+        if let Some(result_readfds) = result_readfds {
+            vm.write_bytes(readfds.get(), &result_readfds)?;
+        }
+        if let Some(result_writefds) = result_writefds {
+            vm.write_bytes(writefds.get(), &result_writefds)?;
+        }
+        if let Some(result_exceptfds) = result_exceptfds {
+            vm.write_bytes(exceptfds.get(), &result_exceptfds)?;
+        }
+        Ok(())
+    })
+    .await?;
+
+    Ok(set)
 }
 
 #[syscall(i386 = 313, amd64 = 275)]
