@@ -7,7 +7,7 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{Error, ErrorKind, Result},
     fs::{
         fd::{
             do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
@@ -199,6 +199,7 @@ async fn read(
 
 #[syscall(i386 = 4, amd64 = 1)]
 async fn write(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -209,11 +210,16 @@ async fn write(
 
     let count = usize_from(count);
 
-    let len = do_io_with_vm(&*fd.clone(), Events::WRITE, virtual_memory, move |vm| {
+    let res = do_io_with_vm(&*fd.clone(), Events::WRITE, virtual_memory, move |vm| {
         fd.write_from_user(vm, buf, count)
     })
-    .await?;
+    .await;
 
+    if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
+        thread.queue_signal(Signal::PIPE);
+    }
+
+    let len = res?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -757,6 +763,7 @@ async fn readv(
 
 #[syscall(i386 = 146, amd64 = 20)]
 async fn writev(
+    thread: Arc<Thread>,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -784,7 +791,7 @@ async fn writev(
         .await?;
 
     let addr = Pointer::parse(iovec.base, abi)?;
-    write(virtual_memory, fdtable, fd, addr, iovec.len).await
+    write(thread, virtual_memory, fdtable, fd, addr, iovec.len).await
 }
 
 #[syscall(i386 = 33, amd64 = 21)]

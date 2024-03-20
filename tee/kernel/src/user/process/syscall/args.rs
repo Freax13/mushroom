@@ -1078,6 +1078,7 @@ pub struct Signal(u8);
 impl Signal {
     pub const FPE: Self = Self(8);
     pub const SEGV: Self = Self(11);
+    pub const PIPE: Self = Self(13);
 
     pub fn new(value: u8) -> Result<Self> {
         if value >= 64 {
