@@ -1,6 +1,7 @@
 use core::{
     fmt::{self, Display},
     marker::PhantomData,
+    ops::Add,
 };
 
 use alloc::sync::Arc;
@@ -853,6 +854,20 @@ impl Timespec {
     pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
 }
 
+impl Add for Timespec {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut tv_sec = self.tv_sec + rhs.tv_sec;
+        let mut tv_nsec = self.tv_nsec + rhs.tv_nsec;
+        if let Some(new_tv_nsec) = tv_nsec.checked_sub(1_000_000_000) {
+            tv_nsec = new_tv_nsec;
+            tv_sec += 1;
+        }
+        Self { tv_sec, tv_nsec }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timeval {
     pub tv_sec: u32,
@@ -1069,6 +1084,12 @@ impl From<RLimit> for RLimit64 {
 
 bitflags! {
     pub struct SpliceFlags {}
+}
+
+bitflags! {
+    pub struct ClockNanosleepFlags {
+        const TIMER_ABSTIME = 1;
+    }
 }
 
 // This value is guaranteed to be less than 64.
