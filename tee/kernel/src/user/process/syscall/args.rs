@@ -1070,3 +1070,22 @@ impl From<RLimit> for RLimit64 {
 bitflags! {
     pub struct SpliceFlags {}
 }
+
+// This value is guaranteed to be less than 64.
+#[derive(Debug, Clone, Copy)]
+pub struct Signal(u8);
+
+impl Signal {
+    pub const SEGV: Self = Self(11);
+
+    pub fn new(value: u8) -> Result<Self> {
+        if value >= 64 {
+            return Err(Error::inval(()));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn get(&self) -> usize {
+        usize::from(self.0)
+    }
+}
