@@ -582,7 +582,7 @@ impl CpuState {
         let restorer = Pointer::<c_void>::new(restorer);
 
         if !stack.flags.contains(StackFlags::DISABLE)
-            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+            && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
         {
             self.registers.rsp = stack.sp + stack.size;
         }

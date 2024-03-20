@@ -301,9 +301,12 @@ impl Thread {
         let sigaction = state.signal_handler_table.get(signal);
         let thread_sigmask = state.sigmask;
         state.sigmask |= sigaction.sa_mask;
+        if !sigaction.sa_flags.contains(SigactionFlags::NODEFER) {
+            state.sigmask |= Sigset(1 << signal.get());
+        }
         let sigaltstack = state.sigaltstack;
         if sigaltstack.flags.contains(StackFlags::AUTODISARM)
-            && sigaction.sa_flags.contains(SigactionFlags::SA_ONSTACK)
+            && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
         {
             state.sigaltstack.flags |= StackFlags::DISABLE;
         }
@@ -567,7 +570,8 @@ impl Not for Sigset {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct SigactionFlags: u32 {
-        const SA_ONSTACK = 0x08000000;
+        const ONSTACK = 0x08000000;
+        const NODEFER = 0x40000000;
     }
 }
 
