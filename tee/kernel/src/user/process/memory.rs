@@ -124,7 +124,7 @@ impl VirtualMemoryActivator {
         // Switch the page tables.
         if let Some(pcid_allocation) = virtual_memory.pcid_allocation.as_ref() {
             unsafe {
-                Cr3::write_pcid(virtual_memory.pml4, pcid_allocation.pcid);
+                Cr3::write_pcid_no_flush(virtual_memory.pml4, pcid_allocation.pcid);
             }
         } else {
             unsafe {
@@ -141,8 +141,15 @@ impl VirtualMemoryActivator {
         let res = f(&mut active_virtual_memory);
 
         // Restore the page tables.
-        unsafe {
-            Cr3::write_raw(prev_pml4, bits);
+        if virtual_memory.pcid_allocation.is_some() {
+            let pcid = Pcid::new(bits).unwrap();
+            unsafe {
+                Cr3::write_pcid_no_flush(prev_pml4, pcid);
+            }
+        } else {
+            unsafe {
+                Cr3::write_raw(prev_pml4, bits);
+            }
         }
 
         res
@@ -275,6 +282,14 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         let user_page = state.pages.get(&page).ok_or_else(|| Error::fault(()))?;
 
         let mut guard = user_page.lock();
+
+        // Check whether the page should be mapped at all.
+        if !guard
+            .perms()
+            .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
+        {
+            return Err(Error::fault(()));
+        }
 
         if required_flags.contains(PageTableFlags::WRITABLE)
             && guard.perms().contains(MemoryPermissions::WRITE)
@@ -444,10 +459,18 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
             let mut guard = user_page.lock();
             guard.set_perms(MemoryPermissions::from(prot));
-            let entry = guard.entry();
 
-            unsafe {
-                try_set_page(page, entry);
+            if guard
+                .perms()
+                .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
+            {
+                let entry = guard.entry();
+
+                unsafe {
+                    try_set_page(page, entry);
+                }
+            } else {
+                try_unmap_user_page(page);
             }
 
             drop(guard);
@@ -790,9 +813,11 @@ struct PcidAllocations {
 
 impl PcidAllocations {
     const fn new() -> Self {
+        let mut in_use = [false; 4096];
+        in_use[0] = true; // Reserve the first PCID for the kernel.
         Self {
             last_idx: 0,
-            in_use: [false; 4096],
+            in_use,
         }
     }
 

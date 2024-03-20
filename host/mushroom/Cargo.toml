@@ -29,4 +29,4 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 vcek-kds = { workspace = true }
 volatile = { version = "0.5.1", features = ["unstable"] }
-x86_64 = "0.15.0"
+x86_64 = "0.15.1"

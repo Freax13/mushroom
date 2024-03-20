@@ -13,4 +13,4 @@ itertools = { version = "0.12.1", default-features = false }
 snp-types = { workspace = true }
 thiserror = { version = "1.0.58" }
 raw-cpuid = "11.0.1"
-x86_64 = "0.15.0"
+x86_64 = "0.15.1"
