@@ -31,7 +31,7 @@ use crate::{
 };
 
 use super::{
-    memory::{VirtualMemory, VirtualMemoryActivator},
+    memory::VirtualMemory,
     syscall::{
         args::{FileMode, OpenFlags, Pointer, RLimit, Resource, Signal, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
@@ -213,10 +213,7 @@ impl Thread {
                 self.try_deliver_signal().await.unwrap();
 
                 let clone = self.clone();
-                let exit = VirtualMemoryActivator::r#do(move |vm_activator| {
-                    clone.run_userspace(vm_activator).unwrap()
-                })
-                .await;
+                let exit = clone.run_userspace().unwrap();
 
                 match exit {
                     Exit::DivideError => {
@@ -226,24 +223,21 @@ impl Thread {
                     Exit::GeneralProtectionFault => {
                         assert!(self.queue_signal(Signal::SEGV));
                     }
-                    Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
+                    Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
                 }
             }
         };
 
         select_biased! {
             _ = thread_exit_future.fuse() => {}
-            status = process_exit_future.fuse() => self.clone().exit(status).await,
+            status = process_exit_future.fuse() => self.clone().exit(status),
             _ = run_future.fuse() => unreachable!(),
         }
     }
 
-    async fn exit(self: Arc<Self>, status: u8) {
-        VirtualMemoryActivator::r#do(move |vm_activator| {
-            let mut guard = self.lock();
-            guard.exit(vm_activator, status)
-        })
-        .await
+    fn exit(self: Arc<Self>, status: u8) {
+        let mut guard = self.lock();
+        guard.exit(status)
     }
 
     pub async fn wait_for_exit(&self) -> u8 {
@@ -262,22 +256,15 @@ impl Thread {
         let _ = self.dead_children.sender().send((tid, status));
     }
 
-    fn run_userspace(&self, vm_activator: &mut VirtualMemoryActivator) -> Result<Exit> {
+    fn run_userspace(&self) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
-        vm_activator.activate(&virtual_memory, |_| unsafe {
-            let mut guard = self.cpu_state.lock();
-            guard.run_user()
-        })
+        let mut guard = self.cpu_state.lock();
+        guard.run_user(&virtual_memory)
     }
 
-    async fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
+    fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
         let virtual_memory = self.lock().virtual_memory().clone();
-        let handled =
-            VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |_| unsafe {
-                virtual_memory.handle_page_fault(page_fault.addr, page_fault.code)
-            })
-            .await;
-
+        let handled = virtual_memory.handle_page_fault(page_fault.addr, page_fault.code);
         if !handled {
             assert!(self.queue_signal(Signal::SEGV));
         }
@@ -323,18 +310,15 @@ impl Thread {
         };
 
         let this = self.clone();
-        VirtualMemoryActivator::use_from_async(virtual_memory.clone(), move |vm| {
-            let mut cpu_state = this.cpu_state.lock();
-            cpu_state.start_signal_handler(
-                u64::from_usize(signal.get()),
-                sig_info,
-                sigaction,
-                sigaltstack,
-                thread_sigmask,
-                vm,
-            )
-        })
-        .await
+        let mut cpu_state = this.cpu_state.lock();
+        cpu_state.start_signal_handler(
+            u64::from_usize(signal.get()),
+            sig_info,
+            sigaction,
+            sigaltstack,
+            thread_sigmask,
+            &virtual_memory,
+        )
     }
 }
 
@@ -443,7 +427,6 @@ impl ThreadGuard<'_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
         let node = lookup_and_resolve_node(self.cwd.clone(), path, ctx)?;
         if !node.mode().contains(FileMode::EXECUTE) {
@@ -451,7 +434,7 @@ impl ThreadGuard<'_> {
         }
 
         let file = node.open(OpenFlags::empty())?;
-        self.start_executable(path, &*file, argv, envp, ctx, vm_activator)
+        self.start_executable(path, &*file, argv, envp, ctx)
     }
 
     pub fn start_executable(
@@ -461,14 +444,12 @@ impl ThreadGuard<'_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> Result<()> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let cpu_state = vm_activator.activate(&virtual_memory, |vm| {
-            vm.start_executable(path, file, argv, envp, ctx, self.cwd.clone())
-        })?;
+        let cpu_state =
+            virtual_memory.start_executable(path, file, argv, envp, ctx, self.cwd.clone())?;
 
         // Success! Commit the new state to the thread.
 

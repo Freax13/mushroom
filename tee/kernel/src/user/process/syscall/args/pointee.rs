@@ -22,7 +22,7 @@ use crate::{
         path::Path,
     },
     user::process::{
-        memory::{ActiveVirtualMemory, VirtualMemoryActivator},
+        memory::VirtualMemory,
         syscall::traits::Abi,
         thread::{
             SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, ThreadGuard,
@@ -39,14 +39,8 @@ use super::{
 /// This trait is implemented by types for which userspace pointers can exist.
 pub trait Pointee {
     /// Format a userspace pointer for syscall logs.
-    fn display(
-        f: &mut dyn fmt::Write,
-        addr: VirtAddr,
-        thread: &ThreadGuard,
-        vm_activator: &mut VirtualMemoryActivator,
-    ) -> fmt::Result {
+    fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
         let _ = thread;
-        let _ = vm_activator;
         write!(f, "{:#x}", addr.as_u64())
     }
 }
@@ -56,7 +50,7 @@ pub trait Pointee {
 /// The extra generic parameter `T` only exists to allow multiple blankets
 /// implementations to exist.
 pub trait ReadablePointee<T = Custom>: Pointee + Sized {
-    fn read(addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<(usize, Self)>;
+    fn read(addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<(usize, Self)>;
 }
 
 /// A pointee which can be written to userspace.
@@ -64,7 +58,7 @@ pub trait ReadablePointee<T = Custom>: Pointee + Sized {
 /// The extra generic parameter `T` only exists to allow multiple blankets
 /// implementations to exist.
 pub trait WritablePointee<T = Custom>: Pointee {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize>;
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<usize>;
 }
 
 pub trait SizedPointee<T = Custom>: Pointee {
@@ -90,7 +84,7 @@ where
     T: PrimitivePointee + CheckedBitPattern,
     [(); size_of::<T>()]: Sized,
 {
-    fn read(addr: VirtAddr, vm: &ActiveVirtualMemory, _: Abi) -> Result<(usize, Self)> {
+    fn read(addr: VirtAddr, vm: &VirtualMemory, _: Abi) -> Result<(usize, Self)> {
         let mut bytes = [0; size_of::<T>()];
         vm.read_bytes(addr, &mut bytes)?;
         let value = try_pod_read_unaligned::<T>(&bytes)?;
@@ -102,7 +96,7 @@ impl<T> WritablePointee<Primitive> for T
 where
     T: PrimitivePointee + NoUninit,
 {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, _: Abi) -> Result<usize> {
         vm.write_bytes(addr, bytes_of(self))?;
         Ok(size_of::<Self>())
     }
@@ -145,7 +139,7 @@ where
     <T::Amd64 as CheckedBitPattern>::Bits: NoUninit,
     Error: From<<T::I386 as TryInto<Self>>::Error> + From<<T::Amd64 as TryInto<Self>>::Error>,
 {
-    fn read(addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<(usize, Self)> {
+    fn read(addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<(usize, Self)> {
         match abi {
             Abi::I386 => {
                 let mut bits = <T::I386 as CheckedBitPattern>::Bits::zeroed();
@@ -173,7 +167,7 @@ where
     Self: TryInto<T::I386> + TryInto<T::Amd64> + Copy,
     Error: From<<Self as TryInto<T::I386>>::Error> + From<<Self as TryInto<T::Amd64>>::Error>,
 {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<usize> {
         match abi {
             Abi::I386 => {
                 let value: T::I386 = (*self).try_into()?;
@@ -219,7 +213,7 @@ impl<T, P> WritablePointee<Array<P>> for [T]
 where
     T: WritablePointee<P>,
 {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<usize> {
         let mut total_len = 0;
         for value in self.iter() {
             let size = value.write(addr + u64::from_usize(total_len), vm, abi)?;
@@ -235,7 +229,7 @@ impl<T, P, const N: usize> ReadablePointee<Array<P>> for [T; N]
 where
     T: ReadablePointee<P>,
 {
-    fn read(addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<(usize, Self)> {
+    fn read(addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<(usize, Self)> {
         /// A container for a partially initialized array.
         struct PartiallyInitialized<T, const N: usize> {
             initialized: usize,
@@ -288,7 +282,7 @@ impl<T, P, const N: usize> WritablePointee<Array<P>> for [T; N]
 where
     T: WritablePointee<P>,
 {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<usize> {
         self.as_slice().write(addr, vm, abi)
     }
 }
@@ -300,15 +294,10 @@ impl Pointee for u32 {}
 impl PrimitivePointee for u32 {}
 
 impl Pointee for CStr {
-    fn display(
-        f: &mut dyn fmt::Write,
-        addr: VirtAddr,
-        thread: &ThreadGuard,
-        vm_activator: &mut VirtualMemoryActivator,
-    ) -> fmt::Result {
-        let res = vm_activator.activate(thread.virtual_memory(), |vm| {
-            vm.read_cstring(Pointer::from(addr), 128)
-        });
+    fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
+        let res = thread
+            .virtual_memory()
+            .read_cstring(Pointer::from(addr), 128);
         match res {
             Ok(value) => write!(f, "{value:?}"),
             Err(_) => write!(f, "{:#x} (invalid ptr)", addr.as_u64()),
@@ -319,7 +308,7 @@ impl Pointee for CStr {
 impl AbiAgnosticPointee for CStr {}
 
 impl WritablePointee for CStr {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<usize> {
         let bytes = self.to_bytes_with_nul();
         vm.write_bytes(addr, bytes)?;
         Ok(bytes.len())
@@ -327,33 +316,23 @@ impl WritablePointee for CStr {
 }
 
 impl Pointee for CString {
-    fn display(
-        f: &mut dyn fmt::Write,
-        addr: VirtAddr,
-        thread: &ThreadGuard,
-        vm_activator: &mut VirtualMemoryActivator,
-    ) -> fmt::Result {
-        CStr::display(f, addr, thread, vm_activator)
+    fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
+        CStr::display(f, addr, thread)
     }
 }
 
 impl AbiAgnosticPointee for CString {}
 
 impl Pointee for Path {
-    fn display(
-        f: &mut dyn fmt::Write,
-        addr: VirtAddr,
-        thread: &ThreadGuard,
-        vm_activator: &mut VirtualMemoryActivator,
-    ) -> fmt::Result {
-        CStr::display(f, addr, thread, vm_activator)
+    fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
+        CStr::display(f, addr, thread)
     }
 }
 
 impl AbiAgnosticPointee for Path {}
 
 impl ReadablePointee for Path {
-    fn read(addr: VirtAddr, vm: &ActiveVirtualMemory, _abi: Abi) -> Result<(usize, Self)> {
+    fn read(addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<(usize, Self)> {
         const PATH_MAX: usize = 0x1000;
         let pathname = vm.read_cstring(Pointer::from(addr), PATH_MAX)?;
         let len = pathname.to_bytes_with_nul().len();
@@ -363,7 +342,7 @@ impl ReadablePointee for Path {
 }
 
 impl WritablePointee for Path {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<usize> {
         vm.write_bytes(addr, self.as_bytes())?;
         vm.write_bytes(addr + u64::from_usize(self.as_bytes().len()), b"\0")?;
         Ok(self.as_bytes().len() + 1)
@@ -880,7 +859,7 @@ impl From<Sigset> for Sigset64 {
 impl Pointee for DirEntry {}
 
 impl WritablePointee for DirEntry {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, _abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<usize> {
         let dirent = LinuxDirent64 {
             ino: self.ino,
             off: i64::try_from(self.len())?,
@@ -905,7 +884,7 @@ impl AbiAgnosticPointee for DirEntry {}
 impl Pointee for OldDirEntry {}
 
 impl WritablePointee for OldDirEntry {
-    fn write(&self, addr: VirtAddr, vm: &ActiveVirtualMemory, abi: Abi) -> Result<usize> {
+    fn write(&self, addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<usize> {
         let len = self.len(abi);
 
         let dirent = OldLinuxDirent {

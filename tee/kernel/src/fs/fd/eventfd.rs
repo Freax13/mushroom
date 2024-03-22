@@ -10,7 +10,7 @@ use crate::{
     fs::node::new_ino,
     rt::notify::Notify,
     user::process::{
-        memory::ActiveVirtualMemory,
+        memory::VirtualMemory,
         syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
     },
 };
@@ -84,7 +84,7 @@ impl OpenFileDescription for EventFd {
 
     fn write_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {

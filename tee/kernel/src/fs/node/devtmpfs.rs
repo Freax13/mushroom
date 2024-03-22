@@ -18,7 +18,7 @@ use crate::{
     fs::{path::FileName, INPUT},
     supervisor,
     user::process::{
-        memory::ActiveVirtualMemory,
+        memory::VirtualMemory,
         syscall::args::{FileMode, FileType, FileTypeAndMode, Pointer, Stat, Timespec},
     },
 };
@@ -119,7 +119,7 @@ impl File for NullFile {
     fn read_to_user(
         &self,
         _offset: usize,
-        _vm: &mut ActiveVirtualMemory,
+        _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         _len: usize,
         _no_atime: bool,
@@ -134,7 +134,7 @@ impl File for NullFile {
     fn write_from_user(
         &self,
         _offset: usize,
-        _vm: &mut ActiveVirtualMemory,
+        _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -145,12 +145,7 @@ impl File for NullFile {
         Ok(buf.len())
     }
 
-    fn append_from_user(
-        &self,
-        _vm: &mut ActiveVirtualMemory,
-        _: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
+    fn append_from_user(&self, _vm: &VirtualMemory, _: Pointer<[u8]>, len: usize) -> Result<usize> {
         Ok(len)
     }
 
@@ -241,7 +236,7 @@ impl File for OutputFile {
     fn write_from_user(
         &self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -370,7 +365,7 @@ impl File for RandomFile {
     fn write_from_user(
         &self,
         _offset: usize,
-        _vm: &mut ActiveVirtualMemory,
+        _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -383,7 +378,7 @@ impl File for RandomFile {
 
     fn append_from_user(
         &self,
-        _vm: &mut ActiveVirtualMemory,
+        _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {

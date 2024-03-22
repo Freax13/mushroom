@@ -12,7 +12,7 @@ use log::debug;
 use crate::{
     error::{Error, Result},
     user::process::{
-        memory::ActiveVirtualMemory,
+        memory::VirtualMemory,
         syscall::args::{FileMode, Pointer, Stat, Whence},
     },
 };
@@ -25,7 +25,7 @@ pub trait File: INode {
     fn read_to_user(
         &self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
         no_atime: bool,
@@ -50,7 +50,7 @@ pub trait File: INode {
     fn write_from_user(
         &self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
     ) -> Result<usize> {
@@ -70,7 +70,7 @@ pub trait File: INode {
     fn append(&self, buf: &[u8]) -> Result<usize>;
     fn append_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
     ) -> Result<usize> {
@@ -141,7 +141,7 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
 
     fn read_to_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -244,7 +244,7 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
 
     fn write_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -319,7 +319,7 @@ impl OpenFileDescription for AppendFileFileDescription {
 
     fn write_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -376,7 +376,7 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn read_to_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -396,7 +396,7 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn write_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {

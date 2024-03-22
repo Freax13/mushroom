@@ -16,7 +16,6 @@ use crate::{
 
 use self::{
     futex::Futexes,
-    memory::VirtualMemoryActivator,
     thread::{new_tid, Thread},
 };
 
@@ -64,7 +63,7 @@ impl Process {
     }
 }
 
-pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
+pub fn start_init_process() {
     let res = Thread::spawn(|self_weak| {
         let thread = Thread::empty(self_weak, new_tid());
 
@@ -81,7 +80,6 @@ pub fn start_init_process(vm_activator: &mut VirtualMemoryActivator) {
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
             &mut ctx,
-            vm_activator,
         )?;
         drop(guard);
 

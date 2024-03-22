@@ -3,7 +3,7 @@ use core::{cmp, iter::from_fn};
 use crate::{
     spin::mutex::Mutex,
     user::process::{
-        memory::ActiveVirtualMemory,
+        memory::VirtualMemory,
         syscall::args::{OpenFlags, Pipe2Flags, Pointer},
     },
 };
@@ -71,7 +71,7 @@ impl OpenFileDescription for ReadHalf {
 
     fn read_to_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -208,7 +208,7 @@ impl OpenFileDescription for WriteHalf {
 
     fn write_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {

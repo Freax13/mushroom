@@ -14,10 +14,7 @@ use x86_64::VirtAddr;
 use crate::{
     error::{Error, Result},
     fs::fd::{Events, FdFlags, FileDescriptorTable},
-    user::process::{
-        memory::{VirtualMemory, VirtualMemoryActivator},
-        thread::ThreadGuard,
-    },
+    user::process::{memory::VirtualMemory, thread::ThreadGuard},
 };
 
 use self::pointee::{Pointee, PrimitivePointee, Timespec32};
@@ -34,7 +31,6 @@ pub trait SyscallArg: Display + Send + Copy {
         value: u64,
         abi: Abi,
         thread: &ThreadGuard<'_>,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result;
 }
 
@@ -88,7 +84,6 @@ macro_rules! bitflags {
                 value: u64,
                 _: Abi,
                 _thread: &ThreadGuard<'_>,
-                _vm_activator: &mut VirtualMemoryActivator,
             ) -> fmt::Result {
                 let valid_bits = Self::from_bits_truncate(value);
                 let invalid_bits = value & !Self::all().bits();
@@ -138,7 +133,6 @@ macro_rules! enum_arg {
                 value: u64,
                 abi: Abi,
                 _thread: &ThreadGuard<'_>,
-                _vm_activator: &mut VirtualMemoryActivator,
             ) -> fmt::Result {
                 match Self::parse(value, abi) {
                     Ok(value) => write!(f, "{value}"),
@@ -168,7 +162,6 @@ impl SyscallArg for Ignored {
         _value: u64,
         _: Abi,
         _thread: &ThreadGuard<'_>,
-        _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "ignored")
     }
@@ -272,9 +265,8 @@ where
         value: u64,
         _: Abi,
         thread: &ThreadGuard<'_>,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
-        T::display(f, VirtAddr::new(value), thread, vm_activator)
+        T::display(f, VirtAddr::new(value), thread)
     }
 }
 
@@ -288,7 +280,6 @@ impl SyscallArg for u64 {
         value: u64,
         _: Abi,
         _thread: &ThreadGuard<'_>,
-        _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{value}")
     }
@@ -307,7 +298,6 @@ impl SyscallArg for i64 {
         value: u64,
         abi: Abi,
         _thread: &ThreadGuard<'_>,
-        _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         write!(f, "{}", Self::parse(value, abi).unwrap())
     }
@@ -329,9 +319,8 @@ impl SyscallArg for i32 {
         value: u64,
         abi: Abi,
         thread: &ThreadGuard<'_>,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
-        i64::display(f, value, abi, thread, vm_activator)
+        i64::display(f, value, abi, thread)
     }
 }
 
@@ -505,7 +494,6 @@ impl SyscallArg for FdNum {
         value: u64,
         abi: Abi,
         _thread: &ThreadGuard<'_>,
-        _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         match Self::parse(value, abi) {
             Ok(fd) => write!(f, "{fd}"),
@@ -621,11 +609,10 @@ impl SyscallArg for FutexOpWithFlags {
         value: u64,
         abi: Abi,
         thread: &ThreadGuard<'_>,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
-        FutexOp::display(f, value & 0x7f, abi, thread, vm_activator)?;
+        FutexOp::display(f, value & 0x7f, abi, thread)?;
         write!(f, " | ")?;
-        FutexFlags::display(f, value & !0x7f, abi, thread, vm_activator)
+        FutexFlags::display(f, value & !0x7f, abi, thread)
     }
 }
 

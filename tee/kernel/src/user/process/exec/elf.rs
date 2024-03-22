@@ -10,7 +10,7 @@ use crate::{
     error::{Error, Result},
     fs::{fd::OpenFileDescription, path::Path},
     user::process::{
-        memory::{ActiveVirtualMemoryWriteGuard, Bias, MemoryPermissions},
+        memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
         syscall::traits::Abi,
     },
 };
@@ -105,7 +105,7 @@ pub trait ProgramHeaderEntry: Pod {
 
 pub fn load_elf<E>(
     file: &dyn OpenFileDescription,
-    mut vm: ActiveVirtualMemoryWriteGuard<'_>,
+    mut vm: VirtualMemoryWriteGuard<'_>,
     load_bias: u64,
 ) -> Result<LoaderInfo>
 where
