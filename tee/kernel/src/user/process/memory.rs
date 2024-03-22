@@ -11,7 +11,7 @@ use crate::{
     fs::fd::OpenFileDescription,
     memory::{
         page::{KernelPage, UserPage},
-        pagetable::{check_user_address, Pagetables},
+        pagetable::{check_user_address, check_user_page, Pagetables},
     },
     spin::{
         lazy::Lazy,
@@ -149,10 +149,8 @@ impl VirtualMemory {
             return Err(Error::fault(()));
         }
 
-        unsafe {
-            self.pagetables
-                .set_page(page, entry, &mut &FRAME_ALLOCATOR)?;
-        }
+        self.pagetables
+            .set_page(page, entry, &mut &FRAME_ALLOCATOR)?;
 
         drop(guard);
 
@@ -254,13 +252,13 @@ impl VirtualMemory {
 
         check_user_address(addr, bytes.len())?;
 
-        if unsafe { self.pagetables.try_write_user_fast(bytes, addr) }.is_ok() {
+        if self.pagetables.try_write_user_fast(bytes, addr).is_ok() {
             return Ok(());
         }
 
         self.map_addrs(addr, bytes.len(), PageTableFlags::WRITABLE)?;
 
-        unsafe { self.pagetables.try_write_user_fast(bytes, addr) }.unwrap();
+        self.pagetables.try_write_user_fast(bytes, addr).unwrap();
 
         Ok(())
     }
@@ -312,9 +310,7 @@ impl VirtualMemory {
             {
                 let entry = guard.entry();
 
-                unsafe {
-                    self.pagetables.try_set_page(page, entry);
-                }
+                self.pagetables.try_set_page(page, entry)?;
             } else {
                 self.pagetables.try_unmap_user_page(page);
             }
@@ -338,15 +334,6 @@ impl Default for VirtualMemory {
 impl Drop for VirtualMemory {
     fn drop(&mut self) {
         self.modify().unmap(VirtAddr::new(0), !0);
-    }
-}
-
-/// Check that the page is in the lower half.
-fn check_user_page(page: Page) -> Result<()> {
-    if u16::from(page.p4_index()) < 256 {
-        Ok(())
-    } else {
-        Err(Error::fault(()))
     }
 }
 

@@ -185,6 +185,15 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
     }
 }
 
+/// Check that the page is in the lower half.
+pub fn check_user_page(page: Page) -> Result<()> {
+    if u16::from(page.p4_index()) < 256 {
+        Ok(())
+    } else {
+        Err(Error::fault(()))
+    }
+}
+
 #[inline(always)]
 pub fn check_user_address(addr: VirtAddr, len: usize) -> Result<()> {
     let Some(len_m1) = len.checked_sub(1) else {
@@ -303,12 +312,13 @@ impl Pagetables {
     }
 
     /// Map a page regardless of whether there's already a page mapped there.
-    pub unsafe fn set_page(
+    pub fn set_page(
         &self,
         page: Page,
         entry: PresentPageTableEntry,
         allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
     ) -> Result<()> {
+        check_user_page(page)?;
         trace!("mapping page {page:?}");
 
         let _guard = self.update_lock.read();
@@ -335,7 +345,8 @@ impl Pagetables {
     }
 
     /// Update a page, if it's already mapped.
-    pub unsafe fn try_set_page(&self, page: Page, entry: PresentPageTableEntry) {
+    pub fn try_set_page(&self, page: Page, entry: PresentPageTableEntry) -> Result<()> {
+        check_user_page(page)?;
         trace!("mapping page {page:?}");
 
         let _guard = self.update_lock.read();
@@ -343,19 +354,19 @@ impl Pagetables {
         let level4_entry = &level4[page.p4_index()];
 
         let Some(level3_guard) = level4_entry.acquire_existing() else {
-            return;
+            return Ok(());
         };
         let level3 = &*level3_guard;
         let level3_entry = &level3[page.p3_index()];
 
         let Some(level2_guard) = level3_entry.acquire_existing() else {
-            return;
+            return Ok(());
         };
         let level2 = &*level2_guard;
         let level2_entry = &level2[page.p2_index()];
 
         let Some(level1_guard) = level2_entry.acquire_existing() else {
-            return;
+            return Ok(());
         };
         let level1 = &*level1_guard;
         let level1_entry = &level1[page.p1_index()];
@@ -363,6 +374,7 @@ impl Pagetables {
         unsafe {
             level1_entry.set_page(entry);
         }
+        Ok(())
     }
 
     /// Remove the write-bit on all mapped userspace pages.
@@ -534,7 +546,7 @@ impl Pagetables {
     /// The caller has to ensure that `src` is safe to read from volatily. Reads
     /// may be racy.
     #[inline(always)]
-    pub unsafe fn try_write_user_fast(&self, src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
+    pub fn try_write_user_fast(&self, src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
         if src.len() == 0 {
             return Ok(());
         }
@@ -544,6 +556,8 @@ impl Pagetables {
         if end_inclusive.as_u64().get_bit(63) {
             return Err(());
         }
+
+        check_user_address(dest, src.len()).map_err(|_| ())?;
 
         let _guard = self.activate();
 
