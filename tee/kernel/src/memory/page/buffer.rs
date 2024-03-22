@@ -5,7 +5,7 @@ use usize_conversions::FromUsize;
 
 use crate::{
     error::Result,
-    user::process::{memory::ActiveVirtualMemory, syscall::args::Pointer},
+    user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
 use super::KernelPage;
@@ -116,7 +116,7 @@ impl Buffer {
     pub fn read_to_user(
         &self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -225,7 +225,7 @@ impl Buffer {
     pub fn write_from_user(
         &mut self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {

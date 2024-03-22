@@ -5,24 +5,30 @@ global_asm!(include_str!("pagetable.s"));
 use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
+    spin::{mutex::Mutex, rwlock::RwLock},
+    user::process::memory::without_smap,
 };
 
 use core::{
     arch::{asm, global_asm},
+    cell::RefMut,
     cmp, fmt,
     iter::Step,
     marker::{PhantomData, PhantomPinned},
     num::NonZeroU64,
     ops::{Bound, Deref, Index, Range, RangeBounds},
+    ptr::NonNull,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::spin::lazy::Lazy;
+use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use log::trace;
 use x86_64::{
-    registers::control::{Cr3, Cr4, Cr4Flags},
+    instructions::tlb::Pcid,
+    registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
     structures::paging::{
         FrameAllocator, FrameDeallocator, Page, PageTableIndex, PhysFrame, Size4KiB,
     },
@@ -43,39 +49,6 @@ static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
         pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
     }
 });
-
-pub fn allocate_pml4() -> Result<PhysFrame> {
-    // Make sure that all pml4 kernel entries are initialized.
-    Lazy::force(&INIT_KERNEL_PML4ES);
-
-    // Allocate a frame for the new pml4.
-    let frame = (&FRAME_ALLOCATOR)
-        .allocate_frame()
-        .ok_or(Error::no_mem(()))?;
-
-    // Copy the kernel entries into a temporary buffer.
-    let pml4 = ActivePageTable::get();
-    let mut entries = [0u64; 512];
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            pml4.entries[256..].as_ptr().cast(),
-            entries[256..].as_mut_ptr(),
-            256,
-        );
-    }
-    // Fix the recursive entry.
-    entries[usize::from(RECURSIVE_INDEX)] =
-        PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE)
-            .0
-            .get();
-
-    // Copy the buffer into the pml4.
-    unsafe {
-        copy_into_frame(frame, bytemuck::cast_mut(&mut entries))?;
-    }
-
-    Ok(frame)
-}
 
 pub unsafe fn map_page(
     page: Page,
@@ -106,83 +79,6 @@ pub unsafe fn map_page(
     Ok(())
 }
 
-/// Map a page regardless of whether there's already a page mapped there.
-pub unsafe fn set_page(
-    page: Page,
-    entry: PresentPageTableEntry,
-    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-) -> Result<()> {
-    trace!("mapping page {page:?}");
-
-    let level4 = ActivePageTable::get();
-    let level4_entry = &level4[page.p4_index()];
-
-    let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
-    let level3 = &*level3_guard;
-    let level3_entry = &level3[page.p3_index()];
-
-    let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
-    let level2 = &*level2_guard;
-    let level2_entry = &level2[page.p2_index()];
-
-    let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
-    let level1 = &*level1_guard;
-    let level1_entry = &level1[page.p1_index()];
-
-    unsafe {
-        level1_entry.set_page(entry);
-    }
-
-    Ok(())
-}
-
-/// Update a page, if it's already mapped.
-pub unsafe fn try_set_page(page: Page, entry: PresentPageTableEntry) {
-    trace!("mapping page {page:?}");
-
-    let level4 = ActivePageTable::get();
-    let level4_entry = &level4[page.p4_index()];
-
-    let Some(level3_guard) = level4_entry.acquire_existing() else {
-        return;
-    };
-    let level3 = &*level3_guard;
-    let level3_entry = &level3[page.p3_index()];
-
-    let Some(level2_guard) = level3_entry.acquire_existing() else {
-        return;
-    };
-    let level2 = &*level2_guard;
-    let level2_entry = &level2[page.p2_index()];
-
-    let Some(level1_guard) = level2_entry.acquire_existing() else {
-        return;
-    };
-    let level1 = &*level1_guard;
-    let level1_entry = &level1[page.p1_index()];
-
-    unsafe {
-        level1_entry.set_page(entry);
-    }
-}
-
-/// Remove the write-bit on all mapped userspace pages.
-///
-/// # Safety
-///
-/// The caller has to ensure that no other thread is modifying the page tables
-/// at the same time.
-pub unsafe fn freeze_userspace() {
-    let level4 = ActivePageTable::get();
-    for entry in level4.entries[..256].iter() {
-        unsafe {
-            entry.freeze();
-        }
-    }
-
-    flush_current_pcid();
-}
-
 /// Unmap a page.
 ///
 /// # Panics
@@ -209,133 +105,6 @@ pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
     unsafe { level1_entry.unmap() }
 }
 
-/// Unmap a page if it's mapped.
-pub fn try_unmap_user_page(page: Page) {
-    try_unmap_user_pages(page..=page)
-}
-
-/// Unmap all pages in the given range. Not all pages have to be mapped.
-pub fn try_unmap_user_pages(pages: impl RangeBounds<Page>) {
-    const LAST_USER_PAGE: Page =
-        unsafe { Page::from_start_address_unchecked(VirtAddr::new(0x7fff_ffff_f000)) };
-
-    // Convert to inclusive range.
-    let start = match pages.start_bound() {
-        Bound::Included(&page) => page,
-        Bound::Excluded(&page) => Step::forward_checked(page, 1).unwrap_or(LAST_USER_PAGE),
-        Bound::Unbounded => Page::containing_address(VirtAddr::zero()),
-    };
-    let start = cmp::min(start, LAST_USER_PAGE);
-    let end = match pages.end_bound() {
-        Bound::Included(&page) => page,
-        Bound::Excluded(&page) => {
-            if let Some(page) = Step::backward_checked(page, 1) {
-                page
-            } else {
-                return;
-            }
-        }
-        Bound::Unbounded => LAST_USER_PAGE,
-    };
-    let end = cmp::min(end, LAST_USER_PAGE);
-
-    // Don't do anything if the range is empty.
-    if start > end {
-        return;
-    }
-
-    let pml4 = ActivePageTable::get();
-    for p4_index in start.p4_index()..=end.p4_index() {
-        let pml4e = &pml4[p4_index];
-        let Some(pdp) = pml4e.acquire_existing() else {
-            continue;
-        };
-
-        let start = cmp::max(
-            start,
-            Page::from_page_table_indices(
-                p4_index,
-                PageTableIndex::new(0),
-                PageTableIndex::new(0),
-                PageTableIndex::new(0),
-            ),
-        );
-        let end = cmp::min(
-            end,
-            Page::from_page_table_indices(
-                p4_index,
-                PageTableIndex::new(511),
-                PageTableIndex::new(511),
-                PageTableIndex::new(511),
-            ),
-        );
-
-        for p3_index in start.p3_index()..=end.p3_index() {
-            let pdpe = &pdp[p3_index];
-            let Some(pd) = pdpe.acquire_existing() else {
-                continue;
-            };
-
-            let start = cmp::max(
-                start,
-                Page::from_page_table_indices(
-                    p4_index,
-                    p3_index,
-                    PageTableIndex::new(0),
-                    PageTableIndex::new(0),
-                ),
-            );
-            let end = cmp::min(
-                end,
-                Page::from_page_table_indices(
-                    p4_index,
-                    p3_index,
-                    PageTableIndex::new(511),
-                    PageTableIndex::new(511),
-                ),
-            );
-
-            for p2_index in start.p2_index()..=end.p2_index() {
-                let pde = &pd[p2_index];
-                let Some(pt) = pde.acquire_existing() else {
-                    continue;
-                };
-
-                let start = cmp::max(
-                    start,
-                    Page::from_page_table_indices(
-                        p4_index,
-                        p3_index,
-                        p2_index,
-                        PageTableIndex::new(0),
-                    ),
-                );
-                let end = cmp::min(
-                    end,
-                    Page::from_page_table_indices(
-                        p4_index,
-                        p3_index,
-                        p2_index,
-                        PageTableIndex::new(511),
-                    ),
-                );
-
-                for p1_index in start.p1_index()..=end.p1_index() {
-                    let pte = &pt[p1_index];
-                    unsafe {
-                        pte.try_unmap();
-                    }
-                }
-            }
-        }
-    }
-
-    let (_, pcid) = Cr3::read_pcid();
-    unsafe {
-        INVLPGB.flush_user_pages(pcid, start..=end);
-    }
-}
-
 pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     let pml4 = ActivePageTable::get();
     let pml4e = &pml4[page.p4_index()];
@@ -346,6 +115,453 @@ pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     let pt = pde.acquire_existing()?;
     let pte = &pt[page.p1_index()];
     pte.entry()
+}
+
+/// Try to copy memory from `src` into `dest`.
+///
+/// This function is not unsafe. If the read fails for some reason `Err(())` is
+/// returned.
+#[inline(always)]
+fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
+    let failed: u64;
+    unsafe {
+        asm!(
+            "66:",
+            "rep movsb",
+            "67:",
+            ".pushsection .recoverable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            inout("rsi") src.as_u64() => _,
+            inout("rdi") dest.as_mut_ptr() => _,
+            inout("rcx") dest.len() => _,
+            inout("rdx") 0u64 => failed,
+        );
+    }
+
+    // assert_eq!(failed, 0);
+
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Try to copy memory from `src` into `dest`.
+///
+/// If the write fails for some reason `Err(())` is returned.
+///
+/// # Safety
+///
+/// The caller has to ensure that `src` is safe to read from volatily. Reads
+/// may be racy.
+///
+/// The caller has to ensure writing to `dest` doesn't invalidate any of Rust's
+/// rules.
+#[inline(always)]
+unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
+    let failed: u64;
+    unsafe {
+        asm!(
+            "66:",
+            "rep movsb",
+            "67:",
+            ".pushsection .recoverable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            inout("rsi") src.as_ptr() as *const u8 => _,
+            inout("rdi") dest.as_u64() => _,
+            inout("rcx") src.len() => _,
+            inout("rdx") 0u64 => failed,
+        );
+    }
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+#[inline(always)]
+pub fn check_user_address(addr: VirtAddr, len: usize) -> Result<()> {
+    let Some(len_m1) = len.checked_sub(1) else {
+        return Ok(());
+    };
+
+    // Make sure that even the end is still in the lower half.
+    let end_inclusive = Step::forward_checked(addr, len_m1).ok_or_else(|| Error::fault(()))?;
+    if end_inclusive.as_u64().get_bit(63) {
+        return Err(Error::fault(()));
+    }
+    Ok(())
+}
+
+pub struct PagetablesAllocations {
+    pml4: PhysFrame,
+    /// None if PCID is not supported.
+    pcid_allocation: Option<PcidAllocation>,
+}
+
+impl Drop for PagetablesAllocations {
+    fn drop(&mut self) {
+        unsafe {
+            (&FRAME_ALLOCATOR).deallocate_frame(self.pml4);
+        }
+    }
+}
+
+pub struct Pagetables {
+    allocations: Arc<PagetablesAllocations>,
+    /// A lock guarding modifications to the pagetables.
+    update_lock: RwLock<()>,
+}
+
+impl Pagetables {
+    pub fn new() -> Result<Self> {
+        // Make sure that all pml4 kernel entries are initialized.
+        Lazy::force(&INIT_KERNEL_PML4ES);
+
+        // Allocate a frame for the new pml4.
+        let frame = (&FRAME_ALLOCATOR)
+            .allocate_frame()
+            .ok_or(Error::no_mem(()))?;
+
+        // Copy the kernel entries into a temporary buffer.
+        let pml4 = ActivePageTable::get();
+        let mut entries = [0u64; 512];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                pml4.entries[256..].as_ptr().cast(),
+                entries[256..].as_mut_ptr(),
+                256,
+            );
+        }
+        // Fix the recursive entry.
+        entries[usize::from(RECURSIVE_INDEX)] =
+            PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE)
+                .0
+                .get();
+
+        // Copy the buffer into the pml4.
+        unsafe {
+            copy_into_frame(frame, bytemuck::cast_mut(&mut entries))?;
+        }
+
+        let cr4 = Cr4::read();
+        let pcid_allocation = cr4
+            .contains(Cr4Flags::PCID)
+            .then(|| ALLOCATIONS.lock().allocate());
+        let allocations = PagetablesAllocations {
+            pml4: frame,
+            pcid_allocation,
+        };
+        let allocations = Arc::new(allocations);
+
+        Ok(Self {
+            allocations,
+            update_lock: RwLock::new(()),
+        })
+    }
+
+    pub fn run_with<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _guard = self.activate();
+        f()
+    }
+
+    #[must_use]
+    fn activate(&self) -> ActivePageTableGuard {
+        let allocations = &self.allocations;
+
+        let per_cpu = PerCpu::get();
+        let mut guard = per_cpu.last_pagetables.borrow_mut();
+
+        let update_required = !guard
+            .as_ref()
+            .is_some_and(|existing| Arc::ptr_eq(existing, allocations));
+
+        if update_required {
+            if let Some(pcid_allocation) = allocations.pcid_allocation.as_ref() {
+                unsafe {
+                    Cr3::write_pcid_no_flush(allocations.pml4, pcid_allocation.pcid);
+                }
+            } else {
+                unsafe {
+                    Cr3::write(allocations.pml4, Cr3Flags::empty());
+                }
+            }
+
+            *guard = Some(allocations.clone());
+        }
+
+        ActivePageTableGuard {
+            _guard: guard,
+            pml4: ActivePageTable::get(),
+        }
+    }
+
+    /// Map a page regardless of whether there's already a page mapped there.
+    pub unsafe fn set_page(
+        &self,
+        page: Page,
+        entry: PresentPageTableEntry,
+        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
+    ) -> Result<()> {
+        trace!("mapping page {page:?}");
+
+        let _guard = self.update_lock.read();
+        let level4 = self.activate();
+        let level4_entry = &level4[page.p4_index()];
+
+        let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
+        let level3 = &*level3_guard;
+        let level3_entry = &level3[page.p3_index()];
+
+        let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
+        let level2 = &*level2_guard;
+        let level2_entry = &level2[page.p2_index()];
+
+        let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
+        let level1 = &*level1_guard;
+        let level1_entry = &level1[page.p1_index()];
+
+        unsafe {
+            level1_entry.set_page(entry);
+        }
+
+        Ok(())
+    }
+
+    /// Update a page, if it's already mapped.
+    pub unsafe fn try_set_page(&self, page: Page, entry: PresentPageTableEntry) {
+        trace!("mapping page {page:?}");
+
+        let _guard = self.update_lock.read();
+        let level4 = self.activate();
+        let level4_entry = &level4[page.p4_index()];
+
+        let Some(level3_guard) = level4_entry.acquire_existing() else {
+            return;
+        };
+        let level3 = &*level3_guard;
+        let level3_entry = &level3[page.p3_index()];
+
+        let Some(level2_guard) = level3_entry.acquire_existing() else {
+            return;
+        };
+        let level2 = &*level2_guard;
+        let level2_entry = &level2[page.p2_index()];
+
+        let Some(level1_guard) = level2_entry.acquire_existing() else {
+            return;
+        };
+        let level1 = &*level1_guard;
+        let level1_entry = &level1[page.p1_index()];
+
+        unsafe {
+            level1_entry.set_page(entry);
+        }
+    }
+
+    /// Remove the write-bit on all mapped userspace pages.
+    pub fn freeze_userspace(&self) {
+        let _guard = self.update_lock.write();
+
+        let level4 = self.activate();
+        for entry in level4.entries[..256].iter() {
+            unsafe {
+                entry.freeze();
+            }
+        }
+
+        flush_current_pcid();
+    }
+
+    /// Unmap a page if it's mapped.
+    pub fn try_unmap_user_page(&self, page: Page) {
+        self.try_unmap_user_pages(page..=page)
+    }
+
+    /// Unmap all pages in the given range. Not all pages have to be mapped.
+    pub fn try_unmap_user_pages(&self, pages: impl RangeBounds<Page>) {
+        const LAST_USER_PAGE: Page =
+            unsafe { Page::from_start_address_unchecked(VirtAddr::new(0x7fff_ffff_f000)) };
+
+        // Convert to inclusive range.
+        let start = match pages.start_bound() {
+            Bound::Included(&page) => page,
+            Bound::Excluded(&page) => Step::forward_checked(page, 1).unwrap_or(LAST_USER_PAGE),
+            Bound::Unbounded => Page::containing_address(VirtAddr::zero()),
+        };
+        let start = cmp::min(start, LAST_USER_PAGE);
+        let end = match pages.end_bound() {
+            Bound::Included(&page) => page,
+            Bound::Excluded(&page) => {
+                if let Some(page) = Step::backward_checked(page, 1) {
+                    page
+                } else {
+                    return;
+                }
+            }
+            Bound::Unbounded => LAST_USER_PAGE,
+        };
+        let end = cmp::min(end, LAST_USER_PAGE);
+
+        // Don't do anything if the range is empty.
+        if start > end {
+            return;
+        }
+
+        let _guard = self.update_lock.read();
+        let pml4 = self.activate();
+        for p4_index in start.p4_index()..=end.p4_index() {
+            let pml4e = &pml4[p4_index];
+            let Some(pdp) = pml4e.acquire_existing() else {
+                continue;
+            };
+
+            let start = cmp::max(
+                start,
+                Page::from_page_table_indices(
+                    p4_index,
+                    PageTableIndex::new(0),
+                    PageTableIndex::new(0),
+                    PageTableIndex::new(0),
+                ),
+            );
+            let end = cmp::min(
+                end,
+                Page::from_page_table_indices(
+                    p4_index,
+                    PageTableIndex::new(511),
+                    PageTableIndex::new(511),
+                    PageTableIndex::new(511),
+                ),
+            );
+
+            for p3_index in start.p3_index()..=end.p3_index() {
+                let pdpe = &pdp[p3_index];
+                let Some(pd) = pdpe.acquire_existing() else {
+                    continue;
+                };
+
+                let start = cmp::max(
+                    start,
+                    Page::from_page_table_indices(
+                        p4_index,
+                        p3_index,
+                        PageTableIndex::new(0),
+                        PageTableIndex::new(0),
+                    ),
+                );
+                let end = cmp::min(
+                    end,
+                    Page::from_page_table_indices(
+                        p4_index,
+                        p3_index,
+                        PageTableIndex::new(511),
+                        PageTableIndex::new(511),
+                    ),
+                );
+
+                for p2_index in start.p2_index()..=end.p2_index() {
+                    let pde = &pd[p2_index];
+                    let Some(pt) = pde.acquire_existing() else {
+                        continue;
+                    };
+
+                    let start = cmp::max(
+                        start,
+                        Page::from_page_table_indices(
+                            p4_index,
+                            p3_index,
+                            p2_index,
+                            PageTableIndex::new(0),
+                        ),
+                    );
+                    let end = cmp::min(
+                        end,
+                        Page::from_page_table_indices(
+                            p4_index,
+                            p3_index,
+                            p2_index,
+                            PageTableIndex::new(511),
+                        ),
+                    );
+
+                    for p1_index in start.p1_index()..=end.p1_index() {
+                        let pte = &pt[p1_index];
+                        unsafe {
+                            pte.try_unmap();
+                        }
+                    }
+                }
+            }
+        }
+
+        let (_, pcid) = Cr3::read_pcid();
+        unsafe {
+            INVLPGB.flush_user_pages(pcid, start..=end);
+        }
+    }
+
+    /// Try to copy user memory from `src` into `dest`.
+    ///
+    /// This function is not unsafe. If the read fails for some reason `Err(())` is
+    /// returned. If `src` isn't user memory `Err(())` is returned.
+    #[inline(always)]
+    pub fn try_read_user_fast(&self, src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
+        if dest.len() == 0 {
+            return Ok(());
+        }
+
+        check_user_address(src, dest.len()).map_err(|_| ())?;
+
+        let _guard = self.activate();
+
+        without_smap(|| try_read_fast(src, dest))
+    }
+
+    /// Try to copy memory from `src` into `dest`.
+    ///
+    /// If the write fails for some reason `Err(())` is returned. If `src` isn't
+    /// user memory `Err(())` is returned.
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that `src` is safe to read from volatily. Reads
+    /// may be racy.
+    #[inline(always)]
+    pub unsafe fn try_write_user_fast(&self, src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
+        if src.len() == 0 {
+            return Ok(());
+        }
+
+        // Make sure that even the end is still in the lower half.
+        let end_inclusive = Step::forward_checked(dest, src.len() - 1).ok_or(())?;
+        if end_inclusive.as_u64().get_bit(63) {
+            return Err(());
+        }
+
+        let _guard = self.activate();
+
+        without_smap(|| unsafe { try_write_fast(src, dest) })
+    }
+}
+
+struct ActivePageTableGuard {
+    _guard: RefMut<'static, Option<Arc<PagetablesAllocations>>>,
+    pml4: &'static ActivePageTable<Level4>,
+}
+
+impl Deref for ActivePageTableGuard {
+    type Target = ActivePageTable<Level4>;
+
+    fn deref(&self) -> &Self::Target {
+        self.pml4
+    }
 }
 
 fn flush_current_pcid() {
@@ -1303,5 +1519,59 @@ unsafe fn load(entry: &AtomicU64) -> u64 {
         out
     } else {
         unsafe { core::ptr::read(entry.as_ptr()) }
+    }
+}
+
+static ALLOCATIONS: Mutex<PcidAllocations> = Mutex::new(PcidAllocations::new());
+
+struct PcidAllocations {
+    last_idx: usize,
+    in_use: [bool; 4096],
+}
+
+impl PcidAllocations {
+    const fn new() -> Self {
+        let mut in_use = [false; 4096];
+        in_use[0] = true; // Reserve the first PCID for the kernel.
+        Self {
+            last_idx: 0,
+            in_use,
+        }
+    }
+
+    fn allocate(&mut self) -> PcidAllocation {
+        let mut counter = 0;
+
+        while self.in_use[self.last_idx] {
+            self.last_idx += 1;
+            self.last_idx %= self.in_use.len();
+            counter += 1;
+            assert!(counter < self.in_use.len());
+        }
+
+        self.in_use[self.last_idx] = true;
+        let pcid = Pcid::new(self.last_idx as u16).unwrap();
+        self.last_idx += 1;
+        self.last_idx %= self.in_use.len();
+        PcidAllocation { pcid }
+    }
+
+    unsafe fn deallocate(&mut self, pcid: Pcid) {
+        INVLPGB.flush_pcid(pcid);
+
+        self.in_use[usize::from(pcid.value())] = false;
+    }
+}
+
+pub struct PcidAllocation {
+    pcid: Pcid,
+}
+
+impl Drop for PcidAllocation {
+    fn drop(&mut self) {
+        let mut guard = ALLOCATIONS.lock();
+        unsafe {
+            guard.deallocate(self.pcid);
+        }
     }
 }

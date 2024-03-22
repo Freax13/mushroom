@@ -18,7 +18,7 @@ use x86_64::{
 use self::elf::{ElfIdent, ElfLoaderParams};
 
 use super::{
-    memory::{ActiveVirtualMemory, Bias, MemoryPermissions},
+    memory::{Bias, MemoryPermissions, VirtualMemory},
     syscall::{
         args::{FileMode, OpenFlags},
         cpu_state::CpuState,
@@ -32,9 +32,9 @@ use crate::{
 
 mod elf;
 
-impl ActiveVirtualMemory<'_, '_> {
+impl VirtualMemory {
     pub fn start_executable(
-        &mut self,
+        &self,
         path: &Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
@@ -67,7 +67,7 @@ impl ActiveVirtualMemory<'_, '_> {
     }
 
     fn start_elf<E>(
-        &mut self,
+        &self,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -178,7 +178,7 @@ impl ActiveVirtualMemory<'_, '_> {
     }
 
     fn start_shebang(
-        &mut self,
+        &self,
         path: &Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],

@@ -3,20 +3,16 @@ use core::{
     borrow::Borrow,
     cmp::{self, Ordering},
     iter::Step,
-    ops::{Deref, RangeBounds},
+    ops::RangeBounds,
     ptr::NonNull,
 };
 
 use crate::{
     fs::fd::OpenFileDescription,
     memory::{
-        invlpgb::INVLPGB,
         page::{KernelPage, UserPage},
-        pagetable::{
-            freeze_userspace, set_page, try_set_page, try_unmap_user_page, try_unmap_user_pages,
-        },
+        pagetable::{check_user_address, Pagetables},
     },
-    rt::spawn,
     spin::{
         lazy::Lazy,
         mutex::Mutex,
@@ -24,38 +20,28 @@ use crate::{
     },
 };
 use alloc::{
-    boxed::Box,
     collections::{btree_map::Entry, BTreeMap},
     ffi::CString,
-    sync::Arc,
     vec::Vec,
 };
 use bit_field::BitField;
 use bitflags::bitflags;
-use crossbeam_queue::SegQueue;
 use log::debug;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
-    instructions::{random::RdRand, tlb::Pcid},
-    registers::{
-        control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
-        rflags::{self, RFlags},
-    },
+    instructions::random::RdRand,
+    registers::rflags::{self, RFlags},
     structures::{
         idt::PageFaultErrorCode,
-        paging::{Page, PageOffset, PhysFrame},
+        paging::{Page, PageOffset},
     },
     VirtAddr,
 };
 
 use crate::{
     error::{Error, Result},
-    memory::{
-        frame::FRAME_ALLOCATOR,
-        pagetable::{allocate_pml4, PageTableFlags},
-    },
-    rt::oneshot,
+    memory::{frame::FRAME_ALLOCATOR, pagetable::PageTableFlags},
 };
 
 use super::syscall::{
@@ -70,97 +56,9 @@ const SIGRETURN_TRAMPOLINE_PAGE: u64 = 0x7fff_f000;
 pub const SIGRETURN_TRAMPOLINE_I386: u64 = SIGRETURN_TRAMPOLINE_PAGE;
 pub const SIGRETURN_TRAMPOLINE_AMD64: u64 = SIGRETURN_TRAMPOLINE_PAGE + 0x10;
 
-type DynVirtualMemoryOp = Box<dyn FnOnce(&mut VirtualMemoryActivator) + Send>;
-static PENDING_VIRTUAL_MEMORY_OPERATIONS: SegQueue<DynVirtualMemoryOp> = SegQueue::new();
-
-/// Returns true if a virtual memory op was executed.
-pub fn do_virtual_memory_op(virtual_memory_activator: &mut VirtualMemoryActivator) -> bool {
-    let Some(op) = PENDING_VIRTUAL_MEMORY_OPERATIONS.pop() else {
-        return false;
-    };
-    op(virtual_memory_activator);
-    true
-}
-
-pub struct VirtualMemoryActivator(());
-
-impl VirtualMemoryActivator {
-    pub async fn r#do<R>(f: impl FnOnce(&mut VirtualMemoryActivator) -> R + Send + 'static) -> R
-    where
-        R: Send + 'static,
-    {
-        let (sender, receiver) = oneshot::new();
-
-        PENDING_VIRTUAL_MEMORY_OPERATIONS.push(Box::new(|virtual_memory_activator| {
-            let result = f(virtual_memory_activator);
-            let _ = sender.send(result);
-        }));
-
-        receiver.recv().await.unwrap()
-    }
-
-    /// A function that allows an async function to activate a virtual memory.
-    pub async fn use_from_async<R>(
-        virtual_memory: Arc<VirtualMemory>,
-        f: impl FnOnce(&mut ActiveVirtualMemory) -> R + Send + 'static,
-    ) -> R
-    where
-        R: Send + 'static,
-    {
-        Self::r#do(move |vm_activator| vm_activator.activate(&virtual_memory, f)).await
-    }
-
-    pub unsafe fn new() -> Self {
-        Self(())
-    }
-
-    pub fn activate<'a, 'b, R, F>(&'a mut self, virtual_memory: &'b VirtualMemory, f: F) -> R
-    where
-        F: for<'r> FnOnce(&'r mut ActiveVirtualMemory<'a, 'b>) -> R,
-    {
-        // Save the current page tables.
-        let (prev_pml4, bits) = Cr3::read_raw();
-
-        // Switch the page tables.
-        if let Some(pcid_allocation) = virtual_memory.pcid_allocation.as_ref() {
-            unsafe {
-                Cr3::write_pcid_no_flush(virtual_memory.pml4, pcid_allocation.pcid);
-            }
-        } else {
-            unsafe {
-                Cr3::write(virtual_memory.pml4, Cr3Flags::empty());
-            }
-        }
-
-        let mut active_virtual_memory = ActiveVirtualMemory {
-            _activator: self,
-            virtual_memory,
-        };
-
-        // Run the closure.
-        let res = f(&mut active_virtual_memory);
-
-        // Restore the page tables.
-        if virtual_memory.pcid_allocation.is_some() {
-            let pcid = Pcid::new(bits).unwrap();
-            unsafe {
-                Cr3::write_pcid_no_flush(prev_pml4, pcid);
-            }
-        } else {
-            unsafe {
-                Cr3::write_raw(prev_pml4, bits);
-            }
-        }
-
-        res
-    }
-}
-
 pub struct VirtualMemory {
     state: RwLock<VirtualMemoryState>,
-    pml4: PhysFrame,
-    /// None if PCID is not supported.
-    pcid_allocation: Option<PcidAllocation>,
+    pagetables: Pagetables,
 }
 
 impl VirtualMemory {
@@ -168,10 +66,11 @@ impl VirtualMemory {
         Self::default()
     }
 
-    /// # Safety
-    ///
-    /// The virtual memory must be active.
-    pub unsafe fn handle_page_fault(&self, addr: u64, error_code: PageFaultErrorCode) -> bool {
+    pub fn run_with<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.pagetables.run_with(f)
+    }
+
+    pub fn handle_page_fault(&self, addr: u64, error_code: PageFaultErrorCode) -> bool {
         let addr = VirtAddr::new(addr);
         let page = Page::containing_address(addr);
 
@@ -187,16 +86,11 @@ impl VirtualMemory {
             error_code.contains(PageFaultErrorCode::INSTRUCTION_FETCH),
         );
 
-        // TODO: remove this.
-        let vm = ActiveVirtualMemory {
-            _activator: &mut VirtualMemoryActivator(()),
-            virtual_memory: self,
-        };
-        vm.map_page(page, required_flags).is_ok()
+        self.map_page(page, required_flags).is_ok()
     }
 
     /// Create a deep copy of the memory.
-    pub fn clone(&self, vm_activator: &mut VirtualMemoryActivator) -> Result<Self> {
+    pub fn clone(&self) -> Result<Self> {
         let mut this = Self::new();
         let new_state = this.state.get_mut();
 
@@ -204,9 +98,7 @@ impl VirtualMemory {
         new_state.brk_end = guard.brk_end;
 
         // Prevent userspace from writing to memory.
-        vm_activator.activate(self, |_| unsafe {
-            freeze_userspace();
-        });
+        self.pagetables.freeze_userspace();
 
         // Clone the backing memory.
         for (page, user_page) in guard.pages.iter_mut() {
@@ -222,58 +114,11 @@ impl VirtualMemory {
     pub fn brk_end(&self) -> VirtAddr {
         self.state.read().brk_end
     }
-}
 
-impl Default for VirtualMemory {
-    fn default() -> Self {
-        let cr4 = &Cr4::read();
-        let pcid_allocation = cr4
-            .contains(Cr4Flags::PCID)
-            .then(|| ALLOCATIONS.lock().allocate());
-
-        let pml4 = allocate_pml4().unwrap();
-
-        Self {
-            state: RwLock::new(VirtualMemoryState::new()),
-            pml4,
-            pcid_allocation,
-        }
-    }
-}
-
-impl Drop for VirtualMemory {
-    fn drop(&mut self) {
-        let state = self.state.get_mut();
-        if !state.pages.is_empty() {
-            let this = core::mem::take(self);
-            spawn(async move {
-                VirtualMemoryActivator::use_from_async(Arc::new(this), |a| {
-                    a.modify().unmap(VirtAddr::new(0), !0)
-                })
-                .await;
-            });
-        }
-    }
-}
-
-/// Check that the page is in the lower half.
-fn check_user_page(page: Page) -> Result<()> {
-    if u16::from(page.p4_index()) < 256 {
-        Ok(())
-    } else {
-        Err(Error::fault(()))
-    }
-}
-
-pub struct ActiveVirtualMemory<'a, 'b> {
-    _activator: &'a mut VirtualMemoryActivator,
-    virtual_memory: &'b VirtualMemory,
-}
-
-impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
-    pub fn modify(&self) -> ActiveVirtualMemoryWriteGuard<'_> {
-        ActiveVirtualMemoryWriteGuard {
+    pub fn modify(&self) -> VirtualMemoryWriteGuard<'_> {
+        VirtualMemoryWriteGuard {
             guard: self.state.write(),
+            virtual_memory: self,
         }
     }
 
@@ -294,7 +139,7 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         if required_flags.contains(PageTableFlags::WRITABLE)
             && guard.perms().contains(MemoryPermissions::WRITE)
         {
-            try_unmap_user_page(page);
+            self.pagetables.try_unmap_user_page(page);
             guard.make_mut()?;
         }
 
@@ -305,7 +150,8 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
         }
 
         unsafe {
-            set_page(page, entry, &mut &FRAME_ALLOCATOR)?;
+            self.pagetables
+                .set_page(page, entry, &mut &FRAME_ALLOCATOR)?;
         }
 
         drop(guard);
@@ -341,13 +187,13 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
         check_user_address(addr, bytes.len())?;
 
-        if try_read_user_fast(addr, bytes).is_ok() {
+        if self.pagetables.try_read_user_fast(addr, bytes).is_ok() {
             return Ok(());
         }
 
         self.map_addrs(addr, bytes.len(), PageTableFlags::empty())?;
 
-        try_read_user_fast(addr, bytes).unwrap();
+        self.pagetables.try_read_user_fast(addr, bytes).unwrap();
 
         Ok(())
     }
@@ -408,13 +254,13 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
 
         check_user_address(addr, bytes.len())?;
 
-        if unsafe { try_write_user_fast(bytes, addr) }.is_ok() {
+        if unsafe { self.pagetables.try_write_user_fast(bytes, addr) }.is_ok() {
             return Ok(());
         }
 
         self.map_addrs(addr, bytes.len(), PageTableFlags::WRITABLE)?;
 
-        unsafe { try_write_user_fast(bytes, addr) }.unwrap();
+        unsafe { self.pagetables.try_write_user_fast(bytes, addr) }.unwrap();
 
         Ok(())
     }
@@ -467,10 +313,10 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
                 let entry = guard.entry();
 
                 unsafe {
-                    try_set_page(page, entry);
+                    self.pagetables.try_set_page(page, entry);
                 }
             } else {
-                try_unmap_user_page(page);
+                self.pagetables.try_unmap_user_page(page);
             }
 
             drop(guard);
@@ -480,19 +326,36 @@ impl<'a, 'b> ActiveVirtualMemory<'a, 'b> {
     }
 }
 
-impl Deref for ActiveVirtualMemory<'_, '_> {
-    type Target = VirtualMemory;
-
-    fn deref(&self) -> &Self::Target {
-        self.virtual_memory
+impl Default for VirtualMemory {
+    fn default() -> Self {
+        Self {
+            state: RwLock::new(VirtualMemoryState::new()),
+            pagetables: Pagetables::new().unwrap(),
+        }
     }
 }
 
-pub struct ActiveVirtualMemoryWriteGuard<'a> {
-    guard: WriteRwLockGuard<'a, VirtualMemoryState>,
+impl Drop for VirtualMemory {
+    fn drop(&mut self) {
+        self.modify().unmap(VirtAddr::new(0), !0);
+    }
 }
 
-impl ActiveVirtualMemoryWriteGuard<'_> {
+/// Check that the page is in the lower half.
+fn check_user_page(page: Page) -> Result<()> {
+    if u16::from(page.p4_index()) < 256 {
+        Ok(())
+    } else {
+        Err(Error::fault(()))
+    }
+}
+
+pub struct VirtualMemoryWriteGuard<'a> {
+    guard: WriteRwLockGuard<'a, VirtualMemoryState>,
+    virtual_memory: &'a VirtualMemory,
+}
+
+impl VirtualMemoryWriteGuard<'_> {
     fn add_user_page(
         &mut self,
         page: Page,
@@ -518,7 +381,7 @@ impl ActiveVirtualMemoryWriteGuard<'_> {
                 if user_page.is_zero_page() {
                     existing.zero_range(range)?;
                 } else {
-                    try_unmap_user_page(page);
+                    self.virtual_memory.pagetables.try_unmap_user_page(page);
 
                     existing.make_mut()?;
                     let existing_ptr = existing.index(range.clone());
@@ -641,8 +504,31 @@ impl ActiveVirtualMemoryWriteGuard<'_> {
     }
 
     pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
-        unsafe {
-            self.guard.unmap(addr, len);
+        // Page align the start.
+        let start = addr.align_up(0x1000u64);
+        let len = len.saturating_sub(start - addr);
+
+        // Page align the end.
+        let len = align_down(len, 0x1000);
+        let end = start + len;
+
+        let start_page = Page::from_start_address(start).unwrap();
+        let end_page = Page::from_start_address(end).unwrap();
+        let pages = start_page..end_page;
+
+        // Flush all pages in the range.
+        self.virtual_memory
+            .pagetables
+            .try_unmap_user_pages(pages.clone());
+
+        loop {
+            // Find the next page in the range.
+            let Some((&page, _)) = self.guard.pages.range(pages.clone()).next() else {
+                break;
+            };
+
+            // Remove the page.
+            self.guard.pages.remove(&page);
         }
     }
 
@@ -721,36 +607,6 @@ impl VirtualMemoryState {
             })
             .unwrap()
     }
-
-    /// # Safety
-    ///
-    /// The virtual memory has to be active.
-    unsafe fn unmap(&mut self, addr: VirtAddr, len: u64) {
-        // Page align the start.
-        let start = addr.align_up(0x1000u64);
-        let len = len.saturating_sub(start - addr);
-
-        // Page align the end.
-        let len = align_down(len, 0x1000);
-        let end = start + len;
-
-        let start_page = Page::from_start_address(start).unwrap();
-        let end_page = Page::from_start_address(end).unwrap();
-        let pages = start_page..end_page;
-
-        // Flush all pages in the range.
-        try_unmap_user_pages(pages.clone());
-
-        loop {
-            // Find the next page in the range.
-            let Some((&page, _)) = self.pages.range(pages.clone()).next() else {
-                break;
-            };
-
-            // Remove the page.
-            self.pages.remove(&page);
-        }
-    }
 }
 
 bitflags! {
@@ -802,181 +658,6 @@ where
     }
 
     result
-}
-
-static ALLOCATIONS: Mutex<PcidAllocations> = Mutex::new(PcidAllocations::new());
-
-struct PcidAllocations {
-    last_idx: usize,
-    in_use: [bool; 4096],
-}
-
-impl PcidAllocations {
-    const fn new() -> Self {
-        let mut in_use = [false; 4096];
-        in_use[0] = true; // Reserve the first PCID for the kernel.
-        Self {
-            last_idx: 0,
-            in_use,
-        }
-    }
-
-    fn allocate(&mut self) -> PcidAllocation {
-        let mut counter = 0;
-
-        while self.in_use[self.last_idx] {
-            self.last_idx += 1;
-            self.last_idx %= self.in_use.len();
-            counter += 1;
-            assert!(counter < self.in_use.len());
-        }
-
-        self.in_use[self.last_idx] = true;
-        let pcid = Pcid::new(self.last_idx as u16).unwrap();
-        self.last_idx += 1;
-        self.last_idx %= self.in_use.len();
-        PcidAllocation { pcid }
-    }
-
-    unsafe fn deallocate(&mut self, pcid: Pcid) {
-        INVLPGB.flush_pcid(pcid);
-
-        self.in_use[usize::from(pcid.value())] = false;
-    }
-}
-
-pub struct PcidAllocation {
-    pcid: Pcid,
-}
-
-impl Drop for PcidAllocation {
-    fn drop(&mut self) {
-        let mut guard = ALLOCATIONS.lock();
-        unsafe {
-            guard.deallocate(self.pcid);
-        }
-    }
-}
-
-/// Try to copy memory from `src` into `dest`.
-///
-/// This function is not unsafe. If the read fails for some reason `Err(())` is
-/// returned.
-#[inline(always)]
-fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
-    let failed: u64;
-    unsafe {
-        asm!(
-            "66:",
-            "rep movsb",
-            "67:",
-            ".pushsection .recoverable",
-            ".quad 66b",
-            ".quad 67b",
-            ".popsection",
-            inout("rsi") src.as_u64() => _,
-            inout("rdi") dest.as_mut_ptr() => _,
-            inout("rcx") dest.len() => _,
-            inout("rdx") 0u64 => failed,
-        );
-    }
-
-    // assert_eq!(failed, 0);
-
-    if failed == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
-}
-
-#[inline(always)]
-fn check_user_address(addr: VirtAddr, len: usize) -> Result<()> {
-    let Some(len_m1) = len.checked_sub(1) else {
-        return Ok(());
-    };
-
-    // Make sure that even the end is still in the lower half.
-    let end_inclusive = Step::forward_checked(addr, len_m1).ok_or_else(|| Error::fault(()))?;
-    if end_inclusive.as_u64().get_bit(63) {
-        return Err(Error::fault(()));
-    }
-    Ok(())
-}
-
-/// Try to copy user memory from `src` into `dest`.
-///
-/// This function is not unsafe. If the read fails for some reason `Err(())` is
-/// returned. If `src` isn't user memory `Err(())` is returned.
-#[inline(always)]
-fn try_read_user_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
-    if dest.len() == 0 {
-        return Ok(());
-    }
-
-    check_user_address(src, dest.len()).map_err(|_| ())?;
-
-    without_smap(|| try_read_fast(src, dest))
-}
-
-/// Try to copy memory from `src` into `dest`.
-///
-/// If the write fails for some reason `Err(())` is returned.
-///
-/// # Safety
-///
-/// The caller has to ensure that `src` is safe to read from volatily. Reads
-/// may be racy.
-///
-/// The caller has to ensure writing to `dest` doesn't invalidate any of Rust's
-/// rules.
-#[inline(always)]
-unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
-    let failed: u64;
-    unsafe {
-        asm!(
-            "66:",
-            "rep movsb",
-            "67:",
-            ".pushsection .recoverable",
-            ".quad 66b",
-            ".quad 67b",
-            ".popsection",
-            inout("rsi") src.as_ptr() as *const u8 => _,
-            inout("rdi") dest.as_u64() => _,
-            inout("rcx") src.len() => _,
-            inout("rdx") 0u64 => failed,
-        );
-    }
-    if failed == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
-}
-
-/// Try to copy memory from `src` into `dest`.
-///
-/// If the write fails for some reason `Err(())` is returned. If `src` isn't
-/// user memory `Err(())` is returned.
-///
-/// # Safety
-///
-/// The caller has to ensure that `src` is safe to read from volatily. Reads
-/// may be racy.
-#[inline(always)]
-unsafe fn try_write_user_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
-    if src.len() == 0 {
-        return Ok(());
-    }
-
-    // Make sure that even the end is still in the lower half.
-    let end_inclusive = Step::forward_checked(dest, src.len() - 1).ok_or(())?;
-    if end_inclusive.as_u64().get_bit(63) {
-        return Err(());
-    }
-
-    without_smap(|| unsafe { try_write_fast(src, dest) })
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -60,7 +60,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
             };
             quote! {
                 write!(f, #format_string)?;
-                <#ty as SyscallArg>::display(f, syscall_args.args[#idx], abi, thread, vm_activator)?;
+                <#ty as SyscallArg>::display(f, syscall_args.args[#idx], abi, thread)?;
             }
         });
     let function_invocation_args = input
@@ -98,11 +98,11 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         }
     } else {
         quote! {
-            VirtualMemoryActivator::r#do(move |vm_activator| {
+            async move {
                 let mut thread = thread.lock();
                 let thread = &mut thread;
                 #syscall_ident(#(#function_invocation_args),*)
-            })
+            }
         }
     };
 
@@ -146,7 +146,6 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
                 f: &mut dyn fmt::Write,
                 syscall_args: SyscallArgs,
                 thread: &ThreadGuard<'_>,
-                vm_activator: &mut VirtualMemoryActivator,
             ) -> fmt::Result {
                 let abi = syscall_args.abi;
 
@@ -219,7 +218,7 @@ fn collect_syscall_inputs(item: ItemFn) -> Result<SyscallInputs> {
     };
 
     for (attrs, pat, ty) in args {
-        if pat.ident == "thread" || pat.ident == "vm_activator" || pat.ident == "abi" {
+        if pat.ident == "thread" || pat.ident == "abi" {
             continue;
         }
 

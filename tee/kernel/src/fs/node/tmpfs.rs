@@ -23,7 +23,7 @@ use crate::{
     error::{Error, Result},
     fs::path::{FileName, Path},
     user::process::{
-        memory::ActiveVirtualMemory,
+        memory::VirtualMemory,
         syscall::args::{FileMode, FileType, FileTypeAndMode, Pointer, Stat, Timespec},
     },
 };
@@ -377,7 +377,7 @@ impl File for TmpFsFile {
     fn read_to_user(
         &self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
         no_atime: bool,
@@ -400,7 +400,7 @@ impl File for TmpFsFile {
     fn write_from_user(
         &self,
         offset: usize,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
@@ -422,7 +422,7 @@ impl File for TmpFsFile {
 
     fn append_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {

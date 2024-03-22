@@ -1,6 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
 use core::{
-    cell::RefCell,
     fmt::{self, Display},
     future::Future,
     pin::Pin,
@@ -12,10 +11,7 @@ use log::{trace, warn};
 use crate::{
     error::{Error, Result},
     per_cpu::PerCpu,
-    user::process::{
-        memory::VirtualMemoryActivator,
-        thread::{Thread, ThreadGuard},
-    },
+    user::process::thread::{Thread, ThreadGuard},
 };
 
 use super::args::SyscallArg;
@@ -46,7 +42,6 @@ impl SyscallArg for u32 {
         value: u64,
         _abi: Abi,
         _thread: &ThreadGuard<'_>,
-        _vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result {
         if let Ok(value) = u32::try_from(value) {
             write!(f, "{value}")
@@ -61,15 +56,12 @@ pub trait Syscall {
     const NO_AMD64: Option<usize>;
     const NAME: &'static str;
 
-    #[allow(clippy::too_many_arguments)]
     async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult;
 
-    #[allow(clippy::too_many_arguments)]
     fn display(
         f: &mut dyn fmt::Write,
         syscall_args: SyscallArgs,
         thread: &ThreadGuard<'_>,
-        vm_activator: &mut VirtualMemoryActivator,
     ) -> fmt::Result;
 }
 
@@ -83,13 +75,7 @@ struct SyscallHandler {
         thread: Arc<Thread>,
         args: SyscallArgs,
     ) -> Pin<Box<dyn Future<Output = SyscallResult> + Send>>,
-    #[allow(clippy::type_complexity)]
-    display: fn(
-        f: &mut dyn fmt::Write,
-        args: SyscallArgs,
-        thread: &ThreadGuard<'_>,
-        vm_activator: &mut VirtualMemoryActivator,
-    ) -> fmt::Result,
+    display: fn(f: &mut dyn fmt::Write, args: SyscallArgs, thread: &ThreadGuard<'_>) -> fmt::Result,
 }
 
 impl SyscallHandler {
@@ -151,23 +137,19 @@ impl SyscallHandlers {
         let res = (handler.execute)(thread.clone(), args).await;
 
         if enable_log {
-            VirtualMemoryActivator::r#do(move |vm_activator| {
-                let guard = thread.lock();
-                let formatted_syscall = FormattedSyscall {
-                    handler,
-                    args,
-                    thread: &guard,
-                    vm_activator: RefCell::new(vm_activator),
-                };
+            let guard = thread.lock();
+            let formatted_syscall = FormattedSyscall {
+                handler,
+                args,
+                thread: &guard,
+            };
 
-                trace!(
-                    "core={} tid={} abi={:?} @ {formatted_syscall} = {res:?}",
-                    PerCpu::get().idx,
-                    guard.tid(),
-                    args.abi,
-                );
-            })
-            .await;
+            trace!(
+                "core={} tid={} abi={:?} @ {formatted_syscall} = ({res:?})",
+                PerCpu::get().idx,
+                guard.tid(),
+                args.abi,
+            );
         }
 
         res
@@ -178,16 +160,10 @@ struct FormattedSyscall<'a> {
     handler: SyscallHandler,
     args: SyscallArgs,
     thread: &'a ThreadGuard<'a>,
-    vm_activator: RefCell<&'a mut VirtualMemoryActivator>,
 }
 
 impl Display for FormattedSyscall<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        (self.handler.display)(
-            f,
-            self.args,
-            self.thread,
-            &mut self.vm_activator.borrow_mut(),
-        )
+        (self.handler.display)(f, self.args, self.thread)
     }
 }

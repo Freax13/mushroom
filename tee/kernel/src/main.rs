@@ -39,7 +39,7 @@ extern crate alloc;
 use exception::switch_stack;
 use supervisor::launch_next_ap;
 
-use crate::{per_cpu::PerCpu, user::process::memory::VirtualMemoryActivator};
+use crate::per_cpu::PerCpu;
 
 mod error;
 mod exception;
@@ -88,14 +88,12 @@ extern "C" fn init() -> ! {
         exception::init();
     }
 
-    let mut vm_activator = unsafe { VirtualMemoryActivator::new() };
-
     // The first AP does some extra initialization work.
     if PerCpu::get().idx == 0 {
-        user::process::start_init_process(&mut vm_activator);
+        user::process::start_init_process();
     }
 
     launch_next_ap();
 
-    user::run(&mut vm_activator)
+    user::run()
 }

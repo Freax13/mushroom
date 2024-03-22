@@ -5,7 +5,7 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use futures::{select_biased, FutureExt};
 
 use super::{
-    memory::{VirtualMemory, VirtualMemoryActivator},
+    memory::VirtualMemory,
     syscall::args::{Pointer, Timespec},
 };
 use crate::{
@@ -33,30 +33,26 @@ impl Futexes {
         deadline: Option<Timespec>,
         vm: Arc<VirtualMemory>,
     ) -> Result<()> {
-        let receiver = VirtualMemoryActivator::use_from_async(vm, move |vm| {
-            // Check if the value already changed. This can help avoid taking the lock.
-            let current_value = vm.read(uaddr)?;
-            if current_value != val {
-                return Err(Error::again(()));
-            }
+        // Check if the value already changed. This can help avoid taking the lock.
+        let current_value = vm.read(uaddr)?;
+        if current_value != val {
+            return Err(Error::again(()));
+        }
 
-            let mut guard = self.futexes.lock();
+        let mut guard = self.futexes.lock();
 
-            // Now that we've taken the lock, we need to check again.
-            let current_value = vm.read(uaddr)?;
-            if current_value != val {
-                return Err(Error::again(()));
-            }
+        // Now that we've taken the lock, we need to check again.
+        let current_value = vm.read(uaddr)?;
+        if current_value != val {
+            return Err(Error::again(()));
+        }
 
-            let (sender, receiver) = oneshot::new();
-            guard
-                .entry(uaddr)
-                .or_default()
-                .push(FutexWaiter { sender, bitset });
-
-            Ok(receiver)
-        })
-        .await?;
+        let (sender, receiver) = oneshot::new();
+        guard
+            .entry(uaddr)
+            .or_default()
+            .push(FutexWaiter { sender, bitset });
+        drop(guard);
 
         if let Some(deadline) = deadline {
             select_biased! {

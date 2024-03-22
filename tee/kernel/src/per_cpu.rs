@@ -5,6 +5,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use alloc::sync::Arc;
 use constants::MAX_APS_COUNT;
 use x86_64::{
     registers::segmentation::{Segment64, GS},
@@ -13,7 +14,7 @@ use x86_64::{
 };
 
 use crate::{
-    memory::pagetable::ReservedFrameStorage,
+    memory::pagetable::{PagetablesAllocations, ReservedFrameStorage},
     user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
 };
 
@@ -37,6 +38,7 @@ pub struct PerCpu {
     pub exit: Cell<RawExit>,
     pub vector: Cell<u8>,
     pub error_code: Cell<u64>,
+    pub last_pagetables: RefCell<Option<Arc<PagetablesAllocations>>>,
 }
 
 impl PerCpu {
@@ -56,6 +58,7 @@ impl PerCpu {
             exit: Cell::new(RawExit::Syscall),
             vector: Cell::new(0),
             error_code: Cell::new(0),
+            last_pagetables: RefCell::new(None),
         }
     }
 

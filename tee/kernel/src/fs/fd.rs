@@ -8,7 +8,7 @@ use crate::{
     memory::page::KernelPage,
     spin::mutex::Mutex,
     user::process::{
-        memory::{ActiveVirtualMemory, VirtualMemory, VirtualMemoryActivator},
+        memory::VirtualMemory,
         syscall::args::{
             EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
         },
@@ -246,7 +246,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn read_to_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
     ) -> Result<usize> {
@@ -274,7 +274,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn write_from_user(
         &self,
-        vm: &mut ActiveVirtualMemory,
+        vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
     ) -> Result<usize> {
@@ -418,19 +418,14 @@ pub async fn do_io_with_vm<R, F>(
 ) -> Result<R>
 where
     R: Send + 'static,
-    F: FnMut(&mut ActiveVirtualMemory) -> Result<R> + Send + 'static,
+    F: FnMut(&VirtualMemory) -> Result<R>,
 {
     let flags = fd.flags();
     let non_blocking = flags.contains(OpenFlags::NONBLOCK);
 
     loop {
         // Try to execute the closure.
-        let (res, f) = VirtualMemoryActivator::use_from_async(vm.clone(), move |vm| {
-            let res = callback(vm);
-            (res, callback)
-        })
-        .await;
-        callback = f;
+        let res = callback(&vm);
 
         match res {
             Ok(value) => return Ok(value),

@@ -12,10 +12,7 @@ use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
 use log::{debug, warn};
 
-use crate::{
-    supervisor::schedule_vcpu,
-    user::process::memory::{do_virtual_memory_op, VirtualMemoryActivator},
-};
+use crate::supervisor::schedule_vcpu;
 
 pub mod mpmc;
 pub mod mpsc;
@@ -30,11 +27,11 @@ pub fn spawn(future: impl Future<Output = ()> + Send + 'static) {
     Task::new(future).wake()
 }
 
-pub fn poll(vm_activator: &mut VirtualMemoryActivator) -> bool {
+pub fn poll() -> bool {
     let Some(thread) = SCHEDULED_THREADS.pop() else {
         return false;
     };
-    thread.poll(vm_activator);
+    thread.poll();
     true
 }
 
@@ -54,7 +51,7 @@ impl Task {
         })
     }
 
-    fn poll(self: &Arc<Self>, vm_activator: &mut VirtualMemoryActivator) {
+    fn poll(self: &Arc<Self>) {
         let waker = Waker::from(self.clone());
         let mut cx = Context::from_waker(&waker);
 
@@ -73,10 +70,6 @@ impl Task {
                 self.state.store(TaskState::Done);
                 return;
             }
-
-            // Run pending virtual memory ops which were likely spawned by this task.
-            // This allows us to immediately continue running the task.
-            while do_virtual_memory_op(vm_activator) {}
 
             // Update the task state.
             let res = self.state.fetch_update(|state| match state {
