@@ -70,7 +70,26 @@ impl Thread {
 impl ThreadGuard<'_> {
     /// Execute the exit syscall.
     pub fn exit(&mut self, status: u8) {
-        let _ = exit(self, self.virtual_memory().clone(), u64::from(status));
+        if let Some(vfork_parent) = self.vfork_done.take() {
+            let _ = vfork_parent.send(());
+        }
+
+        self.close_all_fds();
+
+        let clear_child_tid = core::mem::take(&mut self.clear_child_tid);
+        if !clear_child_tid.is_null() {
+            let _ = self.virtual_memory().write(clear_child_tid, 0u32);
+
+            self.process().futexes.wake(clear_child_tid, 1, None);
+        }
+
+        if !core::mem::replace(&mut self.notified_parent_about_exit, true) {
+            if let Some(parent) = self.parent().upgrade() {
+                parent.add_child_death(self.tid(), status);
+            }
+        }
+
+        self.set_exit_status(status);
     }
 }
 
@@ -1165,35 +1184,10 @@ fn execve(
 }
 
 #[syscall(i386 = 1, amd64 = 60)]
-fn exit(
-    thread: &mut ThreadGuard,
-    #[state] virtual_memory: Arc<VirtualMemory>,
-    status: u64,
-) -> SyscallResult {
-    let status = status as u8;
+async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
+    thread.lock().exit(status as u8);
 
-    if let Some(vfork_parent) = thread.vfork_done.take() {
-        let _ = vfork_parent.send(());
-    }
-
-    thread.close_all_fds();
-
-    let clear_child_tid = core::mem::take(&mut thread.clear_child_tid);
-    if !clear_child_tid.is_null() {
-        let _ = virtual_memory.write(clear_child_tid, 0u32);
-
-        thread.process().futexes.wake(clear_child_tid, 1, None);
-    }
-
-    if !core::mem::replace(&mut thread.notified_parent_about_exit, true) {
-        if let Some(parent) = thread.parent().upgrade() {
-            parent.add_child_death(thread.tid(), status);
-        }
-    }
-
-    thread.set_exit_status(status);
-
-    Ok(0)
+    core::future::pending().await
 }
 
 #[syscall(i386 = 114, amd64 = 61)]
