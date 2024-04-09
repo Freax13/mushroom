@@ -42,20 +42,64 @@ impl Notify {
         struct Wait<'a> {
             notify: &'a Notify,
             start_generation: u64,
+            registered_waker: Option<Waker>,
+        }
+
+        impl Wait<'_> {
+            fn remove_waker(&self, waker: Waker, state: &mut State) {
+                // Don't do anything if the generation no longer matches (the
+                // waker will have already been removed if that's the case.)
+                if state.generation != self.start_generation {
+                    return;
+                }
+
+                // Find and remove the waker.
+                let idx = state
+                    .wakers
+                    .iter()
+                    .position(|w| w.will_wake(&waker))
+                    .unwrap();
+                state.wakers.swap_remove(idx);
+            }
         }
 
         impl Future for Wait<'_> {
             type Output = ();
 
-            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let mut guard = self.notify.state.lock();
                 if guard.generation != self.start_generation {
                     return Poll::Ready(());
                 }
 
-                guard.wakers.push(cx.waker().clone());
+                let waker = cx.waker();
+                if let Some(old_slot) = self.registered_waker.as_mut() {
+                    if old_slot.will_wake(waker) {
+                        // We don't need to do anything.
+                    } else {
+                        let old_waker = core::mem::replace(old_slot, waker.clone());
+
+                        self.remove_waker(old_waker, &mut guard);
+                        guard.wakers.push(waker.clone());
+                    }
+                } else {
+                    self.registered_waker = Some(waker.clone());
+                    guard.wakers.push(waker.clone());
+                }
+
                 drop(guard);
                 Poll::Pending
+            }
+        }
+
+        impl Drop for Wait<'_> {
+            fn drop(&mut self) {
+                // Don't do anything if we haven't registers a waker yet.
+                let Some(waker) = self.registered_waker.take() else {
+                    return;
+                };
+
+                self.remove_waker(waker, &mut self.notify.state.lock());
             }
         }
 
@@ -67,6 +111,7 @@ impl Notify {
         Wait {
             notify: self,
             start_generation,
+            registered_waker: None,
         }
     }
 
