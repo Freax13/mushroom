@@ -15,11 +15,12 @@ impl<T> OnceCell<T> {
         }
     }
 
-    /// Returns the Cell's value. This may be `value` or an earlier set value.
-    pub fn set(&self, value: T) -> &T {
+    /// Initialize the value in the OnceCell if it hasn't been initialized
+    /// already. Returns whether the OnceCell was initialized.
+    pub fn set(&self, value: T) -> bool {
         // Try to initialize the Once.
         let mut option = Some(value);
-        let value = self.state.call_once(|| option.take().unwrap());
+        self.state.call_once(|| option.take().unwrap());
 
         // If the value was taken out of the `Option` we just set the value.
         // Notify other tasks.
@@ -27,8 +28,7 @@ impl<T> OnceCell<T> {
         if set {
             self.notify.notify();
         }
-
-        value
+        set
     }
 
     pub fn try_get(&self) -> Option<&T> {

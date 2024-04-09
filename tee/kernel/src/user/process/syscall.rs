@@ -68,8 +68,8 @@ impl Thread {
 }
 
 impl ThreadGuard<'_> {
-    /// Execute the exit syscall.
-    pub fn exit(&mut self, status: u8) {
+    /// Release the threads resources.
+    pub fn exit(&mut self) {
         if let Some(vfork_parent) = self.vfork_done.take() {
             let _ = vfork_parent.send(());
         }
@@ -83,13 +83,7 @@ impl ThreadGuard<'_> {
             self.process().futexes.wake(clear_child_tid, 1, None);
         }
 
-        if !core::mem::replace(&mut self.notified_parent_about_exit, true) {
-            if let Some(parent) = self.parent().upgrade() {
-                parent.add_child_death(self.tid(), status);
-            }
-        }
-
-        self.set_exit_status(status);
+        self.thread.exited.set(());
     }
 }
 
@@ -976,13 +970,12 @@ async fn clone(
 
     let new_tid = new_tid();
 
-    let mut thread = thread.lock();
+    let thread = thread.lock();
 
     let new_process = if flags.contains(CloneFlags::THREAD) {
         None
     } else {
-        thread.unwaited_children += 1;
-        Some(Arc::new(Process::new(new_tid)))
+        Some(Process::new(new_tid, Arc::downgrade(thread.process())))
     };
 
     let new_virtual_memory = if flags.contains(CloneFlags::VM) {
@@ -1031,38 +1024,35 @@ async fn clone(
         (None, None)
     };
 
-    let tid = Thread::spawn(|weak_thread| {
-        let new_thread = thread.clone(
-            new_tid,
-            weak_thread,
-            new_process,
-            new_virtual_memory,
-            new_signal_handler_table,
-            new_fdtable,
-            stack.get(),
-            new_clear_child_tid,
-            new_tls,
-            vfork_sender,
-        );
+    let new_thread = thread.clone(
+        new_tid,
+        new_process,
+        new_virtual_memory,
+        new_signal_handler_table,
+        new_fdtable,
+        stack.get(),
+        new_clear_child_tid,
+        new_tls,
+        vfork_sender,
+    );
 
-        if flags.contains(CloneFlags::PARENT_SETTID) {
-            virtual_memory.write(parent_tid, new_tid)?;
-        }
+    if flags.contains(CloneFlags::PARENT_SETTID) {
+        virtual_memory.write(parent_tid, new_tid)?;
+    }
 
-        if flags.contains(CloneFlags::CHILD_SETTID) {
-            let guard = new_thread.lock();
-            let virtual_memory = guard.virtual_memory();
-            virtual_memory.write(child_tid, new_tid)?;
-        }
+    if flags.contains(CloneFlags::CHILD_SETTID) {
+        let guard = new_thread.lock();
+        let virtual_memory = guard.virtual_memory();
+        virtual_memory.write(child_tid, new_tid)?;
+    }
 
-        Result::Ok(new_thread)
-    })?;
+    new_thread.spawn();
 
     if let Some(vfork_receiver) = vfork_receiver {
         let _ = vfork_receiver.recv().await;
     }
 
-    Ok(u64::from(tid))
+    Ok(u64::from(new_tid))
 }
 
 #[syscall(i386 = 2, amd64 = 57)]
@@ -1163,7 +1153,7 @@ fn execve(
 
 #[syscall(i386 = 1, amd64 = 60)]
 async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
-    thread.lock().exit(status as u8);
+    thread.lock().exit();
 
     core::future::pending().await
 }
@@ -1181,30 +1171,17 @@ async fn wait4(
         todo!()
     }
 
-    let (tid, status) = match pid {
+    let no_hang = options.contains(WaitOptions::NOHANG);
+    let pid = match pid {
         ..=-2 => todo!(),
-        -1 => {
-            let guard = thread.lock();
-            if guard.unwaited_children == 0 {
-                return Err(Error::child(()));
-            }
-            drop(guard);
-
-            if options.contains(WaitOptions::NOHANG) {
-                let Some((tid, status)) = thread.try_wait_for_child_death() else {
-                    return Ok(0);
-                };
-                (tid, status)
-            } else {
-                thread.wait_for_child_death().await
-            }
-        }
+        -1 => None,
         0 => todo!(),
-        1.. => {
-            let t = THREADS.by_id(pid as u32).ok_or_else(|| Error::child(()))?;
-            let status = t.wait_for_exit().await;
-            (t.tid(), status)
-        }
+        1.. => Some(pid as u32),
+    };
+
+    let opt = thread.process().wait_for_child_death(pid, no_hang).await?;
+    let Some((tid, status)) = opt else {
+        return Ok(0);
     };
 
     if !wstatus.is_null() {
@@ -1213,10 +1190,6 @@ async fn wait4(
 
         virtual_memory.write_bytes(addr, bytes_of(&wstatus))?;
     }
-
-    let mut guard = thread.lock();
-    guard.unwaited_children -= 1;
-    drop(guard);
 
     THREADS.remove(tid);
 
@@ -1834,7 +1807,7 @@ async fn clock_nanosleep(
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
     let process = thread.process().clone();
-    process.exit(status as u8);
+    process.exit_group(status as u8);
     core::future::pending().await
 }
 

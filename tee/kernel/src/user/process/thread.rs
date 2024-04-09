@@ -9,6 +9,7 @@ use crate::{
         fd::{FileDescriptorTable, OpenFileDescription},
         node::{DynINode, FileAccessContext},
     },
+    rt::once::OnceCell,
     spin::mutex::{Mutex, MutexGuard},
 };
 use alloc::{
@@ -27,7 +28,7 @@ use crate::{
         node::{lookup_and_resolve_node, ROOT_NODE},
         path::Path,
     },
-    rt::{mpmc, once::OnceCell, oneshot, spawn},
+    rt::{oneshot, spawn},
 };
 
 use super::{
@@ -77,11 +78,8 @@ pub type WeakThread = Weak<Thread>;
 pub struct Thread {
     // Immutable state.
     tid: u32,
-    self_weak: WeakThread,
-    parent: WeakThread,
     process: Arc<Process>,
-    dead_children: mpmc::Receiver<(u32, u8)>,
-    exit_status: OnceCell<u8>,
+    pub exited: OnceCell<()>,
 
     // Mutable state.
     state: Mutex<ThreadState>,
@@ -97,22 +95,17 @@ pub struct ThreadState {
     pub pending_signals: Sigset,
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
-    pub notified_parent_about_exit: bool,
     pub cwd: DynINode,
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
     fdtable: Arc<FileDescriptorTable>,
-
-    pub unwaited_children: u64,
 }
 
 impl Thread {
     #[allow(clippy::too_many_arguments)]
     fn new(
         tid: u32,
-        self_weak: WeakThread,
-        parent: WeakThread,
         process: Arc<Process>,
         signal_handler_table: Arc<SignalHandlerTable>,
         virtual_memory: Arc<VirtualMemory>,
@@ -124,11 +117,8 @@ impl Thread {
     ) -> Self {
         Self {
             tid,
-            self_weak,
-            parent,
             process,
-            dead_children: mpmc::Receiver::new(),
-            exit_status: OnceCell::new(),
+            exited: OnceCell::new(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
                 signal_handler_table,
@@ -136,50 +126,28 @@ impl Thread {
                 pending_signals: Sigset(0),
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
-                notified_parent_about_exit: false,
                 cwd,
                 vfork_done,
                 fdtable,
                 umask,
-                unwaited_children: 0,
             }),
             cpu_state: Mutex::new(cpu_state),
         }
     }
 
-    pub fn spawn(create_thread: impl FnOnce(WeakThread) -> Result<Thread>) -> Result<u32> {
-        let mut error = None;
-
-        // Create the thread.
-        let arc = Arc::new_cyclic(|self_weak| {
-            let res = create_thread(self_weak.clone());
-            res.unwrap_or_else(|err| {
-                error = Some(err);
-
-                // Create a temporary fake thread.
-                // FIXME: Why isn't try_new_cyclic a thing?
-                Thread::empty(self_weak.clone(), new_tid())
-            })
-        });
-
-        if let Some(error) = error {
-            return Err(error);
-        }
+    pub fn spawn(self) {
+        let arc = Arc::new(self);
 
         // Register the thread.
-        let tid = THREADS.add(arc.clone());
+        THREADS.add(arc.clone());
 
         spawn(arc.run());
-
-        Ok(tid)
     }
 
-    pub fn empty(self_weak: WeakThread, tid: u32) -> Self {
+    pub fn empty(tid: u32) -> Self {
         Self::new(
             tid,
-            self_weak,
-            Weak::new(),
-            Arc::new(Process::new(tid)),
+            Process::new(tid, Weak::new()),
             Arc::new(SignalHandlerTable::new()),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::with_standard_io()),
@@ -206,7 +174,7 @@ impl Thread {
     }
 
     pub async fn run(self: Arc<Self>) {
-        let thread_exit_future = self.exit_status.get();
+        let thread_exit_future = self.exited.get();
         let process_exit_future = self.process.exit_status();
         let run_future = async {
             loop {
@@ -237,23 +205,7 @@ impl Thread {
 
     fn exit(self: Arc<Self>, status: u8) {
         let mut guard = self.lock();
-        guard.exit(status)
-    }
-
-    pub async fn wait_for_exit(&self) -> u8 {
-        *self.exit_status.get().await
-    }
-
-    pub fn try_wait_for_child_death(&self) -> Option<(u32, u8)> {
-        self.dead_children.try_recv()
-    }
-
-    pub async fn wait_for_child_death(&self) -> (u32, u8) {
-        self.dead_children.recv().await
-    }
-
-    pub fn add_child_death(&self, tid: u32, status: u8) {
-        let _ = self.dead_children.sender().send((tid, status));
+        guard.exit()
     }
 
     fn run_userspace(&self) -> Result<Exit> {
@@ -332,7 +284,6 @@ impl ThreadGuard<'_> {
     pub fn clone(
         &self,
         new_tid: u32,
-        self_weak: WeakThread,
         new_process: Option<Arc<Process>>,
         new_virtual_memory: Option<Arc<VirtualMemory>>,
         new_signal_handler_table: Option<Arc<SignalHandlerTable>>,
@@ -350,8 +301,6 @@ impl ThreadGuard<'_> {
 
         let thread = Thread::new(
             new_tid,
-            self_weak,
-            self.weak().clone(),
             process,
             signal_handler_table,
             virtual_memory,
@@ -390,14 +339,6 @@ impl ThreadGuard<'_> {
         drop(guard);
 
         thread
-    }
-
-    pub fn weak(&self) -> &WeakThread {
-        &self.thread.self_weak
-    }
-
-    pub fn parent(&self) -> &WeakThread {
-        &self.thread.parent
     }
 
     pub fn tid(&self) -> u32 {
@@ -458,10 +399,6 @@ impl ThreadGuard<'_> {
         self.clear_child_tid = Pointer::NULL;
 
         Ok(())
-    }
-
-    pub fn set_exit_status(&self, status: u8) {
-        self.thread.exit_status.set(status);
     }
 
     pub fn getrlimit(&self, resource: Resource) -> RLimit {
