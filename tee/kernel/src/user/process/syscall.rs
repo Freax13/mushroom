@@ -1066,69 +1066,47 @@ async fn clone(
 }
 
 #[syscall(i386 = 2, amd64 = 57)]
-fn fork(
-    thread: &mut ThreadGuard,
+async fn fork(
+    thread: Arc<Thread>,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
 ) -> SyscallResult {
-    thread.unwaited_children += 1;
-
-    let tid = Thread::spawn(|self_weak| {
-        let new_tid = new_tid();
-        let new_process = Some(Arc::new(Process::new(new_tid)));
-        let virtual_memory = (*virtual_memory).clone()?;
-        let new_virtual_memory = Some(Arc::new(virtual_memory));
-        let new_signal_handler_table = Some(Arc::new((*thread.signal_handler_table).clone()));
-        let new_fdtable = Arc::new((*fdtable).clone());
-
-        Result::Ok(thread.clone(
-            new_tid,
-            self_weak,
-            new_process,
-            new_virtual_memory,
-            new_signal_handler_table,
-            new_fdtable,
-            VirtAddr::zero(),
-            None,
-            None,
-            None,
-        ))
-    })?;
-
-    Ok(u64::from(tid))
+    clone(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        CloneFlags::from_bits_retain(Signal::CHLD.get() as u64),
+        Pointer::NULL,
+        Pointer::NULL,
+        Pointer::NULL,
+        0,
+    )
+    .await
 }
 
 #[syscall(i386 = 190, amd64 = 58)]
-async fn vfork(thread: Arc<Thread>, #[state] fdtable: Arc<FileDescriptorTable>) -> SyscallResult {
-    let (sender, receiver) = oneshot::new();
-
-    let mut guard = thread.lock();
-    guard.unwaited_children += 1;
-
-    let tid = Thread::spawn(|self_weak| {
-        let new_tid = new_tid();
-        let new_process = Some(Arc::new(Process::new(new_tid)));
-        let new_signal_handler_table = Some(Arc::new((*guard.signal_handler_table).clone()));
-        let new_fdtable = Arc::new((*fdtable).clone());
-
-        Result::Ok(guard.clone(
-            new_tid,
-            self_weak,
-            new_process,
-            None,
-            new_signal_handler_table,
-            new_fdtable,
-            VirtAddr::zero(),
-            None,
-            None,
-            Some(sender),
-        ))
-    })?;
-    drop(guard);
-
-    let _ = receiver.recv().await;
-
-    Ok(u64::from(tid))
+async fn vfork(
+    thread: Arc<Thread>,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+) -> SyscallResult {
+    clone(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        CloneFlags::VM
+            | CloneFlags::VFORK
+            | CloneFlags::from_bits_retain(Signal::CHLD.get() as u64),
+        Pointer::NULL,
+        Pointer::NULL,
+        Pointer::NULL,
+        0,
+    )
+    .await
 }
 
 #[syscall(i386 = 11, amd64 = 59)]

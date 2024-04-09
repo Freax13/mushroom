@@ -1101,6 +1101,7 @@ impl Signal {
     pub const FPE: Self = Self(8);
     pub const SEGV: Self = Self(11);
     pub const PIPE: Self = Self(13);
+    pub const CHLD: Self = Self(17);
 
     pub fn new(value: u8) -> Result<Self> {
         if value >= 64 {
