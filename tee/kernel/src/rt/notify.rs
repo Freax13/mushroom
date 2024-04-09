@@ -115,6 +115,17 @@ impl Notify {
         }
     }
 
+    /// Listen for notifications until the closure return `Some`.
+    pub async fn wait_until<R>(&self, f: impl Fn() -> Option<R>) -> R {
+        loop {
+            let wait = self.wait();
+            if let Some(value) = f() {
+                return value;
+            }
+            wait.await;
+        }
+    }
+
     pub fn notify(&self) {
         let mut guard = self.state.lock();
         guard.generation += 1;
