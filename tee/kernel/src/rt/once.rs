@@ -31,6 +31,10 @@ impl<T> OnceCell<T> {
         value
     }
 
+    pub fn try_get(&self) -> Option<&T> {
+        self.state.get()
+    }
+
     pub async fn get(&self) -> &T {
         loop {
             let wait = self.notify.wait();
