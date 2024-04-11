@@ -1,4 +1,7 @@
-use core::ffi::CStr;
+use core::{
+    ffi::CStr,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use alloc::{
     sync::{Arc, Weak},
@@ -8,7 +11,7 @@ use alloc::{
 use crate::{
     error::{Error, Result},
     fs::{
-        fd::file::File,
+        fd::{file::File, FileDescriptorTable},
         node::{tmpfs::TmpFsFile, FileAccessContext, INode},
         path::Path,
         INIT,
@@ -21,7 +24,9 @@ use crate::{
 
 use self::{
     futex::Futexes,
-    thread::{new_tid, Thread},
+    memory::VirtualMemory,
+    syscall::cpu_state::CpuState,
+    thread::{new_tid, running_state::ExecveValues, Thread, WeakThread},
 };
 
 mod exec;
@@ -37,6 +42,9 @@ pub struct Process {
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
     child_death_notify: Notify,
+    threads: Mutex<Vec<WeakThread>>,
+    /// The number of running threads.
+    running: AtomicUsize,
 }
 
 impl Process {
@@ -48,6 +56,8 @@ impl Process {
             parent: parent.clone(),
             children: Mutex::new(Vec::new()),
             child_death_notify: Notify::new(),
+            threads: Mutex::new(Vec::new()),
+            running: AtomicUsize::new(0),
         };
         let arc = Arc::new(this);
 
@@ -57,6 +67,46 @@ impl Process {
 
         arc
     }
+
+    pub fn add_thread(&self, thread: WeakThread) {
+        let mut guard = self.threads.lock();
+        guard.push(thread);
+        self.running.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn restart_thread(&self) {
+        self.running.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn exit(&self, exit_status: u8) {
+        let prev = self.running.fetch_sub(1, Ordering::Relaxed);
+        if prev == 1 {
+            self.exit_group(exit_status);
+        }
+    }
+
+    pub fn execve(
+        &self,
+        virtual_memory: VirtualMemory,
+        cpu_state: CpuState,
+        fdtable: FileDescriptorTable,
+    ) {
+        let mut threads = self.threads.lock();
+
+        // Restart the thread leader.
+        let leader = threads[0].upgrade().unwrap();
+        leader.execve(ExecveValues {
+            virtual_memory,
+            cpu_state,
+            fdtable,
+        });
+
+        // Stop all threads except for the thread group leader.
+        for thread in threads.drain(1..).filter_map(|t| t.upgrade()) {
+            thread.terminate(0);
+        }
+    }
+
     /// Terminate all threads in the thread group.
     ///
     /// The returned exit status may not be the same as the requested
@@ -77,6 +127,14 @@ impl Process {
             return;
         }
 
+        let mut threads = self.threads.lock();
+        for thread in core::mem::take(&mut *threads)
+            .into_iter()
+            .filter_map(|t| t.upgrade())
+        {
+            thread.terminate(exit_status);
+        }
+        drop(threads);
 
         if let Some(parent) = self.parent.upgrade() {
             parent.child_death_notify.notify();

@@ -9,7 +9,6 @@ use crate::{
         fd::{FileDescriptorTable, OpenFileDescription},
         node::{DynINode, FileAccessContext},
     },
-    rt::once::OnceCell,
     spin::mutex::{Mutex, MutexGuard},
 };
 use alloc::{
@@ -23,22 +22,23 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
-    fs::{
-        node::{lookup_and_resolve_node, ROOT_NODE},
-        path::Path,
-    },
+    error::Result,
+    fs::{node::ROOT_NODE, path::Path},
     rt::{oneshot, spawn},
 };
+
+use self::running_state::{ExitAction, ThreadRunningState};
 
 use super::{
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, OpenFlags, Pointer, RLimit, Resource, Signal, UserDesc},
+        args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
 };
+
+pub mod running_state;
 
 pub static THREADS: Threads = Threads::new();
 
@@ -64,10 +64,6 @@ impl Threads {
         tid
     }
 
-    pub fn by_id(&self, tid: u32) -> Option<Arc<Thread>> {
-        self.map.lock().get(&tid).cloned()
-    }
-
     pub fn remove(&self, tid: u32) {
         self.map.lock().remove(&tid);
     }
@@ -79,7 +75,7 @@ pub struct Thread {
     // Immutable state.
     tid: u32,
     process: Arc<Process>,
-    pub exited: OnceCell<()>,
+    running_state: ThreadRunningState,
 
     // Mutable state.
     state: Mutex<ThreadState>,
@@ -118,7 +114,7 @@ impl Thread {
         Self {
             tid,
             process,
-            exited: OnceCell::new(),
+            running_state: ThreadRunningState::new(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
                 signal_handler_table,
@@ -173,39 +169,53 @@ impl Thread {
         &self.process
     }
 
-    pub async fn run(self: Arc<Self>) {
-        let thread_exit_future = self.exited.get();
-        let process_exit_future = self.process.exit_status();
-        let run_future = async {
-            loop {
-                self.try_deliver_signal().await.unwrap();
-
-                let clone = self.clone();
-                let exit = clone.run_userspace().unwrap();
-
-                match exit {
-                    Exit::DivideError => {
-                        assert!(self.queue_signal(Signal::FPE));
-                    }
-                    Exit::Syscall(args) => self.clone().execute_syscall(args).await,
-                    Exit::GeneralProtectionFault => {
-                        assert!(self.queue_signal(Signal::SEGV));
-                    }
-                    Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
-                }
-            }
-        };
-
-        select_biased! {
-            _ = thread_exit_future.fuse() => {}
-            status = process_exit_future.fuse() => self.clone().exit(status),
-            _ = run_future.fuse() => unreachable!(),
-        }
+    pub fn is_thread_group_leader(&self) -> bool {
+        self.process.pid == self.tid
     }
 
-    fn exit(self: Arc<Self>, status: u8) {
-        let mut guard = self.lock();
-        guard.exit()
+    pub async fn run(self: Arc<Self>) {
+        self.process.add_thread(Arc::downgrade(&self));
+
+        loop {
+            let exit_action = {
+                let running_state = self.watch();
+                let run_future = async {
+                    loop {
+                        self.try_deliver_signal().await.unwrap();
+
+                        let clone = self.clone();
+                        let exit = clone.run_userspace().unwrap();
+
+                        match exit {
+                            Exit::DivideError => {
+                                assert!(self.queue_signal(Signal::FPE));
+                            }
+                            Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+                            Exit::GeneralProtectionFault => {
+                                assert!(self.queue_signal(Signal::SEGV));
+                            }
+                            Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
+                        }
+                    }
+                };
+
+                select_biased! {
+                    exit_action = running_state.fuse() => exit_action,
+                    _ = run_future.fuse() => unreachable!(),
+                }
+            };
+            match exit_action {
+                ExitAction::Terminate => return,
+                ExitAction::WaitForExecve(pending) => {
+                    let Some(params) = pending.get().await else {
+                        return;
+                    };
+                    let mut guard = self.lock();
+                    guard.execve(params.virtual_memory, params.cpu_state, params.fdtable);
+                    continue;
+                }
+            }
+        }
     }
 
     fn run_userspace(&self) -> Result<Exit> {
@@ -364,18 +374,17 @@ impl ThreadGuard<'_> {
 
     pub fn execve(
         &mut self,
-        path: &Path,
-        argv: &[impl AsRef<CStr>],
-        envp: &[impl AsRef<CStr>],
-        ctx: &mut FileAccessContext,
-    ) -> Result<()> {
-        let node = lookup_and_resolve_node(self.cwd.clone(), path, ctx)?;
-        if !node.mode().contains(FileMode::EXECUTE) {
-            return Err(Error::acces(()));
-        }
+        virtual_memory: VirtualMemory,
+        cpu_state: CpuState,
+        fdtable: FileDescriptorTable,
+    ) {
+        self.virtual_memory = Arc::new(virtual_memory);
+        *self.thread.cpu_state.lock() = cpu_state;
+        self.fdtable = Arc::new(fdtable);
 
-        let file = node.open(OpenFlags::empty())?;
-        self.start_executable(path, &*file, argv, envp, ctx)
+        self.clear_child_tid = Pointer::NULL;
+        self.signal_handler_table = Arc::new(SignalHandlerTable::new());
+        self.sigaltstack = Stack::default();
     }
 
     pub fn start_executable(

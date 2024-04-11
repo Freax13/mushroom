@@ -31,7 +31,6 @@ use crate::{
             ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, Pollfd, Resource, SpliceFlags,
             Timeval, UserDesc,
         },
-        thread::SignalHandlerTable,
     },
 };
 
@@ -69,7 +68,7 @@ impl Thread {
 
 impl ThreadGuard<'_> {
     /// Release the threads resources.
-    pub fn exit(&mut self) {
+    pub fn do_exit(&mut self) {
         if let Some(vfork_parent) = self.vfork_done.take() {
             let _ = vfork_parent.send(());
         }
@@ -82,8 +81,6 @@ impl ThreadGuard<'_> {
 
             self.process().futexes.wake(clear_child_tid, 1, None);
         }
-
-        self.thread.exited.set(());
     }
 }
 
@@ -1100,8 +1097,8 @@ async fn vfork(
 }
 
 #[syscall(i386 = 11, amd64 = 59)]
-fn execve(
-    thread: &mut ThreadGuard,
+async fn execve(
+    thread: Arc<Thread>,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1139,21 +1136,34 @@ fn execve(
 
     log::info!("execve({pathname:?}, {args:?}, {envs:?})");
 
-    thread.execve(&pathname, &args, &envs, &mut ctx)?;
+    // Open the executable.
+    let cwd = thread.lock().cwd.clone();
+    let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
+    if !node.mode().contains(FileMode::EXECUTE) {
+        return Err(Error::acces(()));
+    }
+    let file = node.open(OpenFlags::empty())?;
 
-    fdtable.close_after_exec();
-    thread.signal_handler_table = Arc::new(SignalHandlerTable::new());
+    // Create a new virtual memory and CPU state.
+    let virtual_memory = VirtualMemory::new();
+    let cpu_state =
+        virtual_memory.start_executable(&pathname, &*file, &args, &envs, &mut ctx, cwd)?;
 
-    if let Some(vfork_parent) = thread.vfork_done.take() {
+    // Everything was successfull, no errors can occour after this point.
+
+    let fdtable = fdtable.prepare_for_execve();
+    thread.process().execve(virtual_memory, cpu_state, fdtable);
+    if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
 
-    Ok(0)
+    // The execve syscall never returns if successful.
+    core::future::pending().await
 }
 
 #[syscall(i386 = 1, amd64 = 60)]
 async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
-    thread.lock().exit();
+    thread.lock().exit(status as u8);
 
     core::future::pending().await
 }

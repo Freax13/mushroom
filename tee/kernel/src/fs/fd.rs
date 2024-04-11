@@ -165,9 +165,23 @@ impl FileDescriptorTable {
         fd.fd.close()
     }
 
-    pub fn close_after_exec(&self) {
-        let mut guard = self.table.lock();
-        guard.retain(|_, entry| !entry.flags.contains(FdFlags::CLOEXEC));
+    pub fn prepare_for_execve(&self) -> Self {
+        let guard = self.table.lock();
+        // Unshare the entries and skip any entries with CLOEXEC set.
+        Self {
+            table: Mutex::new(
+                guard
+                    .iter()
+                    .filter(|(_, entry)| !entry.flags.contains(FdFlags::CLOEXEC))
+                    .map(|(fd, entry)| {
+                        (
+                            *fd,
+                            FileDescriptorTableEntry::new(entry.fd.clone(), entry.flags),
+                        )
+                    })
+                    .collect(),
+            ),
+        }
     }
 
     pub fn list_entries(&self) -> Vec<DirEntry> {
