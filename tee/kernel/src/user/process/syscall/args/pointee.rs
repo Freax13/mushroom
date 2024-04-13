@@ -629,7 +629,7 @@ impl From<Sigaction32> for Sigaction {
     fn from(value: Sigaction32) -> Self {
         Self {
             sa_handler_or_sigaction: u64::from(value.sa_handler_or_sigaction),
-            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags),
+            sa_flags: SigactionFlags::from_bits_retain(value.sa_flags),
             sa_restorer: u64::from(value.sa_restorer),
             sa_mask: cast(value.sa_mask),
         }
@@ -641,7 +641,7 @@ impl From<Sigaction64> for Sigaction {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
             sa_mask: value.sa_mask,
-            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags as u32),
+            sa_flags: SigactionFlags::from_bits_retain(value.sa_flags as u32),
             sa_restorer: value.sa_restorer,
         }
     }
