@@ -16,7 +16,7 @@ use x86_64::{
 };
 
 use crate::{
-    error::{Error, Result},
+    error::{ensure, err, Result},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
     user::process::{
@@ -432,9 +432,7 @@ impl CpuState {
         let result = match result {
             Ok(result) => {
                 let is_error = (-4095..=-1).contains(&(result as i64));
-                if is_error {
-                    return Err(Error::inval(()));
-                }
+                ensure!(!is_error, Inval);
                 result
             }
             Err(err) => (-(err.kind() as i64)) as u64,
@@ -489,7 +487,7 @@ impl CpuState {
             Ok(Some(num))
         } else {
             let idx = usize_from(u64::from(u_info.entry_number));
-            let entry = self.gdt.get_mut(idx).ok_or(Error::inval(()))?;
+            let entry = self.gdt.get_mut(idx).ok_or(err!(Inval))?;
             *entry = desc;
             Ok(None)
         }

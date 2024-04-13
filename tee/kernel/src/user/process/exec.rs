@@ -1,6 +1,7 @@
 use core::{cmp, ffi::CStr, iter::from_fn};
 
 use crate::{
+    error::{bail, ensure, err},
     fs::{
         fd::OpenFileDescription,
         node::{DynINode, FileAccessContext},
@@ -26,7 +27,7 @@ use super::{
     },
 };
 use crate::{
-    error::{Error, Result},
+    error::Result,
     fs::{node::lookup_and_resolve_node, path::Path},
 };
 
@@ -62,7 +63,7 @@ impl VirtualMemory {
                 }
             }
             [b'#', b'!', ..] => self.start_shebang(path, file, argv, envp, ctx, cwd),
-            _ => Err(Error::no_exec(())),
+            _ => bail!(NoExec),
         }
     }
 
@@ -86,9 +87,7 @@ impl VirtualMemory {
 
         if let Some(interpreter_path) = info.interpreter_path {
             let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
-            if !node.mode().contains(FileMode::EXECUTE) {
-                return Err(Error::acces(()));
-            }
+            ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
 
             let file = node.open(OpenFlags::empty())?;
             let info = elf::load_elf::<E>(&*file, self.modify(), info.base + 0x2000_0000)?;
@@ -193,7 +192,7 @@ impl VirtualMemory {
         log::debug!("{bytes:02x?}");
 
         // Strip shebang.
-        let bytes = bytes.strip_prefix(b"#!").ok_or_else(|| Error::inval(()))?;
+        let bytes = bytes.strip_prefix(b"#!").ok_or(err!(Inval))?;
 
         // Strip leading whitespaces.
         let mut bytes = bytes;
@@ -207,7 +206,7 @@ impl VirtualMemory {
 
             let position_res = bs.iter().position(|&b| matches!(b, b' ' | b'\n'));
             let Some(position) = position_res else {
-                return Some(Err(Error::inval(())));
+                return Some(Err(err!(Inval)));
             };
             let delimiter = bs[position];
 
@@ -222,19 +221,17 @@ impl VirtualMemory {
             Some(Ok(arg))
         });
 
-        let interpreter_path_str = args.next().ok_or_else(|| Error::inval(()))??;
+        let interpreter_path_str = args.next().ok_or(err!(Inval))??;
         let interpreter_path = Path::new(interpreter_path_str.as_bytes().to_vec())?;
         let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
-        if !node.mode().contains(FileMode::EXECUTE) {
-            return Err(Error::acces(()));
-        }
+        ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
         let interpreter = node.open(OpenFlags::empty())?;
 
         let mut new_argv = vec![interpreter_path_str];
         for arg in args {
             new_argv.push(arg?);
         }
-        new_argv.push(CString::new(path.as_bytes()).map_err(|_| Error::inval(()))?);
+        new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
         self.start_executable(&interpreter_path, &*interpreter, &new_argv, envp, ctx, cwd)

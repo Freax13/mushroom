@@ -9,7 +9,7 @@ use alloc::{
 };
 
 use crate::{
-    error::{Error, Result},
+    error::{err, Result},
     fs::{
         fd::{file::File, FileDescriptorTable},
         node::{tmpfs::TmpFsFile, FileAccessContext, INode},
@@ -179,7 +179,7 @@ impl Process {
             .wait_until(|| {
                 let mut guard = self.children.lock();
                 if guard.is_empty() {
-                    return Some(Err(Error::child(())));
+                    return Some(Err(err!(Child)));
                 }
 
                 let opt_idx = guard.iter().position(|child| {

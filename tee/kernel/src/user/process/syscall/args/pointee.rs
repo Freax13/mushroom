@@ -16,7 +16,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{bail, Error, Result},
     fs::{
         node::{DirEntry, OldDirEntry},
         path::Path,
@@ -1518,7 +1518,7 @@ impl TryFrom<SyscallRestartArgs> for Option<SyscallArgs> {
             SyscallRestartArgs::ABI_NONE => return Ok(None),
             SyscallRestartArgs::ABI_I386 => Abi::I386,
             SyscallRestartArgs::ABI_AMD64 => Abi::Amd64,
-            _ => return Err(Error::inval(())),
+            _ => bail!(Inval),
         };
         Ok(Some(SyscallArgs {
             abi,

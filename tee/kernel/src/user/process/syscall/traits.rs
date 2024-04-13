@@ -13,7 +13,7 @@ use usize_conversions::usize_from;
 use log::{trace, warn};
 
 use crate::{
-    error::{Error, Result},
+    error::{err, Result},
     per_cpu::PerCpu,
     user::process::thread::{Thread, ThreadGuard},
 };
@@ -166,7 +166,7 @@ impl SyscallHandlers {
 
         let handler = handlers.get(syscall_no).copied().flatten().ok_or_else(|| {
             warn!("unsupported syscall: no={syscall_no}, abi={:?}", args.abi);
-            Error::no_sys(())
+            err!(NoSys)
         })?;
 
         // Whether the syscall should occur in the debug logs.

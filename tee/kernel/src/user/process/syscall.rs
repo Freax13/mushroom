@@ -9,7 +9,7 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, ErrorKind, Result},
+    error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
             do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
@@ -439,20 +439,13 @@ fn mmap(
         Bias::Dynamic(abi)
     };
 
-    if length == 0 {
-        return Err(Error::inval(()));
-    }
-    if flags.contains(MmapFlags::ANONYMOUS) && offset % 1000 != 0 {
-        return Err(Error::inval(()));
+    ensure!(length != 0, Inval);
+    ensure!(length < (1 << 47), NoMem);
+    if flags.contains(MmapFlags::ANONYMOUS) {
+        ensure!(offset % 0x1000 == 0, Inval);
     }
     if let Bias::Fixed(bias) = bias {
-        if !bias.is_aligned(0x1000u64) {
-            return Err(Error::inval(()));
-        }
-    }
-
-    if length > (1 << 47) {
-        return Err(Error::no_mem(()));
+        ensure!(bias.is_aligned(0x1000u64), Inval);
     }
 
     if flags.contains(MmapFlags::SHARED_VALIDATE) {
@@ -478,7 +471,7 @@ fn mmap(
             Ok(addr.as_u64())
         }
     } else {
-        return Err(Error::inval(()));
+        bail!(Inval)
     }
 }
 
@@ -525,18 +518,14 @@ fn munmap(
     length: u64,
 ) -> SyscallResult {
     let addr = addr.get();
-    if !addr.is_aligned(0x1000u64) {
-        return Err(Error::inval(()));
-    }
+    ensure!(addr.is_aligned(0x1000u64), Inval);
     virtual_memory.modify().unmap(addr, length);
     Ok(0)
 }
 
 #[syscall(i386 = 45, amd64 = 12)]
 fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallResult {
-    if brk_value % 0x1000 != 0 {
-        return Err(Error::inval(()));
-    }
+    ensure!(brk_value % 0x1000 == 0, Inval);
 
     if brk_value == 0 {
         return Ok(virtual_memory.brk_end().as_u64());
@@ -651,7 +640,7 @@ fn rt_sigreturn(
 
 #[syscall(i386 = 54, amd64 = 16)]
 fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
-    SyscallResult::Err(Error::no_tty(()))
+    bail!(NoTty)
 }
 
 #[syscall(i386 = 180, amd64 = 17)]
@@ -813,9 +802,7 @@ fn dup(#[state] fdtable: Arc<FileDescriptorTable>, fildes: FdNum) -> SyscallResu
 
 #[syscall(i386 = 63, amd64 = 33)]
 fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
-    if newfd.get() < 0 {
-        return Err(Error::bad_f(()));
-    }
+    ensure!(newfd.get() >= 0, BadF);
 
     let fd = fdtable.get(oldfd)?;
 
@@ -960,9 +947,7 @@ fn socketpair(
 
     match domain {
         Domain::Unix => {
-            if protocol != 0 {
-                return Err(Error::inval(()));
-            }
+            ensure!(protocol == 0, Inval);
 
             if r#type.contains(SocketPairType::STREAM) {
                 let (half1, half2) = StreamUnixSocket::new_pair(r#type);
@@ -1188,9 +1173,7 @@ async fn execve(
     // Open the executable.
     let cwd = thread.lock().cwd.clone();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
-    if !node.mode().contains(FileMode::EXECUTE) {
-        return Err(Error::acces(()));
-    }
+    ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
     let file = node.open(OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
@@ -1285,9 +1268,7 @@ fn fcntl(
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
-            if min >= FileDescriptorTable::MAX_FD {
-                return Err(Error::inval(()));
-            }
+            ensure!(min < FileDescriptorTable::MAX_FD, Inval);
 
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
@@ -1302,7 +1283,7 @@ fn fcntl(
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
         FcntlCmd::SetFl => {
-            let flags = OpenFlags::from_bits(arg).ok_or_else(|| Error::inval(()))?;
+            let flags = OpenFlags::from_bits(arg).ok_or(err!(Inval))?;
             fd.set_flags(flags);
             Ok(0)
         }
@@ -1321,9 +1302,7 @@ fn fcntl64(
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
-            if min >= FileDescriptorTable::MAX_FD {
-                return Err(Error::inval(()));
-            }
+            ensure!(min < FileDescriptorTable::MAX_FD, Inval);
 
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
@@ -1338,7 +1317,7 @@ fn fcntl64(
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
         FcntlCmd::SetFl => {
-            let flags = OpenFlags::from_bits(arg).ok_or_else(|| Error::inval(()))?;
+            let flags = OpenFlags::from_bits(arg).ok_or(err!(Inval))?;
             fd.set_flags(flags);
             Ok(0)
         }
@@ -1381,9 +1360,7 @@ fn getcwd(
     size: u64,
 ) -> SyscallResult {
     let cwd = thread.cwd.path(&mut ctx)?;
-    if cwd.as_bytes().len() + 1 > usize_from(size) {
-        return Err(Error::range(()));
-    }
+    ensure!(cwd.as_bytes().len() < usize_from(size), Range);
 
     virtual_memory.write(path, cwd)?;
     Ok(0)
@@ -1635,9 +1612,7 @@ fn sigaltstack(
             thread.sigaltstack = Stack::default();
         } else {
             let allowed_flags = StackFlags::AUTODISARM;
-            if !allowed_flags.contains(ss_value.flags) {
-                return Err(Error::inval(()));
-            }
+            ensure!(allowed_flags.contains(ss_value.flags), Inval);
             thread.sigaltstack = ss_value;
         }
     }
@@ -1679,7 +1654,7 @@ fn mount(
 
     let node = match r#type.as_bytes() {
         b"devtmpfs" => devtmpfs::new,
-        _ => return Err(Error::no_dev(())),
+        _ => bail!(NoDev),
     };
 
     node::mount(&dir_name, node, &mut ctx)?;
@@ -1739,13 +1714,13 @@ async fn futex(
             let woken = thread.process().futexes.wake(uaddr, val, None);
             Ok(u64::from(woken))
         }
-        FutexOp::Fd => Err(Error::no_sys(())),
-        FutexOp::Requeue => Err(Error::no_sys(())),
-        FutexOp::CmpRequeue => Err(Error::no_sys(())),
-        FutexOp::WakeOp => Err(Error::no_sys(())),
-        FutexOp::LockPi => Err(Error::no_sys(())),
-        FutexOp::UnlockPi => Err(Error::no_sys(())),
-        FutexOp::TrylockPi => Err(Error::no_sys(())),
+        FutexOp::Fd => bail!(NoSys),
+        FutexOp::Requeue => bail!(NoSys),
+        FutexOp::CmpRequeue => bail!(NoSys),
+        FutexOp::WakeOp => bail!(NoSys),
+        FutexOp::LockPi => bail!(NoSys),
+        FutexOp::UnlockPi => bail!(NoSys),
+        FutexOp::TrylockPi => bail!(NoSys),
         FutexOp::WaitBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
 
@@ -1770,9 +1745,9 @@ async fn futex(
             let woken = thread.process().futexes.wake(uaddr, val, Some(bitset));
             Ok(u64::from(woken))
         }
-        FutexOp::WaitRequeuePi => Err(Error::no_sys(())),
-        FutexOp::CmpRequeuePi => Err(Error::no_sys(())),
-        FutexOp::LockPi2 => Err(Error::no_sys(())),
+        FutexOp::WaitRequeuePi => bail!(NoSys),
+        FutexOp::CmpRequeuePi => bail!(NoSys),
+        FutexOp::LockPi2 => bail!(NoSys),
     }
 }
 
@@ -1913,7 +1888,7 @@ fn epoll_ctl(
             // Poll the fd once to check if it supports epoll.
             let _ = fd.epoll_ready(Events::empty())?;
 
-            let event = event.ok_or_else(|| Error::inval(()))?;
+            let event = event.ok_or(err!(Inval))?;
             epoll.epoll_add(fd, event)?
         }
     }
@@ -1950,9 +1925,7 @@ fn openat(
 
         if flags.contains(OpenFlags::DIRECTORY) {
             let stat = node.stat();
-            if stat.mode.ty() != FileType::Dir {
-                return Err(Error::not_dir(()));
-            }
+            ensure!(stat.mode.ty() == FileType::Dir, NotDir);
         }
 
         let path_fd = PathFd::new(node);
@@ -2283,11 +2256,12 @@ fn faccessat(
         ]
     };
     for (bit, alternatives) in groups {
-        if mode.contains(bit)
-            && !(file_mode.contains(bit)
-                || alternatives.into_iter().any(|bit| file_mode.contains(bit)))
-        {
-            return Err(Error::acces(()));
+        if mode.contains(bit) {
+            ensure!(
+                (file_mode.contains(bit)
+                    || alternatives.into_iter().any(|bit| file_mode.contains(bit))),
+                Acces
+            );
         }
     }
 
@@ -2540,13 +2514,11 @@ fn dup3(
     newfd: FdNum,
     flags: Dup3Flags,
 ) -> SyscallResult {
-    if oldfd == newfd {
-        return Err(Error::inval(()));
-    }
-
-    if !(0..FileDescriptorTable::MAX_FD).contains(&newfd.get()) {
-        return Err(Error::bad_f(()));
-    }
+    ensure!(oldfd != newfd, Inval);
+    ensure!(
+        (0..FileDescriptorTable::MAX_FD).contains(&newfd.get()),
+        BadF
+    );
 
     let fd = fdtable.get(oldfd)?;
     fdtable.replace(newfd, fd, flags)?;
@@ -2586,9 +2558,7 @@ fn prlimit64(
     new_rlim: Pointer<RLimit64>,
     old_rlim: Pointer<RLimit64>,
 ) -> SyscallResult {
-    if !new_rlim.is_null() {
-        return Err(Error::perm(()));
-    }
+    ensure!(new_rlim.is_null(), Perm);
 
     if !old_rlim.is_null() {
         let value = thread.getrlimit(resource);

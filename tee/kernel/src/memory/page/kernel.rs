@@ -10,7 +10,7 @@ use constants::physical_address::DYNAMIC;
 use x86_64::{structures::paging::PhysFrame, PhysAddr};
 
 use crate::{
-    error::{Error, Result},
+    error::{err, Result},
     spin::lazy::Lazy,
 };
 
@@ -65,8 +65,7 @@ impl KernelPage {
             } else {
                 // Initialize the reference count.
                 let reference_count = unsafe { alloc(Layout::new::<AtomicU64>()) };
-                let reference_count =
-                    NonNull::new(reference_count).ok_or_else(|| Error::no_mem(()))?;
+                let reference_count = NonNull::new(reference_count).ok_or(err!(NoMem))?;
                 let reference_count = reference_count.cast::<AtomicU64>();
                 unsafe {
                     reference_count.as_ptr().write(AtomicU64::new(1));
@@ -127,8 +126,7 @@ impl KernelPage {
         }
 
         let content = unsafe { alloc(Layout::new::<PageContent>()) };
-        let content =
-            NonNull::new(content.cast::<PageContent>()).ok_or_else(|| Error::no_mem(()))?;
+        let content = NonNull::new(content.cast::<PageContent>()).ok_or(err!(NoMem))?;
         // Copy the memory to the new allocation.
         unsafe {
             copy_nonoverlapping(self.content.as_ptr(), content.as_ptr(), 1);

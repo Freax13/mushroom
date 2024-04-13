@@ -1,6 +1,7 @@
 use core::{cmp, iter::from_fn};
 
 use crate::{
+    error::{bail, ensure},
     fs::fd::{
         file::{open_file, File},
         FileDescriptor,
@@ -14,7 +15,7 @@ use usize_conversions::FromUsize;
 use x86_64::instructions::random::RdRand;
 
 use crate::{
-    error::{Error, Result},
+    error::Result,
     fs::{path::FileName, INPUT},
     supervisor,
     user::process::{
@@ -109,7 +110,7 @@ impl INode for NullFile {
 
 impl File for NullFile {
     fn get_page(&self, _: usize) -> Result<KernelPage> {
-        Err(Error::no_dev(()))
+        bail!(NoDev)
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8], _no_atime: bool) -> Result<usize> {
@@ -212,20 +213,18 @@ impl INode for OutputFile {
 
 impl File for OutputFile {
     fn get_page(&self, _: usize) -> Result<KernelPage> {
-        Err(Error::no_dev(()))
+        bail!(NoDev)
     }
 
     fn read(&self, _offset: usize, _buf: &mut [u8], _no_atime: bool) -> Result<usize> {
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.lock();
 
         // Make sure that writes always append.
-        if guard.offset != offset {
-            return Err(Error::inval(()));
-        }
+        ensure!(guard.offset == offset, Inval);
 
         supervisor::output(buf);
         guard.offset += buf.len();
@@ -243,9 +242,7 @@ impl File for OutputFile {
         let mut guard = self.internal.lock();
 
         // Make sure that writes always append.
-        if guard.offset != offset {
-            return Err(Error::inval(()));
-        }
+        ensure!(guard.offset == offset, Inval);
 
         let mut addr = pointer.get();
         let mut remaining_len = len;
@@ -277,9 +274,7 @@ impl File for OutputFile {
 
     fn truncate(&self, len: usize) -> Result<()> {
         let guard = self.internal.lock();
-        if guard.offset != len {
-            return Err(Error::io(()));
-        }
+        ensure!(guard.offset == len, Io);
         Ok(())
     }
 }
@@ -345,7 +340,7 @@ impl INode for RandomFile {
 
 impl File for RandomFile {
     fn get_page(&self, _: usize) -> Result<KernelPage> {
-        Err(Error::no_dev(()))
+        bail!(NoDev)
     }
 
     fn read(&self, _offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {

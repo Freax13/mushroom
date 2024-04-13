@@ -6,7 +6,7 @@ use bytemuck::pod_read_unaligned;
 
 use super::{Events, OpenFileDescription};
 use crate::{
-    error::{Error, Result},
+    error::{ensure, err, Result},
     fs::node::new_ino,
     rt::notify::Notify,
     user::process::{
@@ -38,29 +38,23 @@ impl OpenFileDescription for EventFd {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        if buf.len() != 8 {
-            return Err(Error::inval(()));
-        }
+        ensure!(buf.len() == 8, Inval);
 
         let value = self.counter.swap(0, Ordering::SeqCst);
-        if value == 0 {
-            return Err(Error::again(()));
-        }
+        ensure!(value != 0, Again);
 
         buf.copy_from_slice(&value.to_ne_bytes());
         Ok(8)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
-        if buf.len() != 8 {
-            return Err(Error::inval(()));
-        }
+        ensure!(buf.len() == 8, Inval);
 
         let add = pod_read_unaligned::<u64>(buf);
         if add != 0 {
             let mut old_value = self.counter.load(Ordering::SeqCst);
             loop {
-                let new_value = old_value.checked_add(add).ok_or_else(|| Error::again(()))?;
+                let new_value = old_value.checked_add(add).ok_or(err!(Again))?;
                 let res = self.counter.compare_exchange(
                     old_value,
                     new_value,
@@ -88,9 +82,7 @@ impl OpenFileDescription for EventFd {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        if len != 8 {
-            return Err(Error::inval(()));
-        }
+        ensure!(len == 8, Inval);
 
         let mut buf = [0; 8];
         vm.read_bytes(pointer.get(), &mut buf)?;

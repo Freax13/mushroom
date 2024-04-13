@@ -1,5 +1,6 @@
 use crate::{
     dir_impls,
+    error::{bail, ensure, err},
     fs::fd::{
         dir::{open_dir, Directory},
         file::{open_file, File},
@@ -20,7 +21,7 @@ use super::{
     lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext, INode,
 };
 use crate::{
-    error::{Error, Result},
+    error::Result,
     fs::path::{FileName, Path},
     user::process::{
         memory::VirtualMemory,
@@ -131,11 +132,7 @@ impl INode for TmpFsDir {
 
 impl Directory for TmpFsDir {
     fn parent(&self) -> Result<DynINode> {
-        self.parent
-            .lock()
-            .clone()
-            .upgrade()
-            .ok_or_else(|| Error::no_ent(()))
+        self.parent.lock().clone().upgrade().ok_or(err!(NoEnt))
     }
 
     fn set_parent(&self, parent: Weak<dyn INode>) {
@@ -148,7 +145,7 @@ impl Directory for TmpFsDir {
             .items
             .get(path_segment)
             .cloned()
-            .ok_or(Error::no_ent(()))
+            .ok_or(err!(NoEnt))
     }
 
     fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
@@ -160,7 +157,7 @@ impl Directory for TmpFsDir {
                 entry.insert(dir.clone());
                 Ok(dir)
             }
-            Entry::Occupied(_) => Err(Error::exist(())),
+            Entry::Occupied(_) => bail!(Exist),
         }
     }
 
@@ -199,9 +196,7 @@ impl Directory for TmpFsDir {
                 Ok(link)
             }
             Entry::Occupied(mut entry) => {
-                if create_new {
-                    return Err(Error::exist(()));
-                }
+                ensure!(!create_new, Exist);
                 let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
@@ -248,10 +243,7 @@ impl Directory for TmpFsDir {
 
     fn delete(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
-        guard
-            .items
-            .remove(&file_name)
-            .ok_or_else(|| Error::no_ent(()))?;
+        guard.items.remove(&file_name).ok_or(err!(NoEnt))?;
         Ok(())
     }
 
@@ -259,11 +251,9 @@ impl Directory for TmpFsDir {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else {
-            return Err(Error::no_ent(()));
+            bail!(NoEnt);
         };
-        if entry.get().ty() == FileType::Dir {
-            return Err(Error::is_dir(()));
-        }
+        ensure!(entry.get().ty() != FileType::Dir, IsDir);
         entry.remove();
         Ok(())
     }
@@ -272,11 +262,9 @@ impl Directory for TmpFsDir {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else {
-            return Err(Error::no_ent(()));
+            bail!(NoEnt);
         };
-        if entry.get().ty() != FileType::Dir {
-            return Err(Error::is_dir(()));
-        }
+        ensure!(entry.get().ty() == FileType::Dir, NotDir);
         entry.remove();
         Ok(())
     }
@@ -469,7 +457,7 @@ impl INode for TmpFsSymlink {
     }
 
     fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
-        Err(Error::r#loop(()))
+        bail!(Loop)
     }
 
     fn set_mode(&self, _mode: FileMode) {

@@ -1,6 +1,7 @@
 use core::{any::type_name, cmp, ops::Deref};
 
 use crate::{
+    error::{bail, ensure, err},
     fs::{
         node::{new_ino, DirEntryName, DynINode, FileAccessContext},
         path::FileName,
@@ -20,7 +21,7 @@ use bitflags::bitflags;
 use log::debug;
 
 use crate::{
-    error::{Error, ErrorKind, Result},
+    error::{ErrorKind, Result},
     fs::node::DirEntry,
 };
 
@@ -100,7 +101,7 @@ impl FileDescriptorTable {
             .find(|(fd, counter)| counter < fd)
             .map(|(_, counter)| counter)
             .or_else(|| counter_iter.next())
-            .ok_or_else(|| Error::mfile(()))
+            .ok_or(err!(Mfile))
     }
 
     pub fn insert_after(
@@ -124,9 +125,7 @@ impl FileDescriptorTable {
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
     ) -> Result<()> {
-        if fd_num.get() >= Self::MAX_FD {
-            return Err(Error::bad_f(()));
-        }
+        ensure!(fd_num.get() < Self::MAX_FD, BadF);
 
         let mut guard = self.table.lock();
         guard.insert(
@@ -146,22 +145,18 @@ impl FileDescriptorTable {
             .lock()
             .get(&fd_num.get())
             .map(|fd| (fd.fd.clone(), fd.flags))
-            .ok_or(Error::bad_f(()))
+            .ok_or(err!(BadF))
     }
 
     pub fn set_flags(&self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
         let mut guard = self.table.lock();
-        let entry = guard.get_mut(&fd_num.get()).ok_or(Error::bad_f(()))?;
+        let entry = guard.get_mut(&fd_num.get()).ok_or(err!(BadF))?;
         entry.flags = flags;
         Ok(())
     }
 
     pub fn close(&self, fd_num: FdNum) -> Result<()> {
-        let fd = self
-            .table
-            .lock()
-            .remove(&fd_num.get())
-            .ok_or(Error::bad_f(()))?;
+        let fd = self.table.lock().remove(&fd_num.get()).ok_or(err!(BadF))?;
         fd.fd.close()
     }
 
@@ -202,7 +197,7 @@ impl FileDescriptorTable {
 
     pub fn get_node(&self, fd_num: FdNum) -> Result<DynINode> {
         let guard = self.table.lock();
-        let entry = guard.get(&fd_num.get()).ok_or_else(|| Error::no_ent(()))?;
+        let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(entry.ino, entry.fd.clone())))
     }
 }
@@ -255,7 +250,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn read_to_user(
@@ -285,12 +280,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = vm;
         let _ = pointer;
         let _ = len;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn write_from_user(
@@ -316,24 +311,24 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
         let _ = offset;
         let _ = whence;
-        Err(Error::s_pipe(()))
+        bail!(SPipe)
     }
 
     fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
         let _ = pos;
         let _ = buf;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
         let _ = pos;
         let _ = buf;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn truncate(&self, length: usize) -> Result<()> {
         let _ = length;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn close(&self) -> Result<()> {
@@ -350,7 +345,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn set_mode(&self, mode: FileMode) -> Result<()> {
         let _ = mode;
-        Err(Error::io(()))
+        bail!(Io)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -367,40 +362,40 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
         let _ = ctx;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn getdents64(&self, capacity: usize, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = capacity;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
         let _ = page_idx;
-        Err(Error::acces(()))
+        bail!(Acces)
     }
 
     async fn epoll_wait(&self, max_events: usize) -> Result<Vec<EpollEvent>> {
         let _ = max_events;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
         let _ = fd;
         let _ = event;
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 
     fn poll_ready(&self, events: Events) -> Events;
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
         let _ = events;
-        Err(Error::perm(()))
+        bail!(Perm)
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
         let _ = events;
-        Err(Error::perm(()))
+        bail!(Perm)
     }
 }
 

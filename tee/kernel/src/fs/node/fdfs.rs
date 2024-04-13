@@ -6,7 +6,7 @@ use alloc::{
 use super::{new_ino, DirEntry, DynINode, FileAccessContext, INode};
 use crate::{
     dir_impls,
-    error::{Error, Result},
+    error::{bail, err, Result},
     fs::{
         fd::{
             dir::{open_dir, Directory},
@@ -69,7 +69,7 @@ impl INode for FdFsRoot {
     }
 
     fn mount(&self, _file_name: FileName<'static>, _node: DynINode) -> Result<()> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
@@ -77,11 +77,7 @@ impl INode for FdFsRoot {
 
 impl Directory for FdFsRoot {
     fn parent(&self) -> Result<DynINode> {
-        self.parent
-            .lock()
-            .clone()
-            .upgrade()
-            .ok_or_else(|| Error::no_ent(()))
+        self.parent.lock().clone().upgrade().ok_or(err!(NoEnt))
     }
 
     fn set_parent(&self, parent: Weak<dyn INode>) {
@@ -90,8 +86,8 @@ impl Directory for FdFsRoot {
 
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
         let file_name = file_name.as_bytes();
-        let file_name = core::str::from_utf8(file_name).map_err(|_| Error::no_ent(()))?;
-        let fd_num = file_name.parse().map_err(|_| Error::no_ent(()))?;
+        let file_name = core::str::from_utf8(file_name).map_err(|_| err!(NoEnt))?;
+        let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
         let fd_num = FdNum::new(fd_num);
         ctx.fdtable.get_node(fd_num)
     }
@@ -101,11 +97,11 @@ impl Directory for FdFsRoot {
         _file_name: FileName<'static>,
         _mode: FileMode,
     ) -> Result<Result<DynINode, DynINode>> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn create_dir(&self, _file_name: FileName<'static>, _mode: FileMode) -> Result<DynINode> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn create_link(
@@ -114,11 +110,11 @@ impl Directory for FdFsRoot {
         _target: Path,
         _create_new: bool,
     ) -> Result<DynINode> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn hard_link(&self, _file_name: FileName<'static>, _node: DynINode) -> Result<()> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry> {
@@ -126,15 +122,15 @@ impl Directory for FdFsRoot {
     }
 
     fn delete(&self, _file_name: FileName<'static>) -> Result<()> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 
     fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
-        Err(Error::no_ent(()))
+        bail!(NoEnt)
     }
 }
 
