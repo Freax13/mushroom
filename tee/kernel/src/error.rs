@@ -54,6 +54,7 @@ macro_rules! errors {
 errors! {
     Perm perm 1,
     NoEnt no_ent 2,
+    Intr intr 4,
     Io io 5,
     XIo x_io 6,
     NoExec no_exec 8,
@@ -78,6 +79,7 @@ errors! {
     NameTooLong name_too_long 78,
     Loop r#loop 90,
     TimedOut timed_out 110,
+    RestartNoIntr restart_no_intr 512,
 }
 
 impl From<TryFromIntError> for Error {

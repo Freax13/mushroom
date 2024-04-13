@@ -66,6 +66,9 @@ impl Thread {
 
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
+        if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
+            guard.store_for_restart(args);
+        }
     }
 }
 
@@ -193,7 +196,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers
 };
 
-#[syscall(i386 = 3, amd64 = 0)]
+#[syscall(i386 = 3, amd64 = 0, interruptable, restartable)]
 async fn read(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -214,7 +217,7 @@ async fn read(
     Ok(len)
 }
 
-#[syscall(i386 = 4, amd64 = 1)]
+#[syscall(i386 = 4, amd64 = 1, interruptable, restartable)]
 async fn write(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1182,7 +1185,7 @@ async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
     core::future::pending().await
 }
 
-#[syscall(i386 = 114, amd64 = 61)]
+#[syscall(i386 = 114, amd64 = 61, interruptable, restartable)]
 async fn wait4(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1677,7 +1680,7 @@ fn time(
     Ok(u64::from(tv_sec))
 }
 
-#[syscall(i386 = 240, amd64 = 202)]
+#[syscall(i386 = 240, amd64 = 202, interruptable, restartable)]
 async fn futex(
     thread: Arc<Thread>,
     abi: Abi,
@@ -1835,7 +1838,7 @@ async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
     core::future::pending().await
 }
 
-#[syscall(i386 = 256, amd64 = 232)]
+#[syscall(i386 = 256, amd64 = 232, interruptable)]
 async fn epoll_wait(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,

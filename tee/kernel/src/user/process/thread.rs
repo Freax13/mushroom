@@ -1,11 +1,13 @@
 use core::{
     ffi::{c_void, CStr},
     fmt::Debug,
+    future::Future,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use crate::{
+    error::Error,
     fs::{
         fd::{FileDescriptorTable, OpenFileDescription},
         node::{DynINode, FileAccessContext},
@@ -38,6 +40,7 @@ use super::{
     syscall::{
         args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
+        traits::SyscallArgs,
     },
     Process,
 };
@@ -273,7 +276,9 @@ impl Thread {
     /// Returns true if the signal was not already queued.
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
         let mut guard = self.lock();
-        guard.pending_signals.add(sig_info)
+        let res = guard.pending_signals.add(sig_info);
+        self.signal_notify.notify();
+        res
     }
 
     async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
@@ -320,6 +325,42 @@ impl Thread {
         }
 
         Ok(())
+    }
+
+    /// Returns a future that resolves when the process has a pending signal
+    /// and returns whether the running syscall should be restarted.
+    async fn wait_for_signal(&self) -> bool {
+        loop {
+            let thread_notify_wait = self.signal_notify.wait();
+            let process_notify_wait = self.process.signals_notify.wait();
+
+            let mut guard = self.lock();
+            if let Some(restartable) = guard.get_pending_signal() {
+                return restartable;
+            }
+            drop(guard);
+
+            select_biased! {
+                () = thread_notify_wait.fuse() => {},
+                () = process_notify_wait.fuse() => {}
+            }
+        }
+    }
+
+    pub async fn interruptable<R>(
+        &self,
+        f: impl Future<Output = Result<R>>,
+        restartable: bool,
+    ) -> Result<R> {
+        select_biased! {
+            should_restart = self.wait_for_signal().fuse() => {
+                if should_restart && restartable {
+                    return Err(Error::restart_no_intr(()))
+                }
+                Err(Error::intr(()))
+            },
+            res = f.fuse() => res,
+        }
     }
 }
 
@@ -740,6 +781,8 @@ pub struct UContext {
     pub stack: Stack,
     pub mcontext: SigContext,
     pub sigmask: Sigset,
+    // implementation specific
+    pub syscall_restart_args: Option<SyscallArgs>,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -23,7 +23,7 @@ use crate::{
     },
     user::process::{
         memory::VirtualMemory,
-        syscall::traits::Abi,
+        syscall::traits::{Abi, SyscallArgs},
         thread::{
             SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags,
             ThreadGuard, UContext,
@@ -1179,6 +1179,9 @@ pub struct UContext32 {
     stack: Stack32,
     mcontext: SigContext32,
     sigmask: Sigset32,
+    // implementation specific
+    _padding: u32,
+    syscall_restart_args: SyscallRestartArgs,
 }
 
 impl TryFrom<UContext> for UContext32 {
@@ -1220,13 +1223,17 @@ impl TryFrom<UContext> for UContext32 {
                 cr2: value.mcontext.cr2 as u32,
             },
             sigmask: value.sigmask.into(),
+            _padding: 0,
+            syscall_restart_args: value.syscall_restart_args.into(),
         })
     }
 }
 
-impl From<UContext32> for UContext {
-    fn from(value: UContext32) -> Self {
-        Self {
+impl TryFrom<UContext32> for UContext {
+    type Error = Error;
+
+    fn try_from(value: UContext32) -> Result<Self> {
+        Ok(Self {
             stack: value.stack.into(),
             mcontext: SigContext {
                 r8: 0,
@@ -1260,7 +1267,8 @@ impl From<UContext32> for UContext {
                 fpstate: Pointer::from(value.mcontext.fpstate).cast(),
             },
             sigmask: value.sigmask.into(),
-        }
+            syscall_restart_args: value.syscall_restart_args.try_into()?,
+        })
     }
 }
 
@@ -1348,6 +1356,8 @@ pub struct UContext64 {
     stack: Stack64,
     mcontext: SigContext64,
     sigmask: Sigset64,
+    // implementation specific
+    syscall_restart_args: SyscallRestartArgs,
 }
 
 impl From<UContext> for UContext64 {
@@ -1387,13 +1397,16 @@ impl From<UContext> for UContext64 {
                 reserved1: [0; 8],
             },
             sigmask: value.sigmask.into(),
+            syscall_restart_args: value.syscall_restart_args.into(),
         }
     }
 }
 
-impl From<UContext64> for UContext {
-    fn from(value: UContext64) -> Self {
-        Self {
+impl TryFrom<UContext64> for UContext {
+    type Error = Error;
+
+    fn try_from(value: UContext64) -> Result<Self> {
+        Ok(Self {
             stack: value.stack.into(),
             mcontext: SigContext {
                 r8: value.mcontext.r8,
@@ -1427,7 +1440,8 @@ impl From<UContext64> for UContext {
                 fpstate: Pointer::from(value.mcontext.fpstate).cast(),
             },
             sigmask: value.sigmask.into(),
-        }
+            syscall_restart_args: value.syscall_restart_args.try_into()?,
+        })
     }
 }
 
@@ -1479,6 +1493,59 @@ struct FpState64 {
     xmm_space: [u32; 64],
     reserved2: [u32; 12],
     reserved3: [u32; 12],
+}
+
+/// Store the arguments for a syscall so that we can restart it.
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct SyscallRestartArgs {
+    abi: u64,
+    no: u64,
+    args: [u64; 6],
+}
+
+impl SyscallRestartArgs {
+    const ABI_NONE: u64 = 0; // No args are stored.
+    const ABI_I386: u64 = 1;
+    const ABI_AMD64: u64 = 2;
+}
+
+impl TryFrom<SyscallRestartArgs> for Option<SyscallArgs> {
+    type Error = Error;
+
+    fn try_from(value: SyscallRestartArgs) -> Result<Self> {
+        let abi = match value.abi {
+            SyscallRestartArgs::ABI_NONE => return Ok(None),
+            SyscallRestartArgs::ABI_I386 => Abi::I386,
+            SyscallRestartArgs::ABI_AMD64 => Abi::Amd64,
+            _ => return Err(Error::inval(())),
+        };
+        Ok(Some(SyscallArgs {
+            abi,
+            no: value.no,
+            args: value.args,
+        }))
+    }
+}
+
+impl From<Option<SyscallArgs>> for SyscallRestartArgs {
+    fn from(value: Option<SyscallArgs>) -> Self {
+        value.map_or(
+            Self {
+                abi: Self::ABI_NONE,
+                no: 0,
+                args: [0; 6],
+            },
+            |value| Self {
+                abi: match value.abi {
+                    Abi::I386 => Self::ABI_I386,
+                    Abi::Amd64 => Self::ABI_AMD64,
+                },
+                no: value.no,
+                args: value.args,
+            },
+        )
+    }
 }
 
 impl Pointee for RLimit {}

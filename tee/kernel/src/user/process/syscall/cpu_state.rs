@@ -40,6 +40,7 @@ pub struct CpuState {
     xsave_area: XSaveArea,
     last_exit_was_syscall: bool,
     ignore_syscall_result: bool,
+    syscall_restart_args: Option<SyscallArgs>,
 }
 
 impl CpuState {
@@ -63,6 +64,7 @@ impl CpuState {
             xsave_area: XSaveArea::new(),
             last_exit_was_syscall: false,
             ignore_syscall_result: false,
+            syscall_restart_args: None,
         }
     }
 
@@ -76,6 +78,11 @@ impl CpuState {
             ($ident:ident) => {{
                 offset_of!(PerCpu, new_userspace_registers) + offset_of!(Registers, $ident)
             }};
+        }
+
+        // If a syscall should be restarted, return immediately.
+        if let Some(args) = self.syscall_restart_args.take() {
+            return Ok(Exit::Syscall(args));
         }
 
         let per_cpu = PerCpu::get();
@@ -436,6 +443,10 @@ impl CpuState {
         Ok(())
     }
 
+    pub fn store_for_restart(&mut self, args: SyscallArgs) {
+        self.syscall_restart_args = Some(args);
+    }
+
     pub fn set_stack_pointer(&mut self, sp: u64) {
         self.registers.rsp = sp;
     }
@@ -576,6 +587,7 @@ impl CpuState {
             stack,
             mcontext,
             sigmask,
+            syscall_restart_args: self.syscall_restart_args.take(),
         };
         let restorer = if sigaction.sa_restorer != 0 {
             sigaction.sa_restorer
@@ -644,6 +656,7 @@ impl CpuState {
         let ucontext_ptr_ptr = Pointer::<Pointer<UContext>>::new(self.registers.rsp + 8);
         let ucontext_ptr = vm.read_with_abi(ucontext_ptr_ptr, abi)?;
         let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
+        self.syscall_restart_args = ucontext.syscall_restart_args;
         self.load_sig_context(&ucontext.mcontext);
         Ok((ucontext.stack, ucontext.sigmask))
     }
@@ -772,6 +785,7 @@ pub enum RawExit {
     Exception = 1,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Exit {
     Syscall(SyscallArgs),
     DivideError,
@@ -779,6 +793,7 @@ pub enum Exit {
     PageFault(PageFaultExit),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct PageFaultExit {
     pub addr: u64,
     pub code: PageFaultErrorCode,
