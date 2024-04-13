@@ -1,4 +1,4 @@
-use core::{convert::Infallible, num::TryFromIntError, panic::Location};
+use core::{convert::Infallible, num::TryFromIntError};
 
 use bytemuck::checked::CheckedCastError;
 use x86_64::addr::VirtAddrNotValid;
@@ -32,7 +32,8 @@ pub(crate) use {bail, ensure, err};
 #[derive(Clone, Copy)]
 pub struct Error {
     kind: ErrorKind,
-    caller_location: &'static Location<'static>,
+    #[cfg(not(feature = "harden"))]
+    caller_location: &'static core::panic::Location<'static>,
 }
 
 impl Error {
@@ -41,15 +42,24 @@ impl Error {
     }
 
     #[doc(hidden)]
-    #[track_caller]
+    #[cfg_attr(not(feature = "harden"), track_caller)]
     pub fn from_kind(kind: ErrorKind) -> Self {
         Self {
             kind,
-            caller_location: Location::caller(),
+            #[cfg(not(feature = "harden"))]
+            caller_location: core::panic::Location::caller(),
         }
     }
 }
 
+#[cfg(feature = "harden")]
+impl core::fmt::Debug for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.kind)
+    }
+}
+
+#[cfg(not(feature = "harden"))]
 impl core::fmt::Debug for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:?} at {}", self.kind, self.caller_location)
