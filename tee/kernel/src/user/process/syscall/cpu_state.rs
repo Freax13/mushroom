@@ -440,6 +440,10 @@ impl CpuState {
         self.registers.rsp = sp;
     }
 
+    pub fn faulting_instruction(&self) -> u64 {
+        self.registers.rip
+    }
+
     pub fn set_fs_base(&mut self, tls: u64) {
         self.registers.fs_base = tls;
     }
@@ -560,7 +564,6 @@ impl CpuState {
 
     pub fn start_signal_handler(
         &mut self,
-        signum: u64,
         sig_info: SigInfo,
         sigaction: Sigaction,
         stack: Stack,
@@ -607,10 +610,14 @@ impl CpuState {
                 self.registers.rsp -= 12;
                 vm.write_with_abi(Pointer::new(self.registers.rsp + 8), ucontext_ptr, abi)?;
                 vm.write_with_abi(Pointer::new(self.registers.rsp + 4), sig_info_ptr, abi)?;
-                vm.write_with_abi(Pointer::new(self.registers.rsp), signum as u32, abi)?;
+                vm.write_with_abi(
+                    Pointer::new(self.registers.rsp),
+                    sig_info.signal.get() as u32,
+                    abi,
+                )?;
             }
             Abi::Amd64 => {
-                self.registers.rdi = signum;
+                self.registers.rdi = u64::from_usize(sig_info.signal.get());
                 self.registers.rsi = sig_info_ptr.get().as_u64();
                 self.registers.rdx = ucontext_ptr.get().as_u64();
 

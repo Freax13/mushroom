@@ -26,7 +26,10 @@ use self::{
     futex::Futexes,
     memory::VirtualMemory,
     syscall::cpu_state::CpuState,
-    thread::{new_tid, running_state::ExecveValues, Thread, WeakThread},
+    thread::{
+        new_tid, running_state::ExecveValues, PendingSignals, SigChld, SigFields, SigInfo,
+        SigInfoCode, Sigset, Thread, WeakThread,
+    },
 };
 
 mod exec;
@@ -42,6 +45,8 @@ pub struct Process {
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
     child_death_notify: Notify,
+    pending_signals: Mutex<PendingSignals>,
+    signals_notify: Notify,
     threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
@@ -56,6 +61,8 @@ impl Process {
             parent: parent.clone(),
             children: Mutex::new(Vec::new()),
             child_death_notify: Notify::new(),
+            pending_signals: Mutex::new(PendingSignals::new()),
+            signals_notify: Notify::new(),
             threads: Mutex::new(Vec::new()),
             running: AtomicUsize::new(0),
         };
@@ -180,6 +187,15 @@ impl Process {
                 Some(Ok(Some((child.pid, status))))
             })
             .await
+    }
+
+    pub fn queue_signal(&self, sig_info: SigInfo) {
+        self.pending_signals.lock().add(sig_info);
+        self.signals_notify.notify();
+    }
+
+    fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
+        self.pending_signals.lock().pop(mask)
     }
 }
 

@@ -1094,7 +1094,7 @@ bitflags! {
 }
 
 // This value is guaranteed to be less than 64.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Signal(u8);
 
 impl Signal {
@@ -1104,7 +1104,7 @@ impl Signal {
     pub const CHLD: Self = Self(17);
 
     pub fn new(value: u8) -> Result<Self> {
-        if value >= 64 {
+        if !(1..=64).contains(&value) {
             return Err(Error::inval(()));
         }
         Ok(Self(value))

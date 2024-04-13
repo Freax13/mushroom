@@ -25,8 +25,8 @@ use crate::{
         memory::VirtualMemory,
         syscall::traits::Abi,
         thread::{
-            SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, ThreadGuard,
-            UContext,
+            SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags,
+            ThreadGuard, UContext,
         },
     },
 };
@@ -445,6 +445,137 @@ impl Pointee for FdNum {}
 
 impl PrimitivePointee for FdNum {}
 
+impl Pointee for SigInfo {}
+
+impl AbiDependentPointee for SigInfo {
+    type I386 = SigInfo32;
+    type Amd64 = SigInfo64;
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+pub struct SigInfo32 {
+    si_signo: i32,
+    si_code: i32,
+    si_errno: i32,
+    _sifields: [i32; 29],
+}
+
+impl From<SigInfo> for SigInfo32 {
+    fn from(value: SigInfo) -> Self {
+        let mut _sifields = [0; 29];
+        let dst = bytes_of_mut(&mut _sifields);
+        macro_rules! pack {
+            ($expr:expr) => {{
+                let value = $expr;
+                let src = bytes_of(&value);
+                dst[..src.len()].copy_from_slice(src);
+            }};
+        }
+        match value.fields {
+            SigFields::None => {}
+            SigFields::SigChld(sig_chld) => {
+                pack!(SigChld32 {
+                    pid: sig_chld.pid,
+                    uid: sig_chld.uid,
+                    status: sig_chld.status,
+                    utime: sig_chld.utime as i32,
+                    stime: sig_chld.stime as i32,
+                })
+            }
+            SigFields::SigFault(sig_fault) => {
+                pack!(SigFault32 {
+                    addr: sig_fault.addr as u32,
+                })
+            }
+        }
+        Self {
+            si_signo: value.signal.get() as i32,
+            si_code: value.code.get(),
+            si_errno: 0,
+            _sifields,
+        }
+    }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigChld32 {
+    pid: i32,
+    uid: u32,
+    status: i32,
+    utime: i32,
+    stime: i32,
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigFault32 {
+    addr: u32,
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+pub struct SigInfo64 {
+    si_signo: i32,
+    si_code: i32,
+    si_errno: i32,
+    _sifields: [i32; 29],
+}
+
+impl From<SigInfo> for SigInfo64 {
+    fn from(value: SigInfo) -> Self {
+        let mut _sifields = [0; 29];
+        let dst = bytes_of_mut(&mut _sifields);
+        macro_rules! pack {
+            ($expr:expr) => {{
+                let value = $expr;
+                let src = bytes_of(&value);
+                dst[..src.len()].copy_from_slice(src);
+            }};
+        }
+        match value.fields {
+            SigFields::None => {}
+            SigFields::SigChld(sig_chld) => {
+                pack!(SigChld64 {
+                    pid: sig_chld.pid,
+                    uid: sig_chld.uid,
+                    status: sig_chld.status,
+                    utime: sig_chld.utime,
+                    stime: sig_chld.stime,
+                })
+            }
+            SigFields::SigFault(sig_fault) => {
+                pack!(SigFault64 {
+                    addr: sig_fault.addr,
+                })
+            }
+        }
+        Self {
+            si_signo: value.signal.get() as i32,
+            si_code: value.code.get(),
+            si_errno: 0,
+            _sifields,
+        }
+    }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C, packed(4))]
+struct SigChld64 {
+    pid: i32,
+    uid: u32,
+    status: i32,
+    utime: i64,
+    stime: i64,
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigFault64 {
+    addr: u64,
+}
+
 impl Pointee for Sigaction {}
 
 impl AbiDependentPointee for Sigaction {
@@ -834,25 +965,25 @@ pub struct Sigset64([u32; 2]);
 
 impl From<Sigset32> for Sigset {
     fn from(value: Sigset32) -> Self {
-        Self(cast(value))
+        Self::from_bits(cast(value))
     }
 }
 
 impl From<Sigset64> for Sigset {
     fn from(value: Sigset64) -> Self {
-        Self(cast(value))
+        Self::from_bits(cast(value))
     }
 }
 
 impl From<Sigset> for Sigset32 {
     fn from(value: Sigset) -> Self {
-        cast(value.0)
+        cast(value.to_bits())
     }
 }
 
 impl From<Sigset> for Sigset64 {
     fn from(value: Sigset) -> Self {
-        cast(value.0)
+        cast(value.to_bits())
     }
 }
 
@@ -1032,10 +1163,6 @@ impl From<Time> for Time64 {
         Self(u64::from(value.0))
     }
 }
-
-impl Pointee for SigInfo {}
-
-impl PrimitivePointee for SigInfo {}
 
 impl Pointee for UContext {}
 

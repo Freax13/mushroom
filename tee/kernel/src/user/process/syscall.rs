@@ -48,7 +48,10 @@ use self::{
 
 use super::{
     memory::{Bias, VirtualMemory},
-    thread::{new_tid, NewTls, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
+    thread::{
+        new_tid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags,
+        Thread, ThreadGuard, THREADS,
+    },
     Process,
 };
 
@@ -230,7 +233,12 @@ async fn write(
     .await;
 
     if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
-        thread.queue_signal(Signal::PIPE);
+        let sig_info = SigInfo {
+            signal: Signal::PIPE,
+            code: SigInfoCode::KERNEL,
+            fields: SigFields::None,
+        };
+        thread.queue_signal(sig_info);
     }
 
     let len = res?;
