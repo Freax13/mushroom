@@ -126,6 +126,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysRecvFrom);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysFork);
@@ -915,6 +916,33 @@ async fn sendfile64(
     }
 
     let len = u64::from_usize(total_len);
+    Ok(len)
+}
+
+#[syscall(i386 = 371, amd64 = 45, interruptable)]
+async fn recv_from(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    sockfd: FdNum,
+    buf: Pointer<[u8]>,
+    len: u64,
+    flags: u32,
+    src_addr: Pointer<c_void>,
+    addrlen: Pointer<c_void>,
+) -> SyscallResult {
+    assert!(src_addr.is_null());
+    assert!(addrlen.is_null());
+
+    let fd = fdtable.get(sockfd)?;
+
+    let count = usize_from(len);
+
+    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
+        fd.recv_from(vm, buf, count)
+    })
+    .await?;
+
+    let len = u64::from_usize(len);
     Ok(len)
 }
 

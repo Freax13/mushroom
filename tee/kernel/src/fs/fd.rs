@@ -281,6 +281,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Ok(count)
     }
 
+    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+        let _ = vm;
+        let _ = pointer;
+        let _ = len;
+        Err(Error::inval(()))
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
         Err(Error::inval(()))

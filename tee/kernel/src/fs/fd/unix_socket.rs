@@ -75,6 +75,10 @@ impl OpenFileDescription for StreamUnixSocket {
         self.read_half.read_to_user(vm, pointer, len)
     }
 
+    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+        self.read_half.read_to_user(vm, pointer, len)
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         self.write_half.write(buf)
     }
