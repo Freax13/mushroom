@@ -23,10 +23,10 @@ use crate::{
     },
     user::process::{
         memory::VirtualMemory,
-        syscall::traits::Abi,
+        syscall::traits::{Abi, SyscallArgs},
         thread::{
-            SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, ThreadGuard,
-            UContext,
+            SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags,
+            ThreadGuard, UContext,
         },
     },
 };
@@ -445,6 +445,137 @@ impl Pointee for FdNum {}
 
 impl PrimitivePointee for FdNum {}
 
+impl Pointee for SigInfo {}
+
+impl AbiDependentPointee for SigInfo {
+    type I386 = SigInfo32;
+    type Amd64 = SigInfo64;
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+pub struct SigInfo32 {
+    si_signo: i32,
+    si_code: i32,
+    si_errno: i32,
+    _sifields: [i32; 29],
+}
+
+impl From<SigInfo> for SigInfo32 {
+    fn from(value: SigInfo) -> Self {
+        let mut _sifields = [0; 29];
+        let dst = bytes_of_mut(&mut _sifields);
+        macro_rules! pack {
+            ($expr:expr) => {{
+                let value = $expr;
+                let src = bytes_of(&value);
+                dst[..src.len()].copy_from_slice(src);
+            }};
+        }
+        match value.fields {
+            SigFields::None => {}
+            SigFields::SigChld(sig_chld) => {
+                pack!(SigChld32 {
+                    pid: sig_chld.pid,
+                    uid: sig_chld.uid,
+                    status: sig_chld.status,
+                    utime: sig_chld.utime as i32,
+                    stime: sig_chld.stime as i32,
+                })
+            }
+            SigFields::SigFault(sig_fault) => {
+                pack!(SigFault32 {
+                    addr: sig_fault.addr as u32,
+                })
+            }
+        }
+        Self {
+            si_signo: value.signal.get() as i32,
+            si_code: value.code.get(),
+            si_errno: 0,
+            _sifields,
+        }
+    }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigChld32 {
+    pid: i32,
+    uid: u32,
+    status: i32,
+    utime: i32,
+    stime: i32,
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigFault32 {
+    addr: u32,
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+pub struct SigInfo64 {
+    si_signo: i32,
+    si_code: i32,
+    si_errno: i32,
+    _sifields: [i32; 29],
+}
+
+impl From<SigInfo> for SigInfo64 {
+    fn from(value: SigInfo) -> Self {
+        let mut _sifields = [0; 29];
+        let dst = bytes_of_mut(&mut _sifields);
+        macro_rules! pack {
+            ($expr:expr) => {{
+                let value = $expr;
+                let src = bytes_of(&value);
+                dst[..src.len()].copy_from_slice(src);
+            }};
+        }
+        match value.fields {
+            SigFields::None => {}
+            SigFields::SigChld(sig_chld) => {
+                pack!(SigChld64 {
+                    pid: sig_chld.pid,
+                    uid: sig_chld.uid,
+                    status: sig_chld.status,
+                    utime: sig_chld.utime,
+                    stime: sig_chld.stime,
+                })
+            }
+            SigFields::SigFault(sig_fault) => {
+                pack!(SigFault64 {
+                    addr: sig_fault.addr,
+                })
+            }
+        }
+        Self {
+            si_signo: value.signal.get() as i32,
+            si_code: value.code.get(),
+            si_errno: 0,
+            _sifields,
+        }
+    }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C, packed(4))]
+struct SigChld64 {
+    pid: i32,
+    uid: u32,
+    status: i32,
+    utime: i64,
+    stime: i64,
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigFault64 {
+    addr: u64,
+}
+
 impl Pointee for Sigaction {}
 
 impl AbiDependentPointee for Sigaction {
@@ -498,7 +629,7 @@ impl From<Sigaction32> for Sigaction {
     fn from(value: Sigaction32) -> Self {
         Self {
             sa_handler_or_sigaction: u64::from(value.sa_handler_or_sigaction),
-            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags),
+            sa_flags: SigactionFlags::from_bits_retain(value.sa_flags),
             sa_restorer: u64::from(value.sa_restorer),
             sa_mask: cast(value.sa_mask),
         }
@@ -510,7 +641,7 @@ impl From<Sigaction64> for Sigaction {
         Self {
             sa_handler_or_sigaction: value.sa_handler_or_sigaction,
             sa_mask: value.sa_mask,
-            sa_flags: SigactionFlags::from_bits_truncate(value.sa_flags as u32),
+            sa_flags: SigactionFlags::from_bits_retain(value.sa_flags as u32),
             sa_restorer: value.sa_restorer,
         }
     }
@@ -834,25 +965,25 @@ pub struct Sigset64([u32; 2]);
 
 impl From<Sigset32> for Sigset {
     fn from(value: Sigset32) -> Self {
-        Self(cast(value))
+        Self::from_bits(cast(value))
     }
 }
 
 impl From<Sigset64> for Sigset {
     fn from(value: Sigset64) -> Self {
-        Self(cast(value))
+        Self::from_bits(cast(value))
     }
 }
 
 impl From<Sigset> for Sigset32 {
     fn from(value: Sigset) -> Self {
-        cast(value.0)
+        cast(value.to_bits())
     }
 }
 
 impl From<Sigset> for Sigset64 {
     fn from(value: Sigset) -> Self {
-        cast(value.0)
+        cast(value.to_bits())
     }
 }
 
@@ -1033,10 +1164,6 @@ impl From<Time> for Time64 {
     }
 }
 
-impl Pointee for SigInfo {}
-
-impl PrimitivePointee for SigInfo {}
-
 impl Pointee for UContext {}
 
 impl AbiDependentPointee for UContext {
@@ -1052,6 +1179,9 @@ pub struct UContext32 {
     stack: Stack32,
     mcontext: SigContext32,
     sigmask: Sigset32,
+    // implementation specific
+    _padding: u32,
+    syscall_restart_args: SyscallRestartArgs,
 }
 
 impl TryFrom<UContext> for UContext32 {
@@ -1093,13 +1223,17 @@ impl TryFrom<UContext> for UContext32 {
                 cr2: value.mcontext.cr2 as u32,
             },
             sigmask: value.sigmask.into(),
+            _padding: 0,
+            syscall_restart_args: value.syscall_restart_args.into(),
         })
     }
 }
 
-impl From<UContext32> for UContext {
-    fn from(value: UContext32) -> Self {
-        Self {
+impl TryFrom<UContext32> for UContext {
+    type Error = Error;
+
+    fn try_from(value: UContext32) -> Result<Self> {
+        Ok(Self {
             stack: value.stack.into(),
             mcontext: SigContext {
                 r8: 0,
@@ -1133,7 +1267,8 @@ impl From<UContext32> for UContext {
                 fpstate: Pointer::from(value.mcontext.fpstate).cast(),
             },
             sigmask: value.sigmask.into(),
-        }
+            syscall_restart_args: value.syscall_restart_args.try_into()?,
+        })
     }
 }
 
@@ -1221,6 +1356,8 @@ pub struct UContext64 {
     stack: Stack64,
     mcontext: SigContext64,
     sigmask: Sigset64,
+    // implementation specific
+    syscall_restart_args: SyscallRestartArgs,
 }
 
 impl From<UContext> for UContext64 {
@@ -1260,13 +1397,16 @@ impl From<UContext> for UContext64 {
                 reserved1: [0; 8],
             },
             sigmask: value.sigmask.into(),
+            syscall_restart_args: value.syscall_restart_args.into(),
         }
     }
 }
 
-impl From<UContext64> for UContext {
-    fn from(value: UContext64) -> Self {
-        Self {
+impl TryFrom<UContext64> for UContext {
+    type Error = Error;
+
+    fn try_from(value: UContext64) -> Result<Self> {
+        Ok(Self {
             stack: value.stack.into(),
             mcontext: SigContext {
                 r8: value.mcontext.r8,
@@ -1300,7 +1440,8 @@ impl From<UContext64> for UContext {
                 fpstate: Pointer::from(value.mcontext.fpstate).cast(),
             },
             sigmask: value.sigmask.into(),
-        }
+            syscall_restart_args: value.syscall_restart_args.try_into()?,
+        })
     }
 }
 
@@ -1352,6 +1493,59 @@ struct FpState64 {
     xmm_space: [u32; 64],
     reserved2: [u32; 12],
     reserved3: [u32; 12],
+}
+
+/// Store the arguments for a syscall so that we can restart it.
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+struct SyscallRestartArgs {
+    abi: u64,
+    no: u64,
+    args: [u64; 6],
+}
+
+impl SyscallRestartArgs {
+    const ABI_NONE: u64 = 0; // No args are stored.
+    const ABI_I386: u64 = 1;
+    const ABI_AMD64: u64 = 2;
+}
+
+impl TryFrom<SyscallRestartArgs> for Option<SyscallArgs> {
+    type Error = Error;
+
+    fn try_from(value: SyscallRestartArgs) -> Result<Self> {
+        let abi = match value.abi {
+            SyscallRestartArgs::ABI_NONE => return Ok(None),
+            SyscallRestartArgs::ABI_I386 => Abi::I386,
+            SyscallRestartArgs::ABI_AMD64 => Abi::Amd64,
+            _ => return Err(Error::inval(())),
+        };
+        Ok(Some(SyscallArgs {
+            abi,
+            no: value.no,
+            args: value.args,
+        }))
+    }
+}
+
+impl From<Option<SyscallArgs>> for SyscallRestartArgs {
+    fn from(value: Option<SyscallArgs>) -> Self {
+        value.map_or(
+            Self {
+                abi: Self::ABI_NONE,
+                no: 0,
+                args: [0; 6],
+            },
+            |value| Self {
+                abi: match value.abi {
+                    Abi::I386 => Self::ABI_I386,
+                    Abi::Amd64 => Self::ABI_AMD64,
+                },
+                no: value.no,
+                args: value.args,
+            },
+        )
+    }
 }
 
 impl Pointee for RLimit {}

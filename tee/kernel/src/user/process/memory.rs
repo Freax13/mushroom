@@ -70,7 +70,11 @@ impl VirtualMemory {
         self.pagetables.run_with(f)
     }
 
-    pub fn handle_page_fault(&self, addr: u64, error_code: PageFaultErrorCode) -> bool {
+    pub fn handle_page_fault(
+        &self,
+        addr: u64,
+        error_code: PageFaultErrorCode,
+    ) -> Result<(), PageFaultError> {
         let addr = VirtAddr::new(addr);
         let page = Page::containing_address(addr);
 
@@ -86,7 +90,7 @@ impl VirtualMemory {
             error_code.contains(PageFaultErrorCode::INSTRUCTION_FETCH),
         );
 
-        self.map_page(page, required_flags).is_ok()
+        self.map_page(page, required_flags)
     }
 
     /// Create a deep copy of the memory.
@@ -122,9 +126,16 @@ impl VirtualMemory {
         }
     }
 
-    pub fn map_page(&self, page: Page, required_flags: PageTableFlags) -> Result<()> {
+    pub fn map_page(
+        &self,
+        page: Page,
+        required_flags: PageTableFlags,
+    ) -> Result<(), PageFaultError> {
         let state = self.state.read();
-        let user_page = state.pages.get(&page).ok_or_else(|| Error::fault(()))?;
+        let user_page = state
+            .pages
+            .get(&page)
+            .ok_or_else(|| PageFaultError::Unmapped(Error::fault(())))?;
 
         let mut guard = user_page.lock();
 
@@ -133,24 +144,25 @@ impl VirtualMemory {
             .perms()
             .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
         {
-            return Err(Error::fault(()));
+            return Err(PageFaultError::MissingPermissions(Error::fault(())));
         }
 
         if required_flags.contains(PageTableFlags::WRITABLE)
             && guard.perms().contains(MemoryPermissions::WRITE)
         {
             self.pagetables.try_unmap_user_page(page);
-            guard.make_mut()?;
+            guard.make_mut().map_err(PageFaultError::Other)?;
         }
 
         let entry = guard.entry();
 
         if !entry.flags().contains(required_flags) {
-            return Err(Error::fault(()));
+            return Err(PageFaultError::MissingPermissions(Error::fault(())));
         }
 
         self.pagetables
-            .set_page(page, entry, &mut &FRAME_ALLOCATOR)?;
+            .set_page(page, entry, &mut &FRAME_ALLOCATOR)
+            .map_err(PageFaultError::Other)?;
 
         drop(guard);
 
@@ -659,5 +671,20 @@ impl Bias {
             Bias::Fixed(bias) => bias.page_offset(),
             Bias::Dynamic(_) => PageOffset::new(0),
         }
+    }
+}
+
+pub enum PageFaultError {
+    Unmapped(Error),
+    MissingPermissions(Error),
+    Other(Error),
+}
+
+impl From<PageFaultError> for Error {
+    fn from(value: PageFaultError) -> Self {
+        let (PageFaultError::Unmapped(error)
+        | PageFaultError::MissingPermissions(error)
+        | PageFaultError::Other(error)) = value;
+        error
     }
 }

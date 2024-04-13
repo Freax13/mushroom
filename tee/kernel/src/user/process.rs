@@ -1,22 +1,35 @@
-use core::ffi::CStr;
+use core::{
+    ffi::CStr,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
-use alloc::sync::Arc;
+use alloc::{
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 
 use crate::{
+    error::{Error, Result},
     fs::{
-        fd::file::File,
+        fd::{file::File, FileDescriptorTable},
         node::{tmpfs::TmpFsFile, FileAccessContext, INode},
         path::Path,
         INIT,
     },
-    rt::once::OnceCell,
+    rt::{notify::Notify, once::OnceCell},
+    spin::mutex::Mutex,
     supervisor,
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
 };
 
 use self::{
     futex::Futexes,
-    thread::{new_tid, Thread},
+    memory::VirtualMemory,
+    syscall::{args::Signal, cpu_state::CpuState},
+    thread::{
+        new_tid, running_state::ExecveValues, PendingSignals, SigChld, SigFields, SigInfo,
+        SigInfoCode, Sigset, Thread, WeakThread,
+    },
 };
 
 mod exec;
@@ -29,14 +42,77 @@ pub struct Process {
     pid: u32,
     futexes: Arc<Futexes>,
     exit_status: OnceCell<u8>,
+    parent: Weak<Self>,
+    children: Mutex<Vec<Arc<Self>>>,
+    child_death_notify: Notify,
+    termination_signal: Option<Signal>,
+    pending_signals: Mutex<PendingSignals>,
+    signals_notify: Notify,
+    threads: Mutex<Vec<WeakThread>>,
+    /// The number of running threads.
+    running: AtomicUsize,
 }
 
 impl Process {
-    fn new(first_tid: u32) -> Self {
-        Self {
+    fn new(first_tid: u32, parent: Weak<Self>, termination_signal: Option<Signal>) -> Arc<Self> {
+        let this = Self {
             pid: first_tid,
             futexes: Arc::new(Futexes::new()),
             exit_status: OnceCell::new(),
+            parent: parent.clone(),
+            children: Mutex::new(Vec::new()),
+            child_death_notify: Notify::new(),
+            termination_signal,
+            pending_signals: Mutex::new(PendingSignals::new()),
+            signals_notify: Notify::new(),
+            threads: Mutex::new(Vec::new()),
+            running: AtomicUsize::new(0),
+        };
+        let arc = Arc::new(this);
+
+        if let Some(parent) = parent.upgrade() {
+            parent.children.lock().push(arc.clone());
+        }
+
+        arc
+    }
+
+    pub fn add_thread(&self, thread: WeakThread) {
+        let mut guard = self.threads.lock();
+        guard.push(thread);
+        self.running.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn restart_thread(&self) {
+        self.running.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn exit(&self, exit_status: u8) {
+        let prev = self.running.fetch_sub(1, Ordering::Relaxed);
+        if prev == 1 {
+            self.exit_group(exit_status);
+        }
+    }
+
+    pub fn execve(
+        &self,
+        virtual_memory: VirtualMemory,
+        cpu_state: CpuState,
+        fdtable: FileDescriptorTable,
+    ) {
+        let mut threads = self.threads.lock();
+
+        // Restart the thread leader.
+        let leader = threads[0].upgrade().unwrap();
+        leader.execve(ExecveValues {
+            virtual_memory,
+            cpu_state,
+            fdtable,
+        });
+
+        // Stop all threads except for the thread group leader.
+        for thread in threads.drain(1..).filter_map(|t| t.upgrade()) {
+            thread.terminate(0);
         }
     }
 
@@ -44,7 +120,7 @@ impl Process {
     ///
     /// The returned exit status may not be the same as the requested
     /// if another thread terminated the thread group at the same time.
-    pub fn exit(&self, exit_status: u8) -> u8 {
+    pub fn exit_group(&self, exit_status: u8) {
         if self.pid == 1 {
             // Commit or fail the output depending on the exit status of the
             // init process.
@@ -55,37 +131,114 @@ impl Process {
             }
         }
 
-        *self.exit_status.set(exit_status)
+        let set = self.exit_status.set(exit_status);
+        if !set {
+            return;
+        }
+
+        let mut threads = self.threads.lock();
+        for thread in core::mem::take(&mut *threads)
+            .into_iter()
+            .filter_map(|t| t.upgrade())
+        {
+            thread.terminate(exit_status);
+        }
+        drop(threads);
+
+        if let Some(termination_signal) = self.termination_signal {
+            if let Some(parent) = self.parent.upgrade() {
+                parent.queue_signal(SigInfo {
+                    signal: termination_signal,
+                    code: SigInfoCode::CLD_EXITED,
+                    fields: SigFields::SigChld(SigChld {
+                        pid: self.pid as i32,
+                        uid: 0,
+                        status: i32::from(exit_status),
+                        utime: 0,
+                        stime: 0,
+                    }),
+                });
+            }
+        }
+
+        if let Some(parent) = self.parent.upgrade() {
+            parent.child_death_notify.notify();
+        }
     }
 
     pub async fn exit_status(&self) -> u8 {
         *self.exit_status.get().await
     }
+
+    pub async fn wait_for_child_death(
+        &self,
+        pid: Option<u32>,
+        no_hang: bool,
+    ) -> Result<Option<(u32, u8)>> {
+        self.child_death_notify
+            .wait_until(|| {
+                let mut guard = self.children.lock();
+                if guard.is_empty() {
+                    return Some(Err(Error::child(())));
+                }
+
+                let opt_idx = guard.iter().position(|child| {
+                    // If there's a pid, only consider the child with the given pid.
+                    if let Some(pid) = pid {
+                        if child.pid != pid {
+                            return false;
+                        }
+                    }
+
+                    child.exit_status.try_get().is_some()
+                });
+
+                let Some(idx) = opt_idx else {
+                    if no_hang {
+                        return Some(Ok(None));
+                    } else {
+                        return None;
+                    }
+                };
+                let child = guard.swap_remove(idx);
+                let status = *child.exit_status.try_get().unwrap();
+                Some(Ok(Some((child.pid, status))))
+            })
+            .await
+    }
+
+    pub fn queue_signal(&self, sig_info: SigInfo) {
+        self.pending_signals.lock().add(sig_info);
+        self.signals_notify.notify();
+    }
+
+    fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
+        self.pending_signals.lock().pop(mask)
+    }
 }
 
 pub fn start_init_process() {
-    let res = Thread::spawn(|self_weak| {
-        let thread = Thread::empty(self_weak, new_tid());
+    let tid = new_tid();
+    assert_eq!(tid, 1);
+    let thread = Thread::empty(tid);
 
-        let mut guard = thread.lock();
-        let mut ctx = FileAccessContext::extract_from_thread(&guard);
+    let mut guard = thread.lock();
+    let mut ctx = FileAccessContext::extract_from_thread(&guard);
 
-        let file = TmpFsFile::new(FileMode::all());
-        file.write(0, *INIT)?;
-        let file = file.open(OpenFlags::empty())?;
+    let file = TmpFsFile::new(FileMode::all());
+    file.write(0, *INIT).unwrap();
+    let file = file.open(OpenFlags::empty()).unwrap();
 
-        guard.start_executable(
+    guard
+        .start_executable(
             &Path::new(b"/bin/init".to_vec()).unwrap(),
             &*file,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
             &mut ctx,
-        )?;
-        drop(guard);
+        )
+        .unwrap();
+    drop(guard);
 
-        Ok(thread)
-    });
-
-    let tid = res.expect("failed to create init process");
-    assert_eq!(tid, 1);
+    thread.spawn();
 }

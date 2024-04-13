@@ -16,7 +16,7 @@ use crate::{
 
 use super::args::SyscallArg;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SyscallArgs {
     pub abi: Abi,
     pub no: u64,

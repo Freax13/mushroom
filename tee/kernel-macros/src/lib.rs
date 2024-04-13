@@ -1,5 +1,6 @@
 use heck::AsUpperCamelCase;
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
 use syn::{
     parse::{Parse, ParseStream},
@@ -93,10 +94,25 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         .push(parse_quote! {#[allow(clippy::too_many_arguments)]});
 
     let future = if input.sig.asyncness.is_some() {
-        quote! {
+        let mut future = quote! {
             #syscall_ident(#(#function_invocation_args),*)
+        };
+        if attr.interruptable {
+            let restartable = attr.restartable;
+            future = quote! {
+                async move {
+                    thread.clone().interruptable(#future, #restartable).await
+                }
+            };
         }
+        future
     } else {
+        if attr.interruptable {
+            return Err(Error::new(
+                Span::call_site(),
+                "non-async syscalls cannot be interrupted",
+            ));
+        }
         quote! {
             async move {
                 let mut thread = thread.lock();
@@ -106,7 +122,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         }
     };
 
-    let i386 = if let Some(i386) = attr.v {
+    let i386 = if let Some(i386) = attr.i386 {
         quote! { Some(#i386) }
     } else {
         quote! { None }
@@ -158,8 +174,10 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
 }
 
 struct SyscallAttr {
-    v: Option<Expr>,
+    i386: Option<Expr>,
     amd64: Option<Expr>,
+    interruptable: bool,
+    restartable: bool,
 }
 
 impl Parse for SyscallAttr {
@@ -168,24 +186,44 @@ impl Parse for SyscallAttr {
 
         let mut i386 = None;
         let mut amd64 = None;
+        let mut interruptable = false;
+        let mut restartable = false;
         for var in vars.iter() {
-            let name_value = var.require_name_value()?;
-            if name_value.path.is_ident("amd64") {
+            if var.path().is_ident("amd64") {
+                let name_value = var.require_name_value()?;
                 if amd64.is_some() {
                     return Err(Error::new_spanned(name_value, "duplicate amd64"));
                 }
                 amd64 = Some(name_value.value.clone());
-            } else if name_value.path.is_ident("i386") {
+            } else if var.path().is_ident("i386") {
+                let name_value = var.require_name_value()?;
                 if i386.is_some() {
                     return Err(Error::new_spanned(name_value, "duplicate i386"));
                 }
                 i386 = Some(name_value.value.clone());
+            } else if var.path().is_ident("interruptable") {
+                let name_value = var.require_path_only()?;
+                if interruptable {
+                    return Err(Error::new_spanned(name_value, "duplicate interruptable"));
+                }
+                interruptable = true;
+            } else if var.path().is_ident("restartable") {
+                let name_value = var.require_path_only()?;
+                if restartable {
+                    return Err(Error::new_spanned(name_value, "duplicate restartable"));
+                }
+                restartable = true;
             } else {
-                return Err(Error::new_spanned(&name_value.path, "invalid attribute"));
+                return Err(Error::new_spanned(var.path(), "invalid attribute"));
             }
         }
 
-        Ok(Self { v: i386, amd64 })
+        Ok(Self {
+            i386,
+            amd64,
+            interruptable,
+            restartable,
+        })
     }
 }
 

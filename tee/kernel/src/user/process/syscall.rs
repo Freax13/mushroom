@@ -31,7 +31,6 @@ use crate::{
             ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, Pollfd, Resource, SpliceFlags,
             Timeval, UserDesc,
         },
-        thread::SignalHandlerTable,
     },
 };
 
@@ -49,7 +48,10 @@ use self::{
 
 use super::{
     memory::{Bias, VirtualMemory},
-    thread::{new_tid, NewTls, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, THREADS},
+    thread::{
+        new_tid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags,
+        Thread, ThreadGuard,
+    },
     Process,
 };
 
@@ -64,12 +66,15 @@ impl Thread {
 
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
+        if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
+            guard.store_for_restart(args);
+        }
     }
 }
 
 impl ThreadGuard<'_> {
-    /// Execute the exit syscall.
-    pub fn exit(&mut self, status: u8) {
+    /// Release the threads resources.
+    pub fn do_exit(&mut self) {
         if let Some(vfork_parent) = self.vfork_done.take() {
             let _ = vfork_parent.send(());
         }
@@ -82,14 +87,6 @@ impl ThreadGuard<'_> {
 
             self.process().futexes.wake(clear_child_tid, 1, None);
         }
-
-        if !core::mem::replace(&mut self.notified_parent_about_exit, true) {
-            if let Some(parent) = self.parent().upgrade() {
-                parent.add_child_death(self.tid(), status);
-            }
-        }
-
-        self.set_exit_status(status);
     }
 }
 
@@ -199,7 +196,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers
 };
 
-#[syscall(i386 = 3, amd64 = 0)]
+#[syscall(i386 = 3, amd64 = 0, interruptable, restartable)]
 async fn read(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -220,7 +217,7 @@ async fn read(
     Ok(len)
 }
 
-#[syscall(i386 = 4, amd64 = 1)]
+#[syscall(i386 = 4, amd64 = 1, interruptable, restartable)]
 async fn write(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -239,7 +236,12 @@ async fn write(
     .await;
 
     if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
-        thread.queue_signal(Signal::PIPE);
+        let sig_info = SigInfo {
+            signal: Signal::PIPE,
+            code: SigInfoCode::KERNEL,
+            fields: SigFields::None,
+        };
+        thread.queue_signal(sig_info);
     }
 
     let len = res?;
@@ -974,15 +976,20 @@ async fn clone(
         (child_tid, tls) = (Pointer::new(tls), child_tid.get().as_u64());
     }
 
+    let termination_signal = flags.termination_signal()?;
+
     let new_tid = new_tid();
 
-    let mut thread = thread.lock();
+    let thread = thread.lock();
 
     let new_process = if flags.contains(CloneFlags::THREAD) {
         None
     } else {
-        thread.unwaited_children += 1;
-        Some(Arc::new(Process::new(new_tid)))
+        Some(Process::new(
+            new_tid,
+            Arc::downgrade(thread.process()),
+            termination_signal,
+        ))
     };
 
     let new_virtual_memory = if flags.contains(CloneFlags::VM) {
@@ -1031,109 +1038,84 @@ async fn clone(
         (None, None)
     };
 
-    let tid = Thread::spawn(|weak_thread| {
-        let new_thread = thread.clone(
-            new_tid,
-            weak_thread,
-            new_process,
-            new_virtual_memory,
-            new_signal_handler_table,
-            new_fdtable,
-            stack.get(),
-            new_clear_child_tid,
-            new_tls,
-            vfork_sender,
-        );
+    let new_thread = thread.clone(
+        new_tid,
+        new_process,
+        new_virtual_memory,
+        new_signal_handler_table,
+        new_fdtable,
+        stack.get(),
+        new_clear_child_tid,
+        new_tls,
+        vfork_sender,
+    );
 
-        if flags.contains(CloneFlags::PARENT_SETTID) {
-            virtual_memory.write(parent_tid, new_tid)?;
-        }
+    if flags.contains(CloneFlags::PARENT_SETTID) {
+        virtual_memory.write(parent_tid, new_tid)?;
+    }
 
-        if flags.contains(CloneFlags::CHILD_SETTID) {
-            let guard = new_thread.lock();
-            let virtual_memory = guard.virtual_memory();
-            virtual_memory.write(child_tid, new_tid)?;
-        }
+    if flags.contains(CloneFlags::CHILD_SETTID) {
+        let guard = new_thread.lock();
+        let virtual_memory = guard.virtual_memory();
+        virtual_memory.write(child_tid, new_tid)?;
+    }
 
-        Result::Ok(new_thread)
-    })?;
+    new_thread.spawn();
 
     if let Some(vfork_receiver) = vfork_receiver {
         let _ = vfork_receiver.recv().await;
     }
 
-    Ok(u64::from(tid))
+    Ok(u64::from(new_tid))
 }
 
 #[syscall(i386 = 2, amd64 = 57)]
-fn fork(
-    thread: &mut ThreadGuard,
+async fn fork(
+    thread: Arc<Thread>,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
 ) -> SyscallResult {
-    thread.unwaited_children += 1;
-
-    let tid = Thread::spawn(|self_weak| {
-        let new_tid = new_tid();
-        let new_process = Some(Arc::new(Process::new(new_tid)));
-        let virtual_memory = (*virtual_memory).clone()?;
-        let new_virtual_memory = Some(Arc::new(virtual_memory));
-        let new_signal_handler_table = Some(Arc::new((*thread.signal_handler_table).clone()));
-        let new_fdtable = Arc::new((*fdtable).clone());
-
-        Result::Ok(thread.clone(
-            new_tid,
-            self_weak,
-            new_process,
-            new_virtual_memory,
-            new_signal_handler_table,
-            new_fdtable,
-            VirtAddr::zero(),
-            None,
-            None,
-            None,
-        ))
-    })?;
-
-    Ok(u64::from(tid))
+    clone(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        CloneFlags::from_bits_retain(Signal::CHLD.get() as u64),
+        Pointer::NULL,
+        Pointer::NULL,
+        Pointer::NULL,
+        0,
+    )
+    .await
 }
 
 #[syscall(i386 = 190, amd64 = 58)]
-async fn vfork(thread: Arc<Thread>, #[state] fdtable: Arc<FileDescriptorTable>) -> SyscallResult {
-    let (sender, receiver) = oneshot::new();
-
-    let mut guard = thread.lock();
-    guard.unwaited_children += 1;
-
-    let tid = Thread::spawn(|self_weak| {
-        let new_tid = new_tid();
-        let new_process = Some(Arc::new(Process::new(new_tid)));
-        let new_signal_handler_table = Some(Arc::new((*guard.signal_handler_table).clone()));
-        let new_fdtable = Arc::new((*fdtable).clone());
-
-        Result::Ok(guard.clone(
-            new_tid,
-            self_weak,
-            new_process,
-            None,
-            new_signal_handler_table,
-            new_fdtable,
-            VirtAddr::zero(),
-            None,
-            None,
-            Some(sender),
-        ))
-    })?;
-    drop(guard);
-
-    let _ = receiver.recv().await;
-
-    Ok(u64::from(tid))
+async fn vfork(
+    thread: Arc<Thread>,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+) -> SyscallResult {
+    clone(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        CloneFlags::VM
+            | CloneFlags::VFORK
+            | CloneFlags::from_bits_retain(Signal::CHLD.get() as u64),
+        Pointer::NULL,
+        Pointer::NULL,
+        Pointer::NULL,
+        0,
+    )
+    .await
 }
 
 #[syscall(i386 = 11, amd64 = 59)]
-fn execve(
-    thread: &mut ThreadGuard,
+async fn execve(
+    thread: Arc<Thread>,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1171,16 +1153,29 @@ fn execve(
 
     log::info!("execve({pathname:?}, {args:?}, {envs:?})");
 
-    thread.execve(&pathname, &args, &envs, &mut ctx)?;
+    // Open the executable.
+    let cwd = thread.lock().cwd.clone();
+    let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
+    if !node.mode().contains(FileMode::EXECUTE) {
+        return Err(Error::acces(()));
+    }
+    let file = node.open(OpenFlags::empty())?;
 
-    fdtable.close_after_exec();
-    thread.signal_handler_table = Arc::new(SignalHandlerTable::new());
+    // Create a new virtual memory and CPU state.
+    let virtual_memory = VirtualMemory::new();
+    let cpu_state =
+        virtual_memory.start_executable(&pathname, &*file, &args, &envs, &mut ctx, cwd)?;
 
-    if let Some(vfork_parent) = thread.vfork_done.take() {
+    // Everything was successfull, no errors can occour after this point.
+
+    let fdtable = fdtable.prepare_for_execve();
+    thread.process().execve(virtual_memory, cpu_state, fdtable);
+    if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
 
-    Ok(0)
+    // The execve syscall never returns if successful.
+    core::future::pending().await
 }
 
 #[syscall(i386 = 1, amd64 = 60)]
@@ -1190,7 +1185,7 @@ async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
     core::future::pending().await
 }
 
-#[syscall(i386 = 114, amd64 = 61)]
+#[syscall(i386 = 114, amd64 = 61, interruptable, restartable)]
 async fn wait4(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1203,30 +1198,17 @@ async fn wait4(
         todo!()
     }
 
-    let (tid, status) = match pid {
+    let no_hang = options.contains(WaitOptions::NOHANG);
+    let pid = match pid {
         ..=-2 => todo!(),
-        -1 => {
-            let guard = thread.lock();
-            if guard.unwaited_children == 0 {
-                return Err(Error::child(()));
-            }
-            drop(guard);
-
-            if options.contains(WaitOptions::NOHANG) {
-                let Some((tid, status)) = thread.try_wait_for_child_death() else {
-                    return Ok(0);
-                };
-                (tid, status)
-            } else {
-                thread.wait_for_child_death().await
-            }
-        }
+        -1 => None,
         0 => todo!(),
-        1.. => {
-            let t = THREADS.by_id(pid as u32).ok_or_else(|| Error::child(()))?;
-            let status = t.wait_for_exit().await;
-            (t.tid(), status)
-        }
+        1.. => Some(pid as u32),
+    };
+
+    let opt = thread.process().wait_for_child_death(pid, no_hang).await?;
+    let Some((tid, status)) = opt else {
+        return Ok(0);
     };
 
     if !wstatus.is_null() {
@@ -1235,12 +1217,6 @@ async fn wait4(
 
         virtual_memory.write_bytes(addr, bytes_of(&wstatus))?;
     }
-
-    let mut guard = thread.lock();
-    guard.unwaited_children -= 1;
-    drop(guard);
-
-    THREADS.remove(tid);
 
     Ok(u64::from(tid))
 }
@@ -1702,7 +1678,7 @@ fn time(
     Ok(u64::from(tv_sec))
 }
 
-#[syscall(i386 = 240, amd64 = 202)]
+#[syscall(i386 = 240, amd64 = 202, interruptable, restartable)]
 async fn futex(
     thread: Arc<Thread>,
     abi: Abi,
@@ -1856,11 +1832,11 @@ async fn clock_nanosleep(
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
     let process = thread.process().clone();
-    process.exit(status as u8);
+    process.exit_group(status as u8);
     core::future::pending().await
 }
 
-#[syscall(i386 = 256, amd64 = 232)]
+#[syscall(i386 = 256, amd64 = 232, interruptable)]
 async fn epoll_wait(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,

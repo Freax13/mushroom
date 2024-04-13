@@ -559,6 +559,13 @@ bitflags! {
     }
 }
 
+impl CloneFlags {
+    pub fn termination_signal(&self) -> Result<Option<Signal>> {
+        let signal = self.bits() as u8;
+        (signal != 0).then(|| Signal::new(signal)).transpose()
+    }
+}
+
 enum_arg! {
     pub enum FutexOp {
         Wait = 0,
@@ -1094,16 +1101,17 @@ bitflags! {
 }
 
 // This value is guaranteed to be less than 64.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Signal(u8);
 
 impl Signal {
     pub const FPE: Self = Self(8);
     pub const SEGV: Self = Self(11);
     pub const PIPE: Self = Self(13);
+    pub const CHLD: Self = Self(17);
 
     pub fn new(value: u8) -> Result<Self> {
-        if value >= 64 {
+        if !(1..=64).contains(&value) {
             return Err(Error::inval(()));
         }
         Ok(Self(value))
