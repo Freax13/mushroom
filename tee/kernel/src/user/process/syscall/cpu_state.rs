@@ -589,7 +589,7 @@ impl CpuState {
             sigmask,
             syscall_restart_args: self.syscall_restart_args.take(),
         };
-        let restorer = if sigaction.sa_restorer != 0 {
+        let restorer = if sigaction.sa_flags.contains(SigactionFlags::RESTORER) {
             sigaction.sa_restorer
         } else {
             match abi {
