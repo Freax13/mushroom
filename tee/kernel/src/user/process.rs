@@ -25,7 +25,7 @@ use crate::{
 use self::{
     futex::Futexes,
     memory::VirtualMemory,
-    syscall::cpu_state::CpuState,
+    syscall::{args::Signal, cpu_state::CpuState},
     thread::{
         new_tid, running_state::ExecveValues, PendingSignals, SigChld, SigFields, SigInfo,
         SigInfoCode, Sigset, Thread, WeakThread,
@@ -45,6 +45,7 @@ pub struct Process {
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
     child_death_notify: Notify,
+    termination_signal: Option<Signal>,
     pending_signals: Mutex<PendingSignals>,
     signals_notify: Notify,
     threads: Mutex<Vec<WeakThread>>,
@@ -53,7 +54,7 @@ pub struct Process {
 }
 
 impl Process {
-    fn new(first_tid: u32, parent: Weak<Self>) -> Arc<Self> {
+    fn new(first_tid: u32, parent: Weak<Self>, termination_signal: Option<Signal>) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
             futexes: Arc::new(Futexes::new()),
@@ -61,6 +62,7 @@ impl Process {
             parent: parent.clone(),
             children: Mutex::new(Vec::new()),
             child_death_notify: Notify::new(),
+            termination_signal,
             pending_signals: Mutex::new(PendingSignals::new()),
             signals_notify: Notify::new(),
             threads: Mutex::new(Vec::new()),
@@ -142,6 +144,22 @@ impl Process {
             thread.terminate(exit_status);
         }
         drop(threads);
+
+        if let Some(termination_signal) = self.termination_signal {
+            if let Some(parent) = self.parent.upgrade() {
+                parent.queue_signal(SigInfo {
+                    signal: termination_signal,
+                    code: SigInfoCode::CLD_EXITED,
+                    fields: SigFields::SigChld(SigChld {
+                        pid: self.pid as i32,
+                        uid: 0,
+                        status: i32::from(exit_status),
+                        utime: 0,
+                        stime: 0,
+                    }),
+                });
+            }
+        }
 
         if let Some(parent) = self.parent.upgrade() {
             parent.child_death_notify.notify();

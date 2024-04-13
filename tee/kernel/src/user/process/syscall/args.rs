@@ -559,6 +559,13 @@ bitflags! {
     }
 }
 
+impl CloneFlags {
+    pub fn termination_signal(&self) -> Result<Option<Signal>> {
+        let signal = self.bits() as u8;
+        (signal != 0).then(|| Signal::new(signal)).transpose()
+    }
+}
+
 enum_arg! {
     pub enum FutexOp {
         Wait = 0,

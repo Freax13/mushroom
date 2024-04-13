@@ -154,7 +154,7 @@ impl Thread {
     pub fn empty(tid: u32) -> Self {
         Self::new(
             tid,
-            Process::new(tid, Weak::new()),
+            Process::new(tid, Weak::new(), None),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
             Arc::new(VirtualMemory::new()),

@@ -973,6 +973,8 @@ async fn clone(
         (child_tid, tls) = (Pointer::new(tls), child_tid.get().as_u64());
     }
 
+    let termination_signal = flags.termination_signal()?;
+
     let new_tid = new_tid();
 
     let thread = thread.lock();
@@ -980,7 +982,11 @@ async fn clone(
     let new_process = if flags.contains(CloneFlags::THREAD) {
         None
     } else {
-        Some(Process::new(new_tid, Arc::downgrade(thread.process())))
+        Some(Process::new(
+            new_tid,
+            Arc::downgrade(thread.process()),
+            termination_signal,
+        ))
     };
 
     let new_virtual_memory = if flags.contains(CloneFlags::VM) {
