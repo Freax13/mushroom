@@ -7,7 +7,7 @@ use usize_conversions::usize_from;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{bail, ensure, Result},
     fs::{fd::OpenFileDescription, path::Path},
     user::process::{
         memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
@@ -38,30 +38,22 @@ pub struct ElfIdent {
 
 impl ElfIdent {
     pub fn verify(&self) -> Result<Abi> {
-        if self.e_ident[0..4] != MAGIC {
-            return Err(Error::no_exec(()));
-        }
+        ensure!(self.e_ident[0..4] == MAGIC, NoExec);
 
         let abi = match self.e_ident[4] {
             1 => Abi::I386,
             2 => Abi::Amd64,
-            _ => return Err(Error::no_exec(())),
+            _ => bail!(NoExec),
         };
 
         // Check endianess == little.
-        if self.e_ident[5] != 1 {
-            return Err(Error::no_exec(()));
-        }
+        ensure!(self.e_ident[5] == 1, NoExec);
 
         // Check version == 1.
-        if self.e_ident[6] != 1 {
-            return Err(Error::no_exec(()));
-        }
+        ensure!(self.e_ident[6] == 1, NoExec);
 
         // Check OS ABI == 0 (System V) or 3 (Linux).
-        if !matches!(self.e_ident[7], 0 | 3) {
-            return Err(Error::no_exec(()));
-        }
+        ensure!(matches!(self.e_ident[7], 0 | 3), NoExec);
 
         // Ignore extended ABI version.
         let _ = self.e_ident[8];
@@ -116,24 +108,14 @@ where
 
     header.e_ident().verify()?;
 
-    // Check class.
-    if header.e_ident().e_ident[4] != <E::Header>::CLASS {
-        return Err(Error::no_exec(()));
-    }
-
-    // Check machine.
-    if header.e_machine() != <E::Header>::MACHINE {
-        return Err(Error::no_exec(()));
-    }
-
-    if header.e_version() != 1 {
-        return Err(Error::no_exec(()));
-    }
+    ensure!(header.e_ident().e_ident[4] == <E::Header>::CLASS, NoExec);
+    ensure!(header.e_machine() == <E::Header>::MACHINE, NoExec);
+    ensure!(header.e_version() == 1, NoExec);
 
     let base = match header.e_type() {
         ET_EXEC => 0,
         ET_DYN => load_bias,
-        _ => return Err(Error::no_exec(())),
+        _ => bail!(NoExec),
     };
 
     let mut phdr = None;
@@ -143,9 +125,10 @@ where
     let e_phentsize = header.e_phentsize();
     let e_phnum = header.e_phnum();
 
-    if usize::from(e_phentsize) != size_of::<E::ProgramHeaderEntry>() {
-        return Err(Error::no_exec(()));
-    }
+    ensure!(
+        usize::from(e_phentsize) == size_of::<E::ProgramHeaderEntry>(),
+        NoExec
+    );
 
     let mut end = VirtAddr::zero();
 
@@ -164,12 +147,8 @@ where
         match p_type {
             PT_LOAD => {
                 // Sanity check sizes.
-                if p_memsz < p_filesz {
-                    return Err(Error::no_exec(()));
-                }
-                if p_memsz == 0 {
-                    return Err(Error::no_exec(()));
-                }
+                ensure!(p_memsz >= p_filesz, NoExec);
+                ensure!(p_memsz != 0, NoExec);
 
                 let mut permissions = MemoryPermissions::empty();
                 permissions.set(MemoryPermissions::EXECUTE, p_flags.get_bit(PF_X_BIT));

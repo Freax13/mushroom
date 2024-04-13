@@ -3,7 +3,7 @@
 global_asm!(include_str!("pagetable.s"));
 
 use crate::{
-    error::{Error, Result},
+    error::{ensure, err, Result},
     per_cpu::PerCpu,
     spin::{mutex::Mutex, rwlock::RwLock},
     user::process::memory::without_smap,
@@ -186,12 +186,10 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
 }
 
 /// Check that the page is in the lower half.
+#[inline(always)]
 pub fn check_user_page(page: Page) -> Result<()> {
-    if u16::from(page.p4_index()) < 256 {
-        Ok(())
-    } else {
-        Err(Error::fault(()))
-    }
+    ensure!(u16::from(page.p4_index()) < 256, Fault);
+    Ok(())
 }
 
 #[inline(always)]
@@ -201,11 +199,9 @@ pub fn check_user_address(addr: VirtAddr, len: usize) -> Result<()> {
     };
 
     // Make sure that even the end is still in the lower half.
-    let end_inclusive = Step::forward_checked(addr, len_m1).ok_or_else(|| Error::fault(()))?;
-    if end_inclusive.as_u64().get_bit(63) {
-        return Err(Error::fault(()));
-    }
-    Ok(())
+    let end_inclusive = Step::forward_checked(addr, len_m1).ok_or(err!(Fault))?;
+    let page = Page::containing_address(end_inclusive);
+    check_user_page(page)
 }
 
 pub struct PagetablesAllocations {
@@ -234,9 +230,7 @@ impl Pagetables {
         Lazy::force(&INIT_KERNEL_PML4ES);
 
         // Allocate a frame for the new pml4.
-        let frame = (&FRAME_ALLOCATOR)
-            .allocate_frame()
-            .ok_or(Error::no_mem(()))?;
+        let frame = (&FRAME_ALLOCATOR).allocate_frame().ok_or(err!(NoMem))?;
 
         // Copy the kernel entries into a temporary buffer.
         let pml4 = ActivePageTable::get();
@@ -1270,7 +1264,7 @@ impl ReservedFrameStorage {
     ) -> Result<ReservedFrameAllocation<'_>> {
         if self.frame.is_none() {
             // TODO: Use another allocator for this.
-            let frame = allocator.allocate_frame().ok_or(Error::no_mem(()))?;
+            let frame = allocator.allocate_frame().ok_or(err!(NoMem))?;
             self.frame = Some(frame);
         }
 

@@ -7,7 +7,7 @@ use core::{
 };
 
 use crate::{
-    error::Error,
+    error::bail,
     fs::{
         fd::{FileDescriptorTable, OpenFileDescription},
         node::{DynINode, FileAccessContext},
@@ -327,9 +327,9 @@ impl Thread {
         select_biased! {
             should_restart = self.wait_for_signal().fuse() => {
                 if should_restart && restartable {
-                    return Err(Error::restart_no_intr(()))
+                    bail!(RestartNoIntr)
                 }
-                Err(Error::intr(()))
+                bail!(Intr)
             },
             res = f.fuse() => res,
         }

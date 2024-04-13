@@ -1,4 +1,5 @@
 use crate::{
+    error::{ensure, err},
     fs::{
         node::{DirEntryName, DynINode, FileAccessContext, INode},
         path::{FileName, Path},
@@ -11,11 +12,7 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::{
-    error::{Error, Result},
-    fs::node::DirEntry,
-    user::process::syscall::args::Stat,
-};
+use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
 use super::{Events, FileDescriptor, OpenFileDescription};
 
@@ -102,7 +99,7 @@ pub trait Directory: INode {
         let entry = entries
             .into_iter()
             .find(|e| e.ino == stat.ino)
-            .ok_or_else(|| Error::no_ent(()))?;
+            .ok_or(err!(NoEnt))?;
 
         let DirEntryName::FileName(name) = entry.name else {
             unreachable!()
@@ -178,9 +175,7 @@ impl OpenFileDescription for DirectoryFileDescription {
                 ret.push(entries.pop().unwrap());
                 capacity = new_capacity;
             } else {
-                if ret.is_empty() {
-                    return Err(Error::inval(()));
-                }
+                ensure!(!ret.is_empty(), Inval);
                 break;
             }
         }

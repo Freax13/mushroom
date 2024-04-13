@@ -12,7 +12,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{bail, ensure, err, Result},
     fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{memory::VirtualMemory, thread::ThreadGuard},
 };
@@ -76,7 +76,7 @@ macro_rules! bitflags {
 
         impl SyscallArg for $strukt {
             fn parse(value: u64, _: Abi) -> Result<Self> {
-                Self::from_bits(value).ok_or(Error::inval(()))
+                Self::from_bits(value).ok_or(err!(Inval))
             }
 
             fn display(
@@ -124,7 +124,7 @@ macro_rules! enum_arg {
                     $(
                         value if value == Self::$variant as u64 => Ok(Self::$variant),
                     )*
-                    _ => Err(Error::inval(())),
+                    _ => bail!(Inval),
                 }
             }
 
@@ -484,9 +484,7 @@ impl Display for FdNum {
 
 impl SyscallArg for FdNum {
     fn parse(value: u64, abi: Abi) -> Result<Self> {
-        i32::parse(value, abi)
-            .map(Self)
-            .map_err(|_| Error::bad_f(()))
+        i32::parse(value, abi).map(Self).map_err(|_| err!(BadF))
     }
 
     fn display(
@@ -1120,9 +1118,7 @@ impl Signal {
     pub const CHLD: Self = Self(17);
 
     pub fn new(value: u8) -> Result<Self> {
-        if !(1..=64).contains(&value) {
-            return Err(Error::inval(()));
-        }
+        ensure!((1..=64).contains(&value), Inval);
         Ok(Self(value))
     }
 

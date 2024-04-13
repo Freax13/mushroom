@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
-    error::ErrorKind,
+    error::{bail, ensure, err, ErrorKind},
     spin::lazy::Lazy,
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
@@ -14,7 +14,7 @@ use alloc::{
 };
 
 use crate::{
-    error::{Error, Result},
+    error::Result,
     user::process::syscall::args::{FileMode, FileType, Stat},
 };
 
@@ -58,11 +58,11 @@ pub trait INode: Send + Sync + 'static {
     // Directory related functions.
 
     fn path(&self, _ctx: &mut FileAccessContext) -> Result<Path> {
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn parent(&self) -> Result<DynINode> {
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn set_parent(&self, parent: Weak<dyn INode>) {
@@ -72,7 +72,7 @@ pub trait INode: Send + Sync + 'static {
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
         let _ = file_name;
         let _ = ctx;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     /// Atomically create a new file or return the existing node.
@@ -83,13 +83,13 @@ pub trait INode: Send + Sync + 'static {
     ) -> Result<Result<DynINode, DynINode>> {
         let _ = file_name;
         let _ = mode;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
         let _ = file_name;
         let _ = mode;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn create_link(
@@ -101,39 +101,39 @@ pub trait INode: Send + Sync + 'static {
         let _ = file_name;
         let _ = target;
         let _ = create_new;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         let _ = file_name;
         let _ = node;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         let _ = file_name;
         let _ = node;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = ctx;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn delete(&self, file_name: FileName<'static>) -> Result<()> {
         let _ = file_name;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let _ = file_name;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let _ = file_name;
-        Err(Error::not_dir(()))
+        bail!(NotDir)
     }
 
     // Symlink related functions
@@ -152,7 +152,7 @@ pub trait INode: Send + Sync + 'static {
     }
 
     fn read_link(&self) -> Result<Path> {
-        Err(Error::inval(()))
+        bail!(Inval)
     }
 }
 
@@ -180,7 +180,7 @@ impl FileAccessContext {
         self.symlink_recursion_limit = self
             .symlink_recursion_limit
             .checked_sub(1)
-            .ok_or_else(|| Error::r#loop(()))?;
+            .ok_or(err!(Loop))?;
         Ok(())
     }
 }
@@ -219,9 +219,7 @@ fn lookup_node_with_parent(
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
                 PathSegment::Empty | PathSegment::Dot => {
                     // Make sure that the node is a directory.
-                    if node.stat().mode.ty() != FileType::Dir {
-                        return Err(Error::not_dir(()));
-                    }
+                    ensure!(node.stat().mode.ty() == FileType::Dir, NotDir);
                     Ok((start_dir, node))
                 }
                 PathSegment::DotDot => {
@@ -254,7 +252,7 @@ fn find_parent<'a>(
     ctx: &mut FileAccessContext,
 ) -> Result<(DynINode, PathSegment<'a>)> {
     let mut segments = path.segments();
-    let first = segments.next().ok_or_else(|| Error::inval(()))?;
+    let first = segments.next().ok_or(err!(Inval))?;
     let (parent, segment) = segments.try_fold(
         (start_dir, first),
         |(dir, segment), next_segment| -> Result<_> {
@@ -277,9 +275,7 @@ fn find_parent<'a>(
     )?;
 
     // Make sure that the parent is a directory.
-    if parent.stat().mode.ty() != FileType::Dir {
-        return Err(Error::not_dir(()));
-    }
+    ensure!(parent.stat().mode.ty() == FileType::Dir, NotDir);
 
     Ok((parent, segment))
 }
@@ -309,9 +305,7 @@ pub fn create_file(
                 // If the node is a symlink start over with the destination
                 // path.
                 if stat.mode.ty() == FileType::Link {
-                    if flags.contains(OpenFlags::NOFOLLOW) {
-                        return Err(Error::r#loop(()));
-                    }
+                    ensure!(!flags.contains(OpenFlags::NOFOLLOW), Loop);
 
                     path = existing.read_link()?;
                     ctx.follow_symlink()?;
@@ -319,13 +313,8 @@ pub fn create_file(
                     continue;
                 }
 
-                if stat.mode.ty() == FileType::Dir {
-                    return Err(Error::exist(()));
-                }
-
-                if flags.contains(OpenFlags::EXCL) {
-                    return Err(Error::exist(()));
-                }
+                ensure!(stat.mode.ty() != FileType::Dir, Exist);
+                ensure!(!flags.contains(OpenFlags::EXCL), Exist);
 
                 return Ok(existing);
             }
@@ -342,7 +331,7 @@ pub fn create_directory(
     let (dir, last) = find_parent(start_dir, path, ctx)?;
     match last {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            Err(Error::exist(()))
+            bail!(Exist)
         }
         PathSegment::FileName(file_name) => dir.create_dir(file_name.into_owned(), mode),
     }
@@ -404,7 +393,7 @@ pub fn unlink_file(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext
     let (parent, segment) = find_parent(start_dir, path, ctx)?;
     match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            Err(Error::is_dir(()))
+            bail!(IsDir)
         }
         PathSegment::FileName(filename) => parent.delete_non_dir(filename.into_owned()),
     }
@@ -454,7 +443,7 @@ pub fn rename(
     let (old_parent, segment) = find_parent(oldd, old_path, ctx)?;
     let old_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            return Err(Error::is_dir(()))
+            bail!(IsDir)
         }
         PathSegment::FileName(filename) => filename,
     };
@@ -462,7 +451,7 @@ pub fn rename(
     let (new_parent, segment) = find_parent(newd, new_path, ctx)?;
     let new_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            return Err(Error::is_dir(()))
+            bail!(IsDir)
         }
         PathSegment::FileName(filename) => filename,
     };
@@ -471,10 +460,8 @@ pub fn rename(
     let old_stat = old_node.stat();
 
     // If either path has a trailing slash, ensure that the node is a directory.
-    if (old_path.has_trailing_slash() || new_path.has_trailing_slash())
-        && old_stat.mode.ty() != FileType::Dir
-    {
-        return Err(Error::not_dir(()));
+    if old_path.has_trailing_slash() || new_path.has_trailing_slash() {
+        ensure!(old_stat.mode.ty() == FileType::Dir, NotDir);
     }
 
     // Check if the node already exists.
@@ -484,16 +471,10 @@ pub fn rename(
             let new_stat = new_node.stat();
             match (old_stat.mode.ty(), new_stat.mode.ty()) {
                 (FileType::Dir, FileType::Dir) => {
-                    if new_stat.size > 2 {
-                        return Err(Error::not_empty(()));
-                    }
+                    ensure!(new_stat.size <= 2, NotEmpty);
                 }
-                (FileType::Dir, _) => {
-                    return Err(Error::not_dir(()));
-                }
-                (_, FileType::Dir) => {
-                    return Err(Error::is_dir(()));
-                }
+                (FileType::Dir, _) => bail!(NotDir),
+                (_, FileType::Dir) => bail!(IsDir),
                 _ => {}
             }
         }

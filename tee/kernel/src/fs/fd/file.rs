@@ -1,6 +1,7 @@
 use core::any::type_name;
 
 use crate::{
+    error::{ensure, err},
     fs::node::INode,
     memory::page::KernelPage,
     spin::mutex::Mutex,
@@ -10,7 +11,7 @@ use alloc::sync::Arc;
 use log::debug;
 
 use crate::{
-    error::{Error, Result},
+    error::Result,
     user::process::{
         memory::VirtualMemory,
         syscall::args::{FileMode, Pointer, Stat, Whence},
@@ -164,14 +165,12 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
             Whence::Cur => {
                 *guard = guard
                     .checked_add_signed(offset as isize)
-                    .ok_or_else(|| Error::inval(()))?
+                    .ok_or(err!(Inval))?
             }
             Whence::End => todo!(),
             Whence::Data => {
                 // Ensure that `offset` doesn't point past the file.
-                if offset >= self.file.stat().size as usize {
-                    return Err(Error::x_io(()));
-                }
+                ensure!(offset < self.file.stat().size as usize, XIo);
 
                 // We don't support holes so we always jump to `offset`.
                 *guard = offset;
@@ -180,9 +179,7 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
                 let size = usize::try_from(self.file.stat().size)?;
 
                 // Ensure that `offset` doesn't point past the file.
-                if offset >= size {
-                    return Err(Error::x_io(()));
-                }
+                ensure!(offset < size, XIo);
 
                 // We don't support holes so we always jump to the end of the file.
                 *guard = size;
@@ -269,7 +266,7 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
             Whence::Cur => {
                 *guard = guard
                     .checked_add_signed(offset as isize)
-                    .ok_or_else(|| Error::inval(()))?
+                    .ok_or(err!(Inval))?
             }
             Whence::End => todo!(),
             Whence::Data => todo!(),
@@ -426,7 +423,7 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
             Whence::Cur => {
                 *guard = guard
                     .checked_add_signed(offset as isize)
-                    .ok_or_else(|| Error::inval(()))?
+                    .ok_or(err!(Inval))?
             }
             Whence::End => todo!(),
             Whence::Data => todo!(),

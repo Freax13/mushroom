@@ -1,6 +1,7 @@
 use core::{cmp, iter::from_fn};
 
 use crate::{
+    error::{bail, ensure},
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
@@ -13,7 +14,7 @@ use usize_conversions::FromUsize;
 
 use super::{Events, OpenFileDescription};
 use crate::{
-    error::{Error, Result},
+    error::Result,
     rt::notify::{Notify, NotifyOnDrop},
     user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
@@ -50,7 +51,7 @@ impl OpenFileDescription for ReadHalf {
                 return Ok(0);
             }
 
-            return Err(Error::again(()));
+            bail!(Again);
         }
 
         let was_full = guard.len() == CAPACITY;
@@ -84,7 +85,7 @@ impl OpenFileDescription for ReadHalf {
                 return Ok(0);
             }
 
-            return Err(Error::again(()));
+            bail!(Again);
         }
 
         let was_full = guard.len() == CAPACITY;
@@ -181,9 +182,7 @@ impl OpenFileDescription for WriteHalf {
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         // Check if the write half has been closed.
-        if Arc::strong_count(&self.state) == 1 {
-            return Err(Error::pipe(()));
-        }
+        ensure!(Arc::strong_count(&self.state) > 1, Pipe);
 
         if buf.is_empty() {
             return Ok(0);
@@ -192,9 +191,7 @@ impl OpenFileDescription for WriteHalf {
         let mut guard = self.state.buffer.lock();
 
         let max_remaining_capacity = CAPACITY - guard.len();
-        if max_remaining_capacity == 0 {
-            return Err(Error::again(()));
-        }
+        ensure!(max_remaining_capacity > 0, Again);
         let len = cmp::min(buf.len(), max_remaining_capacity);
         let buf = &buf[..len];
 
@@ -213,9 +210,7 @@ impl OpenFileDescription for WriteHalf {
         len: usize,
     ) -> Result<usize> {
         // Check if the write half has been closed.
-        if Arc::strong_count(&self.state) == 1 {
-            return Err(Error::pipe(()));
-        }
+        ensure!(Arc::strong_count(&self.state) > 1, Pipe);
 
         if len == 0 {
             return Ok(0);
@@ -224,9 +219,7 @@ impl OpenFileDescription for WriteHalf {
         let mut guard = self.state.buffer.lock();
 
         let max_remaining_capacity = CAPACITY - guard.len();
-        if max_remaining_capacity == 0 {
-            return Err(Error::again(()));
-        }
+        ensure!(max_remaining_capacity > 0, Again);
         let len = cmp::min(len, max_remaining_capacity);
 
         let start_idx = guard.len();

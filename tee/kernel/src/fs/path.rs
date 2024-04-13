@@ -5,7 +5,7 @@ use core::{
 
 use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
-use crate::error::{Error, Result};
+use crate::error::{bail, ensure, Result};
 
 #[derive(Clone)]
 pub struct Path {
@@ -14,9 +14,7 @@ pub struct Path {
 
 impl Path {
     pub fn new(path: Vec<u8>) -> Result<Self> {
-        if path.is_empty() {
-            return Err(Error::inval(()));
-        }
+        ensure!(!path.is_empty(), Inval);
         Ok(Self { bytes: path.into() })
     }
 
@@ -100,7 +98,7 @@ pub struct FileName<'a>(Cow<'a, [u8]>);
 impl<'a> FileName<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<Self> {
         match bytes {
-            b"" | b"." | b".." => Err(Error::inval(())),
+            b"" | b"." | b".." => bail!(Inval),
             _ => Ok(Self(Cow::Borrowed(bytes))),
         }
     }

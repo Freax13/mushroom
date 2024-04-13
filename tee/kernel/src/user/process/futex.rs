@@ -1,6 +1,9 @@
 use core::num::NonZeroU32;
 
-use crate::spin::mutex::Mutex;
+use crate::{
+    error::{bail, ensure},
+    spin::mutex::Mutex,
+};
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use futures::{select_biased, FutureExt};
 
@@ -8,11 +11,7 @@ use super::{
     memory::VirtualMemory,
     syscall::args::{Pointer, Timespec},
 };
-use crate::{
-    error::{Error, Result},
-    rt::oneshot,
-    time::sleep_until,
-};
+use crate::{error::Result, rt::oneshot, time::sleep_until};
 
 pub struct Futexes {
     futexes: Mutex<BTreeMap<Pointer<u32>, Vec<FutexWaiter>>>,
@@ -35,17 +34,13 @@ impl Futexes {
     ) -> Result<()> {
         // Check if the value already changed. This can help avoid taking the lock.
         let current_value = vm.read(uaddr)?;
-        if current_value != val {
-            return Err(Error::again(()));
-        }
+        ensure!(current_value == val, Again);
 
         let mut guard = self.futexes.lock();
 
         // Now that we've taken the lock, we need to check again.
         let current_value = vm.read(uaddr)?;
-        if current_value != val {
-            return Err(Error::again(()));
-        }
+        ensure!(current_value == val, Again);
 
         let (sender, receiver) = oneshot::new();
         guard
@@ -60,7 +55,7 @@ impl Futexes {
                     res.unwrap();
                     Ok(())
                 }
-                _ = sleep_until(deadline).fuse() => Err(Error::timed_out(())),
+                _ = sleep_until(deadline).fuse() => bail!(TimedOut),
             }
         } else {
             let res = receiver.recv().await;

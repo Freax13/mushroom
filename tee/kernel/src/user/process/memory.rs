@@ -8,6 +8,7 @@ use core::{
 };
 
 use crate::{
+    error::{ensure, err},
     fs::fd::OpenFileDescription,
     memory::{
         page::{KernelPage, UserPage},
@@ -135,7 +136,7 @@ impl VirtualMemory {
         let user_page = state
             .pages
             .get(&page)
-            .ok_or_else(|| PageFaultError::Unmapped(Error::fault(())))?;
+            .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
 
         let mut guard = user_page.lock();
 
@@ -144,7 +145,7 @@ impl VirtualMemory {
             .perms()
             .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
         {
-            return Err(PageFaultError::MissingPermissions(Error::fault(())));
+            return Err(PageFaultError::MissingPermissions(err!(Fault)));
         }
 
         if required_flags.contains(PageTableFlags::WRITABLE)
@@ -157,7 +158,7 @@ impl VirtualMemory {
         let entry = guard.entry();
 
         if !entry.flags().contains(required_flags) {
-            return Err(PageFaultError::MissingPermissions(Error::fault(())));
+            return Err(PageFaultError::MissingPermissions(err!(Fault)));
         }
 
         self.pagetables
@@ -243,9 +244,7 @@ impl VirtualMemory {
             if buf == 0 {
                 break;
             }
-            if ret.len() == max_length {
-                return Err(Error::name_too_long(()));
-            }
+            ensure!(ret.len() < max_length, NameTooLong);
             addr = Step::forward(addr, 1);
             ret.push(buf);
         }
@@ -302,16 +301,15 @@ impl VirtualMemory {
             return Ok(());
         }
 
-        if !addr.is_aligned(0x1000u64) || len % 0x1000 != 0 {
-            return Err(Error::inval(()));
-        }
+        ensure!(addr.is_aligned(0x1000u64), Inval);
+        ensure!(len % 0x1000 == 0, Inval);
 
         let state = self.state.read();
 
         let start = Page::containing_address(addr);
         let end = Page::containing_address(addr + (len - 1));
         for page in start..=end {
-            let user_page = state.pages.get(&page).ok_or_else(|| Error::fault(()))?;
+            let user_page = state.pages.get(&page).ok_or(err!(Fault))?;
 
             let mut guard = user_page.lock();
             guard.set_perms(MemoryPermissions::from(prot));
@@ -453,9 +451,7 @@ impl VirtualMemoryWriteGuard<'_> {
         offset: u64,
         permissions: MemoryPermissions,
     ) -> Result<VirtAddr> {
-        if (offset % 0x1000) != u64::from(bias.page_offset()) {
-            return Err(Error::inval(()));
-        }
+        ensure!(offset % 0x1000 == u64::from(bias.page_offset()), Inval);
         let page_offset = usize_from(offset / 0x1000);
 
         self.mmap(bias, len, permissions, |i| file.get_page(page_offset + i))
