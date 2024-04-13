@@ -50,7 +50,7 @@ use super::{
     memory::{Bias, VirtualMemory},
     thread::{
         new_tid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags,
-        Thread, ThreadGuard, THREADS,
+        Thread, ThreadGuard,
     },
     Process,
 };
@@ -1217,8 +1217,6 @@ async fn wait4(
 
         virtual_memory.write_bytes(addr, bytes_of(&wstatus))?;
     }
-
-    THREADS.remove(tid);
 
     Ok(u64::from(tid))
 }

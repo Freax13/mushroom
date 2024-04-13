@@ -20,7 +20,7 @@ use crate::{
     },
 };
 use alloc::{
-    collections::{BTreeMap, VecDeque},
+    collections::VecDeque,
     sync::{Arc, Weak},
 };
 use bit_field::BitField;
@@ -47,33 +47,9 @@ use super::{
 
 pub mod running_state;
 
-pub static THREADS: Threads = Threads::new();
-
 pub fn new_tid() -> u32 {
     static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
     PID_COUNTER.fetch_add(1, Ordering::SeqCst)
-}
-
-pub struct Threads {
-    map: Mutex<BTreeMap<u32, Arc<Thread>>>,
-}
-
-impl Threads {
-    const fn new() -> Self {
-        Self {
-            map: Mutex::new(BTreeMap::new()),
-        }
-    }
-
-    pub fn add(&self, thread: Arc<Thread>) -> u32 {
-        let tid = thread.tid;
-        self.map.lock().insert(tid, thread);
-        tid
-    }
-
-    pub fn remove(&self, tid: u32) {
-        self.map.lock().remove(&tid);
-    }
 }
 
 pub type WeakThread = Weak<Thread>;
@@ -147,10 +123,6 @@ impl Thread {
 
     pub fn spawn(self) {
         let arc = Arc::new(self);
-
-        // Register the thread.
-        THREADS.add(arc.clone());
-
         spawn(arc.run());
     }
 
