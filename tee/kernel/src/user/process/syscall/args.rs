@@ -625,6 +625,7 @@ impl SyscallArg for FutexOpWithFlags {
 
 bitflags! {
     pub struct Pipe2Flags {
+        const NON_BLOCK = 1 << 11;
         const DIRECT = 1 << 14;
         const CLOEXEC = 1 << 19;
     }
@@ -889,6 +890,14 @@ bitflags! {
 
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
+    }
+}
+
+impl From<SocketPairType> for FdFlags {
+    fn from(value: SocketPairType) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(SocketPairType::CLOEXEC));
+        flags
     }
 }
 

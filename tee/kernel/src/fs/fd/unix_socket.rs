@@ -1,43 +1,100 @@
 use alloc::boxed::Box;
 use async_trait::async_trait;
-use log::debug;
+use futures::{select_biased, FutureExt};
 
-use super::{Events, OpenFileDescription};
+use super::{pipe, Events, OpenFileDescription};
 use crate::{
     error::Result,
     fs::node::new_ino,
-    user::process::syscall::args::{
-        FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+    user::process::{
+        memory::VirtualMemory,
+        syscall::args::{
+            FileMode, FileType, FileTypeAndMode, OpenFlags, Pipe2Flags, Pointer, SocketPairType,
+            Stat, Timespec,
+        },
     },
 };
 
-pub struct UnixSocket {
+pub struct StreamUnixSocket {
     ino: u64,
+    write_half: pipe::WriteHalf,
+    read_half: pipe::ReadHalf,
 }
 
-impl UnixSocket {
-    pub fn new_pair() -> (Self, Self) {
-        (Self { ino: new_ino() }, Self { ino: new_ino() })
+impl StreamUnixSocket {
+    pub fn new_pair(r#type: SocketPairType) -> (Self, Self) {
+        let mut flags = Pipe2Flags::empty();
+        flags.set(
+            Pipe2Flags::NON_BLOCK,
+            r#type.contains(SocketPairType::NON_BLOCK),
+        );
+        flags.set(
+            Pipe2Flags::CLOEXEC,
+            r#type.contains(SocketPairType::CLOEXEC),
+        );
+
+        let (read_half1, write_half1) = pipe::new(flags);
+        let (read_half2, write_half2) = pipe::new(flags);
+
+        (
+            Self {
+                ino: new_ino(),
+                write_half: write_half1,
+                read_half: read_half2,
+            },
+            Self {
+                ino: new_ino(),
+                write_half: write_half2,
+                read_half: read_half1,
+            },
+        )
     }
 }
 
 #[async_trait]
-impl OpenFileDescription for UnixSocket {
+impl OpenFileDescription for StreamUnixSocket {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        self.read_half.flags()
     }
 
-    fn read(&self, _buf: &mut [u8]) -> Result<usize> {
-        todo!()
+    fn set_flags(&self, flags: OpenFlags) {
+        self.write_half.set_flags(flags);
+        self.read_half.set_flags(flags);
     }
 
-    fn write(&self, _buf: &[u8]) -> Result<usize> {
-        todo!()
+    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        self.read_half.read(buf)
+    }
+
+    fn read_to_user(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        self.read_half.read_to_user(vm, pointer, len)
+    }
+
+    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+        self.read_half.read_to_user(vm, pointer, len)
+    }
+
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        self.write_half.write(buf)
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        self.write_half.write_from_user(vm, pointer, len)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
-        debug!("{events:?}");
-        events & Events::empty()
+        self.write_half.poll_ready(events & Events::WRITE)
+            | self.read_half.poll_ready(events & Events::READ)
     }
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
@@ -45,8 +102,12 @@ impl OpenFileDescription for UnixSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        debug!("{events:?}");
-        core::future::pending().await
+        let write_ready = self.write_half.ready(events & Events::WRITE);
+        let read_ready = self.read_half.ready(events & Events::READ);
+        select_biased! {
+            res = write_ready.fuse() => res,
+            res = read_ready.fuse() => res,
+        }
     }
 
     fn stat(&self) -> Stat {

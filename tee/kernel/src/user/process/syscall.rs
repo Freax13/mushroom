@@ -13,7 +13,7 @@ use crate::{
     fs::{
         fd::{
             do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
-            unix_socket::UnixSocket, Events, FdFlags, FileDescriptor, FileDescriptorTable,
+            unix_socket::StreamUnixSocket, Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
             self, create_directory, create_file, create_link,
@@ -126,6 +126,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysRecvFrom);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysFork);
@@ -918,6 +919,33 @@ async fn sendfile64(
     Ok(len)
 }
 
+#[syscall(i386 = 371, amd64 = 45, interruptable)]
+async fn recv_from(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    sockfd: FdNum,
+    buf: Pointer<[u8]>,
+    len: u64,
+    flags: u32,
+    src_addr: Pointer<c_void>,
+    addrlen: Pointer<c_void>,
+) -> SyscallResult {
+    assert!(src_addr.is_null());
+    assert!(addrlen.is_null());
+
+    let fd = fdtable.get(sockfd)?;
+
+    let count = usize_from(len);
+
+    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
+        fd.recv_from(vm, buf, count)
+    })
+    .await?;
+
+    let len = u64::from_usize(len);
+    Ok(len)
+}
+
 #[syscall(i386 = 360, amd64 = 53)]
 fn socketpair(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -936,9 +964,13 @@ fn socketpair(
                 return Err(Error::inval(()));
             }
 
-            let (half1, half2) = UnixSocket::new_pair();
-            res1 = fdtable.insert(half1, FdFlags::empty());
-            res2 = fdtable.insert(half2, FdFlags::empty());
+            if r#type.contains(SocketPairType::STREAM) {
+                let (half1, half2) = StreamUnixSocket::new_pair(r#type);
+                res1 = fdtable.insert(half1, FdFlags::from(r#type));
+                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+            } else {
+                todo!()
+            }
         }
     }
 
