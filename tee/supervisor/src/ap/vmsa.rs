@@ -67,7 +67,7 @@ pub struct InitializedVmsa {
 impl InitializedVmsa {
     pub fn new(tweak_bitmap: &VmsaTweakBitmap, tsc_aux: u32) -> Self {
         let mut vmsa = Vmsa::default();
-        vmsa.set_vpml(1, tweak_bitmap);
+        vmsa.set_vmpl(1, tweak_bitmap);
         vmsa.set_virtual_tom(!0, tweak_bitmap);
         vmsa.set_efer(
             EferFlags::SYSTEM_CALL_EXTENSIONS.bits()

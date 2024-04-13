@@ -125,7 +125,7 @@ vmsa_def! {
     pub pl3_ssp: u64 = 0,
     pub ucet: u64 = 0,
     reserved1: Reserved<2> = Reserved::ZERO,
-    pub vpml: u8 = 0,
+    pub vmpl: u8 = 0,
     pub cpl: u8 = 0,
     reserved2: Reserved<4> = Reserved::ZERO,
     pub efer: u64 = 0,
