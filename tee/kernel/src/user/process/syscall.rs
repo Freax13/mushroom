@@ -3,7 +3,12 @@ use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32, pin::pin};
 use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
 use bit_field::BitArray;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
-use futures::{future::select, stream::FuturesUnordered, StreamExt};
+use futures::{
+    future::{select, Fuse},
+    select_biased,
+    stream::FuturesUnordered,
+    FutureExt, StreamExt,
+};
 use kernel_macros::syscall;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
@@ -1855,13 +1860,32 @@ async fn epoll_wait(
     let maxevents = usize::try_from(maxevents)?;
 
     let epoll = fdtable.get(epfd)?;
-    let events = epoll.epoll_wait(maxevents).await?;
-    assert!(events.len() <= maxevents);
+    let epoll_wait_fut = async move {
+        let events = epoll.epoll_wait(maxevents).await?;
+        assert!(events.len() <= maxevents);
 
-    virtual_memory.write(event, &*events)?;
+        virtual_memory.write(event, &*events)?;
 
-    let len = events.len();
-    Ok(len.try_into()?)
+        let len = events.len();
+        Ok(len.try_into()?)
+    }
+    .fuse();
+
+    let timeout_fut = if timeout != -1 {
+        let timeout = u64::try_from(timeout)?;
+        let timeout = Timespec::from_ms(timeout);
+        let deadline = now() + timeout;
+        sleep_until(deadline).fuse()
+    } else {
+        Fuse::terminated()
+    };
+
+    let mut epoll_wait_fut = pin!(epoll_wait_fut);
+    let mut timeout_fut = pin!(timeout_fut);
+    select_biased! {
+        res = epoll_wait_fut => res,
+        _ = timeout_fut => Ok(0),
+    }
 }
 
 #[syscall(i386 = 255, amd64 = 233)]
