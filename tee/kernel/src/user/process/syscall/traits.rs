@@ -1,8 +1,12 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::sync::Arc;
 use core::{
     fmt::{self, Display},
     future::Future,
-    pin::Pin,
+    marker::PhantomPinned,
+    mem::{align_of, size_of, MaybeUninit},
+    ops::{Deref, DerefMut},
+    pin::{pin, Pin},
+    ptr::Pointee,
 };
 use usize_conversions::usize_from;
 
@@ -14,7 +18,7 @@ use crate::{
     user::process::thread::{Thread, ThreadGuard},
 };
 
-use super::args::SyscallArg;
+use super::{args::SyscallArg, SYSCALL_HANDLERS};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SyscallArgs {
@@ -68,24 +72,26 @@ pub trait Syscall {
 const MAX_SYSCALL_I386_HANDLER: usize = 408;
 const MAX_SYSCALL_AMD64_HANDLER: usize = 327;
 
+type DynFuture = dyn Future<Output = SyscallResult> + Send;
+
 #[derive(Clone, Copy)]
 struct SyscallHandler {
-    #[allow(clippy::type_complexity)]
-    execute: fn(
+    create_future: for<'a> fn(
+        Pin<&'a mut SyscallHandlerSlot>,
         thread: Arc<Thread>,
         args: SyscallArgs,
-    ) -> Pin<Box<dyn Future<Output = SyscallResult> + Send>>,
+    ) -> Pin<Placed<'a>>,
     display: fn(f: &mut dyn fmt::Write, args: SyscallArgs, thread: &ThreadGuard<'_>) -> fmt::Result,
 }
 
 impl SyscallHandler {
     const fn new<T>() -> Self
     where
-        T: Syscall<execute(): Send>,
+        T: Syscall<execute(): Send + 'static>,
     {
         Self {
-            execute: |thread: Arc<Thread>, args: SyscallArgs| {
-                Box::pin(async move { T::execute(thread, args).await })
+            create_future: |slot, thread: Arc<Thread>, args: SyscallArgs| {
+                slot.place(T::execute(thread, args))
             },
             display: T::display,
         }
@@ -95,6 +101,12 @@ impl SyscallHandler {
 pub struct SyscallHandlers {
     i386_handlers: [Option<SyscallHandler>; MAX_SYSCALL_I386_HANDLER],
     amd64_handlers: [Option<SyscallHandler>; MAX_SYSCALL_AMD64_HANDLER],
+    /// This value keeps track of the size of the biggest future returned by a
+    /// syscall handler.
+    future_size: usize,
+    /// This value keeps track of the alignment of the future with the biggest
+    /// alignment requirement returned by a syscall handler.
+    future_align: usize,
 }
 
 impl SyscallHandlers {
@@ -102,12 +114,14 @@ impl SyscallHandlers {
         Self {
             i386_handlers: [None; MAX_SYSCALL_I386_HANDLER],
             amd64_handlers: [None; MAX_SYSCALL_AMD64_HANDLER],
+            future_size: 0,
+            future_align: 1,
         }
     }
 
     pub const fn register<T>(&mut self, val: T)
     where
-        T: Syscall<execute(): Send>,
+        T: Syscall<execute(): Send + 'static>,
     {
         if let Some(no) = T::NO_I386 {
             self.i386_handlers[no] = Some(SyscallHandler::new::<T>());
@@ -116,6 +130,30 @@ impl SyscallHandlers {
             self.amd64_handlers[no] = Some(SyscallHandler::new::<T>());
         }
         core::mem::forget(val);
+
+        // Keep track of the future size and alignment.
+
+        /// Returns the size of the return type of `T::execute`.
+        const fn return_size<T>(
+            _: fn(thread: Arc<Thread>, syscall_args: SyscallArgs) -> T,
+        ) -> usize {
+            size_of::<T>()
+        }
+        let return_size = return_size(T::execute);
+        if self.future_size < return_size {
+            self.future_size = return_size;
+        }
+
+        /// Returns the alignment of the return type of `T::execute`.
+        const fn return_align<T>(
+            _: fn(thread: Arc<Thread>, syscall_args: SyscallArgs) -> T,
+        ) -> usize {
+            core::mem::align_of::<T>()
+        }
+        let return_align = return_align(T::execute);
+        if self.future_align < return_align {
+            self.future_align = return_align;
+        }
     }
 
     pub async fn execute(&self, thread: Arc<Thread>, args: SyscallArgs) -> SyscallResult {
@@ -134,7 +172,10 @@ impl SyscallHandlers {
         // Whether the syscall should occur in the debug logs.
         let enable_log = !matches!(syscall_no, 0 | 1 | 202 | 228) && thread.tid() != 1;
 
-        let res = (handler.execute)(thread.clone(), args).await;
+        let mut slot = SyscallHandlerSlot::new();
+        let slot = pin!(slot);
+        let placed = (handler.create_future)(slot, thread.clone(), args);
+        let res = placed.await;
 
         if enable_log {
             let guard = thread.lock();
@@ -153,6 +194,92 @@ impl SyscallHandlers {
         }
 
         res
+    }
+}
+
+const SIZE: usize = SYSCALL_HANDLERS.future_size;
+const ALIGN: usize = SYSCALL_HANDLERS.future_align;
+
+/// A chunk of memory that can be used to store future returned by a syscall
+/// handler.
+#[repr(align(8))]
+struct SyscallHandlerSlot {
+    bytes: MaybeUninit<[u8; SIZE]>,
+    _marker: PhantomPinned,
+}
+
+impl SyscallHandlerSlot {
+    pub const fn new() -> Self {
+        assert!(align_of::<Self>() == ALIGN);
+
+        Self {
+            bytes: MaybeUninit::uninit(),
+            _marker: PhantomPinned,
+        }
+    }
+
+    pub fn place<T>(mut self: Pin<&mut Self>, future: T) -> Pin<Placed<'_>>
+    where
+        T: Future<Output = SyscallResult> + Send + 'static,
+    {
+        let metadata = core::ptr::metadata(&future as *const DynFuture);
+
+        assert!(size_of::<T>() <= SIZE);
+        assert!(align_of::<T>() <= align_of::<Self>());
+        unsafe {
+            // SAFETY: We're not moving the data out. We checked size and
+            // alignment requirements for the future.
+            let this = self.as_mut().get_unchecked_mut();
+            this.bytes.as_mut_ptr().cast::<T>().write(future);
+        }
+
+        let placed = Placed {
+            metadata,
+            slot: self,
+        };
+        unsafe {
+            // Safety:
+            Pin::new_unchecked(placed)
+        }
+    }
+}
+
+/// A smart pointer representing a future that has been placed in a
+/// `SyscallHandlerSlot`.
+struct Placed<'a> {
+    metadata: <DynFuture as Pointee>::Metadata,
+    slot: Pin<&'a mut SyscallHandlerSlot>,
+}
+
+impl Placed<'_> {
+    fn as_ptr(&self) -> *const DynFuture {
+        core::ptr::from_raw_parts(self.slot.bytes.as_ptr().cast(), self.metadata)
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut DynFuture {
+        core::ptr::from_raw_parts_mut(self.slot.bytes.as_ptr().cast_mut().cast(), self.metadata)
+    }
+}
+
+impl Deref for Placed<'_> {
+    type Target = DynFuture;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.as_ptr() }
+    }
+}
+
+impl DerefMut for Placed<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.as_mut_ptr() }
+    }
+}
+
+impl Drop for Placed<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            core::ptr::drop_in_place(self.as_mut_ptr());
+        }
     }
 }
 
