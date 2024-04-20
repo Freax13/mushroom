@@ -338,39 +338,6 @@ impl Pagetables {
         Ok(())
     }
 
-    /// Update a page, if it's already mapped.
-    pub fn try_set_page(&self, page: Page, entry: PresentPageTableEntry) -> Result<()> {
-        check_user_page(page)?;
-        trace!("mapping page {page:?}");
-
-        let _guard = self.update_lock.read();
-        let level4 = self.activate();
-        let level4_entry = &level4[page.p4_index()];
-
-        let Some(level3_guard) = level4_entry.acquire_existing() else {
-            return Ok(());
-        };
-        let level3 = &*level3_guard;
-        let level3_entry = &level3[page.p3_index()];
-
-        let Some(level2_guard) = level3_entry.acquire_existing() else {
-            return Ok(());
-        };
-        let level2 = &*level2_guard;
-        let level2_entry = &level2[page.p2_index()];
-
-        let Some(level1_guard) = level2_entry.acquire_existing() else {
-            return Ok(());
-        };
-        let level1 = &*level1_guard;
-        let level1_entry = &level1[page.p1_index()];
-
-        unsafe {
-            level1_entry.set_page(entry);
-        }
-        Ok(())
-    }
-
     /// Remove the write-bit on all mapped userspace pages.
     pub fn freeze_userspace(&self) {
         let _guard = self.update_lock.write();

@@ -5,6 +5,7 @@
     alloc_error_handler,
     allocator_api,
     asm_const,
+    btree_cursors,
     cfg_sanitize,
     const_mut_refs,
     core_intrinsics,

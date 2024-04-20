@@ -3,7 +3,7 @@ use core::{cmp, ffi::CStr, iter::from_fn};
 use crate::{
     error::{bail, ensure, err},
     fs::{
-        fd::OpenFileDescription,
+        fd::{FileDescriptor, OpenFileDescription},
         node::{DynINode, FileAccessContext},
     },
     spin::lazy::Lazy,
@@ -37,13 +37,13 @@ impl VirtualMemory {
     pub fn start_executable(
         &self,
         path: &Path,
-        file: &dyn OpenFileDescription,
+        file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
     ) -> Result<CpuState> {
-        self.modify().map_sigreturn_trampoline()?;
+        self.modify().map_sigreturn_trampoline();
 
         let mut header = [0; 4];
         file.pread(0, &mut header)?;
@@ -62,14 +62,14 @@ impl VirtualMemory {
                     }
                 }
             }
-            [b'#', b'!', ..] => self.start_shebang(path, file, argv, envp, ctx, cwd),
+            [b'#', b'!', ..] => self.start_shebang(path, &**file, argv, envp, ctx, cwd),
             _ => bail!(NoExec),
         }
     }
 
     fn start_elf<E>(
         &self,
-        file: &dyn OpenFileDescription,
+        file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
@@ -90,7 +90,7 @@ impl VirtualMemory {
             ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
 
             let file = node.open(OpenFlags::empty())?;
-            let info = elf::load_elf::<E>(&*file, self.modify(), info.base + 0x2000_0000)?;
+            let info = elf::load_elf::<E>(&file, self.modify(), info.base + 0x2000_0000)?;
 
             entrypoint = info.entry;
             brk_start = cmp::max(brk_start, info.end);
@@ -102,13 +102,13 @@ impl VirtualMemory {
 
         // Create stack.
         let len = 0x10_0000;
-        let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len)? + len;
+        let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len) + len;
 
         self.modify().mmap_zero(
             Bias::Fixed(stack),
             0x4000,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
-        )?;
+        );
 
         let mut addr = stack;
         let mut write = |value: u64| match E::ABI {
@@ -234,7 +234,7 @@ impl VirtualMemory {
         new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(&interpreter_path, &*interpreter, &new_argv, envp, ctx, cwd)
+        self.start_executable(&interpreter_path, &interpreter, &new_argv, envp, ctx, cwd)
     }
 }
 

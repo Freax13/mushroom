@@ -460,19 +460,16 @@ fn mmap(
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::ANONYMOUS) {
             let permissions = MemoryPermissions::from(prot);
-            let addr = virtual_memory
-                .modify()
-                .mmap_zero(bias, length, permissions)?;
+            let addr = virtual_memory.modify().mmap_zero(bias, length, permissions);
             Ok(addr.as_u64())
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
 
             let permissions = MemoryPermissions::from(prot);
-            let addr =
-                virtual_memory
-                    .modify()
-                    .mmap_file(bias, length, &*fd, offset, permissions)?;
+            let addr = virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions)?;
             Ok(addr.as_u64())
         }
     } else {
@@ -512,7 +509,9 @@ fn mprotect(
     len: u64,
     prot: ProtFlags,
 ) -> SyscallResult {
-    virtual_memory.mprotect(addr.get(), len, prot)?;
+    virtual_memory
+        .modify()
+        .mprotect(addr.get(), len, MemoryPermissions::from(prot))?;
     Ok(0)
 }
 
@@ -538,7 +537,7 @@ fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallRe
 
     virtual_memory
         .modify()
-        .set_brk_end(VirtAddr::new(brk_value))?;
+        .set_brk_end(VirtAddr::new(brk_value));
 
     Ok(brk_value)
 }
@@ -1184,7 +1183,7 @@ async fn execve(
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
     let cpu_state =
-        virtual_memory.start_executable(&pathname, &*file, &args, &envs, &mut ctx, cwd)?;
+        virtual_memory.start_executable(&pathname, &file, &args, &envs, &mut ctx, cwd)?;
 
     // Everything was successfull, no errors can occour after this point.
 
