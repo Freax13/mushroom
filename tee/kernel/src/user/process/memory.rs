@@ -1,4 +1,13 @@
-use core::{arch::asm, borrow::Borrow, cmp::Ordering, iter::Step, ops::Bound, ptr::NonNull};
+use core::{
+    arch::asm,
+    borrow::Borrow,
+    cell::SyncUnsafeCell,
+    cmp::Ordering,
+    iter::Step,
+    mem::{needs_drop, MaybeUninit},
+    ops::Bound,
+    ptr::{drop_in_place, NonNull},
+};
 
 use crate::{
     error::{ensure, err},
@@ -331,8 +340,7 @@ impl VirtualMemoryWriteGuard<'_> {
         self.unmap(addr, len);
 
         let size = usize_from(end_page - start_page) + 1;
-        let mut pages = Vec::with_capacity(size);
-        pages.resize_with(size, || None);
+        let pages = SplitVec::new(size);
         self.guard.mappings.insert(
             start_page,
             Mutex::new(Mapping {
@@ -748,7 +756,7 @@ pub struct Mapping {
     backing: Arc<dyn Backing>,
     page_offset: u64,
     permissions: MemoryPermissions,
-    pages: Vec<Option<UserPage>>,
+    pages: SplitVec<Option<UserPage>>,
 }
 
 impl Mapping {
@@ -783,13 +791,10 @@ impl Mapping {
     }
 
     pub fn clone(&mut self) -> Result<Self> {
-        let mut pages = Vec::with_capacity(self.pages.len());
-        for page in self.pages.iter_mut() {
-            if let Some(page) = page {
-                pages.push(Some(page.clone()?));
-            } else {
-                pages.push(None);
-            }
+        let mut pages = SplitVec::new(self.pages.len());
+        for (i, page) in self.pages.iter_mut().enumerate() {
+            let Some(page) = page else { continue };
+            *pages.get_mut(i).unwrap() = Some(page.clone()?);
         }
 
         Ok(Self {
@@ -810,4 +815,78 @@ impl Mapping {
 
 pub trait Backing: Send + Sync + 'static {
     fn get_initial_page(&self, offset: u64) -> Result<KernelPage>;
+}
+
+/// Like a `Vec<T>` but with constant time `split_at`.
+struct SplitVec<T> {
+    entries: Arc<[MaybeUninit<SyncUnsafeCell<T>>]>,
+    offset: usize,
+    len: usize,
+}
+
+impl<T> SplitVec<T> {
+    pub fn new(len: usize) -> Self
+    where
+        T: Default,
+    {
+        let mut entries = Arc::new_uninit_slice(len);
+        let mut_entries = Arc::get_mut(&mut entries).unwrap();
+        for entry in mut_entries {
+            entry.write(SyncUnsafeCell::new(T::default()));
+        }
+        Self {
+            entries,
+            offset: 0,
+            len,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns the entries owned by this instance.
+    fn entries(&self) -> &[MaybeUninit<SyncUnsafeCell<T>>] {
+        unsafe {
+            self.entries
+                .get_unchecked(self.offset..)
+                .get_unchecked(..self.len)
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut T> + '_ {
+        self.entries()
+            .iter()
+            .map(|entry| unsafe { &mut *entry.assume_init_ref().get() })
+    }
+
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+        self.entries()
+            .get(idx)
+            .map(|entry| unsafe { &mut *entry.assume_init_ref().get() })
+    }
+
+    pub fn split_off(&mut self, at: usize) -> Self {
+        assert!(self.len >= at);
+
+        let new = Self {
+            entries: self.entries.clone(),
+            offset: self.offset + at,
+            len: self.len - at,
+        };
+        self.len = at;
+        new
+    }
+}
+
+impl<T> Drop for SplitVec<T> {
+    fn drop(&mut self) {
+        if needs_drop::<T>() {
+            for entry in self.entries() {
+                unsafe {
+                    drop_in_place(entry.as_ptr().cast::<T>().cast_mut());
+                }
+            }
+        }
+    }
 }
