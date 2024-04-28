@@ -15,15 +15,17 @@ use crate::{
     user::process::syscall::args::{FileMode, FileType, Stat},
 };
 
-use self::tmpfs::TmpFsDir;
+use self::{
+    directory::{Location, MountLocation},
+    tmpfs::TmpFsDir,
+};
 
 use super::{
-    fd::{
-        dir::{Location, MountLocation},
-        FileDescriptor, FileDescriptorTable,
-    },
+    fd::{FileDescriptor, FileDescriptorTable},
     path::{FileName, Path, PathSegment},
 };
+
+pub mod directory;
 
 pub mod devtmpfs;
 pub mod fdfs;

@@ -4,7 +4,7 @@ use crate::{
         mushroom::Output,
         CharDev,
     },
-    fs::fd::{dir::MountLocation, file::File},
+    fs::fd::file::File,
 };
 use alloc::sync::Arc;
 
@@ -15,6 +15,7 @@ use crate::{
 };
 
 use super::{
+    directory::MountLocation,
     fdfs,
     tmpfs::{TmpFsDir, TmpFsFile},
     DynINode, INode,

@@ -1,10 +1,10 @@
 use core::ops::Deref;
 
 use crate::{
-    char_dev, dir_impls,
+    char_dev,
     error::{bail, ensure, err},
     fs::fd::{
-        dir::{open_dir, Directory, DirectoryLocation, Location},
+        dir::open_dir,
         file::{open_file, File},
         FileDescriptor,
     },
@@ -20,6 +20,7 @@ use alloc::{
 };
 
 use super::{
+    directory::{dir_impls, Directory, DirectoryLocation, Location},
     lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext, INode,
 };
 use crate::{

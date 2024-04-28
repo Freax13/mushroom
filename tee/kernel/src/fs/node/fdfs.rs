@@ -3,15 +3,14 @@ use alloc::{
     vec::Vec,
 };
 
-use super::{new_ino, DirEntry, DynINode, FileAccessContext, INode};
+use super::{
+    directory::{dir_impls, Directory, MountLocation},
+    new_ino, DirEntry, DynINode, FileAccessContext, INode,
+};
 use crate::{
-    dir_impls,
     error::{bail, err, Result},
     fs::{
-        fd::{
-            dir::{open_dir, Directory, MountLocation},
-            FileDescriptor,
-        },
+        fd::{dir::open_dir, FileDescriptor},
         path::{FileName, Path},
     },
     spin::mutex::Mutex,
