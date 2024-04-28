@@ -8,10 +8,7 @@ use crate::{
         thread::ThreadGuard,
     },
 };
-use alloc::{
-    sync::{Arc, Weak},
-    vec::Vec,
-};
+use alloc::{sync::Arc, vec::Vec};
 
 use crate::{
     error::Result,
@@ -21,7 +18,10 @@ use crate::{
 use self::tmpfs::TmpFsDir;
 
 use super::{
-    fd::{FileDescriptor, FileDescriptorTable},
+    fd::{
+        dir::{Location, MountLocation},
+        FileDescriptor, FileDescriptorTable,
+    },
     path::{FileName, Path, PathSegment},
 };
 
@@ -30,7 +30,7 @@ pub mod fdfs;
 pub mod tmpfs;
 
 pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> =
-    Lazy::new(|| TmpFsDir::root(FileMode::from_bits_truncate(0o755)));
+    Lazy::new(|| TmpFsDir::new(Location::root(), FileMode::from_bits_truncate(0o755)));
 
 pub fn new_ino() -> u64 {
     static INO_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -61,12 +61,8 @@ pub trait INode: Send + Sync + 'static {
         bail!(NotDir)
     }
 
-    fn parent(&self) -> Result<DynINode> {
+    fn parent(self: Arc<Self>) -> Result<DynINode> {
         bail!(NotDir)
-    }
-
-    fn set_parent(&self, parent: Weak<dyn INode>) {
-        let _ = parent;
     }
 
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
@@ -362,7 +358,7 @@ pub fn read_link(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) 
 
 pub fn mount(
     path: &Path,
-    create_node: impl FnOnce(Weak<dyn INode>) -> Result<DynINode>,
+    create_node: impl FnOnce(MountLocation) -> Result<DynINode>,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
     let (dir, last) = find_parent(ROOT_NODE.clone(), path, ctx)?;
@@ -373,7 +369,8 @@ pub fn mount(
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let node = create_node(Arc::downgrade(&dir))?;
+    let location = MountLocation::new(Arc::downgrade(&dir), file_name.clone().into_owned());
+    let node = create_node(location)?;
     dir.mount(file_name.into_owned(), node)?;
     Ok(())
 }

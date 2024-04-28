@@ -1,7 +1,7 @@
 use crate::{
     error::{ensure, err},
     fs::{
-        node::{DirEntryName, DynINode, FileAccessContext, INode},
+        node::{DynINode, FileAccessContext, INode},
         path::{FileName, Path},
     },
     spin::mutex::Mutex,
@@ -19,12 +19,12 @@ use super::{Events, FileDescriptor, OpenFileDescription};
 #[macro_export]
 macro_rules! dir_impls {
     () => {
-        fn parent(&self) -> Result<DynINode> {
-            Directory::parent(self)
-        }
-
-        fn set_parent(&self, parent: Weak<dyn INode>) {
-            Directory::set_parent(self, parent)
+        fn parent(self: Arc<Self>) -> Result<DynINode> {
+            Ok(if let Some((parent, _)) = Directory::location(&*self)? {
+                parent
+            } else {
+                self
+            })
         }
 
         fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
@@ -79,34 +79,13 @@ macro_rules! dir_impls {
 }
 
 pub trait Directory: INode {
-    fn parent(&self) -> Result<DynINode>;
-    fn set_parent(&self, parent: Weak<dyn INode>);
+    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>>;
     fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
-        let parent = Directory::parent(self)?;
-
-        let stat = self.stat();
-        let parent_stat = parent.stat();
-
-        // If the directory is its own parent, then it's the root.
-        if parent_stat.ino == stat.ino {
+        let Some((parent, name)) = Directory::location(self)? else {
             return Path::new(b"/".to_vec());
-        }
-
-        let mut path = parent.path(ctx)?;
-
-        // Find the directory in its parent.
-        let entries = parent.list_entries(ctx)?;
-        let entry = entries
-            .into_iter()
-            .find(|e| e.ino == stat.ino)
-            .ok_or(err!(NoEnt))?;
-
-        let DirEntryName::FileName(name) = entry.name else {
-            unreachable!()
         };
-
+        let mut path = parent.path(ctx)?;
         path = path.join_segment(&name);
-
         Ok(path)
     }
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode>;
@@ -185,5 +164,91 @@ impl OpenFileDescription for DirectoryFileDescription {
 
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::READ
+    }
+}
+
+/// The location of a directory in a file system.
+pub struct Location<T>(LocationImpl<T>);
+
+impl<T> Location<T>
+where
+    T: Directory,
+{
+    pub const fn root() -> Self {
+        Self(LocationImpl::Root)
+    }
+
+    /// Returns the parent of the directory and the filename of this directory
+    /// in that directory. Returns `None` if the parent is the root.
+    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        match &self.0 {
+            LocationImpl::Root => Ok(None),
+            LocationImpl::Directory(parent) => parent.get(),
+            LocationImpl::Mount(parent) => parent.get(),
+        }
+    }
+}
+
+enum LocationImpl<T> {
+    Root,
+    Directory(DirectoryLocation<T>),
+    Mount(MountLocation),
+}
+
+pub struct DirectoryLocation<T>(Mutex<DirectoryLocationImpl<T>>);
+
+struct DirectoryLocationImpl<T> {
+    parent: Weak<T>,
+    /// The name of the directory in `parent`.
+    file_name: FileName<'static>,
+}
+
+impl<T> DirectoryLocation<T>
+where
+    T: Directory,
+{
+    pub fn new(parent: Weak<T>, file_name: FileName<'static>) -> Self {
+        Self(Mutex::new(DirectoryLocationImpl { parent, file_name }))
+    }
+
+    /// Returns the parent of the directory and the filename of this directory
+    /// in that directory.
+    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        let guard = self.0.lock();
+        let node = guard.parent.upgrade().ok_or(err!(NoEnt))?;
+        let file_name = guard.file_name.clone();
+        Ok(Some((node, file_name)))
+    }
+}
+
+impl<T> From<DirectoryLocation<T>> for Location<T> {
+    fn from(value: DirectoryLocation<T>) -> Self {
+        Self(LocationImpl::Directory(value))
+    }
+}
+
+pub struct MountLocation {
+    parent: Weak<dyn INode>,
+    /// The name of the directory in `parent`.
+    file_name: FileName<'static>,
+}
+
+impl MountLocation {
+    pub fn new(parent: Weak<dyn INode>, file_name: FileName<'static>) -> Self {
+        Self { parent, file_name }
+    }
+
+    /// Returns the parent of the directory and the filename of this directory
+    /// in that directory.
+    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        let node = self.parent.upgrade().ok_or(err!(NoEnt))?;
+        let file_name = self.file_name.clone();
+        Ok(Some((node, file_name)))
+    }
+}
+
+impl<T> From<MountLocation> for Location<T> {
+    fn from(value: MountLocation) -> Self {
+        Self(LocationImpl::Mount(value))
     }
 }

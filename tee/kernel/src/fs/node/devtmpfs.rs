@@ -3,6 +3,7 @@ use core::{cmp, iter::from_fn};
 use crate::{
     error::{bail, ensure},
     fs::fd::{
+        dir::MountLocation,
         file::{open_file, File},
         FileDescriptor,
     },
@@ -30,8 +31,8 @@ use super::{
     DynINode, INode,
 };
 
-pub fn new(parent: Weak<dyn INode>) -> Result<DynINode> {
-    let tmp_fs_dir = TmpFsDir::new(parent, FileMode::from_bits_truncate(0o755));
+pub fn new(location: MountLocation) -> Result<DynINode> {
+    let tmp_fs_dir = TmpFsDir::new(location, FileMode::from_bits_truncate(0o755));
 
     let input_name = FileName::new(b"input").unwrap();
     let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444));
@@ -54,7 +55,7 @@ pub fn new(parent: Weak<dyn INode>) -> Result<DynINode> {
 
     let fd_name = FileName::new(b"fd").unwrap();
     let fd = fdfs::new(
-        Arc::downgrade(&tmp_fs_dir) as _,
+        MountLocation::new(Arc::downgrade(&tmp_fs_dir) as _, fd_name.clone()),
         FileMode::from_bits_truncate(0o777),
     );
     tmp_fs_dir.mount(fd_name, fd)?;

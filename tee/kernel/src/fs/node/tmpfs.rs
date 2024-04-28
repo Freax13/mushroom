@@ -4,7 +4,7 @@ use crate::{
     dir_impls,
     error::{bail, ensure, err},
     fs::fd::{
-        dir::{open_dir, Directory},
+        dir::{open_dir, Directory, DirectoryLocation, Location},
         file::{open_file, File},
         FileDescriptor,
     },
@@ -34,7 +34,7 @@ use crate::{
 pub struct TmpFsDir {
     ino: u64,
     this: Weak<Self>,
-    parent: Mutex<Weak<dyn INode>>,
+    location: Location<Self>,
     internal: Mutex<TmpFsDirInternal>,
 }
 
@@ -47,30 +47,13 @@ struct TmpFsDirInternal {
 }
 
 impl TmpFsDir {
-    pub fn root(mode: FileMode) -> Arc<Self> {
+    pub fn new(location: impl Into<Location<Self>>, mode: FileMode) -> Arc<Self> {
         let now = now();
 
         Arc::new_cyclic(|this_weak| Self {
             ino: new_ino(),
             this: this_weak.clone(),
-            parent: Mutex::new(this_weak.clone()),
-            internal: Mutex::new(TmpFsDirInternal {
-                mode,
-                items: BTreeMap::new(),
-                atime: now,
-                mtime: now,
-                ctime: now,
-            }),
-        })
-    }
-
-    pub fn new(parent: Weak<dyn INode>, mode: FileMode) -> Arc<Self> {
-        let now = now();
-
-        Arc::new_cyclic(|this_weak| Self {
-            ino: new_ino(),
-            this: this_weak.clone(),
-            parent: Mutex::new(parent),
+            location: location.into(),
             internal: Mutex::new(TmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
@@ -115,7 +98,6 @@ impl INode for TmpFsDir {
     }
 
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
-        node.set_parent(self.this.clone());
         self.internal
             .lock()
             .items
@@ -136,12 +118,8 @@ impl INode for TmpFsDir {
 }
 
 impl Directory for TmpFsDir {
-    fn parent(&self) -> Result<DynINode> {
-        self.parent.lock().clone().upgrade().ok_or(err!(NoEnt))
-    }
-
-    fn set_parent(&self, parent: Weak<dyn INode>) {
-        *self.parent.lock() = parent;
+    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        self.location.get()
     }
 
     fn get_node(&self, path_segment: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
@@ -156,10 +134,11 @@ impl Directory for TmpFsDir {
 
     fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
         let mut guard = self.internal.lock();
-        let entry = guard.items.entry(file_name);
+        let entry = guard.items.entry(file_name.clone());
         match entry {
             Entry::Vacant(entry) => {
-                let dir = TmpFsDir::new(self.this.clone(), mode);
+                let parent = DirectoryLocation::new(self.this.clone(), file_name);
+                let dir = TmpFsDir::new(parent, mode);
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 Ok(dir)
             }
@@ -222,7 +201,12 @@ impl Directory for TmpFsDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Vec<DirEntry> {
-        let parent_ino = Directory::parent(self).ok().map(|parent| parent.stat().ino);
+        let parent_ino = self
+            .location
+            .get()
+            .ok()
+            .flatten()
+            .map(|(parent, _)| parent.stat().ino);
 
         let guard = self.internal.lock();
 

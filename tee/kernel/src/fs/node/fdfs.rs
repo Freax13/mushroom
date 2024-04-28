@@ -9,7 +9,7 @@ use crate::{
     error::{bail, err, Result},
     fs::{
         fd::{
-            dir::{open_dir, Directory},
+            dir::{open_dir, Directory, MountLocation},
             FileDescriptor,
         },
         path::{FileName, Path},
@@ -20,11 +20,11 @@ use crate::{
     },
 };
 
-pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> DynINode {
+pub fn new(location: MountLocation, mode: FileMode) -> DynINode {
     Arc::new_cyclic(|this| FdFsRoot {
         ino: new_ino(),
         this: this.clone(),
-        parent: Mutex::new(parent),
+        location,
         mode: Mutex::new(mode),
     })
 }
@@ -32,7 +32,7 @@ pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> DynINode {
 struct FdFsRoot {
     ino: u64,
     this: Weak<Self>,
-    parent: Mutex<Weak<dyn INode>>,
+    location: MountLocation,
     mode: Mutex<FileMode>,
 }
 
@@ -76,12 +76,8 @@ impl INode for FdFsRoot {
 }
 
 impl Directory for FdFsRoot {
-    fn parent(&self) -> Result<DynINode> {
-        self.parent.lock().clone().upgrade().ok_or(err!(NoEnt))
-    }
-
-    fn set_parent(&self, parent: Weak<dyn INode>) {
-        *self.parent.lock() = parent;
+    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        self.location.get()
     }
 
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
