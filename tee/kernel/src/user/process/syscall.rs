@@ -4,7 +4,7 @@ use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
 use bit_field::BitArray;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use futures::{
-    future::{select, Fuse},
+    future::{select, Either, Fuse},
     select_biased,
     stream::FuturesUnordered,
     FutureExt, StreamExt,
@@ -2391,10 +2391,25 @@ async fn pselect6(
         }
 
         if let Some(deadline) = deadline {
+            // If there are no fds to select from, just sleep and return.
+            if futures.is_empty() {
+                sleep_until(deadline).await;
+                break 0;
+            }
+
             let sleep_until = pin!(sleep_until(deadline));
-            select(sleep_until, futures.next()).await;
+            let res = select(futures.next(), sleep_until).await;
+
+            // Break out of the loop if the timeout expired.
+            if matches!(res, Either::Right(_)) {
+                break 0;
+            }
         } else {
-            futures.next().await;
+            // If there are no fds to select from, just return.
+            let res = futures.next().await;
+            if res.is_none() {
+                break 0;
+            }
         }
     };
 
