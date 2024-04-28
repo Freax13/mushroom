@@ -201,24 +201,6 @@ impl KernelPage {
 
         Ok(())
     }
-
-    /// Zero the all bytes in the page except for the ones in the specified
-    /// range.
-    pub fn zero_range_inv(&mut self, range: impl RangeBounds<usize>) -> Result<()> {
-        match range.start_bound() {
-            Bound::Unbounded | Bound::Included(0) => {}
-            Bound::Included(&idx) => self.zero_range(..idx - 1)?,
-            Bound::Excluded(&idx) => self.zero_range(..idx)?,
-        }
-
-        match range.end_bound() {
-            Bound::Included(&idx) => self.zero_range(idx + 1..)?,
-            Bound::Excluded(&idx) => self.zero_range(idx..)?,
-            Bound::Unbounded => {}
-        }
-
-        Ok(())
-    }
 }
 
 unsafe impl Send for KernelPage {}

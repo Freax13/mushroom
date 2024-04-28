@@ -5,6 +5,7 @@
     alloc_error_handler,
     allocator_api,
     asm_const,
+    btree_cursors,
     cfg_sanitize,
     const_mut_refs,
     core_intrinsics,
@@ -18,6 +19,7 @@
     maybe_uninit_array_assume_init,
     maybe_uninit_uninit_array,
     naked_functions,
+    new_uninit,
     no_sanitize,
     noop_waker,
     pointer_is_aligned,
@@ -25,6 +27,7 @@
     return_type_notation,
     slice_ptr_get,
     step_trait,
+    sync_unsafe_cell,
     trait_upcasting,
     try_trait_v2
 )]

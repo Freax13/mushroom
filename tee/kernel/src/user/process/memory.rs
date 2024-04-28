@@ -1,18 +1,20 @@
 use core::{
     arch::asm,
     borrow::Borrow,
-    cmp::{self, Ordering},
+    cell::SyncUnsafeCell,
+    cmp::Ordering,
     iter::Step,
-    ops::RangeBounds,
-    ptr::NonNull,
+    mem::{needs_drop, MaybeUninit},
+    ops::Bound,
+    ptr::{drop_in_place, NonNull},
 };
 
 use crate::{
     error::{ensure, err},
-    fs::fd::OpenFileDescription,
+    fs::fd::FileDescriptor,
     memory::{
         page::{KernelPage, UserPage},
-        pagetable::{check_user_address, check_user_page, Pagetables},
+        pagetable::{check_user_address, Pagetables},
     },
     spin::{
         lazy::Lazy,
@@ -20,17 +22,13 @@ use crate::{
         rwlock::{RwLock, WriteRwLockGuard},
     },
 };
-use alloc::{
-    collections::{btree_map::Entry, BTreeMap},
-    ffi::CString,
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use log::debug;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
-    align_down,
+    align_down, align_up,
     instructions::random::RdRand,
     registers::rflags::{self, RFlags},
     structures::{
@@ -106,9 +104,9 @@ impl VirtualMemory {
         self.pagetables.freeze_userspace();
 
         // Clone the backing memory.
-        for (page, user_page) in guard.pages.iter_mut() {
-            let user_page = user_page.get_mut().clone()?;
-            new_state.pages.insert(*page, Mutex::new(user_page));
+        for (page, mapping) in guard.mappings.iter_mut() {
+            let mapping = mapping.get_mut().clone()?;
+            new_state.mappings.insert(*page, Mutex::new(mapping));
         }
 
         drop(guard);
@@ -133,15 +131,18 @@ impl VirtualMemory {
         required_flags: PageTableFlags,
     ) -> Result<(), PageFaultError> {
         let state = self.state.read();
-        let user_page = state
-            .pages
-            .get(&page)
+        let (&mapping_page, mapping) = state
+            .mappings
+            .range(..=page)
+            .next_back()
             .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
 
-        let mut guard = user_page.lock();
+        let mut guard = mapping.lock();
+        let offset = page - mapping_page;
+        let user_page = guard.get_page(offset)?;
 
         // Check whether the page should be mapped at all.
-        if !guard
+        if !user_page
             .perms()
             .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
         {
@@ -149,13 +150,13 @@ impl VirtualMemory {
         }
 
         if required_flags.contains(PageTableFlags::WRITABLE)
-            && guard.perms().contains(MemoryPermissions::WRITE)
+            && user_page.perms().contains(MemoryPermissions::WRITE)
         {
             self.pagetables.try_unmap_user_page(page);
-            guard.make_mut().map_err(PageFaultError::Other)?;
+            user_page.make_mut().map_err(PageFaultError::Other)?;
         }
 
-        let entry = guard.entry();
+        let entry = user_page.entry();
 
         if !entry.flags().contains(required_flags) {
             return Err(PageFaultError::MissingPermissions(err!(Fault)));
@@ -164,8 +165,6 @@ impl VirtualMemory {
         self.pagetables
             .set_page(page, entry, &mut &FRAME_ALLOCATOR)
             .map_err(PageFaultError::Other)?;
-
-        drop(guard);
 
         Ok(())
     }
@@ -295,41 +294,6 @@ impl VirtualMemory {
     {
         self.write_with_abi(pointer, value, Abi::Amd64)
     }
-
-    pub fn mprotect(&self, addr: VirtAddr, len: u64, prot: ProtFlags) -> Result<()> {
-        if len == 0 {
-            return Ok(());
-        }
-
-        ensure!(addr.is_aligned(0x1000u64), Inval);
-        ensure!(len % 0x1000 == 0, Inval);
-
-        let state = self.state.read();
-
-        let start = Page::containing_address(addr);
-        let end = Page::containing_address(addr + (len - 1));
-        for page in start..=end {
-            let user_page = state.pages.get(&page).ok_or(err!(Fault))?;
-
-            let mut guard = user_page.lock();
-            guard.set_perms(MemoryPermissions::from(prot));
-
-            if guard
-                .perms()
-                .intersects(MemoryPermissions::READ | MemoryPermissions::WRITE)
-            {
-                let entry = guard.entry();
-
-                self.pagetables.try_set_page(page, entry)?;
-            } else {
-                self.pagetables.try_unmap_user_page(page);
-            }
-
-            drop(guard);
-        }
-
-        Ok(())
-    }
 }
 
 impl Default for VirtualMemory {
@@ -353,59 +317,14 @@ pub struct VirtualMemoryWriteGuard<'a> {
 }
 
 impl VirtualMemoryWriteGuard<'_> {
-    fn add_user_page(
-        &mut self,
-        page: Page,
-        mut user_page: UserPage,
-        range: impl RangeBounds<usize> + Clone,
-    ) -> Result<()> {
-        check_user_page(page)?;
-
-        match self.guard.pages.entry(page) {
-            Entry::Vacant(entry) => {
-                // Zero out the parts of the page outside of `range`.
-                user_page.zero_range_inv(range)?;
-
-                entry.insert(Mutex::new(user_page));
-            }
-            Entry::Occupied(mut entry) => {
-                let existing = entry.get_mut().get_mut();
-
-                // Merge the permissions.
-                existing.set_perms(existing.perms() | user_page.perms());
-
-                // Merge the content with the existing page.
-                if user_page.is_zero_page() {
-                    existing.zero_range(range)?;
-                } else {
-                    self.virtual_memory.pagetables.try_unmap_user_page(page);
-
-                    existing.make_mut()?;
-                    let existing_ptr = existing.index(range.clone());
-
-                    let new_ptr = user_page.index(range);
-
-                    unsafe {
-                        core::intrinsics::volatile_copy_nonoverlapping_memory(
-                            existing_ptr.as_mut_ptr(),
-                            new_ptr.as_mut_ptr(),
-                            existing_ptr.len(),
-                        );
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     fn mmap(
         &mut self,
         bias: Bias,
         len: u64,
         permissions: MemoryPermissions,
-        mut get_page: impl FnMut(usize) -> Result<KernelPage>,
-    ) -> Result<VirtAddr> {
+        backing: impl Backing,
+        page_offset: u64,
+    ) -> VirtAddr {
         assert_ne!(len, 0);
 
         let addr = match bias {
@@ -418,46 +337,92 @@ impl VirtualMemoryWriteGuard<'_> {
         let start_page = Page::containing_address(start);
         let end_page = Page::containing_address(end - 1);
 
-        for (i, page) in (start_page..=end_page).enumerate() {
-            let page_start = page.start_address();
-            let page_end = page_start + 0x1000;
+        self.unmap(addr, len);
 
-            let kernel_page = get_page(i)?;
-            let user_page = UserPage::new(kernel_page, permissions);
+        let size = usize_from(end_page - start_page) + 1;
+        let pages = SplitVec::new(size);
+        self.guard.mappings.insert(
+            start_page,
+            Mutex::new(Mapping {
+                backing: Arc::new(backing),
+                page_offset,
+                permissions,
+                pages,
+            }),
+        );
 
-            let map_start = usize_from(cmp::max(start, page_start) - page_start);
-            let map_end = usize_from(cmp::min(end, page_end) - page_start);
-
-            self.add_user_page(page, user_page, map_start..map_end)?;
-        }
-
-        Ok(addr)
+        addr
     }
 
-    pub fn mmap_zero(
-        &mut self,
-        bias: Bias,
-        len: u64,
-        permissions: MemoryPermissions,
-    ) -> Result<VirtAddr> {
-        self.mmap(bias, len, permissions, |_| Ok(KernelPage::zeroed()))
+    pub fn mmap_zero(&mut self, bias: Bias, len: u64, permissions: MemoryPermissions) -> VirtAddr {
+        struct ZeroBacking;
+
+        impl Backing for ZeroBacking {
+            fn get_initial_page(&self, _offset: u64) -> Result<KernelPage> {
+                Ok(KernelPage::zeroed())
+            }
+        }
+
+        self.mmap(bias, len, permissions, ZeroBacking, 0)
     }
 
     pub fn mmap_file(
         &mut self,
         bias: Bias,
         len: u64,
-        file: &dyn OpenFileDescription,
+        file: FileDescriptor,
+        offset: u64,
+        permissions: MemoryPermissions,
+    ) -> Result<VirtAddr> {
+        self.mmap_file_with_zeros(bias, len, align_up(len, 4096), file, offset, permissions)
+    }
+
+    pub fn mmap_file_with_zeros(
+        &mut self,
+        bias: Bias,
+        file_sz: u64,
+        mem_sz: u64,
+        file: FileDescriptor,
         offset: u64,
         permissions: MemoryPermissions,
     ) -> Result<VirtAddr> {
         ensure!(offset % 0x1000 == u64::from(bias.page_offset()), Inval);
-        let page_offset = usize_from(offset / 0x1000);
+        let page_offset = offset / 0x1000;
 
-        self.mmap(bias, len, permissions, |i| file.get_page(page_offset + i))
+        struct FileBacking {
+            file: FileDescriptor,
+            zero_offset: u64,
+        }
+
+        impl Backing for FileBacking {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
+                let start_offset = usize_from(self.zero_offset.saturating_sub(offset * 0x1000));
+                match start_offset {
+                    0 => Ok(KernelPage::zeroed()),
+                    1..=0xfff => {
+                        let mut page = self.file.get_page(usize_from(offset))?;
+                        page.zero_range(start_offset..)?;
+                        Ok(page)
+                    }
+                    _ => self.file.get_page(usize_from(offset)),
+                }
+            }
+        }
+
+        let addr = self.mmap(
+            bias,
+            mem_sz,
+            permissions,
+            FileBacking {
+                file,
+                zero_offset: offset + file_sz,
+            },
+            page_offset,
+        );
+        Ok(addr)
     }
 
-    pub fn allocate_stack(&mut self, bias: Bias, len: u64) -> Result<VirtAddr> {
+    pub fn allocate_stack(&mut self, bias: Bias, len: u64) -> VirtAddr {
         self.mmap_zero(
             bias,
             len,
@@ -465,7 +430,7 @@ impl VirtualMemoryWriteGuard<'_> {
         )
     }
 
-    pub fn map_sigreturn_trampoline(&mut self) -> Result<()> {
+    pub fn map_sigreturn_trampoline(&mut self) {
         static PAGE: Lazy<Mutex<KernelPage>> = Lazy::new(|| {
             let sigreturn_trampoline = &[
                 // i386 sigreturn trampoline
@@ -490,40 +455,136 @@ impl VirtualMemoryWriteGuard<'_> {
             Mutex::new(page)
         });
 
-        let user_page = UserPage::new(
-            PAGE.lock().clone()?,
+        struct TrampolineCode;
+
+        impl Backing for TrampolineCode {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
+                assert_eq!(offset, 0);
+                PAGE.lock().clone()
+            }
+        }
+
+        self.mmap(
+            Bias::Fixed(VirtAddr::new(SIGRETURN_TRAMPOLINE_PAGE)),
+            4096,
             MemoryPermissions::READ | MemoryPermissions::EXECUTE,
+            TrampolineCode,
+            0,
         );
-        let page = Page::from_start_address(VirtAddr::new(SIGRETURN_TRAMPOLINE_PAGE)).unwrap();
-        self.add_user_page(page, user_page, ..)
     }
 
-    pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
-        // Page align the start.
-        let start = addr.align_up(0x1000u64);
-        let len = len.saturating_sub(start - addr);
+    pub fn mprotect(
+        &mut self,
+        addr: VirtAddr,
+        len: u64,
+        permissions: MemoryPermissions,
+    ) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
 
-        // Page align the end.
-        let len = align_down(len, 0x1000);
-        let end = start + len;
-
-        let start_page = Page::from_start_address(start).unwrap();
-        let end_page = Page::from_start_address(end).unwrap();
-        let pages = start_page..end_page;
+        let start_page = Page::from_start_address(addr).map_err(|_| err!(Inval))?;
+        let end_page = Page::from_start_address(addr + (len - 0x1000)).map_err(|_| err!(Inval))?;
 
         // Flush all pages in the range.
         self.virtual_memory
             .pagetables
-            .try_unmap_user_pages(pages.clone());
+            .try_unmap_user_pages(start_page..=end_page);
 
-        loop {
-            // Find the next page in the range.
-            let Some((&page, _)) = self.guard.pages.range(pages.clone()).next() else {
+        let mut cursor = self
+            .guard
+            .mappings
+            .upper_bound_mut(Bound::Included(&start_page));
+        cursor.prev();
+        while let Some((&page, mapping)) = cursor.next() {
+            let mapping = mapping.get_mut();
+
+            let mapping_end = page + u64::from_usize(mapping.pages.len()) - 1;
+            if page < start_page {
+                ensure!(mapping_end >= start_page, Fault);
+
+                let offset = start_page - page;
+                let new_mapping = mapping.split_off(offset);
+                cursor
+                    .insert_after(start_page, Mutex::new(new_mapping))
+                    .unwrap();
+                continue;
+            } else {
+                if page > end_page {
+                    break;
+                }
+
+                if end_page >= mapping_end {
+                    mapping.set_perms(permissions);
+                    continue;
+                }
+
+                let offset = (end_page - page) + 1;
+                let new_mapping = mapping.split_off(offset);
+                mapping.set_perms(permissions);
+                cursor
+                    .insert_before(end_page + 1, Mutex::new(new_mapping))
+                    .unwrap();
                 break;
-            };
+            }
+        }
 
-            // Remove the page.
-            self.guard.pages.remove(&page);
+        Ok(())
+    }
+
+    pub fn unmap(&mut self, addr: VirtAddr, len: u64) {
+        if len == 0 {
+            return;
+        }
+
+        let start = addr;
+        let end = addr + (len - 1);
+        let start_page = Page::containing_address(start);
+        let end_page = Page::containing_address(end);
+
+        // Flush all pages in the range.
+        self.virtual_memory
+            .pagetables
+            .try_unmap_user_pages(start_page..=end_page);
+
+        let mut cursor = self
+            .guard
+            .mappings
+            .upper_bound_mut(Bound::Included(&start_page));
+        cursor.prev();
+        while let Some((&page, mapping)) = cursor.next() {
+            let mapping = mapping.get_mut();
+
+            let mapping_end = page + u64::from_usize(mapping.pages.len() - 1);
+            if page < start_page {
+                if mapping_end < start_page {
+                    break;
+                }
+
+                let offset = start_page - page;
+                let new_mapping = mapping.split_off(offset);
+                cursor
+                    .insert_after(start_page, Mutex::new(new_mapping))
+                    .unwrap();
+                continue;
+            } else {
+                if page > end_page {
+                    break;
+                }
+
+                if end_page >= mapping_end {
+                    cursor.remove_prev();
+                    continue;
+                }
+
+                let offset = (end_page - page) + 1;
+                let new_mapping = mapping.split_off(offset);
+                cursor.remove_prev();
+                cursor
+                    .insert_before(end_page + 1, Mutex::new(new_mapping))
+                    .unwrap();
+                break;
+            }
         }
     }
 
@@ -531,7 +592,7 @@ impl VirtualMemoryWriteGuard<'_> {
         self.guard.brk_end = brk_start;
     }
 
-    pub fn set_brk_end(&mut self, brk_end: VirtAddr) -> Result<()> {
+    pub fn set_brk_end(&mut self, brk_end: VirtAddr) {
         let old_brk_end = core::mem::replace(&mut self.guard.brk_end, brk_end);
 
         match old_brk_end.cmp(&brk_end) {
@@ -540,27 +601,25 @@ impl VirtualMemoryWriteGuard<'_> {
                     Bias::Fixed(old_brk_end),
                     brk_end - old_brk_end,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
-                )?;
+                );
             }
             Ordering::Equal => {}
             Ordering::Greater => {
                 self.unmap(brk_end, old_brk_end - brk_end);
             }
         }
-
-        Ok(())
     }
 }
 
 struct VirtualMemoryState {
-    pages: BTreeMap<Page, Mutex<UserPage>>,
+    mappings: BTreeMap<Page, Mutex<Mapping>>,
     brk_end: VirtAddr,
 }
 
 impl VirtualMemoryState {
     pub fn new() -> Self {
         Self {
-            pages: BTreeMap::new(),
+            mappings: BTreeMap::new(),
             brk_end: VirtAddr::zero(),
         }
     }
@@ -594,8 +653,16 @@ impl VirtualMemoryState {
                 // Check if there are already pages in the range.
                 let start = Page::containing_address(candidate);
                 let end = Page::containing_address(end);
-                if self.pages.range(start..=end).next().is_some() {
-                    return None;
+                let mut cursor = self.mappings.upper_bound(Bound::Included(&start));
+                cursor.prev();
+                while let Some((&page, mapping)) = cursor.next() {
+                    let mapping_end = page + u64::from_usize(mapping.lock().pages.len() - 1);
+                    if page <= end && start <= mapping_end {
+                        return None;
+                    }
+                    if page > end {
+                        break;
+                    }
                 }
 
                 Some(candidate)
@@ -682,5 +749,144 @@ impl From<PageFaultError> for Error {
         | PageFaultError::MissingPermissions(error)
         | PageFaultError::Other(error)) = value;
         error
+    }
+}
+
+pub struct Mapping {
+    backing: Arc<dyn Backing>,
+    page_offset: u64,
+    permissions: MemoryPermissions,
+    pages: SplitVec<Option<UserPage>>,
+}
+
+impl Mapping {
+    pub fn get_page(&mut self, page_offset: u64) -> Result<&mut UserPage, PageFaultError> {
+        let page = self
+            .pages
+            .get_mut(usize_from(page_offset))
+            .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
+
+        if page.is_none() {
+            let user_page = UserPage::new(
+                self.backing
+                    .get_initial_page(self.page_offset + page_offset)
+                    .map_err(PageFaultError::Other)?,
+                self.permissions,
+            );
+            *page = Some(user_page);
+        }
+
+        Ok(page.as_mut().unwrap())
+    }
+
+    pub fn split_off(&mut self, offset: u64) -> Self {
+        let pages = self.pages.split_off(usize_from(offset));
+
+        Self {
+            backing: self.backing.clone(),
+            page_offset: self.page_offset + offset,
+            permissions: self.permissions,
+            pages,
+        }
+    }
+
+    pub fn clone(&mut self) -> Result<Self> {
+        let mut pages = SplitVec::new(self.pages.len());
+        for (i, page) in self.pages.iter_mut().enumerate() {
+            let Some(page) = page else { continue };
+            *pages.get_mut(i).unwrap() = Some(page.clone()?);
+        }
+
+        Ok(Self {
+            backing: self.backing.clone(),
+            page_offset: self.page_offset,
+            permissions: self.permissions,
+            pages,
+        })
+    }
+
+    fn set_perms(&mut self, permissions: MemoryPermissions) {
+        self.permissions = permissions;
+        for page in self.pages.iter_mut().flatten() {
+            page.set_perms(permissions);
+        }
+    }
+}
+
+pub trait Backing: Send + Sync + 'static {
+    fn get_initial_page(&self, offset: u64) -> Result<KernelPage>;
+}
+
+/// Like a `Vec<T>` but with constant time `split_at`.
+struct SplitVec<T> {
+    entries: Arc<[MaybeUninit<SyncUnsafeCell<T>>]>,
+    offset: usize,
+    len: usize,
+}
+
+impl<T> SplitVec<T> {
+    pub fn new(len: usize) -> Self
+    where
+        T: Default,
+    {
+        let mut entries = Arc::new_uninit_slice(len);
+        let mut_entries = Arc::get_mut(&mut entries).unwrap();
+        for entry in mut_entries {
+            entry.write(SyncUnsafeCell::new(T::default()));
+        }
+        Self {
+            entries,
+            offset: 0,
+            len,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns the entries owned by this instance.
+    fn entries(&self) -> &[MaybeUninit<SyncUnsafeCell<T>>] {
+        unsafe {
+            self.entries
+                .get_unchecked(self.offset..)
+                .get_unchecked(..self.len)
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut T> + '_ {
+        self.entries()
+            .iter()
+            .map(|entry| unsafe { &mut *entry.assume_init_ref().get() })
+    }
+
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+        self.entries()
+            .get(idx)
+            .map(|entry| unsafe { &mut *entry.assume_init_ref().get() })
+    }
+
+    pub fn split_off(&mut self, at: usize) -> Self {
+        assert!(self.len >= at);
+
+        let new = Self {
+            entries: self.entries.clone(),
+            offset: self.offset + at,
+            len: self.len - at,
+        };
+        self.len = at;
+        new
+    }
+}
+
+impl<T> Drop for SplitVec<T> {
+    fn drop(&mut self) {
+        if needs_drop::<T>() {
+            for entry in self.entries() {
+                unsafe {
+                    drop_in_place(entry.as_ptr().cast::<T>().cast_mut());
+                }
+            }
+        }
     }
 }

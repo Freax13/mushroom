@@ -8,7 +8,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{bail, ensure, Result},
-    fs::{fd::OpenFileDescription, path::Path},
+    fs::{fd::FileDescriptor, path::Path},
     user::process::{
         memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
         syscall::traits::Abi,
@@ -96,7 +96,7 @@ pub trait ProgramHeaderEntry: Pod {
 }
 
 pub fn load_elf<E>(
-    file: &dyn OpenFileDescription,
+    file: &FileDescriptor,
     mut vm: VirtualMemoryWriteGuard<'_>,
     load_bias: u64,
 ) -> Result<LoaderInfo>
@@ -155,20 +155,14 @@ where
                 permissions.set(MemoryPermissions::WRITE, p_flags.get_bit(PF_W_BIT));
                 permissions.set(MemoryPermissions::READ, p_flags.get_bit(PF_R_BIT));
 
-                vm.mmap_file(
+                vm.mmap_file_with_zeros(
                     Bias::Fixed(VirtAddr::try_new(base + p_vaddr)?),
                     p_filesz,
-                    file,
+                    p_memsz,
+                    file.clone(),
                     p_offset,
                     permissions,
                 )?;
-                if p_filesz < p_memsz {
-                    vm.mmap_zero(
-                        Bias::Fixed(VirtAddr::try_new(base + p_vaddr + p_filesz)?),
-                        p_memsz - p_filesz,
-                        permissions,
-                    )?;
-                }
 
                 if (p_offset..p_offset + p_filesz).contains(&e_phoff) {
                     phdr = Some(base + p_vaddr + (e_phoff - p_offset));

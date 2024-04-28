@@ -9,7 +9,7 @@ use core::{
 use crate::{
     error::bail,
     fs::{
-        fd::{FileDescriptorTable, OpenFileDescription},
+        fd::{FileDescriptor, FileDescriptorTable},
         node::{DynINode, FileAccessContext},
     },
     rt::notify::Notify,
@@ -443,7 +443,7 @@ impl ThreadGuard<'_> {
     pub fn start_executable(
         &mut self,
         path: &Path,
-        file: &dyn OpenFileDescription,
+        file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,

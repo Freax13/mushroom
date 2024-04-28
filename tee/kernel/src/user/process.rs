@@ -232,7 +232,7 @@ pub fn start_init_process() {
     guard
         .start_executable(
             &Path::new(b"/bin/init".to_vec()).unwrap(),
-            &*file,
+            &file,
             &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
             &[] as &[&CStr],
             &mut ctx,
