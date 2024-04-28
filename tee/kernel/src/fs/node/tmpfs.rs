@@ -1,3 +1,5 @@
+use core::ops::Deref;
+
 use crate::{
     dir_impls,
     error::{bail, ensure, err},
@@ -33,12 +35,12 @@ pub struct TmpFsDir {
     ino: u64,
     this: Weak<Self>,
     parent: Mutex<Weak<dyn INode>>,
-    internal: Mutex<DevTmpFsDirInternal>,
+    internal: Mutex<TmpFsDirInternal>,
 }
 
-struct DevTmpFsDirInternal {
+struct TmpFsDirInternal {
     mode: FileMode,
-    items: BTreeMap<FileName<'static>, DynINode>,
+    items: BTreeMap<FileName<'static>, TmpFsDirEntry>,
     atime: Timespec,
     mtime: Timespec,
     ctime: Timespec,
@@ -52,7 +54,7 @@ impl TmpFsDir {
             ino: new_ino(),
             this: this_weak.clone(),
             parent: Mutex::new(this_weak.clone()),
-            internal: Mutex::new(DevTmpFsDirInternal {
+            internal: Mutex::new(TmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
                 atime: now,
@@ -69,7 +71,7 @@ impl TmpFsDir {
             ino: new_ino(),
             this: this_weak.clone(),
             parent: Mutex::new(parent),
-            internal: Mutex::new(DevTmpFsDirInternal {
+            internal: Mutex::new(TmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
                 atime: now,
@@ -114,7 +116,10 @@ impl INode for TmpFsDir {
 
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         node.set_parent(self.this.clone());
-        self.internal.lock().items.insert(file_name.clone(), node);
+        self.internal
+            .lock()
+            .items
+            .insert(file_name.clone(), TmpFsDirEntry::Mount(node));
         Ok(())
     }
 
@@ -145,6 +150,7 @@ impl Directory for TmpFsDir {
             .items
             .get(path_segment)
             .cloned()
+            .map(Into::into)
             .ok_or(err!(NoEnt))
     }
 
@@ -154,7 +160,7 @@ impl Directory for TmpFsDir {
         match entry {
             Entry::Vacant(entry) => {
                 let dir = TmpFsDir::new(self.this.clone(), mode);
-                entry.insert(dir.clone());
+                entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 Ok(dir)
             }
             Entry::Occupied(_) => bail!(Exist),
@@ -171,10 +177,10 @@ impl Directory for TmpFsDir {
         match entry {
             Entry::Vacant(entry) => {
                 let node = TmpFsFile::new(mode);
-                entry.insert(node.clone());
+                entry.insert(TmpFsDirEntry::File(node.clone()));
                 Ok(Ok(node))
             }
-            Entry::Occupied(entry) => Ok(Err(entry.get().clone())),
+            Entry::Occupied(entry) => Ok(Err(entry.get().clone().into())),
         }
     }
 
@@ -192,7 +198,7 @@ impl Directory for TmpFsDir {
                     ino: new_ino(),
                     target,
                 });
-                entry.insert(link.clone());
+                entry.insert(TmpFsDirEntry::Symlink(link.clone()));
                 Ok(link)
             }
             Entry::Occupied(mut entry) => {
@@ -201,14 +207,17 @@ impl Directory for TmpFsDir {
                     ino: new_ino(),
                     target,
                 });
-                entry.insert(link.clone());
+                entry.insert(TmpFsDirEntry::Symlink(link.clone()));
                 Ok(link)
             }
         }
     }
 
     fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
-        self.internal.lock().items.insert(file_name.clone(), node);
+        self.internal
+            .lock()
+            .items
+            .insert(file_name.clone(), TmpFsDirEntry::Mount(node));
         Ok(())
     }
 
@@ -267,6 +276,38 @@ impl Directory for TmpFsDir {
         ensure!(entry.get().ty() == FileType::Dir, NotDir);
         entry.remove();
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+enum TmpFsDirEntry {
+    File(Arc<TmpFsFile>),
+    Dir(Arc<TmpFsDir>),
+    Symlink(Arc<TmpFsSymlink>),
+    Mount(DynINode),
+}
+
+impl Deref for TmpFsDirEntry {
+    type Target = dyn INode;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            TmpFsDirEntry::File(file) => &**file,
+            TmpFsDirEntry::Dir(dir) => &**dir,
+            TmpFsDirEntry::Symlink(symlink) => &**symlink,
+            TmpFsDirEntry::Mount(mount) => &**mount,
+        }
+    }
+}
+
+impl From<TmpFsDirEntry> for DynINode {
+    fn from(value: TmpFsDirEntry) -> Self {
+        match value {
+            TmpFsDirEntry::File(file) => file,
+            TmpFsDirEntry::Dir(dir) => dir,
+            TmpFsDirEntry::Symlink(symlink) => symlink,
+            TmpFsDirEntry::Mount(node) => node,
+        }
     }
 }
 
