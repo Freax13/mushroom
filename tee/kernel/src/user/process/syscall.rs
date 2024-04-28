@@ -14,6 +14,7 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
+    char_dev::mem::random_bytes,
     error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
@@ -21,10 +22,9 @@ use crate::{
             unix_socket::StreamUnixSocket, Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
-            self, create_directory, create_file, create_link,
-            devtmpfs::{self, RandomFile},
-            hard_link, lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir,
-            unlink_file, DirEntry, FileAccessContext, OldDirEntry,
+            self, create_directory, create_file, create_link, devtmpfs, hard_link,
+            lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir, unlink_file,
+            DirEntry, FileAccessContext, OldDirEntry,
         },
         path::Path,
     },
@@ -2651,7 +2651,7 @@ fn getrandom(
     let mut buf = buf;
 
     let mut total_len = 0;
-    for (_, random) in (0..buflen).zip(RandomFile::random_bytes()) {
+    for (_, random) in (0..buflen).zip(random_bytes()) {
         let len = virtual_memory.write(buf, random)?;
         buf = buf.bytes_offset(len);
         total_len += len;

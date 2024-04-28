@@ -44,6 +44,7 @@ use supervisor::launch_next_ap;
 
 use crate::per_cpu::PerCpu;
 
+mod char_dev;
 mod error;
 mod exception;
 mod fs;

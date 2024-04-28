@@ -100,6 +100,18 @@ pub trait INode: Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn create_char_dev(
+        &self,
+        file_name: FileName<'static>,
+        major: u16,
+        minor: u8,
+    ) -> Result<DynINode> {
+        let _ = file_name;
+        let _ = major;
+        let _ = minor;
+        bail!(NotDir)
+    }
+
     fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         let _ = file_name;
         let _ = node;

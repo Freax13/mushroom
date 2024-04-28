@@ -109,6 +109,15 @@ impl Directory for FdFsRoot {
         bail!(NoEnt)
     }
 
+    fn create_char_dev(
+        &self,
+        _file_name: FileName<'static>,
+        _major: u16,
+        _minor: u8,
+    ) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
     fn hard_link(&self, _file_name: FileName<'static>, _node: DynINode) -> Result<()> {
         bail!(NoEnt)
     }

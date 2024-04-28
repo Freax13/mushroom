@@ -56,6 +56,15 @@ macro_rules! dir_impls {
             Directory::create_link(self, file_name, target, create_new)
         }
 
+        fn create_char_dev(
+            &self,
+            file_name: FileName<'static>,
+            major: u16,
+            minor: u8,
+        ) -> Result<DynINode> {
+            Directory::create_char_dev(self, file_name, major, minor)
+        }
+
         fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
             Directory::hard_link(self, file_name, node)
         }
@@ -101,6 +110,12 @@ pub trait Directory: INode {
         file_name: FileName<'static>,
         target: Path,
         create_new: bool,
+    ) -> Result<DynINode>;
+    fn create_char_dev(
+        &self,
+        file_name: FileName<'static>,
+        major: u16,
+        minor: u8,
     ) -> Result<DynINode>;
     fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()>;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry>;

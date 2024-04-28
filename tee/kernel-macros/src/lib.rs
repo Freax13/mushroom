@@ -6,7 +6,8 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    Attribute, Error, Expr, FnArg, Ident, ItemFn, Meta, Pat, PatIdent, Result, Token, Type,
+    Attribute, Error, Expr, FnArg, Ident, ItemFn, ItemImpl, Meta, Pat, PatIdent, Result, Token,
+    Type,
 };
 
 #[proc_macro_attribute]
@@ -277,4 +278,34 @@ fn is_state_attr(attr: &Attribute) -> bool {
 struct SyscallInputs {
     states: Vec<(PatIdent, Type)>,
     args: Vec<(PatIdent, Type)>,
+}
+
+#[proc_macro_attribute]
+pub fn register(_attrs: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemImpl);
+    expand_register(input).map_or_else(|a| Error::into_compile_error(a).into(), Into::into)
+}
+
+fn expand_register(input: ItemImpl) -> Result<impl Into<TokenStream>> {
+    let ty = &input.self_ty;
+
+    let (_, trait_, _) = input.trait_.as_ref().ok_or_else(|| {
+        Error::new_spanned(&input, "only trait implementations can be registered")
+    })?;
+    let module = if trait_.is_ident("CharDev") {
+        quote! {
+            crate::char_dev
+        }
+    } else {
+        return Err(Error::new_spanned(trait_, "unsupported trait"));
+    };
+
+    Ok(quote! {
+        #input
+
+        const _: () = {
+            #[::linkme::distributed_slice(#module::REGISTRATIONS)]
+            static REGISTRATION: #module::Registration = #module::Registration::new::<#ty>();
+        };
+    })
 }

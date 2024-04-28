@@ -1,7 +1,7 @@
 use core::ops::Deref;
 
 use crate::{
-    dir_impls,
+    char_dev, dir_impls,
     error::{bail, ensure, err},
     fs::fd::{
         dir::{open_dir, Directory, DirectoryLocation, Location},
@@ -148,11 +148,11 @@ impl Directory for TmpFsDir {
 
     fn create_file(
         &self,
-        path_segment: FileName<'static>,
+        file_name: FileName<'static>,
         mode: FileMode,
     ) -> Result<Result<DynINode, DynINode>> {
         let mut guard = self.internal.lock();
-        let entry = guard.items.entry(path_segment);
+        let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
                 let node = TmpFsFile::new(mode);
@@ -189,6 +189,24 @@ impl Directory for TmpFsDir {
                 entry.insert(TmpFsDirEntry::Symlink(link.clone()));
                 Ok(link)
             }
+        }
+    }
+
+    fn create_char_dev(
+        &self,
+        file_name: FileName<'static>,
+        major: u16,
+        minor: u8,
+    ) -> Result<DynINode> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
+        match entry {
+            Entry::Vacant(entry) => {
+                let char_dev = Arc::new(TmpFsCharDev::new(major, minor));
+                entry.insert(TmpFsDirEntry::CharDev(char_dev.clone()));
+                Ok(char_dev)
+            }
+            Entry::Occupied(_) => bail!(Exist),
         }
     }
 
@@ -268,6 +286,7 @@ enum TmpFsDirEntry {
     File(Arc<TmpFsFile>),
     Dir(Arc<TmpFsDir>),
     Symlink(Arc<TmpFsSymlink>),
+    CharDev(Arc<TmpFsCharDev>),
     Mount(DynINode),
 }
 
@@ -279,6 +298,7 @@ impl Deref for TmpFsDirEntry {
             TmpFsDirEntry::File(file) => &**file,
             TmpFsDirEntry::Dir(dir) => &**dir,
             TmpFsDirEntry::Symlink(symlink) => &**symlink,
+            TmpFsDirEntry::CharDev(char_dev) => &**char_dev,
             TmpFsDirEntry::Mount(mount) => &**mount,
         }
     }
@@ -290,6 +310,7 @@ impl From<TmpFsDirEntry> for DynINode {
             TmpFsDirEntry::File(file) => file,
             TmpFsDirEntry::Dir(dir) => dir,
             TmpFsDirEntry::Symlink(symlink) => symlink,
+            TmpFsDirEntry::CharDev(char_dev) => char_dev,
             TmpFsDirEntry::Mount(node) => node,
         }
     }
@@ -501,6 +522,50 @@ impl INode for TmpFsSymlink {
         ctx.follow_symlink()?;
         lookup_node_with_parent(start_dir, &self.target, ctx).map(Some)
     }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+}
+
+pub struct TmpFsCharDev {
+    ino: u64,
+    major: u16,
+    minor: u8,
+}
+
+impl TmpFsCharDev {
+    pub fn new(major: u16, minor: u8) -> Self {
+        Self {
+            ino: new_ino(),
+            major,
+            minor,
+        }
+    }
+}
+
+impl INode for TmpFsCharDev {
+    fn stat(&self) -> Stat {
+        Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Char, FileMode::from_bits_retain(0o666)),
+            uid: 0,
+            gid: 0,
+            rdev: u64::from(self.major) << 8 | u64::from(self.minor),
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        }
+    }
+
+    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
+        char_dev::open(flags, self.stat())
+    }
+
+    fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 }
