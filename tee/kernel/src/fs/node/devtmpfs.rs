@@ -14,20 +14,17 @@ use crate::{
     user::process::syscall::args::FileMode,
 };
 
-use super::{
-    directory::MountLocation,
-    fdfs,
-    tmpfs::{TmpFsDir, TmpFsFile},
-    DynINode, INode,
-};
+use super::{directory::MountLocation, fdfs, tmpfs::TmpFsDir, DynINode, INode};
 
 pub fn new(location: MountLocation) -> Result<DynINode> {
     let tmp_fs_dir = TmpFsDir::new(location, FileMode::from_bits_truncate(0o755));
 
     let input_name = FileName::new(b"input").unwrap();
-    let input_file = TmpFsFile::new(FileMode::from_bits_truncate(0o444));
+    let input_file = tmp_fs_dir
+        .create_file(input_name, FileMode::from_bits_truncate(0o444))?
+        .ok()
+        .unwrap();
     input_file.write(0, *INPUT)?;
-    tmp_fs_dir.mount(input_name, input_file)?;
 
     let output_name = FileName::new(b"output").unwrap();
     tmp_fs_dir.create_char_dev(output_name, Output::MAJOR, Output::MINOR)?;

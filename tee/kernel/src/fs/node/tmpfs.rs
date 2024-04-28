@@ -64,6 +64,23 @@ impl TmpFsDir {
             }),
         })
     }
+
+    pub fn create_file(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+    ) -> Result<Result<Arc<TmpFsFile>, DynINode>> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
+        match entry {
+            Entry::Vacant(entry) => {
+                let node = TmpFsFile::new(mode);
+                entry.insert(TmpFsDirEntry::File(node.clone()));
+                Ok(Ok(node))
+            }
+            Entry::Occupied(entry) => Ok(Err(entry.get().clone().into())),
+        }
+    }
 }
 
 impl INode for TmpFsDir {
@@ -152,16 +169,8 @@ impl Directory for TmpFsDir {
         file_name: FileName<'static>,
         mode: FileMode,
     ) -> Result<Result<DynINode, DynINode>> {
-        let mut guard = self.internal.lock();
-        let entry = guard.items.entry(file_name);
-        match entry {
-            Entry::Vacant(entry) => {
-                let node = TmpFsFile::new(mode);
-                entry.insert(TmpFsDirEntry::File(node.clone()));
-                Ok(Ok(node))
-            }
-            Entry::Occupied(entry) => Ok(Err(entry.get().clone().into())),
-        }
+        self.create_file(file_name, mode)
+            .map(|res| res.map(|file| file as _))
     }
 
     fn create_link(
