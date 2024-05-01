@@ -492,9 +492,7 @@ impl ThreadGuard<'_> {
 
             // Check if the signal needs to be handled. If the signal handler
             // wants to ignore the signal we just skip it.
-            let guard = self.signal_handler_table.sigactions.lock();
-            let handler = guard[pending_signal_info.signal.get()];
-            drop(guard);
+            let handler = self.signal_handler_table.get(pending_signal_info.signal);
             let ignored = match handler.sa_handler_or_sigaction {
                 Sigaction::SIG_DFL => match pending_signal_info.signal {
                     Signal::CHLD => true,
@@ -809,11 +807,11 @@ impl SignalHandlerTable {
     }
 
     pub fn get(&self, signal: Signal) -> Sigaction {
-        self.sigactions.lock()[signal.get()]
+        self.sigactions.lock()[signal.get() - 1]
     }
 
     pub fn set(&self, signal: Signal, sigaction: Sigaction) -> Sigaction {
-        core::mem::replace(&mut self.sigactions.lock()[signal.get()], sigaction)
+        core::mem::replace(&mut self.sigactions.lock()[signal.get() - 1], sigaction)
     }
 }
 
