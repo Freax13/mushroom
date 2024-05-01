@@ -233,7 +233,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
         .start_executable(
             &Path::new(b"/bin/init".to_vec()).unwrap(),
             &file,
-            &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
+            &[c"/bin/init"],
             &[] as &[&CStr],
             &mut ctx,
         )
