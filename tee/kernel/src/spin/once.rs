@@ -104,3 +104,14 @@ impl<T> Once<T> {
 
 unsafe impl<T> Send for Once<T> where T: Send {}
 unsafe impl<T> Sync for Once<T> where T: Send + Sync {}
+
+impl<T> Drop for Once<T> {
+    fn drop(&mut self) {
+        let state = *self.state.get_mut();
+        if state == STATE_INITIALIZED {
+            unsafe {
+                self.cell.get_mut().assume_init_drop();
+            }
+        }
+    }
+}
