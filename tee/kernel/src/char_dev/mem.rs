@@ -39,8 +39,8 @@ impl OpenFileDescription for Null {
         self.flags
     }
 
-    fn stat(&self) -> Stat {
-        self.stat
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.stat)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -115,8 +115,8 @@ impl OpenFileDescription for Random {
         self.flags
     }
 
-    fn stat(&self) -> Stat {
-        self.stat
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.stat)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -186,8 +186,8 @@ impl OpenFileDescription for URandom {
         self.flags
     }
 
-    fn stat(&self) -> Stat {
-        self.stat
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.stat)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

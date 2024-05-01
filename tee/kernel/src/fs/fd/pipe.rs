@@ -145,8 +145,8 @@ impl OpenFileDescription for ReadHalf {
         }
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: 0,
             nlink: 1,
@@ -160,7 +160,7 @@ impl OpenFileDescription for ReadHalf {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 }
 
@@ -256,8 +256,8 @@ impl OpenFileDescription for WriteHalf {
         Ok(len)
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: 0,
             nlink: 1,
@@ -271,7 +271,7 @@ impl OpenFileDescription for WriteHalf {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {

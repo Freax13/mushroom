@@ -170,13 +170,13 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
             Whence::End => todo!(),
             Whence::Data => {
                 // Ensure that `offset` doesn't point past the file.
-                ensure!(offset < self.file.stat().size as usize, XIo);
+                ensure!(offset < self.file.stat()?.size as usize, XIo);
 
                 // We don't support holes so we always jump to `offset`.
                 *guard = offset;
             }
             Whence::Hole => {
-                let size = usize::try_from(self.file.stat().size)?;
+                let size = usize::try_from(self.file.stat()?.size)?;
 
                 // Ensure that `offset` doesn't point past the file.
                 ensure!(offset < size, XIo);
@@ -197,7 +197,7 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         self.file.update_times(ctime, atime, mtime);
     }
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         self.file.stat()
     }
 
@@ -284,7 +284,7 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.update_times(ctime, atime, mtime);
     }
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         self.file.stat()
     }
 
@@ -332,7 +332,7 @@ impl OpenFileDescription for AppendFileFileDescription {
         self.file.update_times(ctime, atime, mtime);
     }
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         self.file.stat()
     }
 
@@ -441,7 +441,7 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         self.file.update_times(ctime, atime, mtime);
     }
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         self.file.stat()
     }
 

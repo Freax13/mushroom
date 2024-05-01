@@ -56,8 +56,8 @@ impl OpenFileDescription for Epoll {
     }
 
     #[inline]
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -71,7 +71,7 @@ impl OpenFileDescription for Epoll {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {

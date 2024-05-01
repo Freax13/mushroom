@@ -38,11 +38,11 @@ struct FdFsRoot {
 impl INode for FdFsRoot {
     dir_impls!();
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         let mode = *self.mode.lock();
         let mode = FileTypeAndMode::new(FileType::Dir, mode);
 
-        Stat {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -56,7 +56,7 @@ impl INode for FdFsRoot {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -167,8 +167,8 @@ impl FdINode {
 }
 
 impl INode for FdINode {
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -182,7 +182,7 @@ impl INode for FdINode {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {

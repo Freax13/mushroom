@@ -296,7 +296,7 @@ fn stat(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_and_resolve_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -314,7 +314,7 @@ fn stat64(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_and_resolve_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
     let stat64 = Stat64::from(stat);
 
     virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
@@ -331,7 +331,7 @@ fn fstat(
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let stat = fd.stat();
+    let stat = fd.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -350,7 +350,7 @@ fn lstat(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -368,7 +368,7 @@ fn lstat64(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     let stat64 = Stat64::from(stat);
     virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
@@ -1336,7 +1336,7 @@ async fn execve(
     // Open the executable.
     let cwd = thread.lock().cwd.clone();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
-    ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
+    ensure!(node.mode()?.contains(FileMode::EXECUTE), Acces);
     let file = node.open(OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
@@ -2106,8 +2106,7 @@ fn openat(
         };
 
         if flags.contains(OpenFlags::DIRECTORY) {
-            let stat = node.stat();
-            ensure!(stat.mode.ty() == FileType::Dir, NotDir);
+            ensure!(node.ty()? == FileType::Dir, NotDir);
         }
 
         let path_fd = PathFd::new(node);
@@ -2224,10 +2223,10 @@ fn newfstatat(
         let pathname = virtual_memory.read(pathname.cast::<u8>())?;
         if pathname == 0 {
             let stat = if dfd == FdNum::CWD {
-                thread.cwd.stat()
+                thread.cwd.stat()?
             } else {
                 let fd = fdtable.get(dfd)?;
-                fd.stat()
+                fd.stat()?
             };
 
             virtual_memory.write_with_abi(statbuf, stat, abi)?;
@@ -2250,7 +2249,7 @@ fn newfstatat(
     } else {
         lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?
     };
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -2421,7 +2420,7 @@ fn faccessat(
     let pathname = virtual_memory.read(pathname)?;
 
     let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
     let file_mode = stat.mode.mode();
 
     let groups = {

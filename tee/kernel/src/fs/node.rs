@@ -55,15 +55,15 @@ pub fn new_dev() -> u64 {
 pub type DynINode = Arc<dyn INode>;
 
 pub trait INode: Any + Send + Sync + 'static {
-    fn ty(&self) -> FileType {
-        self.stat().mode.ty()
+    fn ty(&self) -> Result<FileType> {
+        self.stat().map(|stat| stat.mode.ty())
     }
-    fn stat(&self) -> Stat;
+    fn stat(&self) -> Result<Stat>;
 
     fn open(&self, flags: OpenFlags) -> Result<FileDescriptor>;
 
-    fn mode(&self) -> FileMode {
-        self.stat().mode.mode()
+    fn mode(&self) -> Result<FileMode> {
+        self.stat().map(|stat| stat.mode.mode())
     }
 
     fn set_mode(&self, mode: FileMode);
@@ -264,7 +264,7 @@ fn lookup_node_with_parent(
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
                 PathSegment::Empty | PathSegment::Dot => {
                     // Make sure that the node is a directory.
-                    ensure!(node.stat().mode.ty() == FileType::Dir, NotDir);
+                    ensure!(node.ty()? == FileType::Dir, NotDir);
                     Ok((start_dir, node))
                 }
                 PathSegment::DotDot => {
@@ -320,7 +320,7 @@ fn find_parent<'a>(
     )?;
 
     // Make sure that the parent is a directory.
-    ensure!(parent.stat().mode.ty() == FileType::Dir, NotDir);
+    ensure!(parent.ty()? == FileType::Dir, NotDir);
 
     Ok((parent, segment))
 }
@@ -345,7 +345,7 @@ pub fn create_file(
         match dir.create_file(file_name.into_owned(), mode)? {
             Ok(file) => return Ok(file),
             Err(existing) => {
-                let stat = existing.stat();
+                let stat = existing.stat()?;
 
                 // If the node is a symlink start over with the destination
                 // path.

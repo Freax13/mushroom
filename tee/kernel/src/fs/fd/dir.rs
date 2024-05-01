@@ -33,7 +33,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.dir.update_times(ctime, atime, mtime);
     }
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         self.dir.stat()
     }
 

@@ -37,8 +37,8 @@ impl OpenFileDescription for Output {
         self.flags
     }
 
-    fn stat(&self) -> Stat {
-        self.stat
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.stat)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

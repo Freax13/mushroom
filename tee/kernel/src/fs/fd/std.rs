@@ -24,8 +24,8 @@ impl OpenFileDescription for Stdin {
         OpenFlags::empty()
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -39,7 +39,7 @@ impl OpenFileDescription for Stdin {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -68,8 +68,8 @@ impl OpenFileDescription for Stdout {
         Ok(buf.len())
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -83,7 +83,7 @@ impl OpenFileDescription for Stdout {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -112,8 +112,8 @@ impl OpenFileDescription for Stderr {
         Ok(buf.len())
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -127,7 +127,7 @@ impl OpenFileDescription for Stderr {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {

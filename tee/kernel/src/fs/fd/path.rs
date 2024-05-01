@@ -21,7 +21,7 @@ impl OpenFileDescription for PathFd {
         OpenFlags::empty()
     }
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         self.node.stat()
     }
 
