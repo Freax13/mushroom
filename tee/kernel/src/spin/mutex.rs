@@ -1,5 +1,6 @@
 use core::{
     cell::UnsafeCell,
+    cmp,
     num::Wrapping,
     ops::{Deref, DerefMut},
     panic::Location,
@@ -64,6 +65,30 @@ impl<T> Mutex<T> {
     #[inline]
     pub fn get_mut(&mut self) -> &mut T {
         self.cell.get_mut()
+    }
+
+    /// Lock two mutexes. This method avoids deadlocks with other threads
+    /// trying to acquire the same Mutexes.
+    pub fn lock_two<'a>(&'a self, other: &'a Self) -> (MutexGuard<'a, T>, MutexGuard<'a, T>) {
+        // Compare the pointers of the mutexes to get a determinstic ordering.
+        let self_ptr = self as *const Self;
+        let other_ptr = other as *const Self;
+        let cmp = self_ptr.cmp(&other_ptr);
+
+        // Lock the mutex with the lower address first.
+        match cmp {
+            cmp::Ordering::Less => {
+                let self_guard = self.lock();
+                let other_guard = other.lock();
+                (self_guard, other_guard)
+            }
+            cmp::Ordering::Equal => panic!("can't lock the same Mutex twice"),
+            cmp::Ordering::Greater => {
+                let other_guard = other.lock();
+                let self_guard = self.lock();
+                (self_guard, other_guard)
+            }
+        }
     }
 }
 
