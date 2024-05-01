@@ -4,7 +4,7 @@ use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
 use bit_field::BitArray;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use futures::{
-    future::{select, Either, Fuse},
+    future::{self, Either, Fuse},
     select_biased,
     stream::FuturesUnordered,
     FutureExt, StreamExt,
@@ -33,8 +33,8 @@ use crate::{
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{
-            ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, Pollfd, Resource, SpliceFlags,
-            Timeval, UserDesc,
+            ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, PSelectSigsetArg, Pollfd, Resource,
+            SpliceFlags, Timeval, UserDesc,
         },
     },
 };
@@ -124,6 +124,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysWritev);
     handlers.register(SysAccess);
     handlers.register(SysPipe);
+    handlers.register(SysSelect);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
@@ -784,6 +785,164 @@ fn pipe(
     pipefd: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
     pipe2(virtual_memory, fdtable, pipefd, Pipe2Flags::empty())
+}
+
+#[syscall(i386 = 82, amd64 = 23, interruptable)]
+async fn select(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    numfds: i64,
+    readfds: Pointer<FdSet>,
+    writefds: Pointer<FdSet>,
+    exceptfds: Pointer<FdSet>,
+    timeout: Pointer<Timeval>,
+) -> SyscallResult {
+    let timeout = if !timeout.is_null() {
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        Some(Timespec::from(timeout))
+    } else {
+        None
+    };
+    select_impl(
+        virtual_memory,
+        fdtable,
+        numfds,
+        readfds,
+        writefds,
+        exceptfds,
+        timeout,
+    )
+    .await
+}
+
+async fn select_impl(
+    virtual_memory: Arc<VirtualMemory>,
+    fdtable: Arc<FileDescriptorTable>,
+    numfds: i64,
+    readfds: Pointer<FdSet>,
+    writefds: Pointer<FdSet>,
+    exceptfds: Pointer<FdSet>,
+    timeout: Option<Timespec>,
+) -> SyscallResult {
+    let numfds = usize::try_from(numfds)?;
+
+    let req_readfds = if !readfds.is_null() {
+        let mut req_readfds = vec![0; numfds.div_ceil(8)];
+        virtual_memory.read_bytes(readfds.get(), &mut req_readfds)?;
+        Some(req_readfds)
+    } else {
+        None
+    };
+    let req_writefds = if !writefds.is_null() {
+        let mut req_writefds = vec![0; numfds.div_ceil(8)];
+        virtual_memory.read_bytes(writefds.get(), &mut req_writefds)?;
+        Some(req_writefds)
+    } else {
+        None
+    };
+    let req_exceptfds = if !exceptfds.is_null() {
+        let mut req_exceptfds = vec![0; numfds.div_ceil(8)];
+        virtual_memory.read_bytes(exceptfds.get(), &mut req_exceptfds)?;
+        Some(req_exceptfds)
+    } else {
+        None
+    };
+
+    let mut result_readfds = req_readfds
+        .as_ref()
+        .map(|req_readfds| vec![0; req_readfds.len()]);
+    let mut result_writefds = req_writefds
+        .as_ref()
+        .map(|req_writefds| vec![0; req_writefds.len()]);
+    let result_exceptfds = req_exceptfds
+        .as_ref()
+        .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
+
+    let deadline = timeout.map(|timeout| now() + timeout);
+    let mut futures = FuturesUnordered::new();
+
+    let set = loop {
+        futures.clear();
+
+        let mut set = 0;
+
+        for i in 0..numfds {
+            let read = req_readfds
+                .as_ref()
+                .map_or(false, |readfds| readfds.get_bit(i));
+            let write = req_writefds
+                .as_ref()
+                .map_or(false, |writefds| writefds.get_bit(i));
+            let except = req_exceptfds
+                .as_ref()
+                .map_or(false, |exceptfds| exceptfds.get_bit(i));
+
+            if !read && !write && !except {
+                continue;
+            }
+
+            let mut events = Events::empty();
+            events.set(Events::READ, read);
+            events.set(Events::WRITE, write);
+
+            if events.is_empty() {
+                continue;
+            }
+
+            let fd = fdtable.get(FdNum::new(i as i32))?;
+            let ready_events = fd.poll_ready(events);
+
+            if ready_events.contains(Events::READ) {
+                result_readfds.as_mut().unwrap().set_bit(i, true);
+                set += 1;
+            }
+            if ready_events.contains(Events::WRITE) {
+                result_writefds.as_mut().unwrap().set_bit(i, true);
+                set += 1;
+            }
+
+            futures.push(async move { fd.ready(events).await });
+        }
+
+        if set != 0 {
+            break set;
+        }
+
+        if let Some(deadline) = deadline {
+            // If there are no fds to select from, just sleep and return.
+            if futures.is_empty() {
+                sleep_until(deadline).await;
+                break 0;
+            }
+
+            let sleep_until = pin!(sleep_until(deadline));
+            let res = future::select(futures.next(), sleep_until).await;
+
+            // Break out of the loop if the timeout expired.
+            if matches!(res, Either::Right(_)) {
+                break 0;
+            }
+        } else {
+            // If there are no fds to select from, just return.
+            let res = futures.next().await;
+            if res.is_none() {
+                break 0;
+            }
+        }
+    };
+
+    if let Some(result_readfds) = result_readfds {
+        virtual_memory.write_bytes(readfds.get(), &result_readfds)?;
+    }
+    if let Some(result_writefds) = result_writefds {
+        virtual_memory.write_bytes(writefds.get(), &result_writefds)?;
+    }
+    if let Some(result_exceptfds) = result_exceptfds {
+        virtual_memory.write_bytes(exceptfds.get(), &result_exceptfds)?;
+    }
+
+    Ok(set)
 }
 
 #[syscall(i386 = 219, amd64 = 28)]
@@ -2293,6 +2452,7 @@ fn faccessat(
 
 #[syscall(i386 = 308, amd64 = 270)]
 async fn pselect6(
+    thread: Arc<Thread>,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -2301,129 +2461,50 @@ async fn pselect6(
     writefds: Pointer<FdSet>,
     exceptfds: Pointer<FdSet>,
     timeout: Pointer<Timespec>,
-    sigmask: Pointer<Sigset>,
+    sigmask: Pointer<PSelectSigsetArg>,
 ) -> SyscallResult {
-    // TODO: Implement the signal mask related features.
+    let mut sigmask = if !sigmask.is_null() {
+        let sigmask = virtual_memory.read_with_abi(sigmask, abi)?;
+        Some(virtual_memory.read_with_abi(sigmask.ss, abi)?)
+    } else {
+        None
+    };
 
-    let numfds = usize::try_from(numfds)?;
+    // Update the signal mask.
+    if let Some(sigmask) = sigmask.as_mut() {
+        let mut guard = thread.lock();
+        core::mem::swap(sigmask, &mut guard.sigmask);
+    }
 
-    let req_readfds = if !readfds.is_null() {
-        let mut req_readfds = vec![0; numfds.div_ceil(8)];
-        virtual_memory.read_bytes(readfds.get(), &mut req_readfds)?;
-        Some(req_readfds)
-    } else {
-        None
-    };
-    let req_writefds = if !writefds.is_null() {
-        let mut req_writefds = vec![0; numfds.div_ceil(8)];
-        virtual_memory.read_bytes(writefds.get(), &mut req_writefds)?;
-        Some(req_writefds)
-    } else {
-        None
-    };
-    let req_exceptfds = if !exceptfds.is_null() {
-        let mut req_exceptfds = vec![0; numfds.div_ceil(8)];
-        virtual_memory.read_bytes(exceptfds.get(), &mut req_exceptfds)?;
-        Some(req_exceptfds)
-    } else {
-        None
-    };
     let timeout = if !timeout.is_null() {
-        Some(virtual_memory.read_with_abi(timeout, abi)?)
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        Some(timeout)
     } else {
         None
     };
 
-    let mut result_readfds = req_readfds
-        .as_ref()
-        .map(|req_readfds| vec![0; req_readfds.len()]);
-    let mut result_writefds = req_writefds
-        .as_ref()
-        .map(|req_writefds| vec![0; req_writefds.len()]);
-    let result_exceptfds = req_exceptfds
-        .as_ref()
-        .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
+    let res = thread
+        .interruptable(
+            select_impl(
+                virtual_memory,
+                fdtable,
+                numfds,
+                readfds,
+                writefds,
+                exceptfds,
+                timeout,
+            ),
+            false,
+        )
+        .await;
 
-    let deadline = timeout.map(|timeout| now() + timeout);
-    let mut futures = FuturesUnordered::new();
-
-    let set = loop {
-        futures.clear();
-
-        let mut set = 0;
-
-        for i in 0..numfds {
-            let read = req_readfds
-                .as_ref()
-                .map_or(false, |readfds| readfds.get_bit(i));
-            let write = req_writefds
-                .as_ref()
-                .map_or(false, |writefds| writefds.get_bit(i));
-            let except = req_exceptfds
-                .as_ref()
-                .map_or(false, |exceptfds| exceptfds.get_bit(i));
-
-            if !read && !write && !except {
-                continue;
-            }
-
-            let mut events = Events::empty();
-            events.set(Events::READ, read);
-            events.set(Events::WRITE, write);
-
-            let fd = fdtable.get(FdNum::new(i as i32))?;
-            let ready_events = fd.poll_ready(events);
-
-            if ready_events.contains(Events::READ) {
-                result_readfds.as_mut().unwrap().set_bit(i, true);
-                set += 1;
-            }
-            if ready_events.contains(Events::WRITE) {
-                result_writefds.as_mut().unwrap().set_bit(i, true);
-                set += 1;
-            }
-
-            futures.push(async move { fd.ready(events).await });
-        }
-
-        if set != 0 {
-            break set;
-        }
-
-        if let Some(deadline) = deadline {
-            // If there are no fds to select from, just sleep and return.
-            if futures.is_empty() {
-                sleep_until(deadline).await;
-                break 0;
-            }
-
-            let sleep_until = pin!(sleep_until(deadline));
-            let res = select(futures.next(), sleep_until).await;
-
-            // Break out of the loop if the timeout expired.
-            if matches!(res, Either::Right(_)) {
-                break 0;
-            }
-        } else {
-            // If there are no fds to select from, just return.
-            let res = futures.next().await;
-            if res.is_none() {
-                break 0;
-            }
-        }
-    };
-
-    if let Some(result_readfds) = result_readfds {
-        virtual_memory.write_bytes(readfds.get(), &result_readfds)?;
-    }
-    if let Some(result_writefds) = result_writefds {
-        virtual_memory.write_bytes(writefds.get(), &result_writefds)?;
-    }
-    if let Some(result_exceptfds) = result_exceptfds {
-        virtual_memory.write_bytes(exceptfds.get(), &result_exceptfds)?;
+    // Restore the signal mask.
+    if let Some(sigmask) = sigmask.as_mut() {
+        let mut guard = thread.lock();
+        core::mem::swap(sigmask, &mut guard.sigmask);
     }
 
-    Ok(set)
+    res
 }
 
 #[syscall(i386 = 313, amd64 = 275)]

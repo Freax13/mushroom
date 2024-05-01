@@ -12,7 +12,7 @@ use bytemuck::{
     bytes_of, bytes_of_mut, cast, checked::try_pod_read_unaligned, CheckedBitPattern, NoUninit,
     Pod, Zeroable,
 };
-use usize_conversions::FromUsize;
+use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
@@ -32,8 +32,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, Pointer, RLimit, Stat, Time, Timespec,
-    Timeval, WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Stat, Time,
+    Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1590,3 +1590,41 @@ impl From<RLimit> for RLimit64 {
 impl Pointee for super::RLimit64 {}
 
 impl PrimitivePointee for super::RLimit64 {}
+impl Pointee for PSelectSigsetArg {}
+
+impl AbiDependentPointee for PSelectSigsetArg {
+    type I386 = PSelectSigsetArg32;
+    type Amd64 = PSelectSigsetArg64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct PSelectSigsetArg32 {
+    ss: Pointer32<Sigset>,
+    ss_len: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct PSelectSigsetArg64 {
+    ss: Pointer64<Sigset>,
+    ss_len: u64,
+}
+
+impl From<PSelectSigsetArg32> for PSelectSigsetArg {
+    fn from(value: PSelectSigsetArg32) -> Self {
+        Self {
+            ss: value.ss.into(),
+            ss_len: usize_from(value.ss_len),
+        }
+    }
+}
+
+impl From<PSelectSigsetArg64> for PSelectSigsetArg {
+    fn from(value: PSelectSigsetArg64) -> Self {
+        Self {
+            ss: value.ss.into(),
+            ss_len: usize_from(value.ss_len),
+        }
+    }
+}
