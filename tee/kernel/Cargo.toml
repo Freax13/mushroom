@@ -21,6 +21,7 @@ crossbeam-queue = { version = "0.3.11", default-features = false, features = ["a
 crossbeam-utils = { version = "0.8.19", default-features = false }
 futures = { version = "0.3.30", default-features = false, features = ["async-await", "alloc"] }
 kernel-macros.workspace = true
+linkme = "0.3.25"
 log = { version = "0.4.21", default-features = false }
 profiler-types = { workspace = true, optional = true }
 usize_conversions = "0.2.0"

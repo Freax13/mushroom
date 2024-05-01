@@ -1,134 +1,14 @@
 use crate::{
-    error::{ensure, err},
-    fs::{
-        node::{DirEntryName, DynINode, FileAccessContext, INode},
-        path::{FileName, Path},
-    },
+    error::ensure,
+    fs::node::{directory::Directory, DynINode, FileAccessContext},
     spin::mutex::Mutex,
-    user::process::syscall::args::{FileMode, OpenFlags, Timespec},
+    user::process::syscall::args::{OpenFlags, Timespec},
 };
-use alloc::{
-    sync::{Arc, Weak},
-    vec::Vec,
-};
+use alloc::{sync::Arc, vec::Vec};
 
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
 use super::{Events, FileDescriptor, OpenFileDescription};
-
-#[macro_export]
-macro_rules! dir_impls {
-    () => {
-        fn parent(&self) -> Result<DynINode> {
-            Directory::parent(self)
-        }
-
-        fn set_parent(&self, parent: Weak<dyn INode>) {
-            Directory::set_parent(self, parent)
-        }
-
-        fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
-            Directory::path(self, ctx)
-        }
-
-        fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
-            Directory::get_node(self, file_name, ctx)
-        }
-
-        fn create_file(
-            &self,
-            file_name: FileName<'static>,
-            mode: FileMode,
-        ) -> Result<Result<DynINode, DynINode>> {
-            Directory::create_file(self, file_name, mode)
-        }
-
-        fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
-            Directory::create_dir(self, file_name, mode)
-        }
-
-        fn create_link(
-            &self,
-            file_name: FileName<'static>,
-            target: Path,
-            create_new: bool,
-        ) -> Result<DynINode> {
-            Directory::create_link(self, file_name, target, create_new)
-        }
-
-        fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
-            Directory::hard_link(self, file_name, node)
-        }
-
-        fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-            Ok(Directory::list_entries(self, ctx))
-        }
-
-        fn delete(&self, file_name: FileName<'static>) -> Result<()> {
-            Directory::delete(self, file_name)
-        }
-
-        fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
-            Directory::delete_non_dir(self, file_name)
-        }
-
-        fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
-            Directory::delete_dir(self, file_name)
-        }
-    };
-}
-
-pub trait Directory: INode {
-    fn parent(&self) -> Result<DynINode>;
-    fn set_parent(&self, parent: Weak<dyn INode>);
-    fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
-        let parent = Directory::parent(self)?;
-
-        let stat = self.stat();
-        let parent_stat = parent.stat();
-
-        // If the directory is its own parent, then it's the root.
-        if parent_stat.ino == stat.ino {
-            return Path::new(b"/".to_vec());
-        }
-
-        let mut path = parent.path(ctx)?;
-
-        // Find the directory in its parent.
-        let entries = parent.list_entries(ctx)?;
-        let entry = entries
-            .into_iter()
-            .find(|e| e.ino == stat.ino)
-            .ok_or(err!(NoEnt))?;
-
-        let DirEntryName::FileName(name) = entry.name else {
-            unreachable!()
-        };
-
-        path = path.join_segment(&name);
-
-        Ok(path)
-    }
-    fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode>;
-    /// Atomically create a new file or return the existing node.
-    fn create_file(
-        &self,
-        file_name: FileName<'static>,
-        mode: FileMode,
-    ) -> Result<Result<DynINode, DynINode>>;
-    fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode>;
-    fn create_link(
-        &self,
-        file_name: FileName<'static>,
-        target: Path,
-        create_new: bool,
-    ) -> Result<DynINode>;
-    fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()>;
-    fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry>;
-    fn delete(&self, file_name: FileName<'static>) -> Result<()>;
-    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
-    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
-}
 
 pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
     Ok(FileDescriptor::from(DirectoryFileDescription {

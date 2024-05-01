@@ -39,6 +39,13 @@ SECTIONS {
         __recoverable_start = .;
         *(.recoverable .recoverable.*)
         __recoverable_end = .;
+
+        __start_linkme_REGISTRATIONS = .;
+        KEEP(*(linkme_REGISTRATIONS linkme_REGISTRATIONS.*))
+        __stop_linkme_REGISTRATIONS = .;
+        __start_linkm2_REGISTRATIONS = .;
+        KEEP(*(linkm2_REGISTRATIONS linkm2_REGISTRATIONS.*))
+        __stop_linkm2_REGISTRATIONS = .;
     } :rodata
 
     .data (0xffff800002000000) :

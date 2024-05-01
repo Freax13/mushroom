@@ -705,6 +705,12 @@ impl PendingSignals {
     }
 }
 
+impl Default for PendingSignals {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SigInfo {
     pub signal: Signal,
@@ -808,5 +814,11 @@ impl SignalHandlerTable {
 
     pub fn set(&self, signal: Signal, sigaction: Sigaction) -> Sigaction {
         core::mem::replace(&mut self.sigactions.lock()[signal.get()], sigaction)
+    }
+}
+
+impl Default for SignalHandlerTable {
+    fn default() -> Self {
+        Self::new()
     }
 }

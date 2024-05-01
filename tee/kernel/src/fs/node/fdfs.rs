@@ -3,15 +3,14 @@ use alloc::{
     vec::Vec,
 };
 
-use super::{new_ino, DirEntry, DynINode, FileAccessContext, INode};
+use super::{
+    directory::{dir_impls, Directory, MountLocation},
+    new_ino, DirEntry, DynINode, FileAccessContext, INode,
+};
 use crate::{
-    dir_impls,
     error::{bail, err, Result},
     fs::{
-        fd::{
-            dir::{open_dir, Directory},
-            FileDescriptor,
-        },
+        fd::{dir::open_dir, FileDescriptor},
         path::{FileName, Path},
     },
     spin::mutex::Mutex,
@@ -20,11 +19,11 @@ use crate::{
     },
 };
 
-pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> DynINode {
+pub fn new(location: MountLocation, mode: FileMode) -> DynINode {
     Arc::new_cyclic(|this| FdFsRoot {
         ino: new_ino(),
         this: this.clone(),
-        parent: Mutex::new(parent),
+        location,
         mode: Mutex::new(mode),
     })
 }
@@ -32,7 +31,7 @@ pub fn new(parent: Weak<dyn Directory>, mode: FileMode) -> DynINode {
 struct FdFsRoot {
     ino: u64,
     this: Weak<Self>,
-    parent: Mutex<Weak<dyn INode>>,
+    location: MountLocation,
     mode: Mutex<FileMode>,
 }
 
@@ -76,12 +75,8 @@ impl INode for FdFsRoot {
 }
 
 impl Directory for FdFsRoot {
-    fn parent(&self) -> Result<DynINode> {
-        self.parent.lock().clone().upgrade().ok_or(err!(NoEnt))
-    }
-
-    fn set_parent(&self, parent: Weak<dyn INode>) {
-        *self.parent.lock() = parent;
+    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        self.location.get()
     }
 
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
@@ -113,7 +108,12 @@ impl Directory for FdFsRoot {
         bail!(NoEnt)
     }
 
-    fn hard_link(&self, _file_name: FileName<'static>, _node: DynINode) -> Result<()> {
+    fn create_char_dev(
+        &self,
+        _file_name: FileName<'static>,
+        _major: u16,
+        _minor: u8,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -130,6 +130,26 @@ impl Directory for FdFsRoot {
     }
 
     fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn rename(
+        &self,
+        _oldname: FileName<'static>,
+        _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn hard_link(
+        &self,
+        _oldname: FileName<'static>,
+        _symlink_follow: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
 }
