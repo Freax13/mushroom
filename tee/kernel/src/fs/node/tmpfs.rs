@@ -222,7 +222,7 @@ impl Directory for TmpFsDir {
         }
     }
 
-    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Vec<DirEntry> {
+    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let parent_ino = self
             .location
             .get()
@@ -255,7 +255,7 @@ impl Directory for TmpFsDir {
                 name: DirEntryName::from(name.clone()),
             })
         }
-        entries
+        Ok(entries)
     }
 
     fn delete(&self, file_name: FileName<'static>) -> Result<()> {

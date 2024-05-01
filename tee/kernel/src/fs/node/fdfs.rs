@@ -117,8 +117,8 @@ impl Directory for FdFsRoot {
         bail!(NoEnt)
     }
 
-    fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry> {
-        ctx.fdtable.list_entries()
+    fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
+        Ok(ctx.fdtable.list_entries())
     }
 
     fn delete(&self, _file_name: FileName<'static>) -> Result<()> {

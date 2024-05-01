@@ -47,7 +47,10 @@ impl OpenFileDescription for DirectoryFileDescription {
         ctx: &mut FileAccessContext,
     ) -> Result<Vec<DirEntry>> {
         let mut guard = self.entries.lock();
-        let entries = guard.get_or_insert_with(|| Directory::list_entries(&*self.dir, ctx));
+        if guard.is_none() {
+            *guard = Some(Directory::list_entries(&*self.dir, ctx)?);
+        }
+        let entries = guard.as_mut().unwrap();
 
         let mut ret = Vec::new();
         while let Some(last) = entries.last() {

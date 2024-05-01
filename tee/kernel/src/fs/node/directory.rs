@@ -60,7 +60,7 @@ macro_rules! dir_impls {
         }
 
         fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-            Ok(Directory::list_entries(self, ctx))
+            Directory::list_entries(self, ctx)
         }
 
         fn delete(&self, file_name: FileName<'static>) -> Result<()> {
@@ -129,7 +129,7 @@ pub trait Directory: INode {
         major: u16,
         minor: u8,
     ) -> Result<DynINode>;
-    fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry>;
+    fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;
     fn delete(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
