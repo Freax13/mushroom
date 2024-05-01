@@ -14,7 +14,10 @@ use x86_64::VirtAddr;
 use crate::{
     error::{bail, ensure, err, Result},
     fs::fd::{Events, FdFlags, FileDescriptorTable},
-    user::process::{memory::VirtualMemory, thread::ThreadGuard},
+    user::process::{
+        memory::VirtualMemory,
+        thread::{Sigset, ThreadGuard},
+    },
 };
 
 use self::pointee::{Pointee, PrimitivePointee, Timespec32};
@@ -1130,3 +1133,9 @@ impl Signal {
 pub struct FdSet {}
 
 impl Pointee for FdSet {}
+
+#[derive(Clone, Copy)]
+pub struct PSelectSigsetArg {
+    pub ss: Pointer<Sigset>,
+    pub ss_len: usize,
+}
