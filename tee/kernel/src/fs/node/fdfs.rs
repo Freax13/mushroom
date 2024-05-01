@@ -117,10 +117,6 @@ impl Directory for FdFsRoot {
         bail!(NoEnt)
     }
 
-    fn hard_link(&self, _file_name: FileName<'static>, _node: DynINode) -> Result<()> {
-        bail!(NoEnt)
-    }
-
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry> {
         ctx.fdtable.list_entries()
     }
@@ -134,6 +130,26 @@ impl Directory for FdFsRoot {
     }
 
     fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn rename(
+        &self,
+        _oldname: FileName<'static>,
+        _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn hard_link(
+        &self,
+        _oldname: FileName<'static>,
+        _symlink_follow: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
 }

@@ -1,4 +1,4 @@
-use core::ops::Deref;
+use core::{any::Any, ops::Deref};
 
 use crate::{
     char_dev,
@@ -33,6 +33,7 @@ use crate::{
 };
 
 pub struct TmpFsDir {
+    dev: u64,
     ino: u64,
     this: Weak<Self>,
     location: Location<Self>,
@@ -48,10 +49,11 @@ struct TmpFsDirInternal {
 }
 
 impl TmpFsDir {
-    pub fn new(location: impl Into<Location<Self>>, mode: FileMode) -> Arc<Self> {
+    pub fn new(dev: u64, location: impl Into<Location<Self>>, mode: FileMode) -> Arc<Self> {
         let now = now();
 
         Arc::new_cyclic(|this_weak| Self {
+            dev,
             ino: new_ino(),
             this: this_weak.clone(),
             location: location.into(),
@@ -156,7 +158,7 @@ impl Directory for TmpFsDir {
         match entry {
             Entry::Vacant(entry) => {
                 let parent = DirectoryLocation::new(self.this.clone(), file_name);
-                let dir = TmpFsDir::new(parent, mode);
+                let dir = TmpFsDir::new(self.dev, parent, mode);
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 Ok(dir)
             }
@@ -220,14 +222,6 @@ impl Directory for TmpFsDir {
         }
     }
 
-    fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
-        self.internal
-            .lock()
-            .items
-            .insert(file_name.clone(), TmpFsDirEntry::Mount(node));
-        Ok(())
-    }
-
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Vec<DirEntry> {
         let parent_ino = self
             .location
@@ -288,6 +282,176 @@ impl Directory for TmpFsDir {
         ensure!(entry.get().ty() == FileType::Dir, NotDir);
         entry.remove();
         Ok(())
+    }
+
+    fn rename(
+        &self,
+        oldname: FileName<'static>,
+        check_is_dir: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()> {
+        let new_dir =
+            Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
+        ensure!(new_dir.dev == self.dev, XDev);
+
+        fn can_rename(
+            old: &TmpFsDirEntry,
+            new: Option<&TmpFsDirEntry>,
+            check_is_dir: bool,
+        ) -> Result<()> {
+            ensure!(
+                !check_is_dir || matches!(old, TmpFsDirEntry::Dir(_)),
+                NotDir
+            );
+
+            if let Some(new) = new {
+                match (old, new) {
+                    (
+                        TmpFsDirEntry::File(_)
+                        | TmpFsDirEntry::Symlink(_)
+                        | TmpFsDirEntry::CharDev(_),
+                        TmpFsDirEntry::File(_)
+                        | TmpFsDirEntry::Symlink(_)
+                        | TmpFsDirEntry::CharDev(_),
+                    ) => {}
+                    (
+                        TmpFsDirEntry::File(_)
+                        | TmpFsDirEntry::Symlink(_)
+                        | TmpFsDirEntry::CharDev(_),
+                        TmpFsDirEntry::Dir(_),
+                    ) => {
+                        bail!(IsDir)
+                    }
+                    (
+                        TmpFsDirEntry::Dir(_),
+                        TmpFsDirEntry::File(_)
+                        | TmpFsDirEntry::Symlink(_)
+                        | TmpFsDirEntry::CharDev(_),
+                    ) => bail!(NotDir),
+                    (TmpFsDirEntry::Dir(_), TmpFsDirEntry::Dir(new)) => {
+                        let guard = new.internal.lock();
+                        ensure!(guard.items.is_empty(), NotEmpty);
+                    }
+                    (TmpFsDirEntry::Mount(_), _) | (_, TmpFsDirEntry::Mount(_)) => bail!(Busy),
+                }
+            }
+            Ok(())
+        }
+
+        if core::ptr::eq(self, &*new_dir) {
+            if newname == oldname {
+                let guard = self.internal.lock();
+
+                // Look up the entries.
+                let Some(old) = guard.items.get(&oldname) else {
+                    bail!(NoEnt);
+                };
+
+                // Make sure that we can rename the old entry over the missing entry.
+                can_rename(old, None, check_is_dir)?;
+
+                Ok(())
+            } else {
+                let mut guard = self.internal.lock();
+
+                // Look up the entries.
+                let Some(old) = guard.items.get(&oldname) else {
+                    bail!(NoEnt);
+                };
+                let new = guard.items.get(&newname);
+
+                // Make sure that we can rename the old entry over the new entry.
+                can_rename(old, new, check_is_dir)?;
+
+                // Do the rename.
+                let entry = guard.items.remove(&oldname).unwrap();
+                guard.items.insert(newname, entry);
+
+                Ok(())
+            }
+        } else {
+            let (mut old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+
+            // Look up the entries.
+            let Entry::Occupied(old_entry) = old_guard.items.entry(oldname) else {
+                bail!(NoEnt);
+            };
+            let new_entry = new_guard.items.entry(newname);
+            let new = match &new_entry {
+                Entry::Vacant(_) => None,
+                Entry::Occupied(entry) => Some(entry.get()),
+            };
+
+            // Make sure that we can rename the old entry over the new entry.
+            can_rename(old_entry.get(), new, check_is_dir)?;
+
+            // Do the rename.
+            match new_entry {
+                Entry::Vacant(entry) => {
+                    entry.insert(old_entry.remove());
+                }
+                Entry::Occupied(mut entry) => {
+                    entry.insert(old_entry.remove());
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    fn hard_link(
+        &self,
+        oldname: FileName<'static>,
+        follow_symlink: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
+        let new_dir =
+            Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
+        ensure!(new_dir.dev == self.dev, XDev);
+
+        if core::ptr::eq(self, &*new_dir) {
+            let mut guard = self.internal.lock();
+            let entry = guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
+
+            if follow_symlink {
+                if let TmpFsDirEntry::Symlink(symlink) = entry {
+                    return Ok(Some(symlink.target.clone()));
+                }
+            }
+            if let TmpFsDirEntry::Mount(_) = entry {
+                bail!(Busy);
+            }
+
+            match guard.items.entry(newname) {
+                Entry::Vacant(e) => {
+                    e.insert(entry);
+                }
+                Entry::Occupied(_) => bail!(Exist),
+            }
+        } else {
+            let (old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+            let entry = old_guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
+
+            if follow_symlink {
+                if let TmpFsDirEntry::Symlink(symlink) = entry {
+                    return Ok(Some(symlink.target.clone()));
+                }
+            }
+            if let TmpFsDirEntry::Mount(_) = entry {
+                bail!(Busy);
+            }
+
+            match new_guard.items.entry(newname) {
+                Entry::Vacant(e) => {
+                    e.insert(entry);
+                }
+                Entry::Occupied(_) => bail!(Exist),
+            }
+        }
+
+        Ok(None)
     }
 }
 

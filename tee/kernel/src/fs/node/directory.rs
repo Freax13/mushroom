@@ -59,10 +59,6 @@ macro_rules! dir_impls {
             Directory::create_char_dev(self, file_name, major, minor)
         }
 
-        fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
-            Directory::hard_link(self, file_name, node)
-        }
-
         fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
             Ok(Directory::list_entries(self, ctx))
         }
@@ -77,6 +73,26 @@ macro_rules! dir_impls {
 
         fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
             Directory::delete_dir(self, file_name)
+        }
+
+        fn rename(
+            &self,
+            oldname: FileName<'static>,
+            check_is_dir: bool,
+            new_dir: DynINode,
+            newname: FileName<'static>,
+        ) -> Result<()> {
+            Directory::rename(self, oldname, check_is_dir, new_dir, newname)
+        }
+
+        fn hard_link(
+            &self,
+            oldname: FileName<'static>,
+            follow_symlink: bool,
+            new_dir: DynINode,
+            newname: FileName<'static>,
+        ) -> Result<Option<Path>> {
+            Directory::hard_link(self, oldname, follow_symlink, new_dir, newname)
         }
     };
 }
@@ -113,11 +129,24 @@ pub trait Directory: INode {
         major: u16,
         minor: u8,
     ) -> Result<DynINode>;
-    fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()>;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Vec<DirEntry>;
     fn delete(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
+    fn rename(
+        &self,
+        oldname: FileName<'static>,
+        check_is_dir: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()>;
+    fn hard_link(
+        &self,
+        oldname: FileName<'static>,
+        follow_symlink: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<Option<Path>>;
 }
 
 /// The location of a directory in a file system.

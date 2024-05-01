@@ -1,7 +1,10 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::{
+    any::Any,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crate::{
-    error::{bail, ensure, err, ErrorKind},
+    error::{bail, ensure, err},
     spin::lazy::Lazy,
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
@@ -31,17 +34,27 @@ pub mod devtmpfs;
 pub mod fdfs;
 pub mod tmpfs;
 
-pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> =
-    Lazy::new(|| TmpFsDir::new(Location::root(), FileMode::from_bits_truncate(0o755)));
+pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> = Lazy::new(|| {
+    TmpFsDir::new(
+        new_dev(),
+        Location::root(),
+        FileMode::from_bits_truncate(0o755),
+    )
+});
 
 pub fn new_ino() -> u64 {
     static INO_COUNTER: AtomicU64 = AtomicU64::new(1);
     INO_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
+pub fn new_dev() -> u64 {
+    static DEV_COUNTER: AtomicU64 = AtomicU64::new(1);
+    DEV_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 pub type DynINode = Arc<dyn INode>;
 
-pub trait INode: Send + Sync + 'static {
+pub trait INode: Any + Send + Sync + 'static {
     fn ty(&self) -> FileType {
         self.stat().mode.ty()
     }
@@ -114,12 +127,6 @@ pub trait INode: Send + Sync + 'static {
         bail!(NotDir)
     }
 
-    fn hard_link(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
-        let _ = file_name;
-        let _ = node;
-        bail!(NotDir)
-    }
-
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         let _ = file_name;
         let _ = node;
@@ -143,6 +150,34 @@ pub trait INode: Send + Sync + 'static {
 
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let _ = file_name;
+        bail!(NotDir)
+    }
+
+    fn rename(
+        &self,
+        oldname: FileName<'static>,
+        check_is_dir: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()> {
+        let _ = oldname;
+        let _ = check_is_dir;
+        let _ = new_dir;
+        let _ = newname;
+        bail!(NotDir)
+    }
+
+    fn hard_link(
+        &self,
+        oldname: FileName<'static>,
+        follow_symlink: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
+        let _ = oldname;
+        let _ = follow_symlink;
+        let _ = new_dir;
+        let _ = newname;
         bail!(NotDir)
     }
 
@@ -424,24 +459,38 @@ pub fn unlink_dir(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext)
 pub fn hard_link(
     start_dir: DynINode,
     start_path: &Path,
-    target_dir: DynINode,
-    target_path: &Path,
+    mut target_dir: DynINode,
+    mut target_path: Path,
     symlink_follow: bool,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let target_node = if symlink_follow {
-        lookup_and_resolve_node(target_dir, target_path, ctx)?
-    } else {
-        lookup_node(target_dir, target_path, ctx)?
+    let (new_parent, new_filename) = find_parent(start_dir, start_path, ctx)?;
+    let PathSegment::FileName(new_filename) = new_filename else {
+        bail!(Exist);
     };
-    let (parent, filename) = find_parent(start_dir, start_path, ctx)?;
-    match filename {
-        PathSegment::Root => todo!(),
-        PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
-        PathSegment::FileName(filename) => parent.hard_link(filename.into_owned(), target_node),
+    let new_filename = new_filename.into_owned();
+
+    loop {
+        let (old_parent, old_filename) = find_parent(target_dir, &target_path, ctx)?;
+        let PathSegment::FileName(old_filename) = old_filename else {
+            bail!(Exist);
+        };
+
+        let new_path = old_parent.hard_link(
+            old_filename.into_owned(),
+            symlink_follow,
+            new_parent.clone(),
+            new_filename.clone(),
+        )?;
+        if let Some(new_path) = new_path {
+            target_dir = old_parent;
+            target_path = new_path;
+        } else {
+            break;
+        }
     }
+
+    Ok(())
 }
 
 pub fn rename(
@@ -467,36 +516,13 @@ pub fn rename(
         PathSegment::FileName(filename) => filename,
     };
 
-    let old_node = old_parent.get_node(&old_name, ctx)?;
-    let old_stat = old_node.stat();
-
-    // If either path has a trailing slash, ensure that the node is a directory.
-    if old_path.has_trailing_slash() || new_path.has_trailing_slash() {
-        ensure!(old_stat.mode.ty() == FileType::Dir, NotDir);
-    }
-
-    // Check if the node already exists.
-    match new_parent.get_node(&new_name, ctx) {
-        Ok(new_node) => {
-            // Make sure that the new node can be replaced by the old one.
-            let new_stat = new_node.stat();
-            match (old_stat.mode.ty(), new_stat.mode.ty()) {
-                (FileType::Dir, FileType::Dir) => {
-                    ensure!(new_stat.size <= 2, NotEmpty);
-                }
-                (FileType::Dir, _) => bail!(NotDir),
-                (_, FileType::Dir) => bail!(IsDir),
-                _ => {}
-            }
-        }
-        Err(err) if err.kind() == ErrorKind::NoEnt => {}
-        Err(err) => return Err(err),
-    }
-
-    if !Arc::ptr_eq(&old_parent, &new_parent) || new_name != old_name {
-        new_parent.mount(new_name.into_owned(), old_node)?;
-        old_parent.delete(old_name.into_owned())?;
-    }
+    let check_is_dir = old_path.has_trailing_slash() || new_path.has_trailing_slash();
+    old_parent.rename(
+        old_name.into_owned(),
+        check_is_dir,
+        new_parent,
+        new_name.into_owned(),
+    )?;
 
     Ok(())
 }

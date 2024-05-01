@@ -2182,7 +2182,7 @@ fn linkat(
         newdir,
         &newpath,
         olddir,
-        &oldpath,
+        oldpath,
         flags.contains(LinkOptions::SYMLINK_FOLLOW),
         &mut ctx,
     )?;
