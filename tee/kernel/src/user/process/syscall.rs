@@ -124,6 +124,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysWritev);
     handlers.register(SysAccess);
     handlers.register(SysPipe);
+    handlers.register(SysSelect);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
@@ -784,6 +785,35 @@ fn pipe(
     pipefd: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
     pipe2(virtual_memory, fdtable, pipefd, Pipe2Flags::empty())
+}
+
+#[syscall(i386 = 82, amd64 = 23, interruptable)]
+async fn select(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    numfds: i64,
+    readfds: Pointer<FdSet>,
+    writefds: Pointer<FdSet>,
+    exceptfds: Pointer<FdSet>,
+    timeout: Pointer<Timeval>,
+) -> SyscallResult {
+    let timeout = if !timeout.is_null() {
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        Some(Timespec::from(timeout))
+    } else {
+        None
+    };
+    select_impl(
+        virtual_memory,
+        fdtable,
+        numfds,
+        readfds,
+        writefds,
+        exceptfds,
+        timeout,
+    )
+    .await
 }
 
 async fn select_impl(
