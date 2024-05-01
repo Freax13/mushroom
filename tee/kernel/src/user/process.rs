@@ -17,7 +17,7 @@ use crate::{
         INIT,
     },
     rt::{notify::Notify, once::OnceCell},
-    spin::mutex::Mutex,
+    spin::{lazy::Lazy, mutex::Mutex},
     supervisor,
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
 };
@@ -217,7 +217,7 @@ impl Process {
     }
 }
 
-pub fn start_init_process() {
+static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let tid = new_tid();
     assert_eq!(tid, 1);
     let thread = Thread::empty(tid);
@@ -240,5 +240,12 @@ pub fn start_init_process() {
         .unwrap();
     drop(guard);
 
-    thread.spawn();
+    let thread = Arc::new(thread);
+    thread.clone().spawn();
+
+    thread
+});
+
+pub fn start_init_process() {
+    INIT_THREAD.process();
 }

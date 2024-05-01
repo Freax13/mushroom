@@ -121,9 +121,8 @@ impl Thread {
         }
     }
 
-    pub fn spawn(self) {
-        let arc = Arc::new(self);
-        spawn(arc.run());
+    pub fn spawn(self: Arc<Self>) {
+        spawn(self.run());
     }
 
     pub fn empty(tid: u32) -> Self {
