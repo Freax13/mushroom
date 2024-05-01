@@ -1,9 +1,11 @@
 use core::{
     ffi::CStr,
+    iter::from_fn,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use alloc::{
+    collections::VecDeque,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -214,6 +216,24 @@ impl Process {
 
     fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
         self.pending_signals.lock().pop(mask)
+    }
+
+    pub fn find_by_pid(pid: u32) -> Option<Arc<Self>> {
+        Self::all().find(|p| p.pid == pid)
+    }
+
+    pub fn all() -> impl Iterator<Item = Arc<Self>> {
+        INIT_THREAD.process().iter()
+    }
+
+    fn iter(self: &Arc<Self>) -> impl Iterator<Item = Arc<Self>> {
+        let mut queue = VecDeque::new();
+        queue.push_back(self.clone());
+        from_fn(move || {
+            let process = queue.pop_front()?;
+            queue.extend(process.children.lock().iter().cloned());
+            Some(process)
+        })
     }
 }
 
