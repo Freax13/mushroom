@@ -46,7 +46,7 @@ pub trait ExtractableThreadState: Send {
 
 impl ExtractableThreadState for Arc<FileDescriptorTable> {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        guard.fdtable().clone()
+        guard.thread.fdtable.lock().clone()
     }
 }
 
