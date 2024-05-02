@@ -686,7 +686,7 @@ impl INode for TmpFsSymlink {
         todo!()
     }
 
-    fn read_link(&self) -> Result<Path> {
+    fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.target.clone())
     }
 

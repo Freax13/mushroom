@@ -196,7 +196,8 @@ pub trait INode: Any + Send + Sync + 'static {
         Ok(None)
     }
 
-    fn read_link(&self) -> Result<Path> {
+    fn read_link(&self, ctx: &FileAccessContext) -> Result<Path> {
+        let _ = ctx;
         bail!(Inval)
     }
 }
@@ -352,7 +353,7 @@ pub fn create_file(
                 if stat.mode.ty() == FileType::Link {
                     ensure!(!flags.contains(OpenFlags::NOFOLLOW), Loop);
 
-                    path = existing.read_link()?;
+                    path = existing.read_link(ctx)?;
                     ctx.follow_symlink()?;
                     start_dir = dir;
                     continue;
@@ -402,7 +403,7 @@ pub fn create_link(
 
 pub fn read_link(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<Path> {
     let node = lookup_node(start_dir, path, ctx)?;
-    node.read_link()
+    node.read_link(ctx)
 }
 
 pub fn mount(
