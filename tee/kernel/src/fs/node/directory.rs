@@ -8,7 +8,10 @@ use crate::{
     spin::mutex::Mutex,
     user::process::syscall::args::{FileMode, FileType},
 };
-use alloc::{sync::Weak, vec::Vec};
+use alloc::{
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 
 use crate::{error::Result, fs::node::DirEntry};
 
@@ -167,6 +170,7 @@ where
         match &self.0 {
             LocationImpl::Root => Ok(None),
             LocationImpl::Directory(parent) => parent.get(),
+            LocationImpl::Static(parent) => parent.get(),
             LocationImpl::Mount(parent) => parent.get(),
         }
     }
@@ -175,6 +179,7 @@ where
 enum LocationImpl<T> {
     Root,
     Directory(DirectoryLocation<T>),
+    Static(StaticLocation<T>),
     Mount(MountLocation),
 }
 
@@ -207,6 +212,48 @@ where
 impl<T> From<DirectoryLocation<T>> for Location<T> {
     fn from(value: DirectoryLocation<T>) -> Self {
         Self(LocationImpl::Directory(value))
+    }
+}
+
+/// This location type should only be used for dynamically generated nodes.
+/// They keep a strong reference to the parent, so the parent shouldn't keep
+/// one to the child.
+pub struct StaticLocation<T> {
+    parent: Arc<T>,
+    /// The name of the directory in `parent`.
+    file_name: FileName<'static>,
+}
+
+impl<T> StaticLocation<T>
+where
+    T: Directory,
+{
+    pub fn new(parent: Arc<T>, file_name: FileName<'static>) -> Self {
+        Self { parent, file_name }
+    }
+
+    /// Returns the parent of the directory and the filename of this directory
+    /// in that directory.
+    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
+        let node = self.parent.clone();
+        let file_name = self.file_name.clone();
+        Ok(Some((node, file_name)))
+    }
+
+    pub fn parent_entry(&self) -> Option<DirEntry> {
+        let parent = self.parent.clone();
+        let stat = parent.stat().ok()?;
+        Some(DirEntry {
+            ino: stat.ino,
+            ty: FileType::Dir,
+            name: DirEntryName::DotDot,
+        })
+    }
+}
+
+impl<T> From<StaticLocation<T>> for Location<T> {
+    fn from(value: StaticLocation<T>) -> Self {
+        Self(LocationImpl::Static(value))
     }
 }
 
