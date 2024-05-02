@@ -1,3 +1,4 @@
+use super::DirEntryName;
 use crate::{
     error::err,
     fs::{
@@ -5,7 +6,7 @@ use crate::{
         path::{FileName, Path},
     },
     spin::mutex::Mutex,
-    user::process::syscall::args::FileMode,
+    user::process::syscall::args::{FileMode, FileType},
 };
 use alloc::{sync::Weak, vec::Vec};
 
@@ -226,6 +227,16 @@ impl MountLocation {
         let node = self.parent.upgrade().ok_or(err!(NoEnt))?;
         let file_name = self.file_name.clone();
         Ok(Some((node, file_name)))
+    }
+
+    pub fn parent_entry(&self) -> Option<DirEntry> {
+        let parent = self.parent.upgrade()?;
+        let stat = parent.stat().ok()?;
+        Some(DirEntry {
+            ino: stat.ino,
+            ty: FileType::Dir,
+            name: DirEntryName::DotDot,
+        })
     }
 }
 
