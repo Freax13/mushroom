@@ -4,9 +4,8 @@ use crate::{
         mushroom::Output,
         CharDev,
     },
-    fs::fd::file::File,
+    fs::{fd::file::File, path::Path},
 };
-use alloc::sync::Arc;
 
 use crate::{
     error::Result,
@@ -14,7 +13,7 @@ use crate::{
     user::process::syscall::args::FileMode,
 };
 
-use super::{directory::MountLocation, fdfs, new_dev, tmpfs::TmpFsDir, DynINode, INode};
+use super::{directory::MountLocation, new_dev, tmpfs::TmpFsDir, DynINode, INode};
 
 pub fn new(location: MountLocation) -> Result<DynINode> {
     let tmp_fs_dir = TmpFsDir::new(new_dev(), location, FileMode::from_bits_truncate(0o755));
@@ -38,11 +37,7 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
     tmp_fs_dir.create_char_dev(urandom_name, URandom::MAJOR, URandom::MINOR)?;
 
     let fd_name = FileName::new(b"fd").unwrap();
-    let fd = fdfs::new(
-        MountLocation::new(Arc::downgrade(&tmp_fs_dir) as _, fd_name.clone()),
-        FileMode::from_bits_truncate(0o777),
-    );
-    tmp_fs_dir.mount(fd_name, fd)?;
+    tmp_fs_dir.create_link(fd_name, Path::new(b"/proc/self/fd".to_vec()).unwrap(), true)?;
 
     Ok(tmp_fs_dir)
 }

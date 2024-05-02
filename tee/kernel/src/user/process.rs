@@ -14,7 +14,7 @@ use crate::{
     error::{err, Result},
     fs::{
         fd::{file::File, FileDescriptorTable},
-        node::{tmpfs::TmpFsFile, FileAccessContext, INode},
+        node::{procfs::ProcessInos, tmpfs::TmpFsFile, FileAccessContext, INode},
         path::Path,
         INIT,
     },
@@ -53,6 +53,7 @@ pub struct Process {
     threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
+    pub inos: ProcessInos,
 }
 
 impl Process {
@@ -69,6 +70,7 @@ impl Process {
             signals_notify: Notify::new(),
             threads: Mutex::new(Vec::new()),
             running: AtomicUsize::new(0),
+            inos: ProcessInos::new(),
         };
         let arc = Arc::new(this);
 
@@ -77,6 +79,10 @@ impl Process {
         }
 
         arc
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
     }
 
     pub fn add_thread(&self, thread: WeakThread) {
@@ -166,6 +172,10 @@ impl Process {
         if let Some(parent) = self.parent.upgrade() {
             parent.child_death_notify.notify();
         }
+    }
+
+    pub fn thread_group_leader(&self) -> Weak<Thread> {
+        self.threads.lock()[0].clone()
     }
 
     pub async fn exit_status(&self) -> u8 {

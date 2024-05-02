@@ -25,7 +25,7 @@ use crate::{
     fs::node::DirEntry,
 };
 
-use super::node::fdfs::FdINode;
+use super::node::procfs::FdINode;
 
 pub mod dir;
 pub mod epoll;

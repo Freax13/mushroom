@@ -23,8 +23,8 @@ use crate::{
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir, unlink_file,
-            DirEntry, FileAccessContext, OldDirEntry,
+            lookup_and_resolve_node, lookup_node, procfs, read_link, set_mode, unlink_dir,
+            unlink_file, DirEntry, FileAccessContext, OldDirEntry,
         },
         path::Path,
     },
@@ -1817,6 +1817,7 @@ fn mount(
 
     let node = match r#type.as_bytes() {
         b"devtmpfs" => devtmpfs::new,
+        b"procfs" => procfs::new,
         _ => bail!(NoDev),
     };
 

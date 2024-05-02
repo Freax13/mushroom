@@ -70,6 +70,7 @@ impl core::fmt::Debug for Error {
 pub enum ErrorKind {
     Perm = 1,
     NoEnt = 2,
+    Srch = 3,
     Intr = 4,
     Io = 5,
     XIo = 6,

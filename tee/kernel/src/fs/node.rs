@@ -9,6 +9,7 @@ use crate::{
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
         thread::ThreadGuard,
+        Process,
     },
 };
 use alloc::{sync::Arc, vec::Vec};
@@ -24,14 +25,14 @@ use self::{
 };
 
 use super::{
-    fd::{FileDescriptor, FileDescriptorTable},
+    fd::FileDescriptor,
     path::{FileName, Path, PathSegment},
 };
 
 pub mod directory;
 
 pub mod devtmpfs;
-pub mod fdfs;
+pub mod procfs;
 pub mod tmpfs;
 
 pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> = Lazy::new(|| {
@@ -215,7 +216,7 @@ fn resolve_links(
 }
 
 pub struct FileAccessContext {
-    pub fdtable: Arc<FileDescriptorTable>,
+    pub process: Arc<Process>,
     symlink_recursion_limit: u16,
 }
 
@@ -234,7 +235,7 @@ impl FileAccessContext {
 impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
         Self {
-            fdtable: ExtractableThreadState::extract_from_thread(guard),
+            process: guard.process().clone(),
             symlink_recursion_limit: 16,
         }
     }
