@@ -5,7 +5,10 @@ use usize_conversions::FromUsize;
 
 use crate::{
     error::Result,
-    fs::fd::{Events, OpenFileDescription},
+    fs::{
+        fd::{Events, OpenFileDescription},
+        path::Path,
+    },
     supervisor,
     user::process::{
         memory::VirtualMemory,
@@ -18,6 +21,7 @@ use super::CharDev;
 const MAJOR: u16 = 0xf00;
 
 pub struct Output {
+    path: Path,
     flags: OpenFlags,
     stat: Stat,
 }
@@ -27,14 +31,18 @@ impl CharDev for Output {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 0;
 
-    fn new(flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { flags, stat })
+    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+        Ok(Self { path, flags, stat })
     }
 }
 
 impl OpenFileDescription for Output {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn stat(&self) -> Result<Stat> {

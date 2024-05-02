@@ -1,4 +1,5 @@
 use crate::fs::node::new_ino;
+use crate::fs::path::Path;
 use crate::spin::mutex::Mutex;
 use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
@@ -30,6 +31,10 @@ impl Epoll {
 impl OpenFileDescription for Epoll {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
+    }
+
+    fn path(&self) -> Path {
+        Path::new(b"anon_inode:[eventpoll]".to_vec()).unwrap()
     }
 
     async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {

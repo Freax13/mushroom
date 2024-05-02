@@ -2,7 +2,7 @@ use core::any::type_name;
 
 use crate::{
     error::{ensure, err},
-    fs::node::INode,
+    fs::{node::INode, path::Path},
     memory::page::KernelPage,
     spin::mutex::Mutex,
     user::process::syscall::args::{OpenFlags, Timespec},
@@ -91,35 +91,37 @@ pub trait File: INode {
     fn truncate(&self, length: usize) -> Result<()>;
 }
 
-pub fn open_file(file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_file(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
     if flags.contains(OpenFlags::TRUNC) {
         file.truncate(0)?;
     }
 
     let fd = if flags.contains(OpenFlags::WRONLY) {
         if flags.contains(OpenFlags::APPEND) {
-            FileDescriptor::from(AppendFileFileDescription::new(file, flags))
+            FileDescriptor::from(AppendFileFileDescription::new(path, file, flags))
         } else {
-            FileDescriptor::from(WriteonlyFileFileDescription::new(file, flags))
+            FileDescriptor::from(WriteonlyFileFileDescription::new(path, file, flags))
         }
     } else if flags.contains(OpenFlags::RDWR) {
-        FileDescriptor::from(ReadWriteFileFileDescription::new(file, flags))
+        FileDescriptor::from(ReadWriteFileFileDescription::new(path, file, flags))
     } else {
-        FileDescriptor::from(ReadonlyFileFileDescription::new(file, flags))
+        FileDescriptor::from(ReadonlyFileFileDescription::new(path, file, flags))
     };
     Ok(fd)
 }
 
 /// A file description for files opened as read-only.
 pub struct ReadonlyFileFileDescription {
+    path: Path,
     file: Arc<dyn File>,
     flags: OpenFlags,
     cursor_idx: Mutex<usize>,
 }
 
 impl ReadonlyFileFileDescription {
-    pub fn new(file: Arc<dyn File>, flags: OpenFlags) -> Self {
+    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
         Self {
+            path,
             file,
             flags,
             cursor_idx: Mutex::new(0),
@@ -130,6 +132,10 @@ impl ReadonlyFileFileDescription {
 impl OpenFileDescription for ReadonlyFileFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -212,14 +218,16 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
 
 /// A file description for files opened as write-only.
 pub struct WriteonlyFileFileDescription {
+    path: Path,
     file: Arc<dyn File>,
     flags: OpenFlags,
     cursor_idx: Mutex<usize>,
 }
 
 impl WriteonlyFileFileDescription {
-    pub fn new(file: Arc<dyn File>, flags: OpenFlags) -> Self {
+    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
         Self {
+            path,
             file,
             flags,
             cursor_idx: Mutex::new(0),
@@ -230,6 +238,10 @@ impl WriteonlyFileFileDescription {
 impl OpenFileDescription for WriteonlyFileFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -295,19 +307,24 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
 
 /// A file description for files opened as write-only.
 pub struct AppendFileFileDescription {
+    path: Path,
     file: Arc<dyn File>,
     flags: OpenFlags,
 }
 
 impl AppendFileFileDescription {
-    pub fn new(file: Arc<dyn File>, flags: OpenFlags) -> Self {
-        Self { file, flags }
+    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
+        Self { path, file, flags }
     }
 }
 
 impl OpenFileDescription for AppendFileFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -343,14 +360,16 @@ impl OpenFileDescription for AppendFileFileDescription {
 
 /// A file description for files opened as read and write.
 pub struct ReadWriteFileFileDescription {
+    path: Path,
     file: Arc<dyn File>,
     flags: OpenFlags,
     cursor_idx: Mutex<usize>,
 }
 
 impl ReadWriteFileFileDescription {
-    pub fn new(file: Arc<dyn File>, flags: OpenFlags) -> Self {
+    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
         Self {
+            path,
             file,
             flags,
             cursor_idx: Mutex::new(0),
@@ -361,6 +380,10 @@ impl ReadWriteFileFileDescription {
 impl OpenFileDescription for ReadWriteFileFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {

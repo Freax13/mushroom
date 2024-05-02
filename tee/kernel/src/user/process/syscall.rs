@@ -1337,7 +1337,7 @@ async fn execve(
     let cwd = thread.lock().cwd.clone();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
     ensure!(node.mode()?.contains(FileMode::EXECUTE), Acces);
-    let file = node.open(OpenFlags::empty())?;
+    let file = node.open(pathname.clone(), OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
@@ -2110,7 +2110,7 @@ fn openat(
             ensure!(node.ty()? == FileType::Dir, NotDir);
         }
 
-        let path_fd = PathFd::new(node);
+        let path_fd = PathFd::new(filename.clone(), node);
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
@@ -2126,7 +2126,7 @@ fn openat(
         } else {
             lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
         };
-        node.open(flags)?
+        node.open(filename, flags)?
     };
 
     let fd = fdtable.insert(fd, flags)?;

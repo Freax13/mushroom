@@ -6,7 +6,10 @@ use x86_64::instructions::random::RdRand;
 
 use crate::{
     error::{bail, Result},
-    fs::fd::{Events, OpenFileDescription},
+    fs::{
+        fd::{Events, OpenFileDescription},
+        path::Path,
+    },
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::process::{
@@ -20,6 +23,7 @@ use super::CharDev;
 const MAJOR: u16 = 1;
 
 pub struct Null {
+    path: Path,
     flags: OpenFlags,
     stat: Stat,
 }
@@ -29,14 +33,18 @@ impl CharDev for Null {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 3;
 
-    fn new(flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { flags, stat })
+    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+        Ok(Self { path, flags, stat })
     }
 }
 
 impl OpenFileDescription for Null {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn stat(&self) -> Result<Stat> {
@@ -96,6 +104,7 @@ pub fn random_bytes() -> impl Iterator<Item = u8> {
 }
 
 pub struct Random {
+    path: Path,
     flags: OpenFlags,
     stat: Stat,
 }
@@ -105,14 +114,18 @@ impl CharDev for Random {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 8;
 
-    fn new(flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { flags, stat })
+    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+        Ok(Self { path, flags, stat })
     }
 }
 
 impl OpenFileDescription for Random {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn stat(&self) -> Result<Stat> {
@@ -167,6 +180,7 @@ impl OpenFileDescription for Random {
 }
 
 pub struct URandom {
+    path: Path,
     flags: OpenFlags,
     stat: Stat,
 }
@@ -176,14 +190,18 @@ impl CharDev for URandom {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 9;
 
-    fn new(flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { flags, stat })
+    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+        Ok(Self { path, flags, stat })
     }
 }
 
 impl OpenFileDescription for URandom {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn stat(&self) -> Result<Stat> {

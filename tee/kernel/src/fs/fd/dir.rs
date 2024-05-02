@@ -1,6 +1,9 @@
 use crate::{
     error::ensure,
-    fs::node::{directory::Directory, DynINode, FileAccessContext},
+    fs::{
+        node::{directory::Directory, DynINode, FileAccessContext},
+        path::Path,
+    },
     spin::mutex::Mutex,
     user::process::syscall::args::{OpenFlags, Timespec},
 };
@@ -10,9 +13,10 @@ use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Sta
 
 use super::{Events, FileDescriptor, OpenFileDescription};
 
-pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_dir(path: Path, dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
     Ok(FileDescriptor::from(DirectoryFileDescription {
         flags,
+        path,
         dir,
         entries: Mutex::new(None),
     }))
@@ -20,6 +24,7 @@ pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescrip
 
 struct DirectoryFileDescription {
     flags: OpenFlags,
+    path: Path,
     dir: Arc<dyn Directory>,
     entries: Mutex<Option<Vec<DirEntry>>>,
 }
@@ -27,6 +32,10 @@ struct DirectoryFileDescription {
 impl OpenFileDescription for DirectoryFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {

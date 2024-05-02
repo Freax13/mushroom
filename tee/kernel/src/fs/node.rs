@@ -61,7 +61,7 @@ pub trait INode: Any + Send + Sync + 'static {
     }
     fn stat(&self) -> Result<Stat>;
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor>;
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor>;
 
     fn mode(&self) -> Result<FileMode> {
         self.stat().map(|stat| stat.mode.mode())

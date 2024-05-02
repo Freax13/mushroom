@@ -257,16 +257,11 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
 
     let file = TmpFsFile::new(FileMode::all());
     file.write(0, *INIT).unwrap();
-    let file = file.open(OpenFlags::empty()).unwrap();
+    let path = Path::new(b"/bin/init".to_vec()).unwrap();
+    let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
 
     guard
-        .start_executable(
-            &Path::new(b"/bin/init".to_vec()).unwrap(),
-            &file,
-            &[c"/bin/init"],
-            &[] as &[&CStr],
-            &mut ctx,
-        )
+        .start_executable(&path, &file, &[c"/bin/init"], &[] as &[&CStr], &mut ctx)
         .unwrap();
     drop(guard);
 

@@ -109,8 +109,8 @@ impl INode for TmpFsDir {
         })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
@@ -548,8 +548,8 @@ impl INode for TmpFsFile {
         })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_file(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
@@ -678,7 +678,7 @@ impl INode for TmpFsSymlink {
         })
     }
 
-    fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
         bail!(Loop)
     }
 
@@ -737,8 +737,8 @@ impl INode for TmpFsCharDev {
         })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        char_dev::open(flags, self.stat()?)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        char_dev::open(path, flags, self.stat()?)
     }
 
     fn set_mode(&self, _mode: FileMode) {}

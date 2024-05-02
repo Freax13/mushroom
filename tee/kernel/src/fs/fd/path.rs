@@ -1,24 +1,32 @@
 use crate::{
     error::Result,
-    fs::node::{DynINode, FileAccessContext},
+    fs::{
+        node::{DynINode, FileAccessContext},
+        path::Path,
+    },
     user::process::syscall::args::{OpenFlags, Stat},
 };
 
 use super::{Events, OpenFileDescription};
 
 pub struct PathFd {
+    path: Path,
     node: DynINode,
 }
 
 impl PathFd {
-    pub fn new(node: DynINode) -> Self {
-        Self { node }
+    pub fn new(path: Path, node: DynINode) -> Self {
+        Self { path, node }
     }
 }
 
 impl OpenFileDescription for PathFd {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
     }
 
     fn stat(&self) -> Result<Stat> {

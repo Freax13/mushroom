@@ -1,11 +1,11 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, format};
 use async_trait::async_trait;
 use futures::{select_biased, FutureExt};
 
 use super::{pipe, Events, OpenFileDescription};
 use crate::{
     error::Result,
-    fs::node::new_ino,
+    fs::{node::new_ino, path::Path},
     user::process::{
         memory::VirtualMemory,
         syscall::args::{
@@ -55,6 +55,10 @@ impl StreamUnixSocket {
 impl OpenFileDescription for StreamUnixSocket {
     fn flags(&self) -> OpenFlags {
         self.read_half.flags()
+    }
+
+    fn path(&self) -> Path {
+        Path::new(format!("socket:[{}]", self.ino).into_bytes()).unwrap()
     }
 
     fn set_flags(&self, flags: OpenFlags) {

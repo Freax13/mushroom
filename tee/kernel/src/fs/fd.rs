@@ -25,7 +25,7 @@ use crate::{
     fs::node::DirEntry,
 };
 
-use super::node::procfs::FdINode;
+use super::{node::procfs::FdINode, path::Path};
 
 pub mod dir;
 pub mod epoll;
@@ -247,6 +247,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn set_flags(&self, flags: OpenFlags) {
         let _ = flags;
     }
+
+    fn path(&self) -> Path;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;

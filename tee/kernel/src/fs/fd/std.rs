@@ -3,7 +3,7 @@ use log::debug;
 use super::{Events, OpenFileDescription};
 use crate::{
     error::Result,
-    fs::node::new_ino,
+    fs::{node::new_ino, path::Path},
     user::process::syscall::args::{
         FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
     },
@@ -22,6 +22,10 @@ impl Stdin {
 impl OpenFileDescription for Stdin {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
+    }
+
+    fn path(&self) -> Path {
+        Path::new(b"pipe:[0]".to_vec()).unwrap()
     }
 
     fn stat(&self) -> Result<Stat> {
@@ -60,6 +64,10 @@ impl Stdout {
 impl OpenFileDescription for Stdout {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
+    }
+
+    fn path(&self) -> Path {
+        Path::new(b"pipe:[1]".to_vec()).unwrap()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -104,6 +112,10 @@ impl Stderr {
 impl OpenFileDescription for Stderr {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
+    }
+
+    fn path(&self) -> Path {
+        Path::new(b"pipe:[2]".to_vec()).unwrap()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {

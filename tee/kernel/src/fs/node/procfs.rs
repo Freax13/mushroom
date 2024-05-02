@@ -67,8 +67,8 @@ impl INode for ProcFsRoot {
         })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, _mode: FileMode) {}
@@ -213,7 +213,7 @@ impl INode for SelfLink {
         })
     }
 
-    fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
         bail!(Loop)
     }
 
@@ -305,8 +305,8 @@ impl INode for ProcessDir {
         })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, _mode: FileMode) {}
@@ -456,8 +456,8 @@ impl INode for FdDir {
         })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, _mode: FileMode) {}
@@ -583,11 +583,15 @@ impl INode for FdINode {
         })
     }
 
-    fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
         Ok(self.fd.clone())
     }
 
     fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
+        Ok(self.fd.path())
+    }
 }
