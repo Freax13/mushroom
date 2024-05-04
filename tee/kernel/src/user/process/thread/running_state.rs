@@ -4,7 +4,10 @@ use crate::{
     fs::fd::FileDescriptorTable,
     rt::notify::Notify,
     spin::mutex::Mutex,
-    user::process::{memory::VirtualMemory, syscall::cpu_state::CpuState},
+    user::process::{
+        memory::VirtualMemory,
+        syscall::{args::WStatus, cpu_state::CpuState},
+    },
 };
 
 use super::{Thread, ThreadGuard};
@@ -40,7 +43,7 @@ impl ThreadRunningState {
 }
 
 impl ThreadGuard<'_> {
-    pub fn exit(&mut self, status: u8) {
+    pub fn exit(&mut self, status: WStatus) {
         let running_state = &self.thread.running_state;
         let mut guard = running_state.state.lock();
 
@@ -66,7 +69,7 @@ impl ThreadGuard<'_> {
 }
 
 impl Thread {
-    pub fn terminate(&self, exit_status: u8) {
+    pub fn terminate(&self, exit_status: WStatus) {
         let running_state = &self.running_state;
         let mut guard = running_state.state.lock();
 

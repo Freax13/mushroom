@@ -38,9 +38,8 @@ use crate::{
 use super::{
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc},
+        args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
-        traits::SyscallArgs,
     },
     Process,
 };
@@ -270,6 +269,12 @@ impl Thread {
                         // Ignore
                         continue;
                     }
+                    signal @ (Signal::SEGV | Signal::PIPE) => {
+                        // Terminate.
+                        drop(state);
+                        self.process.exit_group(WStatus::signaled(signal));
+                        return core::future::pending().await;
+                    }
                     signal => {
                         todo!("unimplemented default for signal {signal:?}")
                     }
@@ -497,6 +502,7 @@ impl ThreadGuard<'_> {
             let ignored = match handler.sa_handler_or_sigaction {
                 Sigaction::SIG_DFL => match pending_signal_info.signal {
                     Signal::CHLD => true,
+                    Signal::SEGV | Signal::PIPE => false,
                     signal => {
                         todo!("unimplemented default for signal {}", signal.get())
                     }
@@ -743,7 +749,7 @@ pub enum SigFields {
 pub struct SigChld {
     pub pid: i32,
     pub uid: u32,
-    pub status: i32,
+    pub status: WStatus,
     pub utime: i64,
     pub stime: i64,
 }
@@ -758,8 +764,6 @@ pub struct UContext {
     pub stack: Stack,
     pub mcontext: SigContext,
     pub sigmask: Sigset,
-    // implementation specific
-    pub syscall_restart_args: Option<SyscallArgs>,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -815,13 +815,21 @@ enum_arg! {
     }
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct WStatus(u32);
 
 impl WStatus {
     pub fn exit(status: u8) -> Self {
         Self(u32::from(status) << 8)
+    }
+
+    pub fn signaled(signal: Signal) -> Self {
+        Self(signal.get() as u32)
+    }
+
+    pub fn raw(self) -> u32 {
+        self.0
     }
 }
 

@@ -72,7 +72,7 @@ impl Thread {
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
         if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
-            guard.store_for_restart(args);
+            guard.restart_syscall(args.no);
         }
     }
 }
@@ -1361,7 +1361,7 @@ async fn execve(
 
 #[syscall(i386 = 1, amd64 = 60)]
 async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
-    thread.lock().exit(status as u8);
+    thread.lock().exit(WStatus::exit(status as u8));
 
     core::future::pending().await
 }
@@ -1394,9 +1394,8 @@ async fn wait4(
 
     if !wstatus.is_null() {
         let addr = wstatus.get();
-        let wstatus = WStatus::exit(status);
 
-        virtual_memory.write_bytes(addr, bytes_of(&wstatus))?;
+        virtual_memory.write_bytes(addr, bytes_of(&status))?;
     }
 
     Ok(u64::from(tid))
@@ -2006,7 +2005,7 @@ async fn clock_nanosleep(
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
     let process = thread.process().clone();
-    process.exit_group(status as u8);
+    process.exit_group(WStatus::exit(status as u8));
     core::future::pending().await
 }
 
