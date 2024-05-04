@@ -3,6 +3,7 @@ use core::{
     borrow::Borrow,
     cell::SyncUnsafeCell,
     cmp::Ordering,
+    fmt::{self, Display, Write},
     iter::Step,
     mem::{needs_drop, MaybeUninit},
     ops::Bound,
@@ -11,7 +12,7 @@ use core::{
 
 use crate::{
     error::{ensure, err},
-    fs::fd::FileDescriptor,
+    fs::{fd::FileDescriptor, path::Path},
     memory::{
         page::{KernelPage, UserPage},
         pagetable::{check_user_address, Pagetables},
@@ -21,8 +22,9 @@ use crate::{
         mutex::Mutex,
         rwlock::{RwLock, WriteRwLockGuard},
     },
+    user::process::syscall::args::Stat,
 };
-use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeMap, ffi::CString, format, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use log::debug;
@@ -294,6 +296,28 @@ impl VirtualMemory {
     {
         self.write_with_abi(pointer, value, Abi::Amd64)
     }
+
+    pub fn maps(&self) -> Vec<u8> {
+        let mut maps = Vec::new();
+        let guard = self.state.read();
+        for (&page, mapping) in guard.mappings.iter() {
+            let mapping = mapping.lock();
+            let start = page.start_address().as_u64();
+            let end = (page + u64::from_usize(mapping.pages.len()))
+                .start_address()
+                .as_u64();
+            let permissions = mapping.permissions;
+            let offset = mapping.page_offset;
+            let (major, minor, ino, path) = mapping.backing.location();
+            let line= format!("{start:08x}-{end:08x} {permissions}p {offset:05x}000 {major:02x}:{minor:02x} {ino} ");
+            maps.extend_from_slice(line.as_bytes());
+            if let Some(path) = path {
+                maps.extend_from_slice(path.as_bytes());
+            }
+            maps.push(b'\n');
+        }
+        maps
+    }
 }
 
 impl Default for VirtualMemory {
@@ -361,6 +385,10 @@ impl VirtualMemoryWriteGuard<'_> {
             fn get_initial_page(&self, _offset: u64) -> Result<KernelPage> {
                 Ok(KernelPage::zeroed())
             }
+
+            fn location(&self) -> (u16, u8, u64, Option<Path>) {
+                (0, 0, 0, None)
+            }
         }
 
         self.mmap(bias, len, permissions, ZeroBacking, 0)
@@ -392,6 +420,7 @@ impl VirtualMemoryWriteGuard<'_> {
         struct FileBacking {
             file: FileDescriptor,
             zero_offset: u64,
+            stat: Stat,
         }
 
         impl Backing for FileBacking {
@@ -407,8 +436,18 @@ impl VirtualMemoryWriteGuard<'_> {
                     _ => self.file.get_page(usize_from(offset)),
                 }
             }
+
+            fn location(&self) -> (u16, u8, u64, Option<Path>) {
+                (
+                    self.stat.major(),
+                    self.stat.minor(),
+                    self.stat.ino,
+                    Some(self.file.path()),
+                )
+            }
         }
 
+        let stat = file.stat()?;
         let addr = self.mmap(
             bias,
             mem_sz,
@@ -416,6 +455,7 @@ impl VirtualMemoryWriteGuard<'_> {
             FileBacking {
                 file,
                 zero_offset: offset + file_sz,
+                stat,
             },
             page_offset,
         );
@@ -461,6 +501,10 @@ impl VirtualMemoryWriteGuard<'_> {
             fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
                 assert_eq!(offset, 0);
                 PAGE.lock().clone()
+            }
+
+            fn location(&self) -> (u16, u8, u64, Option<Path>) {
+                (0, 0, 0, Some(Path::new(b"[trampoline]".to_vec()).unwrap()))
             }
         }
 
@@ -699,6 +743,18 @@ impl From<MemoryPermissions> for PageTableFlags {
     }
 }
 
+impl Display for MemoryPermissions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_char(if self.contains(Self::READ) { 'r' } else { '-' })?;
+        f.write_char(if self.contains(Self::WRITE) { 'w' } else { '-' })?;
+        f.write_char(if self.contains(Self::EXECUTE) {
+            'x'
+        } else {
+            '-'
+        })
+    }
+}
+
 pub fn without_smap<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -815,6 +871,8 @@ impl Mapping {
 
 pub trait Backing: Send + Sync + 'static {
     fn get_initial_page(&self, offset: u64) -> Result<KernelPage>;
+    /// Returns a tuple of (major dev, minor dev, ino, path).
+    fn location(&self) -> (u16, u8, u64, Option<Path>);
 }
 
 /// Like a `Vec<T>` but with constant time `split_at`.

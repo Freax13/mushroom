@@ -1,3 +1,5 @@
+use core::cmp;
+
 use alloc::{
     string::ToString,
     sync::{Arc, Weak},
@@ -8,12 +10,20 @@ use alloc::{
 use crate::{
     error::{bail, err, Result},
     fs::{
-        fd::{dir::open_dir, FileDescriptor},
+        fd::{
+            dir::open_dir,
+            file::{open_file, File},
+            FileDescriptor,
+        },
         node::DirEntryName,
         path::{FileName, Path},
     },
+    memory::page::KernelPage,
     user::process::{
-        syscall::args::{FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
+        memory::VirtualMemory,
+        syscall::args::{
+            FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
+        },
         Process,
     },
 };
@@ -249,6 +259,7 @@ impl INode for SelfLink {
 pub struct ProcessInos {
     root_dir: u64,
     fd_dir: u64,
+    maps_file: u64,
 }
 
 impl ProcessInos {
@@ -257,6 +268,7 @@ impl ProcessInos {
         Self {
             root_dir: new_ino(),
             fd_dir: new_ino(),
+            maps_file: new_ino(),
         }
     }
 }
@@ -326,6 +338,8 @@ impl Directory for ProcessDir {
                 self.dev,
                 self.process.clone(),
             ))
+        } else if file_name == "maps" {
+            Ok(MapsFile::new(self.dev, self.process.clone()))
         } else {
             bail!(NoEnt)
         }
@@ -375,6 +389,11 @@ impl Directory for ProcessDir {
             ino: process.inos.fd_dir,
             ty: FileType::Dir,
             name: DirEntryName::FileName(FileName::new(b"fd").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.maps_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"maps").unwrap()),
         });
         Ok(entries)
     }
@@ -593,5 +612,116 @@ impl INode for FdINode {
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.fd.path())
+    }
+}
+
+struct MapsFile {
+    this: Weak<Self>,
+    dev: u64,
+    process: Weak<Process>,
+}
+
+impl MapsFile {
+    pub fn new(dev: u64, process: Weak<Process>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            dev,
+            process,
+        })
+    }
+}
+
+impl INode for MapsFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.dev,
+            ino: process.inos.maps_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
+    }
+
+    fn set_mode(&self, _mode: FileMode) {}
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+}
+
+impl File for MapsFile {
+    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let maps = thread.lock().virtual_memory().maps();
+        let offset = cmp::min(offset, maps.len());
+        let maps = &maps[offset..];
+        let len = cmp::min(maps.len(), buf.len());
+        buf[..len].copy_from_slice(&maps[..len]);
+        Ok(len)
+    }
+
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _no_atime: bool,
+    ) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let maps = thread.lock().virtual_memory().maps();
+        let offset = cmp::min(offset, maps.len());
+        let maps = &maps[offset..];
+        let len = cmp::min(maps.len(), len);
+        vm.write_bytes(pointer.get(), &maps[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append_from_user(
+        &self,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
     }
 }

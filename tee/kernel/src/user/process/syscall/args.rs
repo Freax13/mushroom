@@ -675,6 +675,16 @@ pub struct Stat {
     pub ctime: Timespec,
 }
 
+impl Stat {
+    pub fn major(&self) -> u16 {
+        self.rdev.get_bits(8..24) as u16
+    }
+
+    pub fn minor(&self) -> u8 {
+        self.rdev as u8
+    }
+}
+
 #[derive(Debug, Clone, Copy, Zeroable, NoUninit)]
 #[repr(C, packed)]
 pub struct Stat64 {
