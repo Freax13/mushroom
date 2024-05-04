@@ -824,6 +824,10 @@ impl WStatus {
         Self(u32::from(status) << 8)
     }
 
+    pub fn signaled(signal: Signal) -> Self {
+        Self(signal.get() as u32)
+    }
+
     pub fn raw(self) -> u32 {
         self.0
     }
