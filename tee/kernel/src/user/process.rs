@@ -19,7 +19,7 @@ use crate::{
         INIT,
     },
     rt::{notify::Notify, once::OnceCell},
-    spin::{lazy::Lazy, mutex::Mutex},
+    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     supervisor,
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
 };
@@ -54,10 +54,16 @@ pub struct Process {
     /// The number of running threads.
     running: AtomicUsize,
     pub inos: ProcessInos,
+    exe: RwLock<Path>,
 }
 
 impl Process {
-    fn new(first_tid: u32, parent: Weak<Self>, termination_signal: Option<Signal>) -> Arc<Self> {
+    fn new(
+        first_tid: u32,
+        parent: Weak<Self>,
+        termination_signal: Option<Signal>,
+        exe: Path,
+    ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
             futexes: Arc::new(Futexes::new()),
@@ -71,6 +77,7 @@ impl Process {
             threads: Mutex::new(Vec::new()),
             running: AtomicUsize::new(0),
             inos: ProcessInos::new(),
+            exe: RwLock::new(exe),
         };
         let arc = Arc::new(this);
 
@@ -83,6 +90,10 @@ impl Process {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    pub fn exe(&self) -> Path {
+        self.exe.read().clone()
     }
 
     pub fn add_thread(&self, thread: WeakThread) {
@@ -107,7 +118,9 @@ impl Process {
         virtual_memory: VirtualMemory,
         cpu_state: CpuState,
         fdtable: FileDescriptorTable,
+        exe: Path,
     ) {
+        *self.exe.write() = exe;
         let mut threads = self.threads.lock();
 
         // Restart the thread leader.

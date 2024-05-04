@@ -1169,6 +1169,7 @@ async fn clone(
             new_tid,
             Arc::downgrade(thread.process()),
             termination_signal,
+            thread.process().exe.read().clone(),
         ))
     };
 
@@ -1344,10 +1345,12 @@ async fn execve(
     let cpu_state =
         virtual_memory.start_executable(&pathname, &file, &args, &envs, &mut ctx, cwd)?;
 
-    // Everything was successfull, no errors can occour after this point.
+    // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
-    thread.process().execve(virtual_memory, cpu_state, fdtable);
+    thread
+        .process()
+        .execve(virtual_memory, cpu_state, fdtable, pathname);
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }

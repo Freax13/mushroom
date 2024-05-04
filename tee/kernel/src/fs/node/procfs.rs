@@ -30,7 +30,7 @@ use crate::{
 
 use super::{
     directory::{dir_impls, Directory, MountLocation, StaticLocation},
-    new_dev, new_ino, DirEntry, DynINode, FileAccessContext, INode,
+    lookup_node_with_parent, new_dev, new_ino, DirEntry, DynINode, FileAccessContext, INode,
 };
 
 pub fn new(location: MountLocation) -> Result<DynINode> {
@@ -259,6 +259,7 @@ impl INode for SelfLink {
 pub struct ProcessInos {
     root_dir: u64,
     fd_dir: u64,
+    exe_link: u64,
     maps_file: u64,
 }
 
@@ -268,6 +269,7 @@ impl ProcessInos {
         Self {
             root_dir: new_ino(),
             fd_dir: new_ino(),
+            exe_link: new_ino(),
             maps_file: new_ino(),
         }
     }
@@ -338,6 +340,8 @@ impl Directory for ProcessDir {
                 self.dev,
                 self.process.clone(),
             ))
+        } else if file_name == "exe" {
+            Ok(ExeLink::new(self.dev, self.process.clone()))
         } else if file_name == "maps" {
             Ok(MapsFile::new(self.dev, self.process.clone()))
         } else {
@@ -389,6 +393,11 @@ impl Directory for ProcessDir {
             ino: process.inos.fd_dir,
             ty: FileType::Dir,
             name: DirEntryName::FileName(FileName::new(b"fd").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.exe_link,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"exe").unwrap()),
         });
         entries.push(DirEntry {
             ino: process.inos.maps_file,
@@ -612,6 +621,63 @@ impl INode for FdINode {
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.fd.path())
+    }
+}
+
+struct ExeLink {
+    dev: u64,
+    process: Weak<Process>,
+}
+
+impl ExeLink {
+    pub fn new(dev: u64, process: Weak<Process>) -> Arc<Self> {
+        Arc::new(Self { dev, process })
+    }
+}
+
+impl INode for ExeLink {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.dev,
+            ino: process.inos.exe_link,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
+        bail!(Loop)
+    }
+
+    fn set_mode(&self, _mode: FileMode) {}
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let exe = process.exe();
+        Ok(exe)
+    }
+
+    fn try_resolve_link(
+        &self,
+        start_dir: DynINode,
+        ctx: &mut FileAccessContext,
+    ) -> Result<Option<(DynINode, DynINode)>> {
+        ctx.follow_symlink()?;
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let exe = process.exe();
+        lookup_node_with_parent(start_dir, &exe, ctx).map(Some)
     }
 }
 
