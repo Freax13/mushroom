@@ -456,8 +456,8 @@ impl AbiDependentPointee for SigInfo {
 #[repr(C)]
 pub struct SigInfo32 {
     si_signo: i32,
-    si_code: i32,
     si_errno: i32,
+    si_code: i32,
     _sifields: [i32; 29],
 }
 
@@ -491,8 +491,8 @@ impl From<SigInfo> for SigInfo32 {
         }
         Self {
             si_signo: value.signal.get() as i32,
-            si_code: value.code.get(),
             si_errno: 0,
+            si_code: value.code.get(),
             _sifields,
         }
     }
@@ -518,14 +518,15 @@ struct SigFault32 {
 #[repr(C)]
 pub struct SigInfo64 {
     si_signo: i32,
-    si_code: i32,
     si_errno: i32,
-    _sifields: [i32; 29],
+    si_code: i32,
+    _padding: i32,
+    _sifields: [i32; 28],
 }
 
 impl From<SigInfo> for SigInfo64 {
     fn from(value: SigInfo) -> Self {
-        let mut _sifields = [0; 29];
+        let mut _sifields = [0; 28];
         let dst = bytes_of_mut(&mut _sifields);
         macro_rules! pack {
             ($expr:expr) => {{
@@ -553,8 +554,9 @@ impl From<SigInfo> for SigInfo64 {
         }
         Self {
             si_signo: value.signal.get() as i32,
-            si_code: value.code.get(),
             si_errno: 0,
+            si_code: value.code.get(),
+            _padding: 0,
             _sifields,
         }
     }
