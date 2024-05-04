@@ -601,6 +601,9 @@ impl CpuState {
             && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
         {
             self.registers.rsp = stack.sp + stack.size;
+        } else {
+            // Skip the red zone.
+            self.registers.rsp -= 128;
         }
 
         // Push information for the signal handler onto the stack.
