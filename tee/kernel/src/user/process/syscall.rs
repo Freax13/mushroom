@@ -72,7 +72,7 @@ impl Thread {
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
         if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
-            guard.store_for_restart(args);
+            guard.restart_syscall(args.no);
         }
     }
 }

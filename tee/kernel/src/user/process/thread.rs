@@ -40,7 +40,6 @@ use super::{
     syscall::{
         args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc},
         cpu_state::{CpuState, Exit, PageFaultExit},
-        traits::SyscallArgs,
     },
     Process,
 };
@@ -758,8 +757,6 @@ pub struct UContext {
     pub stack: Stack,
     pub mcontext: SigContext,
     pub sigmask: Sigset,
-    // implementation specific
-    pub syscall_restart_args: Option<SyscallArgs>,
 }
 
 #[derive(Debug, Clone, Copy)]
