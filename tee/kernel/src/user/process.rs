@@ -27,7 +27,10 @@ use crate::{
 use self::{
     futex::Futexes,
     memory::VirtualMemory,
-    syscall::{args::Signal, cpu_state::CpuState},
+    syscall::{
+        args::{Signal, WStatus},
+        cpu_state::CpuState,
+    },
     thread::{
         new_tid, running_state::ExecveValues, PendingSignals, SigChld, SigFields, SigInfo,
         SigInfoCode, Sigset, Thread, WeakThread,
@@ -43,7 +46,7 @@ pub mod thread;
 pub struct Process {
     pid: u32,
     futexes: Arc<Futexes>,
-    exit_status: OnceCell<u8>,
+    exit_status: OnceCell<WStatus>,
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
     child_death_notify: Notify,
@@ -106,7 +109,7 @@ impl Process {
         self.running.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn exit(&self, exit_status: u8) {
+    pub fn exit(&self, exit_status: WStatus) {
         let prev = self.running.fetch_sub(1, Ordering::Relaxed);
         if prev == 1 {
             self.exit_group(exit_status);
@@ -133,7 +136,7 @@ impl Process {
 
         // Stop all threads except for the thread group leader.
         for thread in threads.drain(1..).filter_map(|t| t.upgrade()) {
-            thread.terminate(0);
+            thread.terminate(WStatus::exit(0));
         }
     }
 
@@ -141,11 +144,11 @@ impl Process {
     ///
     /// The returned exit status may not be the same as the requested
     /// if another thread terminated the thread group at the same time.
-    pub fn exit_group(&self, exit_status: u8) {
+    pub fn exit_group(&self, exit_status: WStatus) {
         if self.pid == 1 {
             // Commit or fail the output depending on the exit status of the
             // init process.
-            if exit_status == 0 {
+            if exit_status == WStatus::exit(0) {
                 supervisor::commit_output();
             } else {
                 supervisor::fail();
@@ -174,7 +177,7 @@ impl Process {
                     fields: SigFields::SigChld(SigChld {
                         pid: self.pid as i32,
                         uid: 0,
-                        status: i32::from(exit_status),
+                        status: exit_status,
                         utime: 0,
                         stime: 0,
                     }),
@@ -191,7 +194,7 @@ impl Process {
         self.threads.lock()[0].clone()
     }
 
-    pub async fn exit_status(&self) -> u8 {
+    pub async fn exit_status(&self) -> WStatus {
         *self.exit_status.get().await
     }
 
@@ -199,7 +202,7 @@ impl Process {
         &self,
         pid: Option<u32>,
         no_hang: bool,
-    ) -> Result<Option<(u32, u8)>> {
+    ) -> Result<Option<(u32, WStatus)>> {
         self.child_death_notify
             .wait_until(|| {
                 let mut guard = self.children.lock();

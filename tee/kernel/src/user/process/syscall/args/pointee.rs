@@ -478,7 +478,7 @@ impl From<SigInfo> for SigInfo32 {
                 pack!(SigChld32 {
                     pid: sig_chld.pid,
                     uid: sig_chld.uid,
-                    status: sig_chld.status,
+                    status: sig_chld.status.raw() as i32,
                     utime: sig_chld.utime as i32,
                     stime: sig_chld.stime as i32,
                 })
@@ -541,7 +541,7 @@ impl From<SigInfo> for SigInfo64 {
                 pack!(SigChld64 {
                     pid: sig_chld.pid,
                     uid: sig_chld.uid,
-                    status: sig_chld.status,
+                    status: sig_chld.status.raw() as i32,
                     utime: sig_chld.utime,
                     stime: sig_chld.stime,
                 })

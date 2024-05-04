@@ -38,7 +38,7 @@ use crate::{
 use super::{
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc},
+        args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process,
@@ -742,7 +742,7 @@ pub enum SigFields {
 pub struct SigChld {
     pub pid: i32,
     pub uid: u32,
-    pub status: i32,
+    pub status: WStatus,
     pub utime: i64,
     pub stime: i64,
 }
