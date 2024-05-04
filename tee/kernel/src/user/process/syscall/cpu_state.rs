@@ -1,11 +1,12 @@
 use core::{
     arch::{asm, x86_64::__cpuid_count},
     ffi::c_void,
-    mem::offset_of,
+    mem::{offset_of, size_of},
 };
 
 use alloc::{vec, vec::Vec};
 use bit_field::BitField;
+use bytemuck::{bytes_of, bytes_of_mut, from_bytes, from_bytes_mut, Pod, Zeroable};
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
@@ -32,6 +33,9 @@ use super::{
     args::{pointee::SizedPointee, Pointer, UserDesc},
     traits::{Abi, SyscallArgs, SyscallResult},
 };
+
+const FP_XSTATE_MAGIC1: u32 = 0x46505853;
+const FP_XSTATE_MAGIC2: u32 = 0x46505845;
 
 #[derive(Clone)]
 pub struct CpuState {
@@ -580,13 +584,7 @@ impl CpuState {
         vm: &VirtualMemory,
     ) -> Result<()> {
         let abi = self.abi_from_cs();
-        let mcontext = self.create_sig_context();
-        let ucontext = UContext {
-            stack,
-            mcontext,
-            sigmask,
-            syscall_restart_args: self.syscall_restart_args.take(),
-        };
+        let mut mcontext = self.create_sig_context();
         let restorer = if sigaction.sa_flags.contains(SigactionFlags::RESTORER) {
             sigaction.sa_restorer
         } else {
@@ -612,7 +610,85 @@ impl CpuState {
         self.registers.rsp -= u64::from_usize(sig_info.size(abi));
         let sig_info_ptr = Pointer::new(self.registers.rsp);
         vm.write_with_abi(sig_info_ptr, sig_info, abi)?;
+        // Write fp state.
+        let xsave_data = &*self.xsave_area.data;
+        let fpstate_ptr = match abi {
+            Abi::I386 => {
+                let trailer_size = 4;
+                let extended_size = size_of::<Fpstate32Header>() + xsave_data.len() + trailer_size;
+                self.registers.rsp -= u64::from_usize(extended_size);
+                let fpstate_ptr = Pointer::new(self.registers.rsp);
+                let ptr = fpstate_ptr;
+
+                // Write the header.
+                let fxsave = from_bytes::<FXSave>(&xsave_data[..512]);
+                let header = Fpstate32Header {
+                    cw: u32::from(fxsave.fcw),
+                    sw: u32::from(fxsave.fsw),
+                    tag: u32::from(fxsave.ftw),
+                    ipoff: fxsave.ipoff,
+                    cssel: fxsave.cssel,
+                    dataoff: fxsave.dataoff,
+                    datasel: fxsave.datasel,
+                    st: fxsave.st,
+                    status: fxsave.fsw,
+                    magic: 0x0000,
+                };
+                vm.write_bytes(ptr.get(), bytes_of(&header))?;
+                let ptr = ptr.bytes_offset(size_of::<Fpstate32Header>());
+
+                // Copy the xsave bytes.
+                vm.write_bytes(ptr.get(), xsave_data)?;
+                // Fill in the reserved bytes.
+                let sw_bytes = FpxSwBytes {
+                    magic1: FP_XSTATE_MAGIC1,
+                    extended_size: extended_size as u32,
+                    xfeatures: (XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX).bits(),
+                    xstate_size: xsave_data.len() as u32,
+                    padding: [0; 7],
+                };
+                vm.write_bytes(ptr.get() + 0x1a0, bytes_of(&sw_bytes))?;
+                let ptr = ptr.bytes_offset(xsave_data.len());
+
+                // Fill in the magic at the end of the area.
+                vm.write_bytes(ptr.get(), bytes_of(&FP_XSTATE_MAGIC2))?;
+
+                fpstate_ptr
+            }
+            Abi::Amd64 => {
+                let trailer_size = 4;
+                let extended_size = xsave_data.len() + trailer_size;
+                self.registers.rsp -= u64::from_usize(extended_size);
+                let fpstate_ptr = Pointer::new(self.registers.rsp);
+                let ptr = fpstate_ptr;
+
+                // Copy the xsave bytes.
+                vm.write_bytes(ptr.get(), xsave_data)?;
+                // Fill in the reserved bytes.
+                let sw_bytes = FpxSwBytes {
+                    magic1: FP_XSTATE_MAGIC1,
+                    extended_size: extended_size as u32,
+                    xfeatures: (XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX).bits(),
+                    xstate_size: xsave_data.len() as u32,
+                    padding: [0; 7],
+                };
+                vm.write_bytes(ptr.get() + 0x1a0, bytes_of(&sw_bytes))?;
+                let ptr = ptr.bytes_offset(xsave_data.len());
+
+                // Fill in the magic at the end of the area.
+                vm.write_bytes(ptr.get(), bytes_of(&FP_XSTATE_MAGIC2))?;
+
+                fpstate_ptr
+            }
+        };
+        mcontext.fpstate = fpstate_ptr;
         // Write ucontext.
+        let ucontext = UContext {
+            stack,
+            mcontext,
+            sigmask,
+            syscall_restart_args: self.syscall_restart_args.take(),
+        };
         self.registers.rsp -= u64::from_usize(ucontext.size(abi));
         let ucontext_ptr = Pointer::new(self.registers.rsp);
         vm.write_with_abi(ucontext_ptr, ucontext, abi)?;
@@ -659,6 +735,43 @@ impl CpuState {
         let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
         self.syscall_restart_args = ucontext.syscall_restart_args;
         self.load_sig_context(&ucontext.mcontext);
+
+        // Load the fp state.
+        let fpstate = ucontext.mcontext.fpstate;
+        if !fpstate.is_null() {
+            let xsave_data = &mut *self.xsave_area.data;
+            match abi {
+                Abi::I386 => {
+                    let ptr = fpstate;
+
+                    // Read the 32-bit specific header.
+                    let mut header = Fpstate32Header::zeroed();
+                    vm.read_bytes(ptr.get(), bytes_of_mut(&mut header))?;
+                    let ptr = ptr.bytes_offset(size_of::<Fpstate32Header>());
+
+                    // Load the xsave data.
+                    vm.read_bytes(ptr.get(), xsave_data)?;
+
+                    // Restore the fields from the header.
+                    let fxsave = from_bytes_mut::<FXSave>(&mut xsave_data[..512]);
+                    fxsave.fcw = header.cw as u16;
+                    fxsave.fsw = header.sw as u16;
+                    fxsave.ftw = header.tag as u8;
+                    fxsave.ipoff = header.ipoff;
+                    fxsave.cssel = header.cssel;
+                    fxsave.dataoff = header.dataoff;
+                    fxsave.datasel = header.datasel;
+                    fxsave.st = header.st;
+                }
+                Abi::Amd64 => {
+                    // Load the xsave data.
+                    vm.read_bytes(fpstate.get(), xsave_data)?;
+                    // Clear the bytes reserved for software.
+                    xsave_data[0x1a0..0x200].fill(0);
+                }
+            }
+        }
+
         Ok((ucontext.stack, ucontext.sigmask))
     }
 }
@@ -851,4 +964,57 @@ impl XSaveArea {
             );
         }
     }
+}
+
+/// The first 512 bytes used by the xsave instructions.
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C, align(64))]
+struct FXSave {
+    fcw: u16,
+    fsw: u16,
+    ftw: u8,
+    _padding1: u8,
+    fop: u16,
+    ipoff: u32,
+    cssel: u32,
+    dataoff: u32,
+    datasel: u32,
+    mxcsr: u32,
+    mxcsr_mask: u32,
+    st: [St; 8],
+    xmm: [Xmm; 16],
+    _padding2: [u8; 96],
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct St([u8; 16]);
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct Xmm([u8; 16]);
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct Fpstate32Header {
+    cw: u32,
+    sw: u32,
+    tag: u32,
+    ipoff: u32,
+    cssel: u32,
+    dataoff: u32,
+    datasel: u32,
+    st: [St; 8],
+    status: u16,
+    magic: u16,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct FpxSwBytes {
+    magic1: u32,
+    extended_size: u32,
+    xfeatures: u64,
+    xstate_size: u32,
+    padding: [u32; 7],
 }
