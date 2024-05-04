@@ -2,13 +2,14 @@ use core::{cmp, iter::from_fn};
 
 use crate::{
     error::{bail, ensure},
+    fs::{node::new_ino, path::Path},
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
         syscall::args::{OpenFlags, Pipe2Flags, Pointer},
     },
 };
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
+use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc};
 use async_trait::async_trait;
 use usize_conversions::FromUsize;
 
@@ -22,7 +23,14 @@ use crate::{
 const CAPACITY: usize = 0x10000;
 
 struct State {
+    ino: u64,
     buffer: Mutex<VecDeque<u8>>,
+}
+
+impl State {
+    fn path(&self) -> Path {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    }
 }
 
 pub struct ReadHalf {
@@ -39,6 +47,10 @@ impl OpenFileDescription for ReadHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
+    }
+
+    fn path(&self) -> Path {
+        self.state.path()
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -145,8 +157,8 @@ impl OpenFileDescription for ReadHalf {
         }
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: 0,
             nlink: 1,
@@ -160,7 +172,7 @@ impl OpenFileDescription for ReadHalf {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 }
 
@@ -178,6 +190,10 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
+    }
+
+    fn path(&self) -> Path {
+        self.state.path()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -256,8 +272,8 @@ impl OpenFileDescription for WriteHalf {
         Ok(len)
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: 0,
             nlink: 1,
@@ -271,7 +287,7 @@ impl OpenFileDescription for WriteHalf {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -308,6 +324,7 @@ impl OpenFileDescription for WriteHalf {
 
 pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
     let state = Arc::new(State {
+        ino: new_ino(),
         buffer: Mutex::new(VecDeque::new()),
     });
     let notify = Arc::new(Notify::new());

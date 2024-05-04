@@ -1,9 +1,11 @@
 use core::{
     ffi::CStr,
+    iter::from_fn,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use alloc::{
+    collections::VecDeque,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -12,12 +14,12 @@ use crate::{
     error::{err, Result},
     fs::{
         fd::{file::File, FileDescriptorTable},
-        node::{tmpfs::TmpFsFile, FileAccessContext, INode},
+        node::{procfs::ProcessInos, tmpfs::TmpFsFile, FileAccessContext, INode},
         path::Path,
         INIT,
     },
     rt::{notify::Notify, once::OnceCell},
-    spin::mutex::Mutex,
+    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     supervisor,
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
 };
@@ -51,10 +53,17 @@ pub struct Process {
     threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
+    pub inos: ProcessInos,
+    exe: RwLock<Path>,
 }
 
 impl Process {
-    fn new(first_tid: u32, parent: Weak<Self>, termination_signal: Option<Signal>) -> Arc<Self> {
+    fn new(
+        first_tid: u32,
+        parent: Weak<Self>,
+        termination_signal: Option<Signal>,
+        exe: Path,
+    ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
             futexes: Arc::new(Futexes::new()),
@@ -67,6 +76,8 @@ impl Process {
             signals_notify: Notify::new(),
             threads: Mutex::new(Vec::new()),
             running: AtomicUsize::new(0),
+            inos: ProcessInos::new(),
+            exe: RwLock::new(exe),
         };
         let arc = Arc::new(this);
 
@@ -75,6 +86,14 @@ impl Process {
         }
 
         arc
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn exe(&self) -> Path {
+        self.exe.read().clone()
     }
 
     pub fn add_thread(&self, thread: WeakThread) {
@@ -99,7 +118,9 @@ impl Process {
         virtual_memory: VirtualMemory,
         cpu_state: CpuState,
         fdtable: FileDescriptorTable,
+        exe: Path,
     ) {
+        *self.exe.write() = exe;
         let mut threads = self.threads.lock();
 
         // Restart the thread leader.
@@ -166,6 +187,10 @@ impl Process {
         }
     }
 
+    pub fn thread_group_leader(&self) -> Weak<Thread> {
+        self.threads.lock()[0].clone()
+    }
+
     pub async fn exit_status(&self) -> u8 {
         *self.exit_status.get().await
     }
@@ -215,9 +240,27 @@ impl Process {
     fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
         self.pending_signals.lock().pop(mask)
     }
+
+    pub fn find_by_pid(pid: u32) -> Option<Arc<Self>> {
+        Self::all().find(|p| p.pid == pid)
+    }
+
+    pub fn all() -> impl Iterator<Item = Arc<Self>> {
+        INIT_THREAD.process().iter()
+    }
+
+    fn iter(self: &Arc<Self>) -> impl Iterator<Item = Arc<Self>> {
+        let mut queue = VecDeque::new();
+        queue.push_back(self.clone());
+        from_fn(move || {
+            let process = queue.pop_front()?;
+            queue.extend(process.children.lock().iter().cloned());
+            Some(process)
+        })
+    }
 }
 
-pub fn start_init_process() {
+static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let tid = new_tid();
     assert_eq!(tid, 1);
     let thread = Thread::empty(tid);
@@ -227,18 +270,20 @@ pub fn start_init_process() {
 
     let file = TmpFsFile::new(FileMode::all());
     file.write(0, *INIT).unwrap();
-    let file = file.open(OpenFlags::empty()).unwrap();
+    let path = Path::new(b"/bin/init".to_vec()).unwrap();
+    let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
 
     guard
-        .start_executable(
-            &Path::new(b"/bin/init".to_vec()).unwrap(),
-            &file,
-            &[CStr::from_bytes_with_nul(b"/bin/init\0").unwrap()],
-            &[] as &[&CStr],
-            &mut ctx,
-        )
+        .start_executable(&path, &file, &[c"/bin/init"], &[] as &[&CStr], &mut ctx)
         .unwrap();
     drop(guard);
 
-    thread.spawn();
+    let thread = Arc::new(thread);
+    thread.clone().spawn();
+
+    thread
+});
+
+pub fn start_init_process() {
+    INIT_THREAD.process();
 }

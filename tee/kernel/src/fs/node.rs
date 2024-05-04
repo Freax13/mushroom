@@ -9,6 +9,7 @@ use crate::{
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
         thread::ThreadGuard,
+        Process,
     },
 };
 use alloc::{sync::Arc, vec::Vec};
@@ -24,14 +25,14 @@ use self::{
 };
 
 use super::{
-    fd::{FileDescriptor, FileDescriptorTable},
+    fd::FileDescriptor,
     path::{FileName, Path, PathSegment},
 };
 
 pub mod directory;
 
 pub mod devtmpfs;
-pub mod fdfs;
+pub mod procfs;
 pub mod tmpfs;
 
 pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> = Lazy::new(|| {
@@ -55,15 +56,15 @@ pub fn new_dev() -> u64 {
 pub type DynINode = Arc<dyn INode>;
 
 pub trait INode: Any + Send + Sync + 'static {
-    fn ty(&self) -> FileType {
-        self.stat().mode.ty()
+    fn ty(&self) -> Result<FileType> {
+        self.stat().map(|stat| stat.mode.ty())
     }
-    fn stat(&self) -> Stat;
+    fn stat(&self) -> Result<Stat>;
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor>;
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor>;
 
-    fn mode(&self) -> FileMode {
-        self.stat().mode.mode()
+    fn mode(&self) -> Result<FileMode> {
+        self.stat().map(|stat| stat.mode.mode())
     }
 
     fn set_mode(&self, mode: FileMode);
@@ -196,7 +197,8 @@ pub trait INode: Any + Send + Sync + 'static {
         Ok(None)
     }
 
-    fn read_link(&self) -> Result<Path> {
+    fn read_link(&self, ctx: &FileAccessContext) -> Result<Path> {
+        let _ = ctx;
         bail!(Inval)
     }
 }
@@ -214,7 +216,7 @@ fn resolve_links(
 }
 
 pub struct FileAccessContext {
-    pub fdtable: Arc<FileDescriptorTable>,
+    pub process: Arc<Process>,
     symlink_recursion_limit: u16,
 }
 
@@ -233,7 +235,7 @@ impl FileAccessContext {
 impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
         Self {
-            fdtable: ExtractableThreadState::extract_from_thread(guard),
+            process: guard.process().clone(),
             symlink_recursion_limit: 16,
         }
     }
@@ -264,7 +266,7 @@ fn lookup_node_with_parent(
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
                 PathSegment::Empty | PathSegment::Dot => {
                     // Make sure that the node is a directory.
-                    ensure!(node.stat().mode.ty() == FileType::Dir, NotDir);
+                    ensure!(node.ty()? == FileType::Dir, NotDir);
                     Ok((start_dir, node))
                 }
                 PathSegment::DotDot => {
@@ -320,7 +322,7 @@ fn find_parent<'a>(
     )?;
 
     // Make sure that the parent is a directory.
-    ensure!(parent.stat().mode.ty() == FileType::Dir, NotDir);
+    ensure!(parent.ty()? == FileType::Dir, NotDir);
 
     Ok((parent, segment))
 }
@@ -345,14 +347,14 @@ pub fn create_file(
         match dir.create_file(file_name.into_owned(), mode)? {
             Ok(file) => return Ok(file),
             Err(existing) => {
-                let stat = existing.stat();
+                let stat = existing.stat()?;
 
                 // If the node is a symlink start over with the destination
                 // path.
                 if stat.mode.ty() == FileType::Link {
                     ensure!(!flags.contains(OpenFlags::NOFOLLOW), Loop);
 
-                    path = existing.read_link()?;
+                    path = existing.read_link(ctx)?;
                     ctx.follow_symlink()?;
                     start_dir = dir;
                     continue;
@@ -402,7 +404,7 @@ pub fn create_link(
 
 pub fn read_link(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<Path> {
     let node = lookup_node(start_dir, path, ctx)?;
-    node.read_link()
+    node.read_link(ctx)
 }
 
 pub fn mount(

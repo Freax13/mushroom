@@ -117,3 +117,9 @@ impl Debug for FileName<'_> {
         Display::fmt(&self.as_bytes().escape_ascii(), f)
     }
 }
+
+impl PartialEq<str> for FileName<'_> {
+    fn eq(&self, other: &str) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}

@@ -23,8 +23,8 @@ use crate::{
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, read_link, set_mode, unlink_dir, unlink_file,
-            DirEntry, FileAccessContext, OldDirEntry,
+            lookup_and_resolve_node, lookup_node, procfs, read_link, set_mode, unlink_dir,
+            unlink_file, DirEntry, FileAccessContext, OldDirEntry,
         },
         path::Path,
     },
@@ -296,7 +296,7 @@ fn stat(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_and_resolve_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -314,7 +314,7 @@ fn stat64(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_and_resolve_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
     let stat64 = Stat64::from(stat);
 
     virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
@@ -331,7 +331,7 @@ fn fstat(
     statbuf: Pointer<Stat>,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let stat = fd.stat();
+    let stat = fd.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -350,7 +350,7 @@ fn lstat(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -368,7 +368,7 @@ fn lstat64(
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_node(thread.cwd.clone(), &filename, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     let stat64 = Stat64::from(stat);
     virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
@@ -1169,6 +1169,7 @@ async fn clone(
             new_tid,
             Arc::downgrade(thread.process()),
             termination_signal,
+            thread.process().exe.read().clone(),
         ))
     };
 
@@ -1240,7 +1241,7 @@ async fn clone(
         virtual_memory.write(child_tid, new_tid)?;
     }
 
-    new_thread.spawn();
+    Arc::new(new_thread).spawn();
 
     if let Some(vfork_receiver) = vfork_receiver {
         let _ = vfork_receiver.recv().await;
@@ -1336,18 +1337,20 @@ async fn execve(
     // Open the executable.
     let cwd = thread.lock().cwd.clone();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
-    ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
-    let file = node.open(OpenFlags::empty())?;
+    ensure!(node.mode()?.contains(FileMode::EXECUTE), Acces);
+    let file = node.open(pathname.clone(), OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
     let cpu_state =
         virtual_memory.start_executable(&pathname, &file, &args, &envs, &mut ctx, cwd)?;
 
-    // Everything was successfull, no errors can occour after this point.
+    // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
-    thread.process().execve(virtual_memory, cpu_state, fdtable);
+    thread
+        .process()
+        .execve(virtual_memory, cpu_state, fdtable, pathname);
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
@@ -1817,6 +1820,7 @@ fn mount(
 
     let node = match r#type.as_bytes() {
         b"devtmpfs" => devtmpfs::new,
+        b"procfs" => procfs::new,
         _ => bail!(NoDev),
     };
 
@@ -2106,11 +2110,10 @@ fn openat(
         };
 
         if flags.contains(OpenFlags::DIRECTORY) {
-            let stat = node.stat();
-            ensure!(stat.mode.ty() == FileType::Dir, NotDir);
+            ensure!(node.ty()? == FileType::Dir, NotDir);
         }
 
-        let path_fd = PathFd::new(node);
+        let path_fd = PathFd::new(filename.clone(), node);
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
@@ -2126,7 +2129,7 @@ fn openat(
         } else {
             lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
         };
-        node.open(flags)?
+        node.open(filename, flags)?
     };
 
     let fd = fdtable.insert(fd, flags)?;
@@ -2224,10 +2227,10 @@ fn newfstatat(
         let pathname = virtual_memory.read(pathname.cast::<u8>())?;
         if pathname == 0 {
             let stat = if dfd == FdNum::CWD {
-                thread.cwd.stat()
+                thread.cwd.stat()?
             } else {
                 let fd = fdtable.get(dfd)?;
-                fd.stat()
+                fd.stat()?
             };
 
             virtual_memory.write_with_abi(statbuf, stat, abi)?;
@@ -2250,7 +2253,7 @@ fn newfstatat(
     } else {
         lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?
     };
-    let stat = node.stat();
+    let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -2421,7 +2424,7 @@ fn faccessat(
     let pathname = virtual_memory.read(pathname)?;
 
     let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
-    let stat = node.stat();
+    let stat = node.stat()?;
     let file_mode = stat.mode.mode();
 
     let groups = {

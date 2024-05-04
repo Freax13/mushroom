@@ -87,9 +87,9 @@ impl VirtualMemory {
 
         if let Some(interpreter_path) = info.interpreter_path {
             let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
-            ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
+            ensure!(node.mode()?.contains(FileMode::EXECUTE), Acces);
 
-            let file = node.open(OpenFlags::empty())?;
+            let file = node.open(interpreter_path, OpenFlags::empty())?;
             let info = elf::load_elf::<E>(&file, self.modify(), info.base + 0x2000_0000)?;
 
             entrypoint = info.entry;
@@ -224,8 +224,8 @@ impl VirtualMemory {
         let interpreter_path_str = args.next().ok_or(err!(Inval))??;
         let interpreter_path = Path::new(interpreter_path_str.as_bytes().to_vec())?;
         let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
-        ensure!(node.mode().contains(FileMode::EXECUTE), Acces);
-        let interpreter = node.open(OpenFlags::empty())?;
+        ensure!(node.mode()?.contains(FileMode::EXECUTE), Acces);
+        let interpreter = node.open(interpreter_path.clone(), OpenFlags::empty())?;
 
         let mut new_argv = vec![interpreter_path_str];
         for arg in args {

@@ -3,7 +3,7 @@ use log::debug;
 use super::{Events, OpenFileDescription};
 use crate::{
     error::Result,
-    fs::node::new_ino,
+    fs::{node::new_ino, path::Path},
     user::process::syscall::args::{
         FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
     },
@@ -24,8 +24,12 @@ impl OpenFileDescription for Stdin {
         OpenFlags::empty()
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn path(&self) -> Path {
+        Path::new(b"pipe:[0]".to_vec()).unwrap()
+    }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -39,7 +43,7 @@ impl OpenFileDescription for Stdin {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -62,14 +66,18 @@ impl OpenFileDescription for Stdout {
         OpenFlags::empty()
     }
 
+    fn path(&self) -> Path {
+        Path::new(b"pipe:[1]".to_vec()).unwrap()
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
         debug!("{chunk:02x?}");
         Ok(buf.len())
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -83,7 +91,7 @@ impl OpenFileDescription for Stdout {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -106,14 +114,18 @@ impl OpenFileDescription for Stderr {
         OpenFlags::empty()
     }
 
+    fn path(&self) -> Path {
+        Path::new(b"pipe:[2]".to_vec()).unwrap()
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
         debug!("{chunk:02x?}");
         Ok(buf.len())
     }
 
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -127,7 +139,7 @@ impl OpenFileDescription for Stderr {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
     fn poll_ready(&self, events: Events) -> Events {

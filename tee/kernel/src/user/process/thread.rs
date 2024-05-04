@@ -65,6 +65,8 @@ pub struct Thread {
     state: Mutex<ThreadState>,
     // Mutable state specific to the ABI the thread is running with.
     pub cpu_state: Mutex<CpuState>,
+    // Rarely mutable state.
+    pub fdtable: Mutex<Arc<FileDescriptorTable>>,
 }
 
 pub struct ThreadState {
@@ -82,7 +84,6 @@ pub struct ThreadState {
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
-    fdtable: Arc<FileDescriptorTable>,
 }
 
 impl Thread {
@@ -114,22 +115,26 @@ impl Thread {
                 clear_child_tid: Pointer::NULL,
                 cwd,
                 vfork_done,
-                fdtable,
                 umask,
             }),
             cpu_state: Mutex::new(cpu_state),
+            fdtable: Mutex::new(fdtable),
         }
     }
 
-    pub fn spawn(self) {
-        let arc = Arc::new(self);
-        spawn(arc.run());
+    pub fn spawn(self: Arc<Self>) {
+        spawn(self.run());
     }
 
     pub fn empty(tid: u32) -> Self {
         Self::new(
             tid,
-            Process::new(tid, Weak::new(), None),
+            Process::new(
+                tid,
+                Weak::new(),
+                None,
+                Path::new(b"/bin/init".to_vec()).unwrap(),
+            ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
             Arc::new(VirtualMemory::new()),
@@ -416,13 +421,9 @@ impl ThreadGuard<'_> {
         &self.virtual_memory
     }
 
-    pub fn fdtable(&self) -> &Arc<FileDescriptorTable> {
-        &self.fdtable
-    }
-
     /// Replaces the file descriptor table with an emtpy one.
     pub fn close_all_fds(&mut self) {
-        self.fdtable = Arc::new(FileDescriptorTable::empty());
+        *self.thread.fdtable.lock() = Arc::new(FileDescriptorTable::empty());
     }
 
     pub fn execve(
@@ -433,7 +434,7 @@ impl ThreadGuard<'_> {
     ) {
         self.virtual_memory = Arc::new(virtual_memory);
         *self.thread.cpu_state.lock() = cpu_state;
-        self.fdtable = Arc::new(fdtable);
+        *self.thread.fdtable.lock() = Arc::new(fdtable);
 
         self.clear_child_tid = Pointer::NULL;
         self.signal_handler_table = Arc::new(SignalHandlerTable::new());

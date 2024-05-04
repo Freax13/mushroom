@@ -7,7 +7,7 @@ use bytemuck::pod_read_unaligned;
 use super::{Events, OpenFileDescription};
 use crate::{
     error::{ensure, err, Result},
-    fs::node::new_ino,
+    fs::{node::new_ino, path::Path},
     rt::notify::Notify,
     user::process::{
         memory::VirtualMemory,
@@ -35,6 +35,10 @@ impl EventFd {
 impl OpenFileDescription for EventFd {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
+    }
+
+    fn path(&self) -> Path {
+        Path::new(b"anon_inode:[eventfd]".to_vec()).unwrap()
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -119,8 +123,8 @@ impl OpenFileDescription for EventFd {
     }
 
     #[inline]
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -134,6 +138,6 @@ impl OpenFileDescription for EventFd {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 }

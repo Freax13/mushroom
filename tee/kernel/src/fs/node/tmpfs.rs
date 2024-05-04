@@ -88,12 +88,12 @@ impl TmpFsDir {
 impl INode for TmpFsDir {
     dir_impls!();
 
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::Dir, guard.mode);
         // FIXME: Fill in more values.
-        Stat {
-            dev: 0,
+        Ok(Stat {
+            dev: self.dev,
             ino: self.ino,
             nlink: 1,
             mode,
@@ -106,11 +106,11 @@ impl INode for TmpFsDir {
             atime: guard.atime,
             mtime: guard.mtime,
             ctime: guard.ctime,
-        }
+        })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
@@ -222,13 +222,13 @@ impl Directory for TmpFsDir {
         }
     }
 
-    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Vec<DirEntry> {
+    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let parent_ino = self
             .location
             .get()
             .ok()
             .flatten()
-            .map(|(parent, _)| parent.stat().ino);
+            .and_then(|(parent, _)| parent.stat().ok().map(|stat| stat.ino));
 
         let guard = self.internal.lock();
 
@@ -246,14 +246,16 @@ impl Directory for TmpFsDir {
             });
         }
         for (name, node) in guard.items.iter() {
-            let stat = node.stat();
+            let Ok(stat) = node.stat() else {
+                continue;
+            };
             entries.push(DirEntry {
                 ino: stat.ino,
                 ty: stat.mode.ty(),
                 name: DirEntryName::from(name.clone()),
             })
         }
-        entries
+        Ok(entries)
     }
 
     fn delete(&self, file_name: FileName<'static>) -> Result<()> {
@@ -268,7 +270,7 @@ impl Directory for TmpFsDir {
         let Entry::Occupied(entry) = node else {
             bail!(NoEnt);
         };
-        ensure!(entry.get().ty() != FileType::Dir, IsDir);
+        ensure!(entry.get().ty()? != FileType::Dir, IsDir);
         entry.remove();
         Ok(())
     }
@@ -279,7 +281,7 @@ impl Directory for TmpFsDir {
         let Entry::Occupied(entry) = node else {
             bail!(NoEnt);
         };
-        ensure!(entry.get().ty() == FileType::Dir, NotDir);
+        ensure!(entry.get().ty()? == FileType::Dir, NotDir);
         entry.remove();
         Ok(())
     }
@@ -523,13 +525,13 @@ impl TmpFsFile {
 }
 
 impl INode for TmpFsFile {
-    fn stat(&self) -> Stat {
+    fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         let mode = FileTypeAndMode::new(FileType::File, guard.mode);
         let size = guard.buffer.len() as i64;
 
         // FIXME: Fill in more values.
-        Stat {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -543,11 +545,11 @@ impl INode for TmpFsFile {
             atime: guard.atime,
             mtime: guard.mtime,
             ctime: guard.ctime,
-        }
+        })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_file(self.this.upgrade().unwrap(), flags)
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
     fn set_mode(&self, mode: FileMode) {
@@ -658,8 +660,8 @@ pub struct TmpFsSymlink {
 }
 
 impl INode for TmpFsSymlink {
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -673,10 +675,10 @@ impl INode for TmpFsSymlink {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
-    fn open(&self, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
         bail!(Loop)
     }
 
@@ -684,7 +686,7 @@ impl INode for TmpFsSymlink {
         todo!()
     }
 
-    fn read_link(&self) -> Result<Path> {
+    fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.target.clone())
     }
 
@@ -717,8 +719,8 @@ impl TmpFsCharDev {
 }
 
 impl INode for TmpFsCharDev {
-    fn stat(&self) -> Stat {
-        Stat {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
@@ -732,11 +734,11 @@ impl INode for TmpFsCharDev {
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
-        }
+        })
     }
 
-    fn open(&self, flags: OpenFlags) -> Result<FileDescriptor> {
-        char_dev::open(flags, self.stat())
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        char_dev::open(path, flags, self.stat()?)
     }
 
     fn set_mode(&self, _mode: FileMode) {}

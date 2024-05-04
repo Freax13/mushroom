@@ -25,7 +25,7 @@ use crate::{
     fs::node::DirEntry,
 };
 
-use super::node::fdfs::FdINode;
+use super::{node::procfs::FdINode, path::Path};
 
 pub mod dir;
 pub mod epoll;
@@ -185,7 +185,7 @@ impl FileDescriptorTable {
             .iter()
             .map(|(num, entry)| DirEntry {
                 ino: entry.ino,
-                ty: entry.fd.ty(),
+                ty: FileType::Link,
                 name: DirEntryName::FileName(
                     FileName::new(format!("{num}").as_bytes())
                         .unwrap()
@@ -247,6 +247,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn set_flags(&self, flags: OpenFlags) {
         let _ = flags;
     }
+
+    fn path(&self) -> Path;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
@@ -354,10 +356,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = mtime;
     }
 
-    fn stat(&self) -> Stat;
+    fn stat(&self) -> Result<Stat>;
 
-    fn ty(&self) -> FileType {
-        self.stat().mode.ty()
+    fn ty(&self) -> Result<FileType> {
+        Ok(self.stat()?.mode.ty())
     }
 
     fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {

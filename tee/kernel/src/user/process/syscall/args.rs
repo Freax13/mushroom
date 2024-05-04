@@ -46,7 +46,7 @@ pub trait ExtractableThreadState: Send {
 
 impl ExtractableThreadState for Arc<FileDescriptorTable> {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        guard.fdtable().clone()
+        guard.thread.fdtable.lock().clone()
     }
 }
 
@@ -673,6 +673,16 @@ pub struct Stat {
     pub atime: Timespec,
     pub mtime: Timespec,
     pub ctime: Timespec,
+}
+
+impl Stat {
+    pub fn major(&self) -> u16 {
+        self.rdev.get_bits(8..24) as u16
+    }
+
+    pub fn minor(&self) -> u8 {
+        self.rdev as u8
+    }
 }
 
 #[derive(Debug, Clone, Copy, Zeroable, NoUninit)]
