@@ -3,14 +3,14 @@ use core::ffi::c_void;
 use bit_field::BitField;
 use x86_64::{
     registers::control::Cr2,
-    structures::{
-        idt::InterruptStackFrame,
-        paging::{FrameAllocator, FrameDeallocator, Page, Size4KiB},
-    },
+    structures::{idt::InterruptStackFrame, paging::Page},
     VirtAddr,
 };
 
-use crate::memory::pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry};
+use crate::memory::{
+    frame::{allocate_frame, deallocate_frame},
+    pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry},
+};
 
 mod interface;
 
@@ -33,11 +33,7 @@ fn map_from_shadow(addr: u64) -> u64 {
 pub const MIN_ALLOCATION_SIZE: usize = 0x1000 << ASAN_MAPPING_SCALE;
 
 /// Add `ptr` to the shadow mapping.
-pub fn map_shadow(
-    ptr: *const c_void,
-    size: usize,
-    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-) {
+pub fn map_shadow(ptr: *const c_void, size: usize) {
     let addr = ptr as u64;
     assert!(
         addr.get_bit(63),
@@ -59,10 +55,10 @@ pub fn map_shadow(
     for shadow_page in (shadow_page..).take(shadow_pages) {
         // debug!("mapping shadow page: {shadow_page:?}");
 
-        let frame = allocator.allocate_frame().unwrap();
+        let frame = allocate_frame();
         let entry =
             PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE | PageTableFlags::GLOBAL);
-        let res = unsafe { map_page(shadow_page, entry, &mut *allocator) };
+        let res = unsafe { map_page(shadow_page, entry) };
         res.unwrap();
 
         let ptr = shadow_page.start_address().as_mut_ptr();
@@ -73,11 +69,7 @@ pub fn map_shadow(
 }
 
 /// Remove `ptr` from the shadow mapping.
-pub fn unmap_shadow(
-    ptr: *const c_void,
-    size: usize,
-    allocator: &mut impl FrameDeallocator<Size4KiB>,
-) {
+pub fn unmap_shadow(ptr: *const c_void, size: usize) {
     let addr = ptr as u64;
     assert!(
         addr.get_bit(63),
@@ -99,7 +91,7 @@ pub fn unmap_shadow(
     for shadow_page in (shadow_page..).take(shadow_pages) {
         let entry = unsafe { unmap_page(shadow_page) };
         unsafe {
-            allocator.deallocate_frame(entry.frame());
+            deallocate_frame(entry.frame());
         }
     }
 }

@@ -3,7 +3,7 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::{memory::frame::NewAllocator, spin::mutex::Mutex};
+use crate::{memory::frame::allocate_frame, spin::mutex::Mutex};
 use arrayvec::ArrayVec;
 use constants::{
     FINISH_OUTPUT_MSR, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
@@ -152,11 +152,7 @@ pub fn launch_next_ap() {
 }
 
 pub fn output(bytes: &[u8]) {
-    static FRAME: Mutex<LazyCell<PhysFrame>> = Mutex::new(LazyCell::new(|| {
-        NewAllocator
-            .allocate_frame()
-            .expect("failed to allocate frame for output")
-    }));
+    static FRAME: Mutex<LazyCell<PhysFrame>> = Mutex::new(LazyCell::new(allocate_frame));
 
     let guard = FRAME.lock();
     let frame = **guard;

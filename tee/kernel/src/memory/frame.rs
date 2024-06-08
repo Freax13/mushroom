@@ -13,9 +13,7 @@ use constants::physical_address::DYNAMIC;
 use crossbeam_utils::atomic::AtomicCell;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
-    structures::paging::{
-        FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB, Size4KiB,
-    },
+    structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB},
     PhysAddr,
 };
 
@@ -56,24 +54,6 @@ static L2: L2SuperGroup = L2SuperGroup::new();
 static PHYSICAL_ADDRESSES: PhysicalAddressSuperGroup = PhysicalAddressSuperGroup::new();
 /// This contains the chunk and group index for every for every slot.
 static REVERSE_MAP: ReverseMap = ReverseMap::new();
-
-#[derive(Clone, Copy)]
-pub struct NewAllocator;
-
-unsafe impl FrameAllocator<Size4KiB> for NewAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = allocate_frame();
-        Some(frame)
-    }
-}
-
-impl FrameDeallocator<Size4KiB> for NewAllocator {
-    unsafe fn deallocate_frame(&mut self, frame: PhysFrame) {
-        unsafe {
-            deallocate_frame(frame);
-        }
-    }
-}
 
 /// Allocate a 4KiB frame.
 pub fn allocate_frame() -> PhysFrame {

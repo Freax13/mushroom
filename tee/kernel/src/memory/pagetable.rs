@@ -29,13 +29,15 @@ use log::trace;
 use x86_64::{
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
-    structures::paging::{
-        FrameAllocator, FrameDeallocator, Page, PageTableIndex, PhysFrame, Size4KiB,
-    },
+    structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
 };
 
-use super::{frame::NewAllocator, invlpgb::INVLPGB, temporary::copy_into_frame};
+use super::{
+    frame::{allocate_frame, deallocate_frame},
+    invlpgb::INVLPGB,
+    temporary::copy_into_frame,
+};
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 
@@ -44,31 +46,27 @@ static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     for pml4e in pml4.entries[256..].iter() {
         let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
         let reserved_allocation = storage
-            .allocate(&mut NewAllocator)
+            .allocate()
             .expect("failed to allocate memory for kernel pml4e");
         pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
     }
 });
 
-pub unsafe fn map_page(
-    page: Page,
-    entry: PresentPageTableEntry,
-    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-) -> Result<()> {
+pub unsafe fn map_page(page: Page, entry: PresentPageTableEntry) -> Result<()> {
     trace!("mapping page {page:?}->{entry:?} pml4={:?}", Cr3::read().0);
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
+    let level3_guard = level4_entry.acquire(entry.flags())?;
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
+    let level2_guard = level3_entry.acquire(entry.flags())?;
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
+    let level1_guard = level2_entry.acquire(entry.flags())?;
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -213,7 +211,7 @@ pub struct PagetablesAllocations {
 impl Drop for PagetablesAllocations {
     fn drop(&mut self) {
         unsafe {
-            NewAllocator.deallocate_frame(self.pml4);
+            deallocate_frame(self.pml4);
         }
     }
 }
@@ -230,7 +228,7 @@ impl Pagetables {
         Lazy::force(&INIT_KERNEL_PML4ES);
 
         // Allocate a frame for the new pml4.
-        let frame = NewAllocator.allocate_frame().ok_or(err!(NoMem))?;
+        let frame = allocate_frame();
 
         // Copy the kernel entries into a temporary buffer.
         let pml4 = ActivePageTable::get();
@@ -306,12 +304,7 @@ impl Pagetables {
     }
 
     /// Map a page regardless of whether there's already a page mapped there.
-    pub fn set_page(
-        &self,
-        page: Page,
-        entry: PresentPageTableEntry,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-    ) -> Result<()> {
+    pub fn set_page(&self, page: Page, entry: PresentPageTableEntry) -> Result<()> {
         check_user_page(page)?;
         trace!("mapping page {page:?}");
 
@@ -319,15 +312,15 @@ impl Pagetables {
         let level4 = self.activate();
         let level4_entry = &level4[page.p4_index()];
 
-        let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
+        let level3_guard = level4_entry.acquire(entry.flags())?;
         let level3 = &*level3_guard;
         let level3_entry = &level3[page.p3_index()];
 
-        let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
+        let level2_guard = level3_entry.acquire(entry.flags())?;
         let level2 = &*level2_guard;
         let level2_entry = &level2[page.p2_index()];
 
-        let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
+        let level1_guard = level2_entry.acquire(entry.flags())?;
         let level1 = &*level1_guard;
         let level1_entry = &level1[page.p1_index()];
 
@@ -677,21 +670,17 @@ where
 }
 
 impl ActivePageTableEntry<Level4> {
-    pub fn acquire(
-        &self,
-        flags: PageTableFlags,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-    ) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
+    pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
         if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
-            let reserved_allocation = storage.allocate(allocator)?;
+            let reserved_allocation = storage.allocate()?;
             self.acquire_reference_count(reserved_allocation, flags)
                 .unwrap();
         } else {
             let mut storage = ReservedFrameStorage::new();
-            let reserved_allocation = storage.allocate(allocator)?;
+            let reserved_allocation = storage.allocate()?;
             self.acquire_reference_count(reserved_allocation, flags)
                 .unwrap();
-            storage.release(allocator);
+            storage.release();
         }
 
         Ok(ActivePageTableEntryGuard { entry: self })
@@ -707,23 +696,19 @@ impl<L> ActivePageTableEntry<L>
 where
     L: HasParentLevel + TableLevel,
 {
-    pub fn acquire(
-        &self,
-        flags: PageTableFlags,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-    ) -> Result<ActivePageTableEntryGuard<'_, L>> {
+    pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, L>> {
         let initialized =
             if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
-                let reserved_allocation = storage.allocate(allocator)?;
+                let reserved_allocation = storage.allocate()?;
                 self.acquire_reference_count(reserved_allocation, flags)
                     .unwrap()
             } else {
                 let mut storage = ReservedFrameStorage::new();
-                let reserved_allocation = storage.allocate(allocator)?;
+                let reserved_allocation = storage.allocate()?;
                 let res = self
                     .acquire_reference_count(reserved_allocation, flags)
                     .unwrap();
-                storage.release(allocator);
+                storage.release();
                 res
             };
 
@@ -817,7 +802,7 @@ where
                 }
 
                 // Actually initialize the entry.
-                let frame = reserved_allocation.take();
+                let frame = allocate_frame();
                 let mut new_entry = frame.start_address().as_u64();
                 new_entry.set_bit(PRESENT_BIT, true);
                 new_entry.set_bit(WRITE_BIT, true);
@@ -1129,7 +1114,7 @@ where
         if let Some(frame) = frame {
             // Deallocate the backing frame for the entry.
             unsafe {
-                NewAllocator.deallocate_frame(frame);
+                deallocate_frame(frame);
             }
 
             // Decrease the reference count on the parent entry.
@@ -1235,25 +1220,21 @@ impl ReservedFrameStorage {
 
     /// Create an allocation by either making a fresh allocation or reusing an
     /// existing one.
-    pub fn allocate(
-        &mut self,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + ?Sized),
-    ) -> Result<ReservedFrameAllocation<'_>> {
+    pub fn allocate(&mut self) -> Result<ReservedFrameAllocation<'_>> {
         if self.frame.is_none() {
-            // TODO: Use another allocator for this.
-            let frame = allocator.allocate_frame().ok_or(err!(NoMem))?;
+            let frame = allocate_frame();
             self.frame = Some(frame);
         }
 
         Ok(ReservedFrameAllocation { storage: self })
     }
 
-    pub fn release(mut self, allocator: &mut (impl FrameDeallocator<Size4KiB> + ?Sized)) {
+    pub fn release(mut self) {
         let Some(frame) = self.frame.take() else {
             return;
         };
         unsafe {
-            allocator.deallocate_frame(frame);
+            deallocate_frame(frame);
         }
     }
 }
@@ -1262,7 +1243,7 @@ impl Drop for ReservedFrameStorage {
     fn drop(&mut self) {
         if let Some(frame) = self.frame.take() {
             unsafe {
-                NewAllocator.deallocate_frame(frame);
+                deallocate_frame(frame);
             }
         }
     }
