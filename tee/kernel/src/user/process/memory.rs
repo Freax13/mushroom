@@ -14,6 +14,7 @@ use crate::{
     error::{ensure, err},
     fs::{fd::FileDescriptor, path::Path},
     memory::{
+        frame::NewAllocator,
         page::{KernelPage, UserPage},
         pagetable::{check_user_address, Pagetables},
     },
@@ -42,7 +43,7 @@ use x86_64::{
 
 use crate::{
     error::{Error, Result},
-    memory::{frame::FRAME_ALLOCATOR, pagetable::PageTableFlags},
+    memory::pagetable::PageTableFlags,
 };
 
 use super::syscall::{
@@ -165,7 +166,7 @@ impl VirtualMemory {
         }
 
         self.pagetables
-            .set_page(page, entry, &mut &FRAME_ALLOCATOR)
+            .set_page(page, entry, &mut NewAllocator)
             .map_err(PageFaultError::Other)?;
 
         Ok(())

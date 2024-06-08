@@ -236,7 +236,7 @@ impl<const N: usize> ChunkHeader<N> {
         crate::sanitize::map_shadow(
             addr as *mut _,
             Size2MiB::SIZE as usize,
-            &mut &crate::memory::heap::FRAME_ALLOCATOR,
+            &mut crate::memory::frame::NewAllocator,
         );
         // Forbid accessing the entries.
         #[cfg(sanitize = "address")]
@@ -300,7 +300,7 @@ impl<const N: usize> ChunkHeader<N> {
         crate::sanitize::unmap_shadow(
             ptr as *mut _,
             Size2MiB::SIZE as usize,
-            &mut &crate::memory::heap::FRAME_ALLOCATOR,
+            &mut crate::memory::frame::NewAllocator,
         );
 
         // Release the physical memory.

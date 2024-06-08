@@ -1,11 +1,8 @@
-use crate::spin::lazy::Lazy;
+use crate::{memory::frame::NewAllocator, spin::lazy::Lazy};
 use constants::{physical_address, virtual_address};
 use x86_64::structures::paging::{frame::PhysFrameRangeInclusive, page::PageRangeInclusive};
 
-use crate::memory::{
-    frame::FRAME_ALLOCATOR,
-    pagetable::{map_page, PageTableFlags, PresentPageTableEntry},
-};
+use crate::memory::pagetable::{map_page, PageTableFlags, PresentPageTableEntry};
 
 pub mod fd;
 pub mod node;
@@ -32,14 +29,14 @@ fn load_static_file(
 
     let header_entry = PresentPageTableEntry::new(header_frame, PageTableFlags::GLOBAL);
     unsafe {
-        map_page(header_page, header_entry, &mut &FRAME_ALLOCATOR).expect("failed to map header");
+        map_page(header_page, header_entry, &mut NewAllocator).expect("failed to map header");
     }
 
     #[cfg(sanitize = "address")]
     crate::sanitize::map_shadow(
         header_page.start_address().as_ptr(),
         crate::sanitize::MIN_ALLOCATION_SIZE,
-        &mut &FRAME_ALLOCATOR,
+        &mut NewAllocator,
     );
 
     let len = unsafe {
@@ -56,8 +53,7 @@ fn load_static_file(
 
         let input_entry = PresentPageTableEntry::new(input_frame, PageTableFlags::GLOBAL);
         unsafe {
-            map_page(input_page, input_entry, &mut &FRAME_ALLOCATOR)
-                .expect("failed to map content");
+            map_page(input_page, input_entry, &mut NewAllocator).expect("failed to map content");
         }
     }
 
@@ -70,7 +66,7 @@ fn load_static_file(
             .cast(),
         ((0x1000 + len).saturating_sub(crate::sanitize::MIN_ALLOCATION_SIZE))
             .next_multiple_of(crate::sanitize::MIN_ALLOCATION_SIZE),
-        &mut &FRAME_ALLOCATOR,
+        &mut NewAllocator,
     );
 
     let first_input_page = header_page + 1;

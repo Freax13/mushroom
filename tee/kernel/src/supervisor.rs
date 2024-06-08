@@ -3,7 +3,7 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::spin::mutex::Mutex;
+use crate::{memory::frame::NewAllocator, spin::mutex::Mutex};
 use arrayvec::ArrayVec;
 use constants::{
     FINISH_OUTPUT_MSR, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
@@ -16,10 +16,7 @@ use x86_64::{
     PhysAddr,
 };
 
-use crate::{
-    memory::{frame::FRAME_ALLOCATOR, temporary::copy_into_frame},
-    per_cpu::PerCpu,
-};
+use crate::{memory::temporary::copy_into_frame, per_cpu::PerCpu};
 
 pub static ALLOCATOR: Allocator = Allocator::new();
 
@@ -156,7 +153,7 @@ pub fn launch_next_ap() {
 
 pub fn output(bytes: &[u8]) {
     static FRAME: Mutex<LazyCell<PhysFrame>> = Mutex::new(LazyCell::new(|| {
-        (&FRAME_ALLOCATOR)
+        NewAllocator
             .allocate_frame()
             .expect("failed to allocate frame for output")
     }));

@@ -35,7 +35,7 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use super::{frame::FRAME_ALLOCATOR, invlpgb::INVLPGB, temporary::copy_into_frame};
+use super::{frame::NewAllocator, invlpgb::INVLPGB, temporary::copy_into_frame};
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 
@@ -44,7 +44,7 @@ static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     for pml4e in pml4.entries[256..].iter() {
         let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
         let reserved_allocation = storage
-            .allocate(&mut &FRAME_ALLOCATOR)
+            .allocate(&mut NewAllocator)
             .expect("failed to allocate memory for kernel pml4e");
         pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
     }
@@ -213,7 +213,7 @@ pub struct PagetablesAllocations {
 impl Drop for PagetablesAllocations {
     fn drop(&mut self) {
         unsafe {
-            (&FRAME_ALLOCATOR).deallocate_frame(self.pml4);
+            NewAllocator.deallocate_frame(self.pml4);
         }
     }
 }
@@ -230,7 +230,7 @@ impl Pagetables {
         Lazy::force(&INIT_KERNEL_PML4ES);
 
         // Allocate a frame for the new pml4.
-        let frame = (&FRAME_ALLOCATOR).allocate_frame().ok_or(err!(NoMem))?;
+        let frame = NewAllocator.allocate_frame().ok_or(err!(NoMem))?;
 
         // Copy the kernel entries into a temporary buffer.
         let pml4 = ActivePageTable::get();
@@ -1129,7 +1129,7 @@ where
         if let Some(frame) = frame {
             // Deallocate the backing frame for the entry.
             unsafe {
-                (&FRAME_ALLOCATOR).deallocate_frame(frame);
+                NewAllocator.deallocate_frame(frame);
             }
 
             // Decrease the reference count on the parent entry.
@@ -1262,7 +1262,7 @@ impl Drop for ReservedFrameStorage {
     fn drop(&mut self) {
         if let Some(frame) = self.frame.take() {
             unsafe {
-                (&FRAME_ALLOCATOR).deallocate_frame(frame);
+                NewAllocator.deallocate_frame(frame);
             }
         }
     }

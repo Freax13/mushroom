@@ -49,6 +49,7 @@ mod error;
 mod exception;
 mod fs;
 mod host;
+mod limited_index;
 mod logging;
 mod memory;
 mod panic;

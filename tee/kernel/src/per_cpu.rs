@@ -14,7 +14,10 @@ use x86_64::{
 };
 
 use crate::{
-    memory::pagetable::{PagetablesAllocations, ReservedFrameStorage},
+    memory::{
+        frame,
+        pagetable::{PagetablesAllocations, ReservedFrameStorage},
+    },
     user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
 };
 
@@ -39,6 +42,7 @@ pub struct PerCpu {
     pub vector: Cell<u8>,
     pub error_code: Cell<u64>,
     pub last_pagetables: RefCell<Option<Arc<PagetablesAllocations>>>,
+    pub private_allocator_state: RefCell<Option<frame::PrivateState>>,
 }
 
 impl PerCpu {
@@ -59,6 +63,7 @@ impl PerCpu {
             vector: Cell::new(0),
             error_code: Cell::new(0),
             last_pagetables: RefCell::new(None),
+            private_allocator_state: RefCell::new(None),
         }
     }
 
