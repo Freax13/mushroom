@@ -829,6 +829,12 @@ where
                 // Write the entry back.
                 atomic_store(&self.entry, new_entry);
 
+                // Flush the entry for the page table. There's a short window
+                // where another thread has removed the entry, but hasn't yet
+                // flushed the entry on this thread yet, which would lead to
+                // this thread using a stale entry.
+                self.flush(true);
+
                 // Zero out the page table.
                 let table_ptr = self.as_table_ptr().cast_mut();
                 unsafe {
@@ -1014,6 +1020,8 @@ impl ActivePageTableEntry<Level1> {
         self.parent_table_entry()
             .increase_reference_count()
             .unwrap();
+
+        self.flush(true);
     }
 
     /// Map a new page or replace an existing page.
@@ -1026,6 +1034,8 @@ impl ActivePageTableEntry<Level1> {
         } else {
             self.flush(res.get_bit(GLOBAL_BIT));
         }
+
+        self.flush(true);
     }
 
     /// # Panics
