@@ -44,11 +44,7 @@ const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
     for pml4e in pml4.entries[256..].iter() {
-        let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
-        let reserved_allocation = storage
-            .allocate()
-            .expect("failed to allocate memory for kernel pml4e");
-        pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
+        pml4e.acquire_reference_count(PageTableFlags::GLOBAL);
     }
 });
 
@@ -671,18 +667,7 @@ where
 
 impl ActivePageTableEntry<Level4> {
     pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
-        if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
-            let reserved_allocation = storage.allocate()?;
-            self.acquire_reference_count(reserved_allocation, flags)
-                .unwrap();
-        } else {
-            let mut storage = ReservedFrameStorage::new();
-            let reserved_allocation = storage.allocate()?;
-            self.acquire_reference_count(reserved_allocation, flags)
-                .unwrap();
-            storage.release();
-        }
-
+        self.acquire_reference_count(flags).unwrap();
         Ok(ActivePageTableEntryGuard { entry: self })
     }
 
@@ -697,20 +682,7 @@ where
     L: HasParentLevel + TableLevel,
 {
     pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, L>> {
-        let initialized =
-            if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
-                let reserved_allocation = storage.allocate()?;
-                self.acquire_reference_count(reserved_allocation, flags)
-                    .unwrap()
-            } else {
-                let mut storage = ReservedFrameStorage::new();
-                let reserved_allocation = storage.allocate()?;
-                let res = self
-                    .acquire_reference_count(reserved_allocation, flags)
-                    .unwrap();
-                storage.release();
-                res
-            };
+        let initialized = self.acquire_reference_count(flags).unwrap();
 
         if initialized {
             let parent_entry = self.parent_table_entry();
@@ -734,11 +706,7 @@ where
     /// already contain one. Increases the reference count.
     ///
     /// Returns true if the entry was just initialized.
-    fn acquire_reference_count(
-        &self,
-        reserved_allocation: ReservedFrameAllocation,
-        flags: PageTableFlags,
-    ) -> Option<bool> {
+    fn acquire_reference_count(&self, flags: PageTableFlags) -> Option<bool> {
         let user = flags.contains(PageTableFlags::USER);
         let global = flags.contains(PageTableFlags::GLOBAL) & L::CAN_SET_GLOBAL;
 
@@ -1201,68 +1169,6 @@ const COW_BIT: usize = 10;
 ///
 /// The total capacity of the reference count is 1<<10 = 1024.
 const REFERENCE_COUNT_BITS: Range<usize> = 52..62;
-
-/// A type that buffers an allocation.
-///
-/// Sometimes we have operations that allocate rarely, but need the allocation
-/// to happen fast. For those operations we buffer the allocation in a storage
-/// and take the buffered allocation out of it in case we need it. If we don't
-/// need it we preserved the allocation for the next time we do the operation.
-pub struct ReservedFrameStorage {
-    frame: Option<PhysFrame>,
-}
-
-impl ReservedFrameStorage {
-    /// Create a new storage.
-    pub const fn new() -> Self {
-        Self { frame: None }
-    }
-
-    /// Create an allocation by either making a fresh allocation or reusing an
-    /// existing one.
-    pub fn allocate(&mut self) -> Result<ReservedFrameAllocation<'_>> {
-        if self.frame.is_none() {
-            let frame = allocate_frame();
-            self.frame = Some(frame);
-        }
-
-        Ok(ReservedFrameAllocation { storage: self })
-    }
-
-    pub fn release(mut self) {
-        let Some(frame) = self.frame.take() else {
-            return;
-        };
-        unsafe {
-            deallocate_frame(frame);
-        }
-    }
-}
-
-impl Drop for ReservedFrameStorage {
-    fn drop(&mut self) {
-        if let Some(frame) = self.frame.take() {
-            unsafe {
-                deallocate_frame(frame);
-            }
-        }
-    }
-}
-
-pub struct ReservedFrameAllocation<'a> {
-    storage: &'a mut ReservedFrameStorage,
-}
-
-impl<'a> ReservedFrameAllocation<'a> {
-    #[inline]
-    fn take(self) -> PhysFrame {
-        unsafe {
-            // SAFETY: The existance of `ReservedFrameAllocation` proves that
-            // there is a frame stored.
-            self.storage.frame.take().unwrap_unchecked()
-        }
-    }
-}
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
