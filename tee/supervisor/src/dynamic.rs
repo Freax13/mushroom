@@ -1,6 +1,6 @@
 //! FIXME: This performs really poorly, fix this.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use bit_field::BitField;
 use constants::{physical_address::DYNAMIC, MEMORY_PORT};
@@ -24,34 +24,46 @@ pub static HOST_ALLOCTOR: HostAllocator = HostAllocator::new();
 /// lower VMPL's cleared.
 pub struct HostAllocator {
     bitmap: [AtomicU8; BITMAP_SIZE],
+    /// The byte index of the previous allocation. Chances are the bits
+    /// directly following this are free.
+    start_offset: AtomicUsize,
 }
 
 impl HostAllocator {
     const fn new() -> Self {
         Self {
             bitmap: [const { AtomicU8::new(0) }; BITMAP_SIZE],
+            start_offset: AtomicUsize::new(0),
         }
     }
 
     fn allocate_slot_id(&self) -> Option<u16> {
-        self.bitmap.iter().enumerate().find_map(|(i, bitmap)| {
-            let mut byte = bitmap.load(Ordering::SeqCst);
-            loop {
-                // Find an unset bit.
-                let bit = (0..8).find(|&i| !byte.get_bit(i))?;
+        let start_index = self.start_offset.load(Ordering::SeqCst);
 
-                // Set the bit.
-                byte = bitmap.fetch_or(1 << bit, Ordering::SeqCst);
+        self.bitmap
+            .iter()
+            .enumerate()
+            .skip(start_index)
+            .chain(self.bitmap.iter().enumerate().take(start_index))
+            .find_map(|(i, bitmap)| {
+                let mut byte = bitmap.load(Ordering::SeqCst);
+                loop {
+                    // Find an unset bit.
+                    let bit = (0..8).find(|&i| !byte.get_bit(i))?;
 
-                // Check if the bit was just set by another core.
-                if byte.get_bit(bit) {
-                    continue;
+                    // Set the bit.
+                    byte = bitmap.fetch_or(1 << bit, Ordering::SeqCst);
+
+                    // Check if the bit was just set by another core.
+                    if byte.get_bit(bit) {
+                        continue;
+                    }
+
+                    // Success!
+                    self.start_offset.store(i, Ordering::SeqCst);
+                    return Some(u16::try_from(i * 8 + bit).unwrap());
                 }
-
-                // Success!
-                return Some(u16::try_from(i * 8 + bit).unwrap());
-            }
-        })
+            })
     }
 
     unsafe fn deallocate_slot_id(&self, slot_id: u16) {
