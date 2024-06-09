@@ -233,7 +233,8 @@ fn handle_msr_prot(
             // Read
             match ecx {
                 MEMORY_MSR => {
-                    let frame = (&HOST_ALLOCTOR).allocate_frame();
+                    let allocator = &mut HOST_ALLOCTOR.borrow_mut();
+                    let frame = allocator.allocate_frame();
 
                     if let Some(frame) = frame {
                         // Create a temporary mapping.
@@ -264,8 +265,9 @@ fn handle_msr_prot(
                     let addr = PhysAddr::new(value);
                     let frame = PhysFrame::from_start_address(addr).unwrap();
                     trace!("deallocating {frame:?}");
+                    let allocator = &mut HOST_ALLOCTOR.borrow_mut();
                     unsafe {
-                        (&HOST_ALLOCTOR).deallocate_frame(frame);
+                        allocator.deallocate_frame(frame);
                     }
                 }
                 UPDATE_OUTPUT_MSR => {
