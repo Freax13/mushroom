@@ -984,8 +984,6 @@ impl ActivePageTableEntry<Level1> {
             self.parent_table_entry()
                 .increase_reference_count()
                 .unwrap();
-        } else {
-            self.flush(res.get_bit(GLOBAL_BIT));
         }
 
         self.flush(true);
