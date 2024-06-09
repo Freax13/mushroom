@@ -2,14 +2,17 @@ use std::{
     ffi::c_void,
     mem::size_of,
     num::NonZeroUsize,
-    os::fd::{AsFd, BorrowedFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     ptr::{copy_nonoverlapping, NonNull},
     sync::Arc,
 };
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{CheckedBitPattern, Pod};
-use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
+use nix::{
+    fcntl::{fallocate, FallocateFlags},
+    sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags},
+};
 use volatile::VolatilePtr;
 use x86_64::{structures::paging::PhysFrame, PhysAddr};
 
@@ -54,8 +57,17 @@ impl Slot {
         let len = u64::try_from(len)?;
         let restricted_fd = private
             .then(|| {
-                vm.create_guest_memfd(len, KvmGuestMemFdFlags::HUGE_PMD)
-                    .context("failed to create guest memfd")
+                let fd = vm
+                    .create_guest_memfd(len, KvmGuestMemFdFlags::HUGE_PMD)
+                    .context("failed to create guest memfd")?;
+                fallocate(
+                    fd.as_raw_fd(),
+                    FallocateFlags::FALLOC_FL_KEEP_SIZE,
+                    0,
+                    len as i64,
+                )
+                .context("failed to reserve memory")?;
+                Result::<_>::Ok(fd)
             })
             .transpose()?;
 

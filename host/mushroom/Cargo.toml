@@ -20,7 +20,7 @@ constants = { workspace = true }
 libc = "0.2.153"
 loader = { workspace = true }
 mushroom-verify = { workspace = true, optional = true }
-nix = { version = "0.28.0", features = ["ioctl", "mman"] }
+nix = { version = "0.28.0", features = ["fs", "ioctl", "mman"] }
 profiler-types = { workspace = true }
 rand = "0.8.5"
 snp-types = { workspace = true }
