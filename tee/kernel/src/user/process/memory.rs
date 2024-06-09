@@ -42,7 +42,7 @@ use x86_64::{
 
 use crate::{
     error::{Error, Result},
-    memory::{frame::FRAME_ALLOCATOR, pagetable::PageTableFlags},
+    memory::pagetable::PageTableFlags,
 };
 
 use super::syscall::{
@@ -165,7 +165,7 @@ impl VirtualMemory {
         }
 
         self.pagetables
-            .set_page(page, entry, &mut &FRAME_ALLOCATOR)
+            .set_page(page, entry)
             .map_err(PageFaultError::Other)?;
 
         Ok(())

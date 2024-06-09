@@ -9,10 +9,7 @@ use x86_64::structures::paging::{page::PageRangeInclusive, Page, PhysFrame, Size
 
 use crate::{
     error::Result,
-    memory::{
-        frame::FRAME_ALLOCATOR,
-        pagetable::{map_page, PresentPageTableEntry},
-    },
+    memory::pagetable::{map_page, PresentPageTableEntry},
     per_cpu::PerCpu,
 };
 
@@ -107,7 +104,7 @@ impl TemporaryMapping {
         let entry =
             PresentPageTableEntry::new(frame, PageTableFlags::WRITABLE | PageTableFlags::GLOBAL);
         unsafe {
-            map_page(*page, entry, &mut (&FRAME_ALLOCATOR))?;
+            map_page(*page, entry)?;
         }
 
         Ok(Self { page })

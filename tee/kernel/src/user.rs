@@ -1,4 +1,4 @@
-use crate::{rt::poll, supervisor::halt, time::advance_time};
+use crate::{memory::frame, rt::poll, supervisor::halt, time::advance_time};
 
 pub mod process;
 
@@ -14,6 +14,10 @@ pub fn run() -> ! {
         if !should_halt {
             continue;
         }
+
+        // Halt the vCPU.
+
+        frame::release_private();
 
         let res = halt();
         if res.is_err() {

@@ -14,7 +14,7 @@ use x86_64::{
 };
 
 use crate::{
-    memory::pagetable::{PagetablesAllocations, ReservedFrameStorage},
+    memory::{frame, pagetable::PagetablesAllocations},
     user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
 };
 
@@ -28,7 +28,6 @@ pub struct PerCpu {
     pub idx: usize,
     pub kernel_registers: Cell<KernelRegisters>,
     pub new_userspace_registers: Cell<Registers>,
-    pub reserved_frame_storage: RefCell<ReservedFrameStorage>,
     pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
@@ -39,6 +38,7 @@ pub struct PerCpu {
     pub vector: Cell<u8>,
     pub error_code: Cell<u64>,
     pub last_pagetables: RefCell<Option<Arc<PagetablesAllocations>>>,
+    pub private_allocator_state: RefCell<Option<frame::PrivateState>>,
 }
 
 impl PerCpu {
@@ -48,7 +48,6 @@ impl PerCpu {
             idx: 0,
             kernel_registers: Cell::new(KernelRegisters::ZERO),
             new_userspace_registers: Cell::new(Registers::ZERO),
-            reserved_frame_storage: RefCell::new(ReservedFrameStorage::new()),
             temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
@@ -59,6 +58,7 @@ impl PerCpu {
             vector: Cell::new(0),
             error_code: Cell::new(0),
             last_pagetables: RefCell::new(None),
+            private_allocator_state: RefCell::new(None),
         }
     }
 

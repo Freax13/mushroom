@@ -29,46 +29,40 @@ use log::trace;
 use x86_64::{
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
-    structures::paging::{
-        FrameAllocator, FrameDeallocator, Page, PageTableIndex, PhysFrame, Size4KiB,
-    },
+    structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
 };
 
-use super::{frame::FRAME_ALLOCATOR, invlpgb::INVLPGB, temporary::copy_into_frame};
+use super::{
+    frame::{allocate_frame, deallocate_frame},
+    invlpgb::INVLPGB,
+    temporary::copy_into_frame,
+};
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
     for pml4e in pml4.entries[256..].iter() {
-        let mut storage = PerCpu::get().reserved_frame_storage.borrow_mut();
-        let reserved_allocation = storage
-            .allocate(&mut &FRAME_ALLOCATOR)
-            .expect("failed to allocate memory for kernel pml4e");
-        pml4e.acquire_reference_count(reserved_allocation, PageTableFlags::GLOBAL);
+        pml4e.acquire_reference_count(PageTableFlags::GLOBAL);
     }
 });
 
-pub unsafe fn map_page(
-    page: Page,
-    entry: PresentPageTableEntry,
-    allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-) -> Result<()> {
+pub unsafe fn map_page(page: Page, entry: PresentPageTableEntry) -> Result<()> {
     trace!("mapping page {page:?}->{entry:?} pml4={:?}", Cr3::read().0);
 
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
+    let level3_guard = level4_entry.acquire(entry.flags())?;
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
+    let level2_guard = level3_entry.acquire(entry.flags())?;
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
+    let level1_guard = level2_entry.acquire(entry.flags())?;
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -213,7 +207,7 @@ pub struct PagetablesAllocations {
 impl Drop for PagetablesAllocations {
     fn drop(&mut self) {
         unsafe {
-            (&FRAME_ALLOCATOR).deallocate_frame(self.pml4);
+            deallocate_frame(self.pml4);
         }
     }
 }
@@ -230,7 +224,7 @@ impl Pagetables {
         Lazy::force(&INIT_KERNEL_PML4ES);
 
         // Allocate a frame for the new pml4.
-        let frame = (&FRAME_ALLOCATOR).allocate_frame().ok_or(err!(NoMem))?;
+        let frame = allocate_frame();
 
         // Copy the kernel entries into a temporary buffer.
         let pml4 = ActivePageTable::get();
@@ -306,12 +300,7 @@ impl Pagetables {
     }
 
     /// Map a page regardless of whether there's already a page mapped there.
-    pub fn set_page(
-        &self,
-        page: Page,
-        entry: PresentPageTableEntry,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-    ) -> Result<()> {
+    pub fn set_page(&self, page: Page, entry: PresentPageTableEntry) -> Result<()> {
         check_user_page(page)?;
         trace!("mapping page {page:?}");
 
@@ -319,15 +308,15 @@ impl Pagetables {
         let level4 = self.activate();
         let level4_entry = &level4[page.p4_index()];
 
-        let level3_guard = level4_entry.acquire(entry.flags(), allocator)?;
+        let level3_guard = level4_entry.acquire(entry.flags())?;
         let level3 = &*level3_guard;
         let level3_entry = &level3[page.p3_index()];
 
-        let level2_guard = level3_entry.acquire(entry.flags(), allocator)?;
+        let level2_guard = level3_entry.acquire(entry.flags())?;
         let level2 = &*level2_guard;
         let level2_entry = &level2[page.p2_index()];
 
-        let level1_guard = level2_entry.acquire(entry.flags(), allocator)?;
+        let level1_guard = level2_entry.acquire(entry.flags())?;
         let level1 = &*level1_guard;
         let level1_entry = &level1[page.p1_index()];
 
@@ -677,23 +666,8 @@ where
 }
 
 impl ActivePageTableEntry<Level4> {
-    pub fn acquire(
-        &self,
-        flags: PageTableFlags,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-    ) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
-        if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
-            let reserved_allocation = storage.allocate(allocator)?;
-            self.acquire_reference_count(reserved_allocation, flags)
-                .unwrap();
-        } else {
-            let mut storage = ReservedFrameStorage::new();
-            let reserved_allocation = storage.allocate(allocator)?;
-            self.acquire_reference_count(reserved_allocation, flags)
-                .unwrap();
-            storage.release(allocator);
-        }
-
+    pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
+        self.acquire_reference_count(flags).unwrap();
         Ok(ActivePageTableEntryGuard { entry: self })
     }
 
@@ -707,25 +681,8 @@ impl<L> ActivePageTableEntry<L>
 where
     L: HasParentLevel + TableLevel,
 {
-    pub fn acquire(
-        &self,
-        flags: PageTableFlags,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + FrameDeallocator<Size4KiB>),
-    ) -> Result<ActivePageTableEntryGuard<'_, L>> {
-        let initialized =
-            if let Ok(mut storage) = PerCpu::get().reserved_frame_storage.try_borrow_mut() {
-                let reserved_allocation = storage.allocate(allocator)?;
-                self.acquire_reference_count(reserved_allocation, flags)
-                    .unwrap()
-            } else {
-                let mut storage = ReservedFrameStorage::new();
-                let reserved_allocation = storage.allocate(allocator)?;
-                let res = self
-                    .acquire_reference_count(reserved_allocation, flags)
-                    .unwrap();
-                storage.release(allocator);
-                res
-            };
+    pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, L>> {
+        let initialized = self.acquire_reference_count(flags).unwrap();
 
         if initialized {
             let parent_entry = self.parent_table_entry();
@@ -749,11 +706,7 @@ where
     /// already contain one. Increases the reference count.
     ///
     /// Returns true if the entry was just initialized.
-    fn acquire_reference_count(
-        &self,
-        reserved_allocation: ReservedFrameAllocation,
-        flags: PageTableFlags,
-    ) -> Option<bool> {
+    fn acquire_reference_count(&self, flags: PageTableFlags) -> Option<bool> {
         let user = flags.contains(PageTableFlags::USER);
         let global = flags.contains(PageTableFlags::GLOBAL) & L::CAN_SET_GLOBAL;
 
@@ -817,7 +770,7 @@ where
                 }
 
                 // Actually initialize the entry.
-                let frame = reserved_allocation.take();
+                let frame = allocate_frame();
                 let mut new_entry = frame.start_address().as_u64();
                 new_entry.set_bit(PRESENT_BIT, true);
                 new_entry.set_bit(WRITE_BIT, true);
@@ -1129,7 +1082,7 @@ where
         if let Some(frame) = frame {
             // Deallocate the backing frame for the entry.
             unsafe {
-                (&FRAME_ALLOCATOR).deallocate_frame(frame);
+                deallocate_frame(frame);
             }
 
             // Decrease the reference count on the parent entry.
@@ -1216,72 +1169,6 @@ const COW_BIT: usize = 10;
 ///
 /// The total capacity of the reference count is 1<<10 = 1024.
 const REFERENCE_COUNT_BITS: Range<usize> = 52..62;
-
-/// A type that buffers an allocation.
-///
-/// Sometimes we have operations that allocate rarely, but need the allocation
-/// to happen fast. For those operations we buffer the allocation in a storage
-/// and take the buffered allocation out of it in case we need it. If we don't
-/// need it we preserved the allocation for the next time we do the operation.
-pub struct ReservedFrameStorage {
-    frame: Option<PhysFrame>,
-}
-
-impl ReservedFrameStorage {
-    /// Create a new storage.
-    pub const fn new() -> Self {
-        Self { frame: None }
-    }
-
-    /// Create an allocation by either making a fresh allocation or reusing an
-    /// existing one.
-    pub fn allocate(
-        &mut self,
-        allocator: &mut (impl FrameAllocator<Size4KiB> + ?Sized),
-    ) -> Result<ReservedFrameAllocation<'_>> {
-        if self.frame.is_none() {
-            // TODO: Use another allocator for this.
-            let frame = allocator.allocate_frame().ok_or(err!(NoMem))?;
-            self.frame = Some(frame);
-        }
-
-        Ok(ReservedFrameAllocation { storage: self })
-    }
-
-    pub fn release(mut self, allocator: &mut (impl FrameDeallocator<Size4KiB> + ?Sized)) {
-        let Some(frame) = self.frame.take() else {
-            return;
-        };
-        unsafe {
-            allocator.deallocate_frame(frame);
-        }
-    }
-}
-
-impl Drop for ReservedFrameStorage {
-    fn drop(&mut self) {
-        if let Some(frame) = self.frame.take() {
-            unsafe {
-                (&FRAME_ALLOCATOR).deallocate_frame(frame);
-            }
-        }
-    }
-}
-
-pub struct ReservedFrameAllocation<'a> {
-    storage: &'a mut ReservedFrameStorage,
-}
-
-impl<'a> ReservedFrameAllocation<'a> {
-    #[inline]
-    fn take(self) -> PhysFrame {
-        unsafe {
-            // SAFETY: The existance of `ReservedFrameAllocation` proves that
-            // there is a frame stored.
-            self.storage.frame.take().unwrap_unchecked()
-        }
-    }
-}
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
