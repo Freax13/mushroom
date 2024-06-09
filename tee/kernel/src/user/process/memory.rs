@@ -675,7 +675,6 @@ impl VirtualMemoryState {
             "mapping of size {size:#x} can never exist"
         );
 
-        let rdrand = RdRand::new().unwrap();
         let vm_size = match abi {
             Abi::I386 => 31,
             Abi::Amd64 => 47,
@@ -684,7 +683,8 @@ impl VirtualMemoryState {
         const MAX_ATTEMPTS: usize = 64;
         (0..MAX_ATTEMPTS)
             .find_map(|_| {
-                let candidate = rdrand.get_u64()?;
+                static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
+                let candidate = RD_RAND.get_u64()?;
                 let candidate = candidate & align_mask;
                 let candidate = align_down(candidate, 0x1000);
 
