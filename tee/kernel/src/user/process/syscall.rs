@@ -579,7 +579,6 @@ struct SysRtSigprocmask;
 impl Syscall for SysRtSigprocmask {
     const NO_I386: Option<usize> = Some(175);
     const NO_AMD64: Option<usize> = Some(14);
-    const NAME: &'static str = "rt_sigprocmask";
 
     async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {
         let how = <u64 as SyscallArg>::parse(syscall_args.args[0], syscall_args.abi)?;

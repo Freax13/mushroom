@@ -58,7 +58,6 @@ impl SyscallArg for u32 {
 pub trait Syscall {
     const NO_I386: Option<usize>;
     const NO_AMD64: Option<usize>;
-    const NAME: &'static str;
 
     async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult;
 

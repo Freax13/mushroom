@@ -110,6 +110,7 @@ impl fmt::Debug for GhcbUsage {
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
+#[allow(dead_code)]
 pub struct PageStateChangeHeader {
     pub cur_entry: u16,
     pub end_entry: u16,

@@ -193,7 +193,7 @@ impl VirtualMemory {
     }
 
     pub unsafe fn read_bytes_volatile(&self, addr: VirtAddr, bytes: NonNull<[u8]>) -> Result<()> {
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             return Ok(());
         }
 
@@ -258,7 +258,7 @@ impl VirtualMemory {
     }
 
     pub unsafe fn write_bytes_volatile(&self, addr: VirtAddr, bytes: NonNull<[u8]>) -> Result<()> {
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             return Ok(());
         }
 

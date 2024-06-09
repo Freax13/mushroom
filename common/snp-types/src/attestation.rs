@@ -32,6 +32,7 @@ pub enum KeySelect {
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C)]
+#[allow(dead_code)]
 pub struct MsgReportRspHeader {
     pub status: MsgReportRspStatus,
     pub report_size: u32,
