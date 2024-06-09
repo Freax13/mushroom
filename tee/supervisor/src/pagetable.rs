@@ -1,4 +1,5 @@
 use core::{
+    arch::global_asm,
     cell::RefCell,
     marker::PhantomData,
     ops::Index,
@@ -21,6 +22,8 @@ use crate::{
     rmp::{pvalidate, pvalidate_2mib, rmpadjust, rmpadjust_2mib},
     FakeSync,
 };
+
+global_asm!(include_str!("pagetable.s"));
 
 /// A macro to get the physical address of a static variable.
 #[macro_export]
