@@ -1057,9 +1057,9 @@ unsafe impl CheckedBitPattern for UserDescFlags {
     }
 }
 
-pub struct Offset(pub i64);
+pub struct Offset(#[allow(dead_code)] pub i64);
 
-pub struct LongOffset(pub i64);
+pub struct LongOffset(#[allow(dead_code)] pub i64);
 
 bitflags! {
     pub struct AtFlags {
@@ -1155,5 +1155,6 @@ impl Pointee for FdSet {}
 #[derive(Clone, Copy)]
 pub struct PSelectSigsetArg {
     pub ss: Pointer<Sigset>,
+    #[allow(dead_code)]
     pub ss_len: usize,
 }

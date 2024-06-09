@@ -4,11 +4,9 @@
     abi_x86_interrupt,
     asm_const,
     core_intrinsics,
-    inline_const,
     layout_for_ptr,
-    lazy_cell,
     naked_functions,
-    pointer_is_aligned,
+    pointer_is_aligned_to,
     sync_unsafe_cell
 )]
 #![allow(internal_features)]

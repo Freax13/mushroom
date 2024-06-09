@@ -58,7 +58,6 @@ impl SyscallArg for u32 {
 pub trait Syscall {
     const NO_I386: Option<usize>;
     const NO_AMD64: Option<usize>;
-    const NAME: &'static str;
 
     async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult;
 
@@ -253,11 +252,14 @@ struct Placed<'a> {
 
 impl Placed<'_> {
     fn as_ptr(&self) -> *const DynFuture {
-        core::ptr::from_raw_parts(self.slot.bytes.as_ptr().cast(), self.metadata)
+        core::ptr::from_raw_parts(self.slot.bytes.as_ptr().cast::<()>(), self.metadata)
     }
 
     fn as_mut_ptr(&mut self) -> *mut DynFuture {
-        core::ptr::from_raw_parts_mut(self.slot.bytes.as_ptr().cast_mut().cast(), self.metadata)
+        core::ptr::from_raw_parts_mut(
+            self.slot.bytes.as_ptr().cast_mut().cast::<()>(),
+            self.metadata,
+        )
     }
 }
 

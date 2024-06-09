@@ -142,7 +142,6 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         impl Syscall for #struct_ident {
             const NO_I386: Option<usize> = #i386;
             const NO_AMD64: Option<usize> = #amd64;
-            const NAME: &'static str = #syscall_name;
 
             async fn execute(
                 thread: Arc<Thread>,

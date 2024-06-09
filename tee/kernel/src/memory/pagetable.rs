@@ -475,7 +475,7 @@ impl Pagetables {
     /// returned. If `src` isn't user memory `Err(())` is returned.
     #[inline(always)]
     pub fn try_read_user_fast(&self, src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
-        if dest.len() == 0 {
+        if dest.is_empty() {
             return Ok(());
         }
 
@@ -497,7 +497,7 @@ impl Pagetables {
     /// may be racy.
     #[inline(always)]
     pub fn try_write_user_fast(&self, src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
-        if src.len() == 0 {
+        if src.is_empty() {
             return Ok(());
         }
 
