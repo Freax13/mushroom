@@ -149,9 +149,7 @@ impl Write for Buffer {
 
         let buffer = &mut self.buffer[self.len..];
 
-        let mut buf = [0; 4];
-        let encoded = c.encode_utf8(&mut buf);
-        buffer[..encoded.len()].copy_from_slice(encoded.as_bytes());
+        let encoded = c.encode_utf8(buffer);
         self.len += encoded.len();
 
         Ok(())
