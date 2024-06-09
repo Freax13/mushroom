@@ -1,7 +1,5 @@
 //! Concurrent page tables.
 
-global_asm!(include_str!("pagetable.s"));
-
 use crate::{
     error::{ensure, err, Result},
     per_cpu::PerCpu,
@@ -10,7 +8,7 @@ use crate::{
 };
 
 use core::{
-    arch::{asm, global_asm},
+    arch::asm,
     cell::RefMut,
     cmp, fmt,
     iter::Step,
