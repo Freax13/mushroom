@@ -253,11 +253,14 @@ struct Placed<'a> {
 
 impl Placed<'_> {
     fn as_ptr(&self) -> *const DynFuture {
-        core::ptr::from_raw_parts(self.slot.bytes.as_ptr().cast(), self.metadata)
+        core::ptr::from_raw_parts(self.slot.bytes.as_ptr().cast::<()>(), self.metadata)
     }
 
     fn as_mut_ptr(&mut self) -> *mut DynFuture {
-        core::ptr::from_raw_parts_mut(self.slot.bytes.as_ptr().cast_mut().cast(), self.metadata)
+        core::ptr::from_raw_parts_mut(
+            self.slot.bytes.as_ptr().cast_mut().cast::<()>(),
+            self.metadata,
+        )
     }
 }
 
