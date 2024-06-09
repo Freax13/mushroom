@@ -25,7 +25,9 @@ use crate::spin::lazy::Lazy;
 use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
+use constants::new_physical_address::{kernel::*, *};
 use log::trace;
+use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4};
 use x86_64::{
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
@@ -40,6 +42,65 @@ use super::{
 };
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
+
+#[used]
+#[link_section = ".pagetables.pml4"]
+static PML4: StaticPml4 = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(256, &PDP_256, flags!(WRITE));
+    page_table.set_table(257, &PDP_257, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_table(352, &PDP_352, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_recursive_table(510, &PML4, flags!());
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_256: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PD_256_0, flags!(WRITE));
+    page_table.set_page(1, PROFILER_BUFFER, flags!(WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_256_0: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, RESET_VECTOR, flags!());
+    page_table.set_page_range(1, TEXT, flags!());
+    page_table.set_page_range(8, RODATA, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(16, DATA, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(24, TDATA, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(32, STACK, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(40, PROFILER_CONTROL, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_352: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PD_352_0, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[export_name = "pd_352_0"]
+#[link_section = ".pagetables"]
+static PD_352_0: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    let flags = flags!(WRITE | EXECUTE_DISABLE);
+    page_table.set_page(0, TEXT_SHADOW, flags);
+    page_table.set_page(1, RODATA_SHADOW, flags);
+    page_table.set_page(2, DATA_SHADOW, flags);
+    page_table.set_page(3, TDATA_SHADOW, flags);
+    page_table.set_page(4, STACK_SHADOW, flags);
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_257: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page_range(0, DYNAMIC, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
 
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();

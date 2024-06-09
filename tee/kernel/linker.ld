@@ -16,6 +16,7 @@ PHDRS
 SECTIONS {
     .pagetables (0x10000000000) : 
     {
+        KEEP(*(.pagetables.pml4 .pagetables.pml4.*))
         KEEP(*(.pagetables .pagetables.*))
     } :pagetables
 

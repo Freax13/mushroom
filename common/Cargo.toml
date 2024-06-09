@@ -6,3 +6,6 @@ resolver = "2"
 constants = { path = "constants" }
 io = { path = "io" }
 snp-types = { path = "snp-types" }
+
+[patch.crates-io]
+x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "c5bc9fc" }

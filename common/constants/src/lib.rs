@@ -76,6 +76,8 @@ pub mod virtual_address {
     }
 }
 
+pub mod new_physical_address;
+
 pub mod physical_address {
     use x86_64::structures::paging::PhysFrame;
 
