@@ -1,5 +1,8 @@
 use core::{
-    arch::{asm, x86_64::__cpuid_count},
+    arch::{
+        asm,
+        x86_64::{__cpuid_count, _xrstor64, _xsaveopt64},
+    },
     ffi::c_void,
     mem::{offset_of, size_of},
 };
@@ -39,7 +42,7 @@ const FP_XSTATE_MAGIC2: u32 = 0x46505845;
 
 #[derive(Clone)]
 pub struct CpuState {
-    registers: Registers,
+    pub registers: Registers,
     gdt: Vec<u64>,
     xsave_area: XSaveArea,
     last_exit_was_syscall: bool,
@@ -926,34 +929,16 @@ impl XSaveArea {
     }
 
     fn save(&mut self) {
-        let flags = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
-        let bits = flags.bits();
-        let lower = bits.get_bits(..32);
-        let upper = bits.get_bits(32..);
-
+        let save_mask = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
         unsafe {
-            asm!(
-                "xsave64 [{xsave_area}]",
-                xsave_area = in(reg) self.data.as_mut_ptr(),
-                in("rax") lower,
-                in("rdx") upper,
-            );
+            _xsaveopt64(self.data.as_mut_ptr(), save_mask.bits());
         }
     }
 
     fn load(&self) {
-        let flags = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
-        let bits = flags.bits();
-        let lower = bits.get_bits(..32);
-        let upper = bits.get_bits(32..);
-
+        let rs_mask = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
         unsafe {
-            asm!(
-                "xrstor64 [{xsave_area}]",
-                xsave_area = in(reg) self.data.as_ptr(),
-                in("rax") lower,
-                in("rdx") upper,
-            );
+            _xrstor64(self.data.as_ptr(), rs_mask.bits());
         }
     }
 }

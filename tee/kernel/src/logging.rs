@@ -69,63 +69,27 @@ impl Buffer {
             return;
         }
 
-        let mut scratch = [0u8; 512];
         unsafe {
             asm!(
-                // Save all ymm registers.
-                "vmovdqu ymmword ptr [{scratch} + 32 *  0],  ymm0",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  1],  ymm1",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  2],  ymm2",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  3],  ymm3",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  4],  ymm4",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  5],  ymm5",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  6],  ymm6",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  7],  ymm7",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  8],  ymm8",
-                "vmovdqu ymmword ptr [{scratch} + 32 *  9],  ymm9",
-                "vmovdqu ymmword ptr [{scratch} + 32 * 10], ymm10",
-                "vmovdqu ymmword ptr [{scratch} + 32 * 11], ymm11",
-                "vmovdqu ymmword ptr [{scratch} + 32 * 12], ymm12",
-                "vmovdqu ymmword ptr [{scratch} + 32 * 13], ymm13",
-                "vmovdqu ymmword ptr [{scratch} + 32 * 14], ymm14",
-                "vmovdqu ymmword ptr [{scratch} + 32 * 15], ymm15",
                 // Move the log buffer into the xmm registers.
-                "movdqu  xmm0, xmmword ptr [{buffer} + 16 *  0]",
-                "movdqu  xmm1, xmmword ptr [{buffer} + 16 *  1]",
-                "movdqu  xmm2, xmmword ptr [{buffer} + 16 *  2]",
-                "movdqu  xmm3, xmmword ptr [{buffer} + 16 *  3]",
-                "movdqu  xmm4, xmmword ptr [{buffer} + 16 *  4]",
-                "movdqu  xmm5, xmmword ptr [{buffer} + 16 *  5]",
-                "movdqu  xmm6, xmmword ptr [{buffer} + 16 *  6]",
-                "movdqu  xmm7, xmmword ptr [{buffer} + 16 *  7]",
-                "movdqu  xmm8, xmmword ptr [{buffer} + 16 *  8]",
-                "movdqu  xmm9, xmmword ptr [{buffer} + 16 *  9]",
-                "movdqu xmm10, xmmword ptr [{buffer} + 16 * 10]",
-                "movdqu xmm11, xmmword ptr [{buffer} + 16 * 11]",
-                "movdqu xmm12, xmmword ptr [{buffer} + 16 * 12]",
-                "movdqu xmm13, xmmword ptr [{buffer} + 16 * 13]",
-                "movdqu xmm14, xmmword ptr [{buffer} + 16 * 14]",
-                "movdqu xmm15, xmmword ptr [{buffer} + 16 * 15]",
+                "movdqa  xmm0, xmmword ptr [{buffer} + 16 *  0]",
+                "movdqa  xmm1, xmmword ptr [{buffer} + 16 *  1]",
+                "movdqa  xmm2, xmmword ptr [{buffer} + 16 *  2]",
+                "movdqa  xmm3, xmmword ptr [{buffer} + 16 *  3]",
+                "movdqa  xmm4, xmmword ptr [{buffer} + 16 *  4]",
+                "movdqa  xmm5, xmmword ptr [{buffer} + 16 *  5]",
+                "movdqa  xmm6, xmmword ptr [{buffer} + 16 *  6]",
+                "movdqa  xmm7, xmmword ptr [{buffer} + 16 *  7]",
+                "movdqa  xmm8, xmmword ptr [{buffer} + 16 *  8]",
+                "movdqa  xmm9, xmmword ptr [{buffer} + 16 *  9]",
+                "movdqa xmm10, xmmword ptr [{buffer} + 16 * 10]",
+                "movdqa xmm11, xmmword ptr [{buffer} + 16 * 11]",
+                "movdqa xmm12, xmmword ptr [{buffer} + 16 * 12]",
+                "movdqa xmm13, xmmword ptr [{buffer} + 16 * 13]",
+                "movdqa xmm14, xmmword ptr [{buffer} + 16 * 14]",
+                "movdqa xmm15, xmmword ptr [{buffer} + 16 * 15]",
                 // Trigger an IOIO #VC exception to start the transfer.
                 "out dx, eax",
-                // Restore ymm registers.
-                "vmovdqu  ymm0, ymmword ptr [{scratch} + 32 *  0]",
-                "vmovdqu  ymm1, ymmword ptr [{scratch} + 32 *  1]",
-                "vmovdqu  ymm2, ymmword ptr [{scratch} + 32 *  2]",
-                "vmovdqu  ymm3, ymmword ptr [{scratch} + 32 *  3]",
-                "vmovdqu  ymm4, ymmword ptr [{scratch} + 32 *  4]",
-                "vmovdqu  ymm5, ymmword ptr [{scratch} + 32 *  5]",
-                "vmovdqu  ymm6, ymmword ptr [{scratch} + 32 *  6]",
-                "vmovdqu  ymm7, ymmword ptr [{scratch} + 32 *  7]",
-                "vmovdqu  ymm8, ymmword ptr [{scratch} + 32 *  8]",
-                "vmovdqu  ymm9, ymmword ptr [{scratch} + 32 *  9]",
-                "vmovdqu ymm10, ymmword ptr [{scratch} + 32 * 10]",
-                "vmovdqu ymm11, ymmword ptr [{scratch} + 32 * 11]",
-                "vmovdqu ymm12, ymmword ptr [{scratch} + 32 * 12]",
-                "vmovdqu ymm13, ymmword ptr [{scratch} + 32 * 13]",
-                "vmovdqu ymm14, ymmword ptr [{scratch} + 32 * 14]",
-                "vmovdqu ymm15, ymmword ptr [{scratch} + 32 * 15]",
-                scratch = in(reg) scratch.as_mut_ptr(),
                 buffer = in(reg) self.buffer.as_ptr(),
                 in("rdx") LOG_PORT,
                 in("eax") self.len,
@@ -149,9 +113,7 @@ impl Write for Buffer {
 
         let buffer = &mut self.buffer[self.len..];
 
-        let mut buf = [0; 4];
-        let encoded = c.encode_utf8(&mut buf);
-        buffer[..encoded.len()].copy_from_slice(encoded.as_bytes());
+        let encoded = c.encode_utf8(buffer);
         self.len += encoded.len();
 
         Ok(())

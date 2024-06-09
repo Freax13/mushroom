@@ -1,6 +1,4 @@
-//! FIXME: This performs really poorly, fix this.
-
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::cell::RefCell;
 
 use bit_field::BitField;
 use constants::{physical_address::DYNAMIC, MEMORY_PORT};
@@ -9,12 +7,13 @@ use x86_64::{
     PhysAddr,
 };
 
-use crate::{ghcb::ioio_write, pagetable::TEMPORARY_MAPPER};
+use crate::{ghcb::ioio_write, pagetable::TEMPORARY_MAPPER, FakeSync};
 
 const SLOTS: usize = 1 << 15;
 const BITMAP_SIZE: usize = SLOTS / 8;
 
-pub static HOST_ALLOCTOR: HostAllocator = HostAllocator::new();
+pub static HOST_ALLOCTOR: FakeSync<RefCell<HostAllocator>> =
+    FakeSync::new(RefCell::new(HostAllocator::new()));
 
 /// An allocator for dynamically allocating 2MiB frames from the host.
 ///
@@ -23,50 +22,50 @@ pub static HOST_ALLOCTOR: HostAllocator = HostAllocator::new();
 /// Deallocated frames are automatically invalidated and the permissions for
 /// lower VMPL's cleared.
 pub struct HostAllocator {
-    bitmap: [AtomicU8; BITMAP_SIZE],
+    bitmap: [u8; BITMAP_SIZE],
+    /// The byte index of the previous allocation. Chances are the bits
+    /// directly following this are free.
+    start_offset: usize,
 }
 
 impl HostAllocator {
     const fn new() -> Self {
         Self {
-            bitmap: [const { AtomicU8::new(0) }; BITMAP_SIZE],
+            bitmap: [0; BITMAP_SIZE],
+            start_offset: 0,
         }
     }
 
-    fn allocate_slot_id(&self) -> Option<u16> {
-        self.bitmap.iter().enumerate().find_map(|(i, bitmap)| {
-            let mut byte = bitmap.load(Ordering::SeqCst);
-            loop {
+    fn allocate_slot_id(&mut self) -> Option<u16> {
+        let start_index = self.start_offset;
+        let (first, second) = self.bitmap.split_at_mut(start_index);
+
+        second
+            .iter_mut()
+            .zip(start_index..)
+            .chain(first.iter_mut().zip(0..))
+            .find_map(|(bitmap, i)| {
                 // Find an unset bit.
-                let bit = (0..8).find(|&i| !byte.get_bit(i))?;
+                let bit = (0..8).find(|&i| !bitmap.get_bit(i))?;
 
                 // Set the bit.
-                byte = bitmap.fetch_or(1 << bit, Ordering::SeqCst);
-
-                // Check if the bit was just set by another core.
-                if byte.get_bit(bit) {
-                    continue;
-                }
+                bitmap.set_bit(bit, true);
 
                 // Success!
-                return Some(u16::try_from(i * 8 + bit).unwrap());
-            }
-        })
+                self.start_offset = i;
+                Some(u16::try_from(i * 8 + bit).unwrap())
+            })
     }
 
-    unsafe fn deallocate_slot_id(&self, slot_id: u16) {
+    unsafe fn deallocate_slot_id(&mut self, slot_id: u16) {
         let byte_idx = usize::from(slot_id / 8);
         let bit_idx = usize::from(slot_id % 8);
-
-        let mut mask = !0;
-        mask.set_bit(bit_idx, false);
-
-        let prev = self.bitmap[byte_idx].fetch_and(mask, Ordering::SeqCst);
-        assert!(prev.get_bit(bit_idx));
+        assert!(self.bitmap[byte_idx].get_bit(bit_idx));
+        self.bitmap[byte_idx].set_bit(bit_idx, false);
     }
 }
 
-unsafe impl FrameAllocator<Size2MiB> for &'_ HostAllocator {
+unsafe impl FrameAllocator<Size2MiB> for HostAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size2MiB>> {
         // Allocate a slot id.
         let slot_id = self.allocate_slot_id()?;
@@ -92,7 +91,7 @@ unsafe impl FrameAllocator<Size2MiB> for &'_ HostAllocator {
     }
 }
 
-impl FrameDeallocator<Size2MiB> for &'_ HostAllocator {
+impl FrameDeallocator<Size2MiB> for HostAllocator {
     unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size2MiB>) {
         assert!(DYNAMIC.contains(frame.start_address().as_u64()));
         let base = PhysFrame::<Size2MiB>::containing_address(PhysAddr::new(DYNAMIC.start()));
