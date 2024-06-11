@@ -1,5 +1,4 @@
 use core::{
-    arch::global_asm,
     cell::RefCell,
     marker::PhantomData,
     ops::Index,
@@ -7,7 +6,9 @@ use core::{
 };
 
 use bit_field::BitField;
+use constants::new_physical_address::supervisor::*;
 use snp_types::{ghcb::msr_protocol::PageOperation, VmplPermissions};
+use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
     structures::paging::{
         page::NotGiantPageSize, Page, PageSize, PageTableIndex, PhysFrame, Size1GiB, Size2MiB,
@@ -23,7 +24,62 @@ use crate::{
     FakeSync,
 };
 
-global_asm!(include_str!("pagetable.s"));
+#[link_section = ".pagetables"]
+#[export_name = "pml4"]
+static PML4: StaticPml4 = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PDP_0, flags!(C | WRITE));
+    page_table.set_table(128, &PDP_128, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table.set_recursive_table(511, &PML4, flags!(C));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_0: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(1, &PD_0_1, flags!(C | WRITE));
+    page_table.set_table(3, &PD_0_3, flags!(C | WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_0_1: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page_range(0, TEXT, flags!(C));
+    page_table.set_page_range(8, RODATA, flags!(C | EXECUTE_DISABLE));
+    page_table.set_page_range(16, DATA, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table.set_page(25, STACK, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table.set_page(27, SECRETS, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table.set_page(29, SHADOW_STACK, flags!(C | EXECUTE_DISABLE | DIRTY));
+    page_table.set_page(32, SHARED, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_0_3: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(509, CPUID_PAGE, flags!(C | EXECUTE_DISABLE));
+    page_table.set_page(510, PAGETABLES, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table.set_page(511, RESET_VECTOR, flags!(C));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_128: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PD_128_0, flags!(C | WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_128_0: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PT_128_0_0, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PT_128_0_0: StaticPt = StaticPageTable::new();
 
 /// A macro to get the physical address of a static variable.
 #[macro_export]

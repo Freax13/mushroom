@@ -176,7 +176,9 @@ pub struct Flags(pub usize);
 impl Flags {
     pub const PRESENT: Self = Self(1 << 0);
     pub const WRITE: Self = Self(1 << 1);
+    pub const DIRTY: Self = Self(1 << 6);
     pub const HUGE: Self = Self(1 << 7);
+    pub const C: Self = Self(1 << 51);
     pub const EXECUTE_DISABLE: Self = Self(1 << 63);
 }
 

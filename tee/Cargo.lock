@@ -689,6 +689,7 @@ dependencies = [
  "log",
  "sha2",
  "snp-types",
+ "static-page-tables",
  "volatile 0.5.1",
  "x86_64",
 ]

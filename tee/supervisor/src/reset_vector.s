@@ -70,20 +70,33 @@ jmp check_next_entry
 found_entry:
 mov cl, byte ptr [ecx+28]
 and cl, 0x3f
-# Check the we can support the C bit position.
-cmp cl, 51
-jne fail_32bit
-# 3.2 Set the C bit in the page tables.
-lea eax, dword ptr [private_pagetables_start]
+# Check the we can support the C-bit position.
+cmp cl, 32
+jl fail_32bit
+# 3.2 Fix the C-bit in the page tables.
+# By default, we set bit 51 in the page tables. This is the C-bit for Zen 3
+# based CPUs. To support other generations, we test for bit 51 and replace it
+# with the appropriate bit.
+# Prepare a mask to XOR into the upper half of the page table entries, to unset
+# bit 51 and set the C-bit instead (this will do nothing if the C-bit is at
+# position 51).
+sub ecx, 32
+mov ebx, 1
+shl ebx, cl
+xor ebx, 0x00080000
+# Loop start
+lea eax, dword ptr [__pagetables_start]
+lea edx, dword ptr [__pagetables_end]
+# Loop condition
 fix_next_entry:
-lea ecx, dword ptr [private_pagetables_end]
-cmp eax, ecx
+cmp eax, edx
 je done_fixing_entries
-mov cl, byte ptr [eax]
-and cl, 1
-test cl, cl
+# Loop body
+# Is bit 51 set?
+test byte ptr [eax + 6], 0x08
 je done_fixing_entry
-or dword ptr [eax + 4], (1 << (51 - 32))
+# If so, clear bit 51 and set the C-bit instead.
+xor dword ptr [eax + 4], ebx
 done_fixing_entry:
 add eax, 8
 jmp fix_next_entry

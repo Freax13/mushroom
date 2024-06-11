@@ -61,7 +61,9 @@ SECTIONS {
 
     .pagetables (0xffc00000) : 
     {
+        __pagetables_start = .;
         KEEP(*(.pagetables .pagetables.*))
+        __pagetables_end = .;
     } :pagetables
 
     .reset_vector (0xfffff000) : 

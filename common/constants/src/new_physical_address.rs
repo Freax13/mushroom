@@ -41,6 +41,22 @@ pub mod kernel {
     pub const STACK_SHADOW: PhysFrame<Size2MiB> = addr(0x18000800000);
 }
 
+pub mod supervisor {
+    use super::*;
+
+    // The segments of the supervisor binary:
+    pub const CPUID_PAGE: PhysFrame<Size2MiB> = addr(0xffa00000);
+    pub const PAGETABLES: PhysFrame<Size2MiB> = addr(0xffc00000);
+    pub const RESET_VECTOR: PhysFrame<Size2MiB> = addr(0xffe00000);
+    pub const TEXT: PhysFrameRange<Size2MiB> = addr_range(0x100000000, 0x100ffffff);
+    pub const RODATA: PhysFrameRange<Size2MiB> = addr_range(0x140000000, 0x140ffffff);
+    pub const DATA: PhysFrameRange<Size2MiB> = addr_range(0x180000000, 0x180ffffff);
+    pub const STACK: PhysFrame<Size2MiB> = addr(0x1c0000000);
+    pub const SECRETS: PhysFrame<Size2MiB> = addr(0x200000000);
+    pub const SHADOW_STACK: PhysFrame<Size2MiB> = addr(0x240000000);
+    pub const SHARED: PhysFrame<Size2MiB> = addr(0x280000000);
+}
+
 // 64 gibibytes of dynamic physical memory that can be hot-plugged and hot-unplugged.
 pub const DYNAMIC: PhysFrameRange<Size1GiB> = addr_range(0x020000000000, 0x20fffffffff);
 
