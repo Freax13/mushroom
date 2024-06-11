@@ -9,7 +9,7 @@ use log::{debug, info, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
     vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
-    Uninteresting, VmplPermissions,
+    Uninteresting,
 };
 use x86_64::{
     instructions::hlt,
@@ -235,17 +235,6 @@ fn handle_msr_prot(
                 MEMORY_MSR => {
                     let allocator = &mut HOST_ALLOCTOR.borrow_mut();
                     let frame = allocator.allocate_frame();
-
-                    if let Some(frame) = frame {
-                        // Create a temporary mapping.
-                        let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-                        let mapping = mapper.create_temporary_mapping_2mib(frame, false);
-
-                        // Make the frame accessible to VMPL 1.
-                        unsafe {
-                            mapping.rmpadjust(1, VmplPermissions::all(), false);
-                        }
-                    }
 
                     trace!("allocated {frame:?}");
                     let value = frame

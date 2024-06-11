@@ -6,7 +6,7 @@ use core::{
 };
 
 use bit_field::BitField;
-use constants::new_physical_address::supervisor::*;
+use constants::new_physical_address::{supervisor::*, DYNAMIC};
 use snp_types::{ghcb::msr_protocol::PageOperation, VmplPermissions};
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
@@ -20,7 +20,7 @@ use x86_64::{
 use crate::{
     cpuid::c_bit_location,
     ghcb,
-    rmp::{pvalidate, pvalidate_2mib, rmpadjust, rmpadjust_2mib},
+    rmp::{pvalidate, rmpadjust},
     FakeSync,
 };
 
@@ -29,6 +29,7 @@ use crate::{
 static PML4: StaticPml4 = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PDP_0, flags!(C | WRITE));
+    page_table.set_table(64, &PDP_64, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_table(128, &PDP_128, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_recursive_table(511, &PML4, flags!(C));
     page_table
@@ -61,6 +62,13 @@ static PD_0_3: StaticPd = {
     page_table.set_page(509, CPUID_PAGE, flags!(C | EXECUTE_DISABLE));
     page_table.set_page(510, PAGETABLES, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(511, RESET_VECTOR, flags!(C));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_64: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page_range(0, DYNAMIC, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table
 };
 
@@ -324,17 +332,7 @@ impl PageTableEntry<Level1> {
 }
 
 const PRESENT: u64 = 1 << 0;
-const HUGE_PAGE: u64 = 1 << 7;
 const WRITE_BIT: usize = 1;
-
-impl PageTableEntry<Level2> {
-    pub unsafe fn create_temporary_mapping(&self, addr: PhysFrame<Size2MiB>, write: bool) {
-        let mut page_table_entry =
-            addr.start_address().as_u64() | PRESENT | HUGE_PAGE | (1 << c_bit_location());
-        page_table_entry.set_bit(WRITE_BIT, write);
-        self.value.store(page_table_entry, Ordering::SeqCst);
-    }
-}
 
 impl PageTableEntry<Level1> {
     pub unsafe fn create_temporary_mapping(
@@ -343,7 +341,7 @@ impl PageTableEntry<Level1> {
         private: bool,
         write: bool,
     ) {
-        let mut page_table_entry = addr.start_address().as_u64() | PRESENT | HUGE_PAGE;
+        let mut page_table_entry = addr.start_address().as_u64() | PRESENT;
         page_table_entry.set_bit(WRITE_BIT, write);
         page_table_entry.set_bit(c_bit_location(), private);
         self.value.store(page_table_entry, Ordering::SeqCst);
@@ -388,35 +386,6 @@ impl TemporaryMapper {
         let pte = &pt[page.p1_index()];
         unsafe {
             pte.create_temporary_mapping(frame, private, write);
-        }
-
-        x86_64::instructions::tlb::flush_all();
-
-        TemporaryMapping {
-            mapper: self,
-            frame,
-            page,
-        }
-    }
-
-    pub fn create_temporary_mapping_2mib(
-        &mut self,
-        frame: PhysFrame<Size2MiB>,
-        write: bool,
-    ) -> TemporaryMapping<Size2MiB> {
-        let page = Page::from_start_address(VirtAddr::new(0x400000200000)).unwrap();
-
-        let pml4 = PageTable::get();
-        let pml4e = &pml4[page.p4_index()];
-        let pdp = pml4e.table().unwrap();
-        let pdpe = &pdp[page.p3_index()];
-        let pd = match pdpe.content().unwrap() {
-            PageTableEntryContent::Frame(_) => unreachable!(),
-            PageTableEntryContent::PageTable(pd) => pd,
-        };
-        let pde = &pd[page.p2_index()];
-        unsafe {
-            pde.create_temporary_mapping(frame, write);
         }
 
         x86_64::instructions::tlb::flush_all();
@@ -482,35 +451,6 @@ impl TemporaryMapping<'_, Size4KiB> {
                 out.as_mut_ptr(),
                 self.page.start_address().as_ptr(),
                 out.len(),
-            );
-        }
-    }
-}
-
-impl TemporaryMapping<'_, Size2MiB> {
-    /// Adjust the permissions of a frame at a given VMPL.
-    ///
-    /// # Safety
-    ///
-    /// This is inherently dangerous.
-    pub unsafe fn rmpadjust(&self, target_vmpl: u8, target_perm_mask: VmplPermissions, vmsa: bool) {
-        rmpadjust_2mib(self.page, target_vmpl, target_perm_mask, vmsa);
-    }
-
-    /// Update the validation status of the frame.
-    ///
-    /// # Safety
-    ///
-    /// This is inherently dangerous.
-    pub unsafe fn pvalidate(&self, valid: bool) {
-        pvalidate_2mib(self.page, valid);
-
-        if valid {
-            // Zero out the memory.
-            core::ptr::write_bytes(
-                self.page.start_address().as_mut_ptr::<u8>(),
-                0,
-                512 * 0x1000,
             );
         }
     }
