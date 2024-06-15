@@ -1,27 +1,15 @@
 use core::{
-    cell::RefCell,
     marker::PhantomData,
     ops::Index,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use bit_field::BitField;
-use constants::new_physical_address::{supervisor::*, DYNAMIC, OUTPUT};
-use snp_types::{ghcb::msr_protocol::PageOperation, VmplPermissions};
+use constants::new_physical_address::{supervisor::*, DYNAMIC, INPUT_FILE, OUTPUT};
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
-    structures::paging::{
-        page::NotGiantPageSize, Page, PageSize, PageTableIndex, PhysFrame, Size1GiB, Size2MiB,
-        Size4KiB,
-    },
+    structures::paging::{Page, PageSize, PageTableIndex, PhysFrame, Size1GiB, Size2MiB},
     PhysAddr, VirtAddr,
-};
-
-use crate::{
-    cpuid::c_bit_location,
-    ghcb,
-    rmp::{pvalidate, rmpadjust},
-    FakeSync,
 };
 
 #[link_section = ".pagetables"]
@@ -40,6 +28,8 @@ static PDP_0: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(1, &PD_0_1, flags!(C | WRITE));
     page_table.set_table(3, &PD_0_3, flags!(C | WRITE));
+    page_table.set_page_range(64, INPUT_FILE, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(128, INPUT_FILE, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table
 };
 
@@ -339,127 +329,10 @@ impl PageTableEntry<Level1> {
     }
 }
 
-const PRESENT: u64 = 1 << 0;
-const WRITE_BIT: usize = 1;
-
-impl PageTableEntry<Level1> {
-    pub unsafe fn create_temporary_mapping(
-        &self,
-        addr: PhysFrame<Size4KiB>,
-        private: bool,
-        write: bool,
-    ) {
-        let mut page_table_entry = addr.start_address().as_u64() | PRESENT;
-        page_table_entry.set_bit(WRITE_BIT, write);
-        page_table_entry.set_bit(c_bit_location(), private);
-        self.value.store(page_table_entry, Ordering::SeqCst);
-    }
-}
-
 enum PageTableEntryContent<'a, L>
 where
     L: HugePageLevel,
 {
     Frame(PhysFrame<L::PageSize>),
     PageTable(&'a PageTable<L::NextLevel>),
-}
-
-pub static TEMPORARY_MAPPER: FakeSync<RefCell<TemporaryMapper>> =
-    FakeSync::new(RefCell::new(TemporaryMapper(())));
-
-pub struct TemporaryMapper(());
-
-impl TemporaryMapper {
-    pub fn create_temporary_mapping_4kib(
-        &mut self,
-        frame: PhysFrame<Size4KiB>,
-        private: bool,
-        write: bool,
-    ) -> TemporaryMapping<Size4KiB> {
-        let page = Page::from_start_address(VirtAddr::new(0x400000000000)).unwrap();
-
-        let pml4 = PageTable::get();
-        let pml4e = &pml4[page.p4_index()];
-        let pdp = pml4e.table().unwrap();
-        let pdpe = &pdp[page.p3_index()];
-        let pd = match pdpe.content().unwrap() {
-            PageTableEntryContent::Frame(_) => unreachable!(),
-            PageTableEntryContent::PageTable(pd) => pd,
-        };
-        let pde = &pd[page.p2_index()];
-        let pt = match pde.content().unwrap() {
-            PageTableEntryContent::Frame(_) => unreachable!(),
-            PageTableEntryContent::PageTable(pt) => pt,
-        };
-        let pte = &pt[page.p1_index()];
-        unsafe {
-            pte.create_temporary_mapping(frame, private, write);
-        }
-
-        x86_64::instructions::tlb::flush_all();
-
-        TemporaryMapping {
-            mapper: self,
-            frame,
-            page,
-        }
-    }
-}
-
-pub struct TemporaryMapping<'a, S>
-where
-    S: NotGiantPageSize,
-{
-    mapper: &'a mut TemporaryMapper,
-    frame: PhysFrame<S>,
-    page: Page<S>,
-}
-
-impl TemporaryMapping<'_, Size4KiB> {
-    pub unsafe fn convert_to_private_in_place(&mut self) -> &[u8; 4096] {
-        // Copy to content out of the page.
-        let mut content = [0u8; 0x1000];
-        unsafe {
-            core::intrinsics::volatile_copy_nonoverlapping_memory(
-                &mut content,
-                self.page.start_address().as_ptr(),
-                1,
-            );
-        }
-
-        // Tell the Hypervisor that we want to change the page to private.
-        ghcb::page_state_change(self.frame, PageOperation::PageAssignmentPrivate);
-
-        self.mapper
-            .create_temporary_mapping_4kib(self.frame, true, true);
-
-        // Convert the page to private.
-        pvalidate(self.page, true).unwrap();
-
-        // Adjust the permissions for VMPL 1.
-        rmpadjust(self.page, 1, VmplPermissions::READ, false).unwrap();
-
-        // Copy the content back in.
-        unsafe {
-            core::intrinsics::volatile_copy_nonoverlapping_memory(
-                self.page.start_address().as_mut_ptr(),
-                &content,
-                1,
-            );
-        }
-
-        unsafe { &*self.page.start_address().as_ptr() }
-    }
-
-    /// Copy memory from the mapping into a buffer.
-    pub fn read(&self, out: &mut [u8]) {
-        assert!(out.len() <= 4096);
-        unsafe {
-            core::intrinsics::volatile_copy_nonoverlapping_memory(
-                out.as_mut_ptr(),
-                self.page.start_address().as_ptr(),
-                out.len(),
-            );
-        }
-    }
 }
