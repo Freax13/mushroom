@@ -32,7 +32,6 @@ pub mod kernel {
     pub const TEXT: PhysFrameRange<Size2MiB> = addr_range(0x10040200000, 0x10040ffffff);
     pub const RODATA: PhysFrameRange<Size2MiB> = addr_range(0x10080000000, 0x10080ffffff);
     pub const DATA: PhysFrameRange<Size2MiB> = addr_range(0x100c0000000, 0x100c0ffffff);
-    pub const TDATA: PhysFrameRange<Size2MiB> = addr_range(0x10100000000, 0x10100ffffff);
     pub const STACK: PhysFrameRange<Size2MiB> = addr_range(0x10140000000, 0x10140ffffff);
 
     // The shadow memory segments of the kernel binary (for KASAN):

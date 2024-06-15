@@ -7,7 +7,6 @@ PHDRS
     text             PT_LOAD AT(0x10040200000);
     rodata           PT_LOAD AT(0x10080000000);
     data             PT_LOAD AT(0x100c0000000);
-    tdata            PT_TLS  AT(0x10100000000);
     stack            PT_LOAD AT(0x10140000000);
     init_file        PT_LOAD AT(0x30000000000) FLAGS((1 << 2) | (1 << 31));
     input_file       PT_LOAD AT(0x40000000000) FLAGS((1 << 2) | (1 << 31));
@@ -60,14 +59,6 @@ SECTIONS {
         *(.bss .bss.*)
         *(.lbss .lbss.*)
     } :data
-
-    .tdata (0xffff800003000000) :
-    {
-        _tdata_start = .;
-        *(.tdata .tdata.*)
-        *(.tbss .tbss.*)
-        _tdata_end = .;
-    } :tdata
 
     .stack (0xffff800004000000) :
     {

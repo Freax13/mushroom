@@ -67,7 +67,6 @@ static PD_256_0: StaticPd = {
     page_table.set_page_range(1, TEXT, flags!());
     page_table.set_page_range(8, RODATA, flags!(EXECUTE_DISABLE));
     page_table.set_page_range(16, DATA, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page_range(24, TDATA, flags!(EXECUTE_DISABLE));
     page_table.set_page_range(32, STACK, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page_range(40, PROFILER_CONTROL, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_table(48, &PT_256_0_48, flags!(WRITE | EXECUTE_DISABLE));
