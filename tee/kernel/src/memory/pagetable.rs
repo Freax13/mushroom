@@ -1,7 +1,5 @@
 //! Concurrent page tables.
 
-global_asm!(include_str!("pagetable.s"));
-
 use crate::{
     error::{ensure, err, Result},
     per_cpu::PerCpu,
@@ -10,7 +8,7 @@ use crate::{
 };
 
 use core::{
-    arch::{asm, global_asm},
+    arch::asm,
     cell::RefMut,
     cmp, fmt,
     iter::Step,
@@ -25,7 +23,9 @@ use crate::spin::lazy::Lazy;
 use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
+use constants::physical_address::{kernel::*, *};
 use log::trace;
+use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
@@ -40,6 +40,88 @@ use super::{
 };
 
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
+
+#[used]
+#[link_section = ".pagetables.pml4"]
+static PML4: StaticPml4 = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(256, &PDP_256, flags!(WRITE));
+    page_table.set_table(257, &PDP_257, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_table(352, &PDP_352, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_recursive_table(510, &PML4, flags!(WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_256: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PD_256_0, flags!(WRITE));
+    page_table.set_page(1, PROFILER_BUFFER, flags!(WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_256_0: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, RESET_VECTOR, flags!());
+    page_table.set_page_range(1, TEXT, flags!());
+    page_table.set_page_range(8, RODATA, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(16, DATA, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(32, STACK, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(40, PROFILER_CONTROL, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_table(48, &PT_256_0_48, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PT_256_0_48: StaticPt = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, OUTPUT, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_352: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_table(0, &PD_352_0, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_table(72, &PD_352_72, flags!(EXECUTE_DISABLE));
+    page_table.set_table(80, &PD_352_80, flags!(EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_352_0: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, TEXT_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(1, RODATA_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(2, DATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(3, TDATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(4, STACK_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_352_72: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, INIT_FILE_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_352_80: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, INPUT_FILE_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PDP_257: StaticPdp = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page_range(0, DYNAMIC, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(64, INIT_FILE, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(128, INPUT_FILE, flags!(EXECUTE_DISABLE));
+    page_table
+};
 
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
@@ -244,7 +326,7 @@ impl Pagetables {
 
         // Copy the buffer into the pml4.
         unsafe {
-            copy_into_frame(frame, bytemuck::cast_mut(&mut entries))?;
+            copy_into_frame(frame, bytemuck::cast_mut(&mut entries));
         }
 
         let cr4 = Cr4::read();

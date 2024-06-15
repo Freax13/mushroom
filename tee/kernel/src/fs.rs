@@ -1,73 +1,77 @@
-use crate::spin::lazy::Lazy;
-use constants::{physical_address, virtual_address};
-use x86_64::structures::paging::{frame::PhysFrameRangeInclusive, page::PageRangeInclusive};
+use core::cmp;
 
-use crate::memory::pagetable::{map_page, PageTableFlags, PresentPageTableEntry};
+use alloc::sync::Arc;
+use node::tmpfs::TmpFsFile;
+
+use crate::error::Result;
+use crate::fs::fd::file::File;
 
 pub mod fd;
 pub mod node;
 pub mod path;
 
-pub static INIT: Lazy<&'static [u8]> = Lazy::new(|| {
-    let pages = virtual_address::INIT.into_iter();
-    let frames = physical_address::INIT.into_iter();
-    load_static_file(pages, frames)
-});
+extern "C" {
+    #[link_name = "init_file"]
+    static INIT_FILE: StaticFile;
+    #[link_name = "input_file"]
+    static INPUT_FILE: StaticFile;
+}
 
-pub static INPUT: Lazy<&'static [u8]> = Lazy::new(|| {
-    let pages = virtual_address::INPUT.into_iter();
-    let frames = physical_address::INPUT.into_iter();
-    load_static_file(pages, frames)
-});
+/// This type represents a static file that was mapped into memory with the
+/// kernel by the loader.
+///
+/// The file is made up of a page containing the size of the file, followed by
+/// pages containing the content of the file. Note that there is no shadow
+/// mapping for the content of the file.
+#[repr(C, align(4096))]
+pub struct StaticFile {
+    size: usize,
+}
 
-fn load_static_file(
-    mut pages: PageRangeInclusive,
-    mut frames: PhysFrameRangeInclusive,
-) -> &'static [u8] {
-    let header_page = pages.next().unwrap();
-    let header_frame = frames.next().unwrap();
-
-    let header_entry = PresentPageTableEntry::new(header_frame, PageTableFlags::GLOBAL);
-    unsafe {
-        map_page(header_page, header_entry).expect("failed to map header");
+impl StaticFile {
+    pub fn init_file() -> &'static Self {
+        unsafe { &INIT_FILE }
     }
 
-    #[cfg(sanitize = "address")]
-    crate::sanitize::map_shadow(
-        header_page.start_address().as_ptr(),
-        crate::sanitize::MIN_ALLOCATION_SIZE,
-    );
+    pub fn input_file() -> &'static Self {
+        unsafe { &INPUT_FILE }
+    }
 
-    let len = unsafe {
-        header_page
-            .start_address()
-            .as_ptr::<usize>()
-            .read_volatile()
-    };
+    fn as_ptr(&self) -> *const [u8] {
+        // The content starts at the page following the header.
+        core::ptr::slice_from_raw_parts(
+            (self as *const Self).cast::<u8>().wrapping_add(0x1000),
+            self.size,
+        )
+    }
 
-    let num_pages = len.div_ceil(0x1000);
-    for _ in 0..num_pages {
-        let input_page = pages.next().unwrap();
-        let input_frame = frames.next().unwrap();
+    pub fn len(&self) -> usize {
+        self.as_ptr().len()
+    }
 
-        let input_entry = PresentPageTableEntry::new(input_frame, PageTableFlags::GLOBAL);
+    pub fn read(&self, offset: usize, buffer: &mut [u8]) {
+        let ptr = self.as_ptr();
+        let end_index = offset + buffer.len();
+        assert!(end_index <= ptr.len());
         unsafe {
-            map_page(input_page, input_entry).expect("failed to map content");
+            core::ptr::copy_nonoverlapping(
+                ptr.cast::<u8>().add(offset),
+                buffer.as_mut_ptr(),
+                buffer.len(),
+            );
         }
     }
 
-    #[cfg(sanitize = "address")]
-    crate::sanitize::map_shadow(
-        header_page
-            .start_address()
-            .as_ptr::<u8>()
-            .wrapping_add(crate::sanitize::MIN_ALLOCATION_SIZE)
-            .cast(),
-        ((0x1000 + len).saturating_sub(crate::sanitize::MIN_ALLOCATION_SIZE))
-            .next_multiple_of(crate::sanitize::MIN_ALLOCATION_SIZE),
-    );
-
-    let first_input_page = header_page + 1;
-    let ptr = first_input_page.start_address().as_ptr();
-    unsafe { core::slice::from_raw_parts(ptr, len) }
+    pub fn copy_to(&self, dst: &Arc<TmpFsFile>) -> Result<()> {
+        dst.truncate(self.len())?;
+        let mut buffer = [0; 0x1000];
+        for i in (0..self.len()).step_by(0x1000) {
+            let remaining_len = self.len() - i;
+            let buffer_len = cmp::min(remaining_len, 0x1000);
+            let buffer = &mut buffer[0..buffer_len];
+            self.read(i, buffer);
+            dst.write(i, buffer)?;
+        }
+        Ok(())
+    }
 }

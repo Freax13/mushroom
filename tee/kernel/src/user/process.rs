@@ -13,10 +13,10 @@ use alloc::{
 use crate::{
     error::{err, Result},
     fs::{
-        fd::{file::File, FileDescriptorTable},
+        fd::FileDescriptorTable,
         node::{procfs::ProcessInos, tmpfs::TmpFsFile, FileAccessContext, INode},
         path::Path,
-        INIT,
+        StaticFile,
     },
     rt::{notify::Notify, once::OnceCell},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
@@ -272,7 +272,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let mut ctx = FileAccessContext::extract_from_thread(&guard);
 
     let file = TmpFsFile::new(FileMode::all());
-    file.write(0, *INIT).unwrap();
+    StaticFile::init_file().copy_to(&file).unwrap();
     let path = Path::new(b"/bin/init".to_vec()).unwrap();
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
 

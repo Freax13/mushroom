@@ -25,69 +25,7 @@ pub const MEMORY_MSR: u32 = 0x7000_0000;
 pub const UPDATE_OUTPUT_MSR: u32 = 0x7000_0001;
 pub const FINISH_OUTPUT_MSR: u32 = 0x7000_0002;
 
-macro_rules! address {
-    ($(#[$meta:meta])* const $ident:ident = $start:literal;) => {
-        $(#[$meta])*
-        pub const $ident: PageRange = PageRange::new($start..=$start + 0xfff);
-    };
-    ($(#[$meta:meta])* const $ident:ident = $start:literal ..=$end:literal;) => {
-        $(#[$meta])*
-        pub const $ident: PageRange = PageRange::new($start..=$end);
-    };
-    ($(#[$meta:meta])* const $ident:ident = $start:literal @ $size:expr;) => {
-        $(#[$meta])*
-        pub const $ident: PageRange = PageRange::new($start..=$start + ($size - 1));
-    };
-    ($(#[$meta:meta])* const $ident:ident = $start:literal $(..=$end:literal)? $(@$size:expr)?;) => {
-        compiler_error!("Must not specify end and size");
-    };
-}
-
-macro_rules! addresses {
-    ($($(#[$meta:meta])* const $ident:ident = $start:literal $(..=$end:literal)? $(@$size:expr)?;)*) => {
-        $(
-            address!{ $(#[$meta])* const $ident = $start $(..=$end)? $(@$size)?; }
-        )*
-
-        #[cfg(test)]
-        #[test]
-        fn test_ranges() {
-            crate::check_ranges(&[
-                $(
-                    $(#[$meta])* $ident,
-                )*
-            ]);
-        }
-    };
-}
-
-pub mod virtual_address {
-    use x86_64::structures::paging::Page;
-
-    type PageRange = crate::PageRange<Page>;
-
-    addresses! {
-        const KERNEL = 0xffff_8000_0000_0000..=0xffff_8000_ffff_ffff;
-        const KASAN_SHADOW_MAPPING = 0xffff_b000_0000_0000..=0xffff_bfff_ffff_ffff;
-        const HEAP = 0xffff_c000_0000_0000..=0xffff_cfff_ffff_ffff;
-        const TEMPORARY = 0xffff_d000_0000_0000..=0xffff_dfff_ffff_ffff;
-        const INIT = 0xffff_e000_0000_0000..=0xffff_e0ff_ffff_ffff;
-        const INPUT = 0xffff_f000_0000_0000..=0xffff_f0ff_ffff_ffff;
-    }
-}
-
-pub mod physical_address {
-    use x86_64::structures::paging::PhysFrame;
-
-    type PageRange = crate::PageRange<PhysFrame>;
-
-    addresses! {
-        // 64 gibibytes of dynamic physical memory that can be grown and shrunk.
-        const DYNAMIC = 0x0000_0200_0000_0000..=0x0000_02ff_ffff_ffff;
-        const INIT = 0x0000_0300_0000_0000..=0x0000_03ff_ffff_ffff;
-        const INPUT = 0x0000_0400_0000_0000..=0x0000_04ff_ffff_ffff;
-    }
-}
+pub mod physical_address;
 
 #[derive(Clone)]
 pub struct PageRange<T> {

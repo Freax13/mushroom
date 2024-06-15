@@ -1,0 +1,7 @@
+[package]
+name = "static-page-tables"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+x86_64 = "0.15.1"

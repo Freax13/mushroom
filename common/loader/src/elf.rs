@@ -28,6 +28,10 @@ pub fn load(
     elf.program_headers
         .into_iter()
         .filter(|ph| matches!(ph.p_type, PT_LOAD))
+        .filter(|ph| {
+            let no_load_page = ph.p_flags.get_bit(31);
+            !no_load_page
+        })
         .flat_map(move |ph| {
             let execute = ph.p_flags.get_bit(0);
             let write = ph.p_flags.get_bit(1);
@@ -134,6 +138,14 @@ pub fn load_shadow_mapping(
             let start_page = Page::containing_address(start_addr);
             let end_inclusive_page = Page::containing_address(end_inclusive_addr);
 
+            let mut vmpl1_perms = VmplPermissions::empty();
+            vmpl1_perms.set(
+                VmplPermissions::READ,
+                ph.is_read() || ph.is_executable() || ph.is_write(),
+            );
+            vmpl1_perms.set(VmplPermissions::WRITE, ph.is_write());
+            vmpl1_perms &= vmpl1_perms_mask;
+
             let mut iter = (start_page..=end_inclusive_page).peekable();
             from_fn(move || {
                 let page = iter.next()?;
@@ -159,8 +171,6 @@ pub fn load_shadow_mapping(
                     payload[offset..][..512].fill(0);
                 }
 
-                let vmpl1_perms =
-                    (VmplPermissions::READ | VmplPermissions::WRITE) & vmpl1_perms_mask;
                 Some(LoadCommand {
                     physical_address: mapping_frame,
                     vmpl1_perms,

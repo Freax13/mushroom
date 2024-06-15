@@ -3,6 +3,7 @@
 #![feature(
     abi_x86_interrupt,
     asm_const,
+    const_mut_refs,
     core_intrinsics,
     layout_for_ptr,
     naked_functions,

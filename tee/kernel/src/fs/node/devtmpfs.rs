@@ -4,14 +4,10 @@ use crate::{
         mushroom::Output,
         CharDev,
     },
-    fs::{fd::file::File, path::Path},
+    fs::{path::Path, StaticFile},
 };
 
-use crate::{
-    error::Result,
-    fs::{path::FileName, INPUT},
-    user::process::syscall::args::FileMode,
-};
+use crate::{error::Result, fs::path::FileName, user::process::syscall::args::FileMode};
 
 use super::{directory::MountLocation, new_dev, tmpfs::TmpFsDir, DynINode, INode};
 
@@ -23,7 +19,7 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
         .create_file(input_name, FileMode::from_bits_truncate(0o444))?
         .ok()
         .unwrap();
-    input_file.write(0, *INPUT)?;
+    StaticFile::input_file().copy_to(&input_file)?;
 
     let output_name = FileName::new(b"output").unwrap();
     tmp_fs_dir.create_char_dev(output_name, Output::MAJOR, Output::MINOR)?;

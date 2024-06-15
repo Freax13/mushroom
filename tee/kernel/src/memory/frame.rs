@@ -9,13 +9,10 @@ use core::{
 };
 
 use bit_field::BitField;
-use constants::physical_address::DYNAMIC;
+use constants::physical_address::DYNAMIC_2MIB;
 use crossbeam_utils::atomic::AtomicCell;
 use usize_conversions::{usize_from, FromUsize};
-use x86_64::{
-    structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB},
-    PhysAddr,
-};
+use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
 
 use crate::{limited_index::LimitedIndex, per_cpu::PerCpu, supervisor};
 
@@ -426,15 +423,13 @@ type SlotIndex = LimitedIndex<SLOTS>;
 
 impl From<PhysFrame<Size2MiB>> for SlotIndex {
     fn from(value: PhysFrame<Size2MiB>) -> Self {
-        let idx = (value.start_address().as_u64() - DYNAMIC.start()) / Size2MiB::SIZE;
-        SlotIndex::new(usize_from(idx))
+        SlotIndex::new(usize_from(value - DYNAMIC_2MIB.start))
     }
 }
 
 impl From<SlotIndex> for PhysFrame<Size2MiB> {
     fn from(value: SlotIndex) -> Self {
-        let address = DYNAMIC.start() + u64::from_usize(value.get()) * Size2MiB::SIZE;
-        PhysFrame::containing_address(PhysAddr::new(address))
+        DYNAMIC_2MIB.start + u64::from_usize(value.get())
     }
 }
 

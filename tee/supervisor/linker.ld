@@ -6,12 +6,13 @@ PHDRS
     rodata       PT_LOAD AT(0x00140000000);
     data         PT_LOAD AT(0x00180000000);
     stack        PT_LOAD AT(0x001c0000000);
-    secrets      PT_LOAD AT(0x00200000000) FLAGS((1 << 1) | (1 << 2) | (1 << 29));
+    secrets      PT_LOAD AT(0x00200000000) FLAGS((1 << 2) | (1 << 29));
     shadow_stack PT_LOAD AT(0x00240000000);
     shared       PT_LOAD AT(0x00280000000) FLAGS((1 << 30));
     cpuid_page   PT_LOAD FLAGS((1 << 2) | (1 << 28));
-    pagetables   PT_LOAD;
+    pagetables   PT_LOAD FLAGS((1 << 2));
     reset_vector PT_LOAD;
+    output       PT_LOAD FLAGS(1 << 31);
 }
 
 SECTIONS {
@@ -41,7 +42,8 @@ SECTIONS {
 
     .secrets (0x43600000) :
     {
-        *(.secrets .secrets.*)
+        secrets = .;
+        . += 0x1000;
     } :secrets
 
     .shadow_stack (0x43a00000) :
@@ -54,6 +56,11 @@ SECTIONS {
         *(.shared .shared.*)
     } :shared
 
+    .output (0x44400000) :
+    {
+        *(.output .output.*)
+    } :output
+
     .cpuid_page (0xffa00000) : 
     {
         KEEP(*(.cpuid_page .cpuid_page.*))
@@ -61,7 +68,9 @@ SECTIONS {
 
     .pagetables (0xffc00000) : 
     {
+        __pagetables_start = .;
         KEEP(*(.pagetables .pagetables.*))
+        __pagetables_end = .;
     } :pagetables
 
     .reset_vector (0xfffff000) : 

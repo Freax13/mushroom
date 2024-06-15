@@ -1,12 +1,15 @@
 use std::iter::once;
 
-use constants::physical_address::INIT;
+use constants::physical_address::INIT_FILE;
 use snp_types::VmplPermissions;
+use x86_64::structures::paging::PhysFrame;
 
 use crate::{LoadCommand, LoadCommandPayload};
 
 pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
-    let mut frames = INIT.into_iter();
+    let start_frame = PhysFrame::from_start_address(INIT_FILE.start.start_address()).unwrap();
+    let end_frame = PhysFrame::from_start_address(INIT_FILE.end.start_address()).unwrap();
+    let mut frames = PhysFrame::range(start_frame, end_frame);
 
     let mut bytes = [0; 0x1000];
     bytes[..8].copy_from_slice(&init.len().to_ne_bytes());

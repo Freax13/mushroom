@@ -1,9 +1,10 @@
 use std::{iter::once, mem::size_of};
 
 use bytemuck::bytes_of;
-use constants::physical_address::INPUT;
+use constants::physical_address::INPUT_FILE;
 use io::input::Header;
 use snp_types::VmplPermissions;
+use x86_64::structures::paging::PhysFrame;
 
 use crate::{LoadCommand, LoadCommandPayload};
 
@@ -21,8 +22,12 @@ pub fn load_input(input: &[u8]) -> (impl Iterator<Item = LoadCommand> + '_, [u8;
         LoadCommandPayload::Shared(bytes)
     }));
 
+    let start_frame = PhysFrame::from_start_address(INPUT_FILE.start.start_address()).unwrap();
+    let end_frame = PhysFrame::from_start_address(INPUT_FILE.end.start_address()).unwrap();
+    let frames = PhysFrame::range(start_frame, end_frame);
+
     (
-        INPUT
+        frames
             .into_iter()
             .zip(payloads)
             .map(|(physical_address, payload)| LoadCommand {

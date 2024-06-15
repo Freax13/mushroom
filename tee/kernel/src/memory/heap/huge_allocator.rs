@@ -4,7 +4,6 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use constants::virtual_address::HEAP;
 use usize_conversions::FromUsize;
 use x86_64::{
     structures::paging::{Page, Size4KiB},
@@ -23,7 +22,7 @@ pub struct HugeAllocator {
 impl HugeAllocator {
     pub const fn new() -> Self {
         Self {
-            bump_addr: AtomicU64::new(HEAP.start()),
+            bump_addr: AtomicU64::new(0xffff_c000_0000_0000),
         }
     }
 }

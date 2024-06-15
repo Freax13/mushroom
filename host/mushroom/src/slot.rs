@@ -14,7 +14,10 @@ use nix::{
     sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags},
 };
 use volatile::VolatilePtr;
-use x86_64::{structures::paging::PhysFrame, PhysAddr};
+use x86_64::{
+    structures::paging::{PhysFrame, Size2MiB},
+    PhysAddr,
+};
 
 use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
 
@@ -49,7 +52,7 @@ impl Slot {
         })
     }
 
-    pub fn new(vm: &VmHandle, gpa: PhysFrame, private: bool) -> Result<Self> {
+    pub fn new(vm: &VmHandle, gpa: PhysFrame<Size2MiB>, private: bool) -> Result<Self> {
         let len = 512 * 0x1000;
         let shared_mapping = AnonymousPrivateMapping::new(len)?;
         let shared_mapping = Arc::new(shared_mapping);
@@ -72,7 +75,7 @@ impl Slot {
             .transpose()?;
 
         Ok(Self {
-            gpa,
+            gpa: PhysFrame::from_start_address(gpa.start_address()).unwrap(),
             shared_mapping,
             restricted_fd,
         })

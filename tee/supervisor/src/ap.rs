@@ -1,4 +1,4 @@
-use core::cell::{Cell, RefCell};
+use core::cell::{Cell, RefCell, SyncUnsafeCell};
 
 use bit_field::BitField;
 use constants::{
@@ -9,7 +9,7 @@ use log::{debug, info, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
     vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
-    Uninteresting, VmplPermissions,
+    Uninteresting,
 };
 use x86_64::{
     instructions::hlt,
@@ -23,7 +23,6 @@ use crate::{
     dynamic::HOST_ALLOCTOR,
     ghcb::{create_ap, eoi, exit, ioio_write, vmsa_tweak_bitmap},
     output::{self, update_output},
-    pagetable::TEMPORARY_MAPPER,
     FakeSync,
 };
 
@@ -236,17 +235,6 @@ fn handle_msr_prot(
                     let allocator = &mut HOST_ALLOCTOR.borrow_mut();
                     let frame = allocator.allocate_frame();
 
-                    if let Some(frame) = frame {
-                        // Create a temporary mapping.
-                        let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-                        let mapping = mapper.create_temporary_mapping_2mib(frame, false);
-
-                        // Make the frame accessible to VMPL 1.
-                        unsafe {
-                            mapping.rmpadjust(1, VmplPermissions::all(), false);
-                        }
-                    }
-
                     trace!("allocated {frame:?}");
                     let value = frame
                         .map(PhysFrame::start_address)
@@ -271,16 +259,23 @@ fn handle_msr_prot(
                     }
                 }
                 UPDATE_OUTPUT_MSR => {
-                    let frame = PhysFrame::containing_address(PhysAddr::new(value));
                     let len = ((value & 0xfff) + 1) as usize;
 
                     let mut buffer = [0; 0x1000];
                     let buffer = &mut buffer[..len];
 
-                    {
-                        let mut mapper = TEMPORARY_MAPPER.borrow_mut();
-                        let mapping = mapper.create_temporary_mapping_4kib(frame, true, false);
-                        mapping.read(buffer);
+                    /// This buffer is shared with the kernel. It's backed by
+                    /// private memory.
+                    #[link_section = ".output"]
+                    static OUTPUT: SyncUnsafeCell<[u8; 0x1000]> = SyncUnsafeCell::new([0; 0x1000]);
+                    let output = OUTPUT.get();
+
+                    unsafe {
+                        core::intrinsics::volatile_copy_nonoverlapping_memory(
+                            buffer.as_mut_ptr(),
+                            output.cast(),
+                            buffer.len(),
+                        );
                     }
 
                     update_output(buffer);

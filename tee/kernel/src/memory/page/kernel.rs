@@ -7,7 +7,7 @@ use core::{
 
 use alloc::alloc::{alloc, alloc_zeroed, dealloc};
 use constants::physical_address::DYNAMIC;
-use x86_64::{structures::paging::PhysFrame, PhysAddr};
+use x86_64::structures::paging::PhysFrame;
 
 use crate::{
     error::{err, Result},
@@ -166,8 +166,8 @@ impl KernelPage {
 
     pub fn frame(&self) -> PhysFrame {
         let vaddr = self.content.as_ptr() as u64;
-        let paddr = vaddr - 0xffff_8080_0000_0000 + DYNAMIC.start();
-        PhysFrame::from_start_address(PhysAddr::new(paddr)).unwrap()
+        let paddr = DYNAMIC.start.start_address() + (vaddr - 0xffff_8080_0000_0000);
+        PhysFrame::from_start_address(paddr).unwrap()
     }
 
     /// Zero the bytes in the specified range.
