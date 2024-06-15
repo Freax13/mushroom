@@ -326,7 +326,7 @@ impl Pagetables {
 
         // Copy the buffer into the pml4.
         unsafe {
-            copy_into_frame(frame, bytemuck::cast_mut(&mut entries))?;
+            copy_into_frame(frame, bytemuck::cast_mut(&mut entries));
         }
 
         let cr4 = Cr4::read();
