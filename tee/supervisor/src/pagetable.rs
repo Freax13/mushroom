@@ -437,7 +437,7 @@ impl TemporaryMapping<'_, Size4KiB> {
         pvalidate(self.page, true).unwrap();
 
         // Adjust the permissions for VMPL 1.
-        rmpadjust(self.page, 1, VmplPermissions::READ, true).unwrap();
+        rmpadjust(self.page, 1, VmplPermissions::READ, false).unwrap();
 
         // Copy the content back in.
         unsafe {
