@@ -76,20 +76,7 @@ pub mod virtual_address {
     }
 }
 
-pub mod new_physical_address;
-
-pub mod physical_address {
-    use x86_64::structures::paging::PhysFrame;
-
-    type PageRange = crate::PageRange<PhysFrame>;
-
-    addresses! {
-        // 64 gibibytes of dynamic physical memory that can be grown and shrunk.
-        const DYNAMIC = 0x0000_0200_0000_0000..=0x0000_02ff_ffff_ffff;
-        const INIT = 0x0000_0300_0000_0000..=0x0000_03ff_ffff_ffff;
-        const INPUT = 0x0000_0400_0000_0000..=0x0000_04ff_ffff_ffff;
-    }
-}
+pub mod physical_address;
 
 #[derive(Clone)]
 pub struct PageRange<T> {

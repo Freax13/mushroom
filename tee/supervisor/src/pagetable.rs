@@ -5,7 +5,7 @@ use core::{
 };
 
 use bit_field::BitField;
-use constants::new_physical_address::{supervisor::*, DYNAMIC, INPUT_FILE, OUTPUT};
+use constants::physical_address::{supervisor::*, DYNAMIC, INPUT_FILE, OUTPUT};
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
     structures::paging::{Page, PageSize, PageTableIndex, PhysFrame, Size1GiB, Size2MiB},

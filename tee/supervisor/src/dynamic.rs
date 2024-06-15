@@ -1,11 +1,11 @@
 use core::cell::RefCell;
 
 use bit_field::BitField;
-use constants::{physical_address::DYNAMIC, MEMORY_PORT};
+use constants::{physical_address::DYNAMIC_2MIB, MEMORY_PORT};
 use snp_types::VmplPermissions;
 use x86_64::{
     structures::paging::{FrameAllocator, FrameDeallocator, Page, PageSize, PhysFrame, Size2MiB},
-    PhysAddr, VirtAddr,
+    VirtAddr,
 };
 
 use crate::{
@@ -75,8 +75,7 @@ unsafe impl FrameAllocator<Size2MiB> for HostAllocator {
         // Allocate a slot id.
         let slot_id = self.allocate_slot_id()?;
 
-        let base = PhysFrame::<Size2MiB>::containing_address(PhysAddr::new(DYNAMIC.start()));
-        let frame = base + u64::from(slot_id);
+        let frame = DYNAMIC_2MIB.start + u64::from(slot_id);
 
         // Tell the host to enable the slot.
         unsafe {
@@ -110,9 +109,8 @@ unsafe impl FrameAllocator<Size2MiB> for HostAllocator {
 
 impl FrameDeallocator<Size2MiB> for HostAllocator {
     unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size2MiB>) {
-        assert!(DYNAMIC.contains(frame.start_address().as_u64()));
-        let base = PhysFrame::<Size2MiB>::containing_address(PhysAddr::new(DYNAMIC.start()));
-        let slot_id = u16::try_from(frame - base).unwrap();
+        assert!(DYNAMIC_2MIB.contains(&frame));
+        let slot_id = u16::try_from(frame - DYNAMIC_2MIB.start).unwrap();
 
         // Create a temporary mapping.
         let base = Page::<Size2MiB>::from_start_address(VirtAddr::new(0x200000000000)).unwrap();

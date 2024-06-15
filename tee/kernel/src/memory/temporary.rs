@@ -20,9 +20,12 @@ use super::pagetable::{unmap_page, PageTableFlags};
 /// mapping.
 #[inline(always)]
 fn get_fast_mapping(frame: PhysFrame) -> Option<*mut [u8; 4096]> {
-    DYNAMIC.contains(frame.start_address().as_u64()).then(|| {
-        (frame.start_address().as_u64() - DYNAMIC.start() + 0xffff_8080_0000_0000) as *mut _
-    })
+    (DYNAMIC.start.start_address()..DYNAMIC.end.start_address())
+        .contains(&frame.start_address())
+        .then(|| {
+            (frame.start_address().as_u64() - DYNAMIC.start.start_address().as_u64()
+                + 0xffff_8080_0000_0000) as *mut _
+        })
 }
 
 /// Copy bytes into a frame.

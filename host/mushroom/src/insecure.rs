@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use bit_field::BitField;
 use bytemuck::bytes_of;
 use constants::{
-    physical_address::DYNAMIC, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT,
+    physical_address::DYNAMIC_2MIB, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT,
     MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
 };
 use snp_types::PageType;
@@ -25,7 +25,7 @@ use x86_64::{
         model_specific::EferFlags,
         xcontrol::XCr0Flags,
     },
-    structures::paging::{PageSize as _, PhysFrame, Size2MiB, Size4KiB},
+    structures::paging::{PhysFrame, Size4KiB},
     PhysAddr,
 };
 
@@ -310,15 +310,8 @@ impl DynamicMemory {
         let mut guard = self.state.lock().unwrap();
         for slot_id in 0..SLOTS as u16 {
             if let Entry::Vacant(entry) = guard.entry(slot_id) {
-                let gpa = DYNAMIC.start() + u64::from(slot_id) * Size2MiB::SIZE;
-                let slot = entry.insert(
-                    Slot::new(
-                        &self.vm,
-                        PhysFrame::containing_address(PhysAddr::new(gpa)),
-                        false,
-                    )
-                    .unwrap(),
-                );
+                let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
+                let slot = entry.insert(Slot::new(&self.vm, gpa, false).unwrap());
 
                 let base = 1 << 6;
                 let kvm_slot_id = base + slot_id;
@@ -326,7 +319,7 @@ impl DynamicMemory {
                     self.vm.map_encrypted_memory(kvm_slot_id, slot).unwrap();
                 }
 
-                return Some(gpa);
+                return Some(gpa.start_address().as_u64());
             }
         }
 

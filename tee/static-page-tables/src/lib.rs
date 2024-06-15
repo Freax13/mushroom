@@ -1,12 +1,10 @@
 #![no_std]
 #![feature(const_mut_refs, const_unsafecell_get_mut, const_ptr_is_null)]
 
-use core::{cell::UnsafeCell, marker::PhantomData, ptr::null};
+use core::{cell::UnsafeCell, marker::PhantomData, ops::Range, ptr::null};
 
 use x86_64::{
-    structures::paging::{
-        frame::PhysFrameRange, PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB,
-    },
+    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB},
     PhysAddr,
 };
 
@@ -77,7 +75,7 @@ where
     pub const fn set_page_range(
         &mut self,
         mut index: usize,
-        mut addr: PhysFrameRange<L::Size>,
+        mut addr: Range<PhysFrame<L::Size>>,
         flags: Flags,
     ) where
         L: PageLevel,

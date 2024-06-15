@@ -229,7 +229,8 @@ impl<const N: usize> ChunkHeader<N> {
             .ok_or(AllocError)?;
 
         // Get a pointer in the mapping of all dynamic memory.
-        let addr = frame.start_address().as_u64() - DYNAMIC.start() + 0xffff_8080_0000_0000;
+        let addr = frame.start_address().as_u64() - DYNAMIC.start.start_address().as_u64()
+            + 0xffff_8080_0000_0000;
 
         // Map shadow memory for the chunk.
         #[cfg(sanitize = "address")]

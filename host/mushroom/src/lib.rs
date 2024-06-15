@@ -13,8 +13,8 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use bit_field::BitField;
 use bytemuck::NoUninit;
 use constants::{
-    physical_address::DYNAMIC, FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT,
-    MEMORY_PORT, UPDATE_OUTPUT_MSR,
+    physical_address::DYNAMIC_2MIB, FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, LOG_PORT,
+    MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use kvm::{KvmCpuidEntry2, KvmHandle, Page, VcpuHandle};
 use profiler::ProfileFolder;
@@ -266,8 +266,8 @@ impl VmContext {
                         MEMORY_PORT => {
                             let slot_id = value.get_bits(0..15) as u16;
                             let enabled = value.get_bit(15);
-                            let gpa = DYNAMIC.start() + u64::from(slot_id) * Size2MiB::SIZE;
-                            debug!(slot_id, enabled, gpa = %format_args!("{gpa:#x}"), "updating slot status");
+                            let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
+                            debug!(slot_id, enabled, gpa = %format_args!("{gpa:?}"), "updating slot status");
 
                             let base = 1 << 6;
                             let kvm_slot_id = base + slot_id;
@@ -290,9 +290,7 @@ impl VmContext {
                                         "tried to disable slot that's already disabled"
                                     );
 
-                                    let gpa = DYNAMIC.start() + u64::from(slot_id) * Size2MiB::SIZE;
-                                    let gfn =
-                                        PhysFrame::from_start_address(PhysAddr::new(gpa)).unwrap();
+                                    let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
                                     let slot = Slot::new(&self.vm, gfn, true)
                                         .context("failed to create dynamic slot")?;
 
@@ -301,7 +299,7 @@ impl VmContext {
                                     }
 
                                     self.vm.set_memory_attributes(
-                                        gpa,
+                                        gfn.start_address().as_u64(),
                                         Size2MiB::SIZE,
                                         KvmMemoryAttributes::PRIVATE,
                                     )?;

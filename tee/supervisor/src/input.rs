@@ -1,7 +1,7 @@
 use core::mem::size_of;
 
 use bytemuck::pod_read_unaligned;
-use constants::new_physical_address::INPUT_FILE;
+use constants::physical_address::INPUT_FILE;
 use io::input::Header;
 use log::info;
 use sha2::{Digest, Sha256};

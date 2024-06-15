@@ -23,7 +23,7 @@ use crate::spin::lazy::Lazy;
 use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
-use constants::new_physical_address::{kernel::*, *};
+use constants::physical_address::{kernel::*, *};
 use log::trace;
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
