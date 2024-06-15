@@ -89,16 +89,14 @@ static PDP_352: StaticPdp = {
     page_table
 };
 
-#[export_name = "pd_352_0"]
 #[link_section = ".pagetables"]
 static PD_352_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
-    let flags = flags!(WRITE | EXECUTE_DISABLE);
-    page_table.set_page(0, TEXT_SHADOW, flags);
-    page_table.set_page(1, RODATA_SHADOW, flags);
-    page_table.set_page(2, DATA_SHADOW, flags);
-    page_table.set_page(3, TDATA_SHADOW, flags);
-    page_table.set_page(4, STACK_SHADOW, flags);
+    page_table.set_page(0, TEXT_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(1, RODATA_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(2, DATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(3, TDATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(4, STACK_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
     page_table
 };
 
