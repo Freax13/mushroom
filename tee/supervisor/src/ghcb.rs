@@ -28,21 +28,16 @@ use x86_64::structures::paging::PhysFrame;
 
 use crate::{pa_of, FakeSync};
 
-#[no_mangle]
-#[link_section = ".secrets"]
-static SECRETS_PAGE: FakeSync<UnsafeCell<[u8; 0x1000]>> =
-    FakeSync::new(UnsafeCell::new([0; 0x1000]));
-
-static SECRETS: FakeSync<LazyCell<Secrets>> = FakeSync::new(LazyCell::new(|| {
-    let mut bytes = [0; 0x1000];
-    unsafe {
-        core::intrinsics::volatile_copy_nonoverlapping_memory(&mut bytes, SECRETS_PAGE.get(), 1);
+fn secrets() -> &'static Secrets {
+    extern "C" {
+        #[link_name = "secrets"]
+        static SECRETS: Secrets;
     }
-    pod_read_unaligned(&bytes)
-}));
+    unsafe { &SECRETS }
+}
 
 pub fn vmsa_tweak_bitmap() -> &'static VmsaTweakBitmap {
-    let Secrets::V3(v3) = &**SECRETS;
+    let Secrets::V3(v3) = secrets();
     &v3.vmsa_tweak_bitmap
 }
 
@@ -230,7 +225,7 @@ where
     let payload = &mut content.payload[..size_of::<T>()];
     payload.copy_from_slice(bytes_of(&request));
 
-    let Secrets::V3(secrets) = &**SECRETS;
+    let Secrets::V3(secrets) = secrets();
     let cipher = Aes256Gcm::new_from_slice(&secrets.vmpck0).unwrap();
     let tag = cipher
         .encrypt_in_place_detached(&nonce, &associated_data, payload)
@@ -263,7 +258,7 @@ pub fn extract_response(msg_seqno: u64, message: &mut Message) -> (u8, u8, &[u8]
     let msg_size = usize::from(content.msg_size);
     let payload = &mut content.payload[..msg_size];
 
-    let Secrets::V3(secrets) = &**SECRETS;
+    let Secrets::V3(secrets) = secrets();
     let cipher = Aes256Gcm::new_from_slice(&secrets.vmpck0).unwrap();
     cipher
         .decrypt_in_place_detached(&nonce, &associated_data, payload, auth_tag)

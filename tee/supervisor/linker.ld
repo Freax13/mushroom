@@ -42,7 +42,8 @@ SECTIONS {
 
     .secrets (0x43600000) :
     {
-        *(.secrets .secrets.*)
+        secrets = .;
+        . += 0x1000;
     } :secrets
 
     .shadow_stack (0x43a00000) :
