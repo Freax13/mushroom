@@ -28,6 +28,10 @@ pub fn load(
     elf.program_headers
         .into_iter()
         .filter(|ph| matches!(ph.p_type, PT_LOAD))
+        .filter(|ph| {
+            let no_load_page = ph.p_flags.get_bit(31);
+            !no_load_page
+        })
         .flat_map(move |ph| {
             let execute = ph.p_flags.get_bit(0);
             let write = ph.p_flags.get_bit(1);

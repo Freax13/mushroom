@@ -1,5 +1,7 @@
 use x86_64::{
-    structures::paging::{frame::PhysFrameRange, PageSize, PhysFrame, Size1GiB, Size2MiB},
+    structures::paging::{
+        frame::PhysFrameRange, PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB,
+    },
     PhysAddr,
 };
 
@@ -63,3 +65,7 @@ pub const DYNAMIC: PhysFrameRange<Size1GiB> = addr_range(0x020000000000, 0x20fff
 // Regions for kernel-guest communication during profiling.
 pub const PROFILER_CONTROL: PhysFrameRange<Size2MiB> = addr_range(0x80000000000, 0x80000ffffff);
 pub const PROFILER_BUFFER: PhysFrame<Size1GiB> = addr(0x80040000000);
+
+/// A shared buffer between the kernel and the supervisor to store output
+/// chunks.
+pub const OUTPUT: PhysFrame<Size4KiB> = addr(0x50000000000);

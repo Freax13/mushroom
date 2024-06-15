@@ -1,9 +1,9 @@
 use core::{
-    cell::LazyCell,
+    cell::SyncUnsafeCell,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::{memory::frame::allocate_frame, spin::mutex::Mutex};
+use crate::spin::mutex::Mutex;
 use arrayvec::ArrayVec;
 use constants::{
     FINISH_OUTPUT_MSR, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
@@ -16,7 +16,7 @@ use x86_64::{
     PhysAddr,
 };
 
-use crate::{memory::temporary::copy_into_frame, per_cpu::PerCpu};
+use crate::per_cpu::PerCpu;
 
 pub static ALLOCATOR: Allocator = Allocator::new();
 
@@ -151,21 +151,26 @@ pub fn launch_next_ap() {
     }
 }
 
-pub fn output(bytes: &[u8]) {
-    static FRAME: Mutex<LazyCell<PhysFrame>> = Mutex::new(LazyCell::new(allocate_frame));
+/// This buffer is shared with the supervisor. It's backed by private memory.
+#[link_section = ".output"]
+static OUTPUT: SyncUnsafeCell<[u8; 4096]> = SyncUnsafeCell::new([0; 4096]);
 
-    let guard = FRAME.lock();
-    let frame = **guard;
+static LOCKED_OUTPUT: Mutex<&SyncUnsafeCell<[u8; 4096]>> = Mutex::new(&OUTPUT);
+
+pub fn output(bytes: &[u8]) {
+    let guard = LOCKED_OUTPUT.lock();
+    let ptr = guard.get();
 
     for chunk in bytes.chunks(0x1000) {
-        let mut buffer = [0; 0x1000];
-        buffer[..chunk.len()].copy_from_slice(chunk);
-
         unsafe {
-            copy_into_frame(frame, &buffer).expect("failed to copy into output frame");
+            core::intrinsics::volatile_copy_nonoverlapping_memory(
+                ptr.cast(),
+                chunk.as_ptr(),
+                chunk.len(),
+            );
         }
 
-        let command = frame.start_address().as_u64() | (chunk.len() as u64 - 1);
+        let command = chunk.len() as u64 - 1;
         unsafe {
             Msr::new(UPDATE_OUTPUT_MSR).write(command);
         }

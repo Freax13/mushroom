@@ -9,6 +9,7 @@ PHDRS
     data             PT_LOAD AT(0x100c0000000);
     tdata            PT_TLS  AT(0x10100000000);
     stack            PT_LOAD AT(0x10140000000);
+    output           PT_LOAD AT(0x50000000000);
     profiler_control PT_LOAD AT(0x80000000000) FLAGS((1 << 30));
     profiler_buffer  PT_LOAD AT(0x80040000000) FLAGS((1 << 30));
 }
@@ -80,4 +81,9 @@ SECTIONS {
     {
         KEEP(*(.profiler_buffer .profiler_buffer.*))
     } :profiler_buffer
+
+    .output (0xffff800006000000) :
+    {
+        KEEP(*(.output .output.*))
+    } :output
 }

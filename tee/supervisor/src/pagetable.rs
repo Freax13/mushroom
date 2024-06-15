@@ -6,7 +6,7 @@ use core::{
 };
 
 use bit_field::BitField;
-use constants::new_physical_address::{supervisor::*, DYNAMIC};
+use constants::new_physical_address::{supervisor::*, DYNAMIC, OUTPUT};
 use snp_types::{ghcb::msr_protocol::PageOperation, VmplPermissions};
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
@@ -53,6 +53,14 @@ static PD_0_1: StaticPd = {
     page_table.set_page(27, SECRETS, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(29, SHADOW_STACK, flags!(C | EXECUTE_DISABLE | DIRTY));
     page_table.set_page(32, SHARED, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_table(34, &PT_0_1_34, flags!(EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PT_0_1_34: StaticPt = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, OUTPUT, flags!(C | EXECUTE_DISABLE));
     page_table
 };
 

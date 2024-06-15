@@ -12,6 +12,7 @@ PHDRS
     cpuid_page   PT_LOAD FLAGS((1 << 2) | (1 << 28));
     pagetables   PT_LOAD;
     reset_vector PT_LOAD;
+    output       PT_LOAD FLAGS(1 << 31);
 }
 
 SECTIONS {
@@ -53,6 +54,11 @@ SECTIONS {
     {
         *(.shared .shared.*)
     } :shared
+
+    .output (0x44400000) :
+    {
+        *(.output .output.*)
+    } :output
 
     .cpuid_page (0xffa00000) : 
     {
