@@ -48,7 +48,7 @@ static PML4: StaticPml4 = {
     page_table.set_table(256, &PDP_256, flags!(WRITE));
     page_table.set_table(257, &PDP_257, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_table(352, &PDP_352, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_recursive_table(510, &PML4, flags!());
+    page_table.set_recursive_table(510, &PML4, flags!(WRITE));
     page_table
 };
 

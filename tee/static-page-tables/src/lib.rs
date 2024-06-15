@@ -101,7 +101,7 @@ impl StaticPageTable<Level4> {
         table: &'static Self,
         mut flags: Flags,
     ) {
-        flags.0 |= Flags::PRESENT.0 | Flags::WRITE.0 | Flags::EXECUTE_DISABLE.0;
+        flags.0 |= Flags::PRESENT.0 | Flags::EXECUTE_DISABLE.0;
         self.set_entry(
             index,
             (table as *const Self as *const ()).wrapping_byte_add(flags.0),
