@@ -9,6 +9,8 @@ PHDRS
     data             PT_LOAD AT(0x100c0000000);
     tdata            PT_TLS  AT(0x10100000000);
     stack            PT_LOAD AT(0x10140000000);
+    init_file        PT_LOAD AT(0x30000000000) FLAGS((1 << 2) | (1 << 31));
+    input_file       PT_LOAD AT(0x40000000000) FLAGS((1 << 2) | (1 << 31));
     output           PT_LOAD AT(0x50000000000);
     profiler_control PT_LOAD AT(0x80000000000) FLAGS((1 << 30));
     profiler_buffer  PT_LOAD AT(0x80040000000) FLAGS((1 << 30));
@@ -86,4 +88,16 @@ SECTIONS {
     {
         KEEP(*(.output .output.*))
     } :output
+
+    .init_file (0xffff809000000000) :
+    {
+        init_file = .;
+        . += 8;
+    } :init_file
+
+    .input_file (0xffff80a000000000) :
+    {
+        input_file = .;
+        . += 8;
+    } :input_file
 }

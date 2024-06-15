@@ -41,6 +41,8 @@ pub mod kernel {
     pub const DATA_SHADOW: PhysFrame<Size2MiB> = addr(0x18000400000);
     pub const TDATA_SHADOW: PhysFrame<Size2MiB> = addr(0x18000600000);
     pub const STACK_SHADOW: PhysFrame<Size2MiB> = addr(0x18000800000);
+    pub const INIT_FILE_SHADOW: PhysFrame<Size2MiB> = addr(0x19200000000);
+    pub const INPUT_FILE_SHADOW: PhysFrame<Size2MiB> = addr(0x19400000000);
 }
 
 pub mod supervisor {
@@ -61,11 +63,14 @@ pub mod supervisor {
 
 // 64 gibibytes of dynamic physical memory that can be hot-plugged and hot-unplugged.
 pub const DYNAMIC: PhysFrameRange<Size1GiB> = addr_range(0x020000000000, 0x20fffffffff);
+pub const INIT_FILE: PhysFrameRange<Size1GiB> =
+    addr_range(0x0000_0300_0000_0000, 0x0000_030f_ffff_ffff);
+pub const INPUT_FILE: PhysFrameRange<Size1GiB> =
+    addr_range(0x0000_0400_0000_0000, 0x0000_040f_ffff_ffff);
+/// A shared buffer between the kernel and the supervisor to store output
+/// chunks.
+pub const OUTPUT: PhysFrame<Size4KiB> = addr(0x50000000000);
 
 // Regions for kernel-guest communication during profiling.
 pub const PROFILER_CONTROL: PhysFrameRange<Size2MiB> = addr_range(0x80000000000, 0x80000ffffff);
 pub const PROFILER_BUFFER: PhysFrame<Size1GiB> = addr(0x80040000000);
-
-/// A shared buffer between the kernel and the supervisor to store output
-/// chunks.
-pub const OUTPUT: PhysFrame<Size4KiB> = addr(0x50000000000);

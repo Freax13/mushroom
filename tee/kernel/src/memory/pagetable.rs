@@ -85,6 +85,8 @@ static PT_256_0_48: StaticPt = {
 static PDP_352: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_352_0, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_table(72, &PD_352_72, flags!(EXECUTE_DISABLE));
+    page_table.set_table(80, &PD_352_80, flags!(EXECUTE_DISABLE));
     page_table
 };
 
@@ -102,9 +104,25 @@ static PD_352_0: StaticPd = {
 };
 
 #[link_section = ".pagetables"]
+static PD_352_72: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, INIT_FILE_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static PD_352_80: StaticPd = {
+    let mut page_table = StaticPageTable::new();
+    page_table.set_page(0, INPUT_FILE_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
 static PDP_257: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page_range(0, DYNAMIC, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(64, INIT_FILE, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(128, INPUT_FILE, flags!(EXECUTE_DISABLE));
     page_table
 };
 
