@@ -109,7 +109,7 @@ impl InitializedVmsa {
         // If the supervisor is not hardened, setup the vCPU so that the kernel
         // can be profiled.
         if !cfg!(feature = "harden") {
-            // Allow the kernel to share profiler data with the host.
+            // Allow the kernel to share data with the host for debugging/profiling.
             vmsa.set_virtual_tom(0x80000000000, tweak_bitmap);
 
             // Allow the kernel to query it's processor id through TSC_AUX.

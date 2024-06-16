@@ -44,6 +44,7 @@ static PD_0_1: StaticPd = {
     page_table.set_page(29, SHADOW_STACK, flags!(C | EXECUTE_DISABLE | DIRTY));
     page_table.set_page(32, SHARED, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_table(34, &PT_0_1_34, flags!(EXECUTE_DISABLE));
+    page_table.set_page(36, LOG_BUFFER, flags!(WRITE | EXECUTE_DISABLE));
     page_table
 };
 

@@ -13,6 +13,7 @@ PHDRS
     output           PT_LOAD AT(0x50000000000);
     profiler_control PT_LOAD AT(0x80000000000) FLAGS((1 << 30));
     profiler_buffer  PT_LOAD AT(0x80040000000) FLAGS((1 << 30));
+    log_buffer       PT_LOAD AT(0x90000000000) FLAGS((1 << 1) | (1 << 30));
 }
 
 SECTIONS {
@@ -79,6 +80,11 @@ SECTIONS {
     {
         KEEP(*(.output .output.*))
     } :output
+
+    .log_buffer (0xffff800007000000) :
+    {
+        KEEP(*(.log_buffer .log_buffer.*))
+    } :log_buffer
 
     .init_file (0xffff809000000000) :
     {

@@ -16,7 +16,6 @@ pub const MAX_APS_COUNT: u8 = 128;
 pub const FIRST_AP: u8 = 0x80;
 
 pub const EXIT_PORT: u16 = 0xf4;
-pub const LOG_PORT: u16 = 0x3f8;
 pub const MEMORY_PORT: u16 = 0x1337;
 pub const KICK_AP_PORT: u16 = 0x7331;
 pub const SCHEDULE_PORT: u16 = 0x1373;

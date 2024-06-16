@@ -12,10 +12,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use bit_field::BitField;
-use bytemuck::bytes_of;
 use constants::{
-    physical_address::DYNAMIC_2MIB, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT,
-    MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
+    physical_address::{kernel, supervisor, DYNAMIC_2MIB},
+    FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
+    UPDATE_OUTPUT_MSR,
 };
 use snp_types::PageType;
 use tracing::{debug, info};
@@ -31,6 +31,7 @@ use x86_64::{
 
 use crate::{
     kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VmHandle},
+    logging::start_log_collection,
     slot::Slot,
     MushroomResult,
 };
@@ -160,6 +161,8 @@ pub fn main(
             run_scheduler.clone(),
         );
     }
+    start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
+    start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
 
     let mut output = Vec::new();
     loop {
@@ -239,13 +242,6 @@ fn run_ap(
             let exit = kvm_run.read().exit();
             match exit {
                 KvmExit::Io(io) => match io.port {
-                    LOG_PORT => {
-                        let regs = ap.get_regs().unwrap();
-                        let fpu = ap.get_fpu().unwrap();
-                        let bytes = &bytes_of(&fpu.xmm)[..regs.rax as usize];
-                        let str = String::from_utf8_lossy(bytes);
-                        print!("{str}");
-                    }
                     SCHEDULE_PORT => run_scheduler.schedule(),
                     KICK_AP_PORT => init_scheduler.schedule(),
                     HALT_PORT => run_scheduler.wait(),

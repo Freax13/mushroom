@@ -1,9 +1,15 @@
-use core::fmt::Write;
+use core::{cell::RefCell, fmt::Write};
 
-use constants::LOG_PORT;
 use log::{Log, Metadata, Record};
+use log_types::{LogBuffer, LogWriter};
 
-use crate::ghcb::ioio_write;
+use crate::FakeSync;
+
+#[link_section = ".log_buffer"]
+static LOG_BUFFER: LogBuffer = LogBuffer::new();
+
+static WRITER: FakeSync<RefCell<LogWriter>> =
+    FakeSync::new(RefCell::new(LogWriter::new(&LOG_BUFFER)));
 
 pub struct SerialLogger;
 
@@ -13,8 +19,6 @@ impl Log for SerialLogger {
     }
 
     fn log(&self, record: &Record) {
-        let mut writer = SerialLogger;
-
         let level_color = match record.level() {
             log::Level::Error => "\x1b[31;101m",
             log::Level::Warn => "\x1b[33;103m",
@@ -24,6 +28,7 @@ impl Log for SerialLogger {
         };
         let reset_color = "\x1b[0m";
 
+        let mut writer = WRITER.borrow_mut();
         let _ = writeln!(
             writer,
             "{level_color}[{:<5} {}:{}]{reset_color} {}",
@@ -35,18 +40,4 @@ impl Log for SerialLogger {
     }
 
     fn flush(&self) {}
-}
-
-impl Write for SerialLogger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for c in s.chars() {
-            self.write_char(c)?;
-        }
-        Ok(())
-    }
-
-    fn write_char(&mut self, c: char) -> core::fmt::Result {
-        ioio_write(LOG_PORT, u32::from(c));
-        Ok(())
-    }
 }

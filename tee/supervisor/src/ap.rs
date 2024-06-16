@@ -2,14 +2,13 @@ use core::cell::{Cell, RefCell, SyncUnsafeCell};
 
 use bit_field::BitField;
 use constants::{
-    EXIT_PORT, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT, MAX_APS_COUNT,
-    MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
+    EXIT_PORT, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR,
+    SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
 };
 use log::{debug, info, trace};
 use snp_types::{
     intercept::{VMEXIT_CPUID, VMEXIT_IOIO, VMEXIT_MSR},
     vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
-    Uninteresting,
 };
 use x86_64::{
     instructions::hlt,
@@ -26,9 +25,8 @@ use crate::{
     FakeSync,
 };
 
-use self::{log_buffer::LogBuffer, vmsa::InitializedVmsa};
+use self::vmsa::InitializedVmsa;
 
-mod log_buffer;
 mod vmsa;
 
 const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
@@ -72,7 +70,6 @@ impl Ap {
 pub struct Initialized {
     halted: bool,
     apic_id: u8,
-    log_buffer: LogBuffer,
     vmsa: InitializedVmsa,
 }
 
@@ -81,7 +78,6 @@ impl Initialized {
         Initialized {
             halted: false,
             apic_id,
-            log_buffer: LogBuffer::new(),
             vmsa: InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id - FIRST_AP)),
         }
     }
@@ -119,7 +115,6 @@ impl Initialized {
                 guest_exit_info1,
                 vmsa.rax(tweak_bitmap),
                 &mut vmsa,
-                &mut self.log_buffer,
                 &mut self.halted,
                 tweak_bitmap,
             ),
@@ -169,7 +164,6 @@ fn handle_ioio_prot(
     guest_exit_info1: u64,
     rax: u64,
     vmsa: &mut Vmsa,
-    log_buffer: &mut LogBuffer,
     halted: &mut bool,
     tweak_bitmap: &VmsaTweakBitmap,
 ) {
@@ -177,23 +171,6 @@ fn handle_ioio_prot(
 
     match port {
         EXIT_PORT => exit(),
-        LOG_PORT => {
-            // Verify the inputs.
-            assert_eq!(guest_exit_info1.get_bits(10..=12), 0); // We don't support segments.
-            assert!(guest_exit_info1.get_bit(9)); // We only support 64-bit addresses.
-            assert!(guest_exit_info1.get_bit(6)); // We only support 32-bit accesses.
-            assert!(!guest_exit_info1.get_bit(3)); // We don't support repeat access.
-            assert!(!guest_exit_info1.get_bit(2)); // We don't support string based access.
-            assert!(!guest_exit_info1.get_bit(0)); // We only support writes.
-
-            let Uninteresting(xmm) = vmsa.fpreg_xmm(tweak_bitmap);
-
-            let bytes = xmm.get(..rax as usize).unwrap();
-            let str = core::str::from_utf8(bytes).unwrap();
-            for c in str.chars() {
-                log_buffer.write(c);
-            }
-        }
         KICK_AP_PORT => {
             let apic_id = u8::try_from(rax).unwrap();
 

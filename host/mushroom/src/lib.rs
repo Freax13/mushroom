@@ -13,10 +13,11 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use bit_field::BitField;
 use bytemuck::NoUninit;
 use constants::{
-    physical_address::DYNAMIC_2MIB, FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, LOG_PORT,
-    MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
+    physical_address::{kernel, supervisor, DYNAMIC_2MIB},
+    FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use kvm::{KvmCpuidEntry2, KvmHandle, Page, VcpuHandle};
+use logging::start_log_collection;
 use profiler::ProfileFolder;
 use snp_types::{
     ghcb::{
@@ -47,6 +48,7 @@ use crate::{
 
 pub mod insecure;
 mod kvm;
+mod logging;
 pub mod profiler;
 mod slot;
 
@@ -223,6 +225,8 @@ impl VmContext {
             })
             .collect::<Result<_>>()?;
 
+        start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
+        start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
         if let Some(profiler_folder) = profiler_folder {
             start_profile_collection(profiler_folder, &memory_slots)?;
         }
@@ -259,10 +263,6 @@ impl VmContext {
                     let value = u32::from_ne_bytes(buffer);
 
                     match io.port {
-                        LOG_PORT => {
-                            let c = char::try_from(value).unwrap();
-                            print!("{c}");
-                        }
                         MEMORY_PORT => {
                             let slot_id = value.get_bits(0..15) as u16;
                             let enabled = value.get_bit(15);
