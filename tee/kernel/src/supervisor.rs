@@ -127,7 +127,7 @@ impl Allocator {
 struct AllocatorState {
     /// A cache for frames. Instead of always freeing, we store a limited
     /// amount of frames for rapid reuse.
-    cached: ArrayVec<PhysFrame<Size2MiB>, 8>,
+    cached: ArrayVec<PhysFrame<Size2MiB>, 128>,
 }
 
 impl AllocatorState {
