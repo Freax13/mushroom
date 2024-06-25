@@ -1,12 +1,19 @@
 use core::{
+    cell::SyncUnsafeCell,
     marker::PhantomData,
     ops::Index,
+    ptr::NonNull,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use bit_field::BitField;
+use bytemuck::AnyBitPattern;
 use constants::physical_address::{supervisor::*, DYNAMIC, INPUT_FILE, OUTPUT};
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
+use volatile::{
+    access::{ReadOnly, WriteOnly},
+    VolatilePtr,
+};
 use x86_64::{
     structures::paging::{Page, PageSize, PageTableIndex, PhysFrame, Size1GiB, Size2MiB},
     PhysAddr, VirtAddr,
@@ -87,6 +94,55 @@ static PD_128_0: StaticPd = {
 
 #[link_section = ".pagetables"]
 static PT_128_0_0: StaticPt = StaticPageTable::new();
+
+/// Create static variables that are shared with the host.
+#[macro_export]
+macro_rules! shared {
+    ($(static $name:ident : $ty:ty = $init:expr;)*) => {
+        $(
+            #[link_section = ".shared"]
+            static $name: $crate::pagetable::Shared<$ty> = {
+                let init: $ty = $init;
+                unsafe { $crate::pagetable::Shared::new(init) }
+            };
+        )*
+    };
+}
+
+/// A chunk of memory that's shared with the host.
+#[repr(C, align(4096))]
+pub struct Shared<T>(SyncUnsafeCell<T>);
+
+impl<T> Shared<T> {
+    /// This is an internal implementation detail of [`shared!`].
+    ///
+    /// # Safety
+    ///
+    /// The caller has to ensure that the `Shared<T>` instance is stored in the `.shared` section.
+    pub const unsafe fn new(value: T) -> Self {
+        Self(SyncUnsafeCell::new(value))
+    }
+
+    pub fn frame(&self) -> PhysFrame {
+        let ptr: *const Self = self;
+        let offset_in_shared = ptr as u64 - 0x44000000;
+        let pa = SHARED.start_address() + offset_in_shared;
+        PhysFrame::from_start_address(pa).unwrap()
+    }
+
+    pub fn as_read_only_ptr(&self) -> VolatilePtr<'_, T, ReadOnly>
+    where
+        T: AnyBitPattern,
+    {
+        let ptr = NonNull::from(&self.0).cast();
+        unsafe { VolatilePtr::new_read_only(ptr) }
+    }
+
+    pub fn as_write_only_ptr(&self) -> VolatilePtr<'_, T, WriteOnly> {
+        let ptr = NonNull::from(&self.0).cast();
+        unsafe { VolatilePtr::new_restricted(WriteOnly, ptr) }
+    }
+}
 
 /// A macro to get the physical address of a static variable.
 #[macro_export]

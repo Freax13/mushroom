@@ -1,6 +1,6 @@
 use core::{
     arch::asm,
-    cell::{LazyCell, RefCell, UnsafeCell},
+    cell::{LazyCell, RefCell},
     mem::size_of,
     ptr::NonNull,
     sync::atomic::{AtomicU64, Ordering},
@@ -8,7 +8,11 @@ use core::{
 
 use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit, Nonce, Tag};
 use bit_field::BitField;
-use bytemuck::{bytes_of, checked::pod_read_unaligned, offset_of, NoUninit};
+use bytemuck::{
+    bytes_of, cast,
+    checked::{self, pod_read_unaligned},
+    offset_of, NoUninit,
+};
 use log::debug;
 use snp_types::{
     attestation::{
@@ -26,7 +30,7 @@ use snp_types::{
 use volatile::{map_field, VolatilePtr};
 use x86_64::structures::paging::PhysFrame;
 
-use crate::{pa_of, FakeSync};
+use crate::{shared, FakeSync};
 
 fn secrets() -> &'static Secrets {
     extern "C" {
@@ -45,13 +49,11 @@ pub fn vmsa_tweak_bitmap() -> &'static VmsaTweakBitmap {
 pub fn with_ghcb<R>(f: impl FnOnce(&mut VolatilePtr<'static, Ghcb>) -> R) -> Result<R, GhcbInUse> {
     static GHCB: FakeSync<LazyCell<RefCell<VolatilePtr<'static, Ghcb>>>> =
         FakeSync::new(LazyCell::new(|| {
-            #[link_section = ".shared"]
-            static GHCB_STORAGE: FakeSync<UnsafeCell<Ghcb>> =
-                FakeSync::new(UnsafeCell::new(Ghcb::ZERO));
+            shared! {
+                static GHCB_STORAGE: Ghcb = Ghcb::ZERO;
+            }
 
-            let address = pa_of!(GHCB_STORAGE);
-            let address = PhysFrame::from_start_address(address).unwrap();
-
+            let address = GHCB_STORAGE.frame();
             register_ghcb(address);
 
             let mut msr = GhcbProtocolMsr::MSR;
@@ -270,17 +272,15 @@ pub fn extract_response(msg_seqno: u64, message: &mut Message) -> (u8, u8, &[u8]
 pub fn do_guest_request(request: Message) -> Message {
     debug!("executing guest request");
 
-    #[link_section = ".shared"]
-    static REQ: FakeSync<UnsafeCell<[u8; 0x1000]>> = FakeSync::new(UnsafeCell::new([0; 0x1000]));
-    #[link_section = ".shared"]
-    static RSP: FakeSync<UnsafeCell<[u8; 0x1000]>> = FakeSync::new(UnsafeCell::new([0; 0x1000]));
-
-    unsafe {
-        core::intrinsics::volatile_copy_nonoverlapping_memory(REQ.get().cast(), &request, 1);
+    shared! {
+        static REQ: [u8; 0x1000] = [0; 0x1000];
+        static RSP: [u8; 0x1000] = [0; 0x1000];
     }
 
-    let req_pa = pa_of!(REQ);
-    let rsp_pa = pa_of!(RSP);
+    REQ.as_write_only_ptr().write(cast(request));
+
+    let req_pa = REQ.frame().start_address();
+    let rsp_pa = RSP.frame().start_address();
 
     let sw_exit_info2 = with_ghcb(|ghcb| {
         ghcb.write(Ghcb::ZERO);
@@ -297,11 +297,7 @@ pub fn do_guest_request(request: Message) -> Message {
     .unwrap();
     assert_eq!(sw_exit_info2, 0);
 
-    let mut bytes = [0; 0x1000];
-    unsafe {
-        core::intrinsics::volatile_copy_nonoverlapping_memory(&mut bytes, RSP.get().cast(), 1);
-    }
-    bytemuck::checked::pod_read_unaligned(&bytes)
+    checked::cast(RSP.as_read_only_ptr().read())
 }
 
 pub fn create_attestation_report(report_data: [u8; 64]) -> AttestionReport {
