@@ -92,7 +92,12 @@ impl HostAllocator {
 
         // Make the frame accessible to VMPL 1.
         unsafe {
-            rmpadjust_2mib(page, 1, VmplPermissions::all(), false);
+            rmpadjust_2mib(
+                page,
+                1,
+                VmplPermissions::READ | VmplPermissions::WRITE | VmplPermissions::EXECUTE_USER,
+                false,
+            );
         }
 
         Some(slot_idx)
