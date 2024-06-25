@@ -12,9 +12,9 @@
 
 use core::ops::Deref;
 
-use log::{debug, LevelFilter};
+use log::{debug, info, LevelFilter};
 
-use crate::{ap::start_bsp, logging::SerialLogger};
+use crate::{ap::start_next_ap, logging::SerialLogger};
 
 mod ap;
 mod dynamic;
@@ -39,7 +39,8 @@ fn main() -> ! {
     input::verify_and_load();
 
     // Run the workload.
-    start_bsp();
+    info!("booting first AP");
+    start_next_ap();
     services::run();
 }
 

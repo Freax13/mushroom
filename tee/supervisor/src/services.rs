@@ -1,4 +1,3 @@
-use constants::FIRST_AP;
 use supervisor_services::{
     allocation_buffer::SlotIndex,
     command_buffer::{CommandBufferReader, CommandHandler},
@@ -6,7 +5,7 @@ use supervisor_services::{
 };
 
 use crate::{
-    ap::{Ap, APS},
+    ap::{kick, start_next_ap},
     dynamic::HostAllocator,
     ghcb::exit,
     output::{finish, update_output},
@@ -33,11 +32,7 @@ pub fn run() -> ! {
         // command.
 
         for id in supervisor_services().notification_buffer.reset() {
-            let mut guard = APS[id].borrow_mut();
-            let Ap::Initialized(i) = &mut *guard else {
-                continue;
-            };
-            i.kick();
+            kick(id as u8);
         }
 
         wait_for_command();
@@ -62,13 +57,7 @@ impl Handler {
 
 impl CommandHandler for Handler {
     fn start_next_ap(&mut self) {
-        for (i, ap) in APS.iter().enumerate() {
-            let mut ap = ap.borrow_mut();
-            if matches!(&*ap, Ap::Uninitialized) {
-                ap.start(FIRST_AP + i as u8);
-                return;
-            }
-        }
+        start_next_ap();
     }
 
     fn allocate_memory(&mut self) {

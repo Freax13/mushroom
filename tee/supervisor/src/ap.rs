@@ -1,7 +1,6 @@
-use core::cell::RefCell;
+use core::cell::Cell;
 
 use constants::{FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT};
-use log::{debug, info};
 use snp_types::vmsa::SevFeatures;
 
 use crate::{
@@ -20,66 +19,28 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
         | SevFeatures::VMSA_REG_PROT.bits(),
 );
 
-pub static APS: FakeSync<[RefCell<Ap>; MAX_APS_COUNT as usize]> =
-    FakeSync::new([const { RefCell::new(Ap::new()) }; MAX_APS_COUNT as usize]);
+pub fn start_next_ap() {
+    static APIC_COUNTER: FakeSync<Cell<u8>> = FakeSync::new(Cell::new(0));
+    let apic_id = APIC_COUNTER.get();
+    if apic_id >= MAX_APS_COUNT {
+        return;
+    }
+    APIC_COUNTER.set(apic_id + 1);
 
-pub enum Ap {
-    Uninitialized,
-    Initialized(Initialized),
+    // Initialize the VMSA.
+    let mut vmsa = InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id));
+    unsafe {
+        vmsa.set_runnable(true);
+    }
+
+    // Tell the host about the new VMSA.
+    let vmsa_pa = vmsa.phys_addr();
+    create_ap(u32::from(FIRST_AP + apic_id), vmsa_pa, SEV_FEATURES);
+
+    // Start the AP.
+    kick(apic_id);
 }
 
-impl Ap {
-    pub const fn new() -> Self {
-        Self::Uninitialized
-    }
-
-    pub fn start(&mut self, apic_id: u8) {
-        debug!("initializing vcpu {apic_id}");
-
-        assert!(matches!(self, Ap::Uninitialized));
-
-        *self = Self::Initialized(Initialized::new(apic_id));
-
-        let Self::Initialized(initialized) = self else {
-            unreachable!();
-        };
-        initialized.boot();
-    }
-}
-
-pub struct Initialized {
-    apic_id: u8,
-    vmsa: InitializedVmsa,
-}
-
-impl Initialized {
-    pub fn new(apic_id: u8) -> Self {
-        Initialized {
-            apic_id,
-            vmsa: InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id - FIRST_AP)),
-        }
-    }
-
-    pub fn boot(&mut self) {
-        unsafe {
-            self.vmsa.set_runnable(true);
-        }
-
-        let vmsa_pa = self.vmsa.phys_addr();
-        create_ap(u32::from(self.apic_id), vmsa_pa, SEV_FEATURES);
-
-        self.kick();
-    }
-
-    pub fn kick(&mut self) {
-        let apic_id = self.apic_id;
-        ioio_write(KICK_AP_PORT, u32::from(apic_id));
-    }
-}
-
-pub fn start_bsp() {
-    info!("booting first AP");
-    let mut first_ap = APS[0].borrow_mut();
-    first_ap.start(FIRST_AP);
-    drop(first_ap);
+pub fn kick(apic_id: u8) {
+    ioio_write(KICK_AP_PORT, u32::from(FIRST_AP + apic_id));
 }
