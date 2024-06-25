@@ -75,7 +75,7 @@ pub fn main(
         &sev_handle,
         profiler_folder,
     )?;
-    vm_context.run_bsp()
+    vm_context.run_supervisor()
 }
 
 struct VmContext {
@@ -218,7 +218,7 @@ impl VmContext {
         let aps = (0..MAX_APS_COUNT)
             .map(|i| {
                 let id = FIRST_AP + i;
-                let ap_thread = Self::run_ap(id, vm.clone(), cpuid_entries.clone());
+                let ap_thread = Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone());
                 Ok((id, ap_thread))
             })
             .collect::<Result<_>>()?;
@@ -237,7 +237,7 @@ impl VmContext {
         })
     }
 
-    pub fn run_bsp(&mut self) -> Result<MushroomResult> {
+    pub fn run_supervisor(&mut self) -> Result<MushroomResult> {
         let mut output = Vec::new();
         let kvm_run = self.bsp.get_kvm_run_block()?;
 
@@ -455,7 +455,11 @@ impl VmContext {
         }
     }
 
-    fn run_ap(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> JoinHandle<()> {
+    fn run_kernel_vcpu(
+        id: u8,
+        vm: Arc<VmHandle>,
+        cpuid_entries: Arc<[KvmCpuidEntry2]>,
+    ) -> JoinHandle<()> {
         let supervisor_thread = std::thread::current();
 
         std::thread::spawn(move || {

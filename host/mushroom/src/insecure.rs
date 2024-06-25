@@ -145,7 +145,7 @@ pub fn main(
     let ap_threads = (0..MAX_APS_COUNT)
         .map(|i| {
             let id = FIRST_AP + i;
-            run_ap(id, vm.clone(), cpuid_entries.clone())
+            run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone())
         })
         .collect::<Vec<_>>();
     ap_threads[0].unpark();
@@ -197,7 +197,7 @@ pub fn main(
     })
 }
 
-fn run_ap(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> Thread {
+fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> Thread {
     let supervisor_thread = std::thread::current();
 
     std::thread::spawn(move || {
