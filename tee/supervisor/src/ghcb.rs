@@ -179,10 +179,6 @@ pub fn write_msr(msr: u32, value: u64) -> Result<(), GhcbInUse> {
     })
 }
 
-pub fn eoi() -> Result<(), GhcbInUse> {
-    write_msr(0x80B, 0)
-}
-
 pub trait GuestRequest: NoUninit {
     const MSG_TYPE: u8;
     const MSG_VERSION: u8;
@@ -343,30 +339,6 @@ pub fn create_ap(apic_id: u32, vmsa: PhysFrame, features: SevFeatures) {
         vmgexit();
     })
     .unwrap();
-}
-
-pub fn set_doorbell(frame: PhysFrame) -> Result<(), ()> {
-    let value = frame.start_address().as_u64();
-
-    let return_value = with_ghcb(|ghcb| {
-        ghcb.write(Ghcb::ZERO);
-        map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
-
-        ghcb_write!(ghcb.sw_exit_code = 0x8000_0014);
-        ghcb_write!(ghcb.sw_exit_info1 = 1);
-        ghcb_write!(ghcb.sw_exit_info2 = value);
-
-        vmgexit();
-
-        map_field!(ghcb.sw_exit_info2).read()
-    })
-    .unwrap();
-
-    if value == return_value {
-        Ok(())
-    } else {
-        Err(())
-    }
 }
 
 pub fn exit() -> ! {

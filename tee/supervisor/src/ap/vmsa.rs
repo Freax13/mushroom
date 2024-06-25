@@ -2,7 +2,6 @@ use core::{
     arch::x86_64::_rdrand64_step,
     cell::SyncUnsafeCell,
     mem::MaybeUninit,
-    ops::{Deref, DerefMut},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -142,44 +141,6 @@ impl InitializedVmsa {
 
         unsafe {
             rmpadjust(page, 1, VmplPermissions::empty(), runnable).unwrap();
-        }
-    }
-
-    /// Sets the VMSA as unrunnable and returns a wrapper around mutable
-    /// reference to it. This reference can be used to inspect and modify the
-    /// VMSA.
-    /// The VMSA will automatically be marked as runnable once the wrapper is
-    /// dropped.
-    pub fn modify(&mut self) -> VmsaModifyGuard {
-        unsafe {
-            self.set_runnable(false);
-        }
-        VmsaModifyGuard { vmsa: self }
-    }
-}
-
-pub struct VmsaModifyGuard<'a> {
-    vmsa: &'a mut InitializedVmsa,
-}
-
-impl Deref for VmsaModifyGuard<'_> {
-    type Target = Vmsa;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.vmsa.vmsa }
-    }
-}
-
-impl DerefMut for VmsaModifyGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.vmsa.vmsa }
-    }
-}
-
-impl Drop for VmsaModifyGuard<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.vmsa.set_runnable(true);
         }
     }
 }

@@ -433,7 +433,9 @@ dependencies = [
  "log",
  "log-types",
  "profiler-types",
+ "snp-types",
  "static-page-tables",
+ "supervisor-services",
  "usize_conversions",
  "x86_64",
 ]
@@ -696,8 +698,17 @@ dependencies = [
  "sha2",
  "snp-types",
  "static-page-tables",
+ "supervisor-services",
  "volatile 0.5.1",
  "x86_64",
+]
+
+[[package]]
+name = "supervisor-services"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bytemuck",
 ]
 
 [[package]]

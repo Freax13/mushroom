@@ -118,8 +118,6 @@ impl VmContext {
             KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
         )?;
 
-        vm.create_irqchip()?;
-
         vm.sev_snp_init()?;
 
         vm.sev_snp_launch_start(policy, sev_handle)?;
@@ -444,9 +442,7 @@ impl VmContext {
                 KvmExit::Other { exit_reason } => {
                     unimplemented!("exit with type: {exit_reason}");
                 }
-                KvmExit::Hlt => {
-                    dbg!("hlt");
-                }
+                KvmExit::Hlt => std::thread::park(),
                 KvmExit::Interrupted => {}
                 exit => {
                     panic!("unexpected exit: {exit:?}");
@@ -460,6 +456,8 @@ impl VmContext {
     }
 
     fn run_ap(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> JoinHandle<()> {
+        let supervisor_thread = std::thread::current();
+
         std::thread::spawn(move || {
             let ap = vm.create_vcpu(i32::from(id)).unwrap();
             ap.set_cpuid(&cpuid_entries).unwrap();
@@ -471,7 +469,11 @@ impl VmContext {
 
             let kvm_run = ap.get_kvm_run_block().unwrap();
 
+            std::thread::park();
+
             loop {
+                map_field!(kvm_run.cr8).write(0);
+
                 // Run the AP.
                 let res = ap.run();
 
@@ -480,16 +482,16 @@ impl VmContext {
                 // Check the exit.
                 let kvm_run = kvm_run.read();
                 match kvm_run.exit() {
-                    KvmExit::ReflectVc => {
-                        // Notify the BSP about the Reflect #VC.
-                        vm.signal_msi(0xfee0_0000, u32::from(id)).unwrap();
+                    KvmExit::Hlt => {
+                        let resume = kvm_run.cr8.get_bit(0);
 
-                        // Wait for the BSP to wake the AP back up.
-                        std::thread::park();
+                        supervisor_thread.unpark();
+
+                        if !resume {
+                            std::thread::park();
+                        }
                     }
-                    exit => {
-                        panic!("unexpected exit {exit:?}");
-                    }
+                    exit => panic!("unexpected exit {exit:?}"),
                 }
             }
         })

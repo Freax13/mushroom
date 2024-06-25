@@ -260,6 +260,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "supervisor-services"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bytemuck",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"

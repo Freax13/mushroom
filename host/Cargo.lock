@@ -680,6 +680,7 @@ dependencies = [
  "profiler-types",
  "rand",
  "snp-types",
+ "supervisor-services",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1159,6 +1160,14 @@ name = "strsim"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee073c9e4cd00e28217186dbe12796d692868f432bf2e97ee73bed0c56dfa01"
+
+[[package]]
+name = "supervisor-services"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bytemuck",
+]
 
 [[package]]
 name = "syn"

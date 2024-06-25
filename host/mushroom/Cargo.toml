@@ -25,6 +25,7 @@ nix = { version = "0.28.0", features = ["fs", "ioctl", "mman"] }
 profiler-types = { workspace = true }
 rand = "0.8.5"
 snp-types = { workspace = true }
+supervisor-services = { workspace = true, features = ["supervisor"], default-features = false }
 tokio = { version = "1.36.0", features = ["fs", "macros", "rt-multi-thread"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"

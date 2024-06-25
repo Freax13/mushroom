@@ -38,7 +38,7 @@ compiler_error!("Hardened kernels can't be profiled.");
 extern crate alloc;
 
 use exception::switch_stack;
-use supervisor::launch_next_ap;
+use supervisor::SCHEDULER;
 
 use crate::per_cpu::PerCpu;
 
@@ -46,7 +46,6 @@ mod char_dev;
 mod error;
 mod exception;
 mod fs;
-mod host;
 mod limited_index;
 mod logging;
 mod memory;
@@ -99,7 +98,7 @@ extern "C" fn init() -> ! {
         user::process::start_init_process();
     }
 
-    launch_next_ap();
+    SCHEDULER.finish_launch();
 
     user::run()
 }
