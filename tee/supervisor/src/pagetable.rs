@@ -168,16 +168,6 @@ macro_rules! pa_of {
     }};
 }
 
-/// Translate a reference to a physical address.
-///
-/// Returns an error if the memory is not contiguous or if the reference is zero sized.
-pub fn ref_to_pa<T>(value: &T) -> Result<PhysAddr, TranslationError>
-where
-    T: ?Sized,
-{
-    unsafe { ptr_to_pa(value) }
-}
-
 /// Translate a pointer to a physical address.
 ///
 /// Returns an error if the memory is not contiguous or if the reference is zero sized.

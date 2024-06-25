@@ -11,14 +11,6 @@ use log::{trace, warn};
 
 use crate::FakeSync;
 
-pub fn c_bit_location() -> usize {
-    static C_BIT: FakeSync<LazyCell<usize>> = FakeSync::new(LazyCell::new(|| {
-        let function = lookup_provided_cpuid_function(0x8000001F, None, 1, 0).unwrap();
-        (function.ebx & 0x3f) as usize
-    }));
-    **C_BIT
-}
-
 /// Look up the host-provided values for a given function. In theory the
 /// SEV-SNP firmware has verified these values, but for some values there is
 /// some leeway as to what's regarded as valid (e.g. the host can disable most
