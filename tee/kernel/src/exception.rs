@@ -11,7 +11,7 @@ use x86_64::{
     registers::{
         control::Cr2,
         model_specific::Star,
-        segmentation::{Segment, CS, DS, ES, GS, SS},
+        segmentation::{Segment, CS, DS, ES, SS},
     },
     structures::{
         gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable},
@@ -147,8 +147,6 @@ extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
 
 #[no_sanitize(address)]
 extern "x86-interrupt" fn kernel_divide_error_handler(frame: InterruptStackFrame) {
-    let _guard = SwapGsGuard::new(&frame);
-
     panic!("divide error {frame:x?}");
 }
 
@@ -234,8 +232,6 @@ extern "x86-interrupt" fn kernel_page_fault_handler(
 }
 
 fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErrorCode) -> ! {
-    let _guard = SwapGsGuard::new(&frame);
-
     let cr2 = Cr2::read_raw();
 
     trace!("page fault");
@@ -295,15 +291,11 @@ extern "x86-interrupt" fn kernel_general_protection_fault_handler(
     frame: InterruptStackFrame,
     code: u64,
 ) {
-    let _guard = SwapGsGuard::new(&frame);
-
     panic!("general protection fault {frame:x?} {code:x?}");
 }
 
 #[no_sanitize(address)]
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code: u64) -> ! {
-    let _guard = SwapGsGuard::new(&frame);
-
     panic!("double fault {frame:x?} {code:x?}");
 }
 
@@ -321,29 +313,5 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
             options(noreturn)
         );
-    }
-}
-
-struct SwapGsGuard(());
-
-impl SwapGsGuard {
-    fn new(frame: &InterruptStackFrame) -> Option<Self> {
-        if frame.code_segment.rpl() == PrivilegeLevel::Ring0 {
-            return None;
-        }
-
-        unsafe {
-            GS::swap();
-        }
-
-        Some(Self(()))
-    }
-}
-
-impl Drop for SwapGsGuard {
-    fn drop(&mut self) {
-        unsafe {
-            GS::swap();
-        }
     }
 }
