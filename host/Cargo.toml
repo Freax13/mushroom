@@ -7,8 +7,10 @@ mushroom-verify = { path = "mushroom-verify" }
 constants = { path = "../common/constants" }
 io = { path = "../common/io" }
 loader = { path = "../common/loader" }
+log-types = { path = "../common/log-types" }
 profiler-types = { path = "../common/profiler-types" }
 snp-types = { path = "../common/snp-types" }
+supervisor-services = { path = "../common/supervisor-services", default-features = false }
 vcek-kds = { path = "vcek-kds" }
 
 [patch.crates-io]

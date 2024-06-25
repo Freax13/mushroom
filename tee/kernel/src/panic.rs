@@ -1,8 +1,6 @@
 use core::panic::PanicInfo;
 
-use x86_64::structures::idt::InterruptDescriptorTable;
-
-use crate::host::exit;
+use crate::supervisor;
 
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
@@ -26,11 +24,13 @@ fn panic_handler(info: &PanicInfo) -> ! {
         print_backtrace();
     }
 
-    exit(false);
-    triple_fault();
+    supervisor::fail();
 }
 
+#[cfg(not(feature = "harden"))]
 fn triple_fault() -> ! {
+    use x86_64::structures::idt::InterruptDescriptorTable;
+
     // Load a IDT without any exception handlers enabled.
     let idt = InterruptDescriptorTable::new();
     unsafe {

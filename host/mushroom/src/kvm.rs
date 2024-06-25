@@ -1166,6 +1166,7 @@ impl KvmRun {
                 &self.exit_data[..size_of::<KvmExitFailEntry>()],
             )),
             10 => KvmExit::Interrupted,
+            11 => KvmExit::SetTpr,
             17 => KvmExit::Internal(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitInternalError>()],
             )),
@@ -1300,6 +1301,7 @@ pub enum KvmExit {
     Shutdown,
     FailEntry(KvmExitFailEntry),
     Interrupted,
+    SetTpr,
     Internal(KvmExitInternalError),
     SystemEvent(KvmExitSystemEvent),
     RdMsr(KvmExitMsr),

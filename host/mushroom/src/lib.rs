@@ -13,10 +13,11 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use bit_field::BitField;
 use bytemuck::NoUninit;
 use constants::{
-    physical_address::DYNAMIC_2MIB, FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, LOG_PORT,
-    MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
+    physical_address::{kernel, supervisor, DYNAMIC_2MIB},
+    FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use kvm::{KvmCpuidEntry2, KvmHandle, Page, VcpuHandle};
+use logging::start_log_collection;
 use profiler::ProfileFolder;
 use snp_types::{
     ghcb::{
@@ -47,6 +48,7 @@ use crate::{
 
 pub mod insecure;
 mod kvm;
+mod logging;
 pub mod profiler;
 mod slot;
 
@@ -73,7 +75,7 @@ pub fn main(
         &sev_handle,
         profiler_folder,
     )?;
-    vm_context.run_bsp()
+    vm_context.run_supervisor()
 }
 
 struct VmContext {
@@ -115,8 +117,6 @@ impl VmContext {
             KvmCap::X86_USER_SPACE_MSR,
             KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
         )?;
-
-        vm.create_irqchip()?;
 
         vm.sev_snp_init()?;
 
@@ -218,11 +218,13 @@ impl VmContext {
         let aps = (0..MAX_APS_COUNT)
             .map(|i| {
                 let id = FIRST_AP + i;
-                let ap_thread = Self::run_ap(id, vm.clone(), cpuid_entries.clone());
+                let ap_thread = Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone());
                 Ok((id, ap_thread))
             })
             .collect::<Result<_>>()?;
 
+        start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
+        start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
         if let Some(profiler_folder) = profiler_folder {
             start_profile_collection(profiler_folder, &memory_slots)?;
         }
@@ -235,7 +237,7 @@ impl VmContext {
         })
     }
 
-    pub fn run_bsp(&mut self) -> Result<MushroomResult> {
+    pub fn run_supervisor(&mut self) -> Result<MushroomResult> {
         let mut output = Vec::new();
         let kvm_run = self.bsp.get_kvm_run_block()?;
 
@@ -259,10 +261,6 @@ impl VmContext {
                     let value = u32::from_ne_bytes(buffer);
 
                     match io.port {
-                        LOG_PORT => {
-                            let c = char::try_from(value).unwrap();
-                            print!("{c}");
-                        }
                         MEMORY_PORT => {
                             let slot_id = value.get_bits(0..15) as u16;
                             let enabled = value.get_bit(15);
@@ -444,9 +442,7 @@ impl VmContext {
                 KvmExit::Other { exit_reason } => {
                     unimplemented!("exit with type: {exit_reason}");
                 }
-                KvmExit::Hlt => {
-                    dbg!("hlt");
-                }
+                KvmExit::Hlt => std::thread::park(),
                 KvmExit::Interrupted => {}
                 exit => {
                     panic!("unexpected exit: {exit:?}");
@@ -459,7 +455,13 @@ impl VmContext {
         }
     }
 
-    fn run_ap(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> JoinHandle<()> {
+    fn run_kernel_vcpu(
+        id: u8,
+        vm: Arc<VmHandle>,
+        cpuid_entries: Arc<[KvmCpuidEntry2]>,
+    ) -> JoinHandle<()> {
+        let supervisor_thread = std::thread::current();
+
         std::thread::spawn(move || {
             let ap = vm.create_vcpu(i32::from(id)).unwrap();
             ap.set_cpuid(&cpuid_entries).unwrap();
@@ -471,7 +473,11 @@ impl VmContext {
 
             let kvm_run = ap.get_kvm_run_block().unwrap();
 
+            std::thread::park();
+
             loop {
+                map_field!(kvm_run.cr8).write(0);
+
                 // Run the AP.
                 let res = ap.run();
 
@@ -480,16 +486,16 @@ impl VmContext {
                 // Check the exit.
                 let kvm_run = kvm_run.read();
                 match kvm_run.exit() {
-                    KvmExit::ReflectVc => {
-                        // Notify the BSP about the Reflect #VC.
-                        vm.signal_msi(0xfee0_0000, u32::from(id)).unwrap();
+                    KvmExit::Hlt => {
+                        let resume = kvm_run.cr8.get_bit(0);
 
-                        // Wait for the BSP to wake the AP back up.
-                        std::thread::park();
+                        supervisor_thread.unpark();
+
+                        if !resume {
+                            std::thread::park();
+                        }
                     }
-                    exit => {
-                        panic!("unexpected exit {exit:?}");
-                    }
+                    exit => panic!("unexpected exit {exit:?}"),
                 }
             }
         })

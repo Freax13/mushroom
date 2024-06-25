@@ -70,13 +70,14 @@ static PD_256_0: StaticPd = {
     page_table.set_page_range(32, STACK, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page_range(40, PROFILER_CONTROL, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_table(48, &PT_256_0_48, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(56, LOG_BUFFER, flags!(WRITE | EXECUTE_DISABLE));
     page_table
 };
 
 #[link_section = ".pagetables"]
 static PT_256_0_48: StaticPt = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page(0, OUTPUT, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(0, SUPERVISOR_SERVICES, flags!(WRITE | EXECUTE_DISABLE));
     page_table
 };
 
@@ -95,8 +96,9 @@ static PD_352_0: StaticPd = {
     page_table.set_page(0, TEXT_SHADOW, flags!(EXECUTE_DISABLE));
     page_table.set_page(1, RODATA_SHADOW, flags!(EXECUTE_DISABLE));
     page_table.set_page(2, DATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page(3, TDATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page(4, STACK_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(6, SUPERVISOR_SERVICES_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(7, LOG_BUFFER_SHADOW, flags!(EXECUTE_DISABLE));
     page_table
 };
 

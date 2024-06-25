@@ -23,7 +23,10 @@ futures = { version = "0.3.30", default-features = false, features = ["async-awa
 kernel-macros.workspace = true
 linkme = "0.3.25"
 log = { version = "0.4.21", default-features = false }
+log-types = { workspace = true }
 profiler-types = { workspace = true, optional = true }
+snp-types = { workspace = true }
 static-page-tables = { workspace = true }
+supervisor-services = { workspace = true, features = ["kernel"], default-features = false }
 usize_conversions = "0.2.0"
 x86_64 = "0.15.1"

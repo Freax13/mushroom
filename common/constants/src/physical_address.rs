@@ -34,14 +34,31 @@ pub mod kernel {
     pub const DATA: Range<PhysFrame<Size2MiB>> = addr_range(0x100c0000000, 0x100c0ffffff);
     pub const STACK: Range<PhysFrame<Size2MiB>> = addr_range(0x10140000000, 0x10140ffffff);
 
+    const fn shadow_addr(addr: u64) -> PhysFrame<Size2MiB> {
+        const KASAN_SHADOW_SCALE_SHIFT: u64 = 3;
+        /// Note that this is the physical address.
+        const KASAN_SHADOW_OFFSET: u64 = 0x180_0000_0000;
+
+        let offset = addr - 0xffff_8000_0000_0000;
+        let scaled = offset >> KASAN_SHADOW_SCALE_SHIFT;
+        let addr = scaled + KASAN_SHADOW_OFFSET;
+        let Ok(frame) = PhysFrame::from_start_address(PhysAddr::new(addr)) else {
+            panic!()
+        };
+        frame
+    }
+
     // The shadow memory segments of the kernel binary (for KASAN):
-    pub const TEXT_SHADOW: PhysFrame<Size2MiB> = addr(0x18000000000);
-    pub const RODATA_SHADOW: PhysFrame<Size2MiB> = addr(0x18000200000);
-    pub const DATA_SHADOW: PhysFrame<Size2MiB> = addr(0x18000400000);
-    pub const TDATA_SHADOW: PhysFrame<Size2MiB> = addr(0x18000600000);
-    pub const STACK_SHADOW: PhysFrame<Size2MiB> = addr(0x18000800000);
-    pub const INIT_FILE_SHADOW: PhysFrame<Size2MiB> = addr(0x19200000000);
-    pub const INPUT_FILE_SHADOW: PhysFrame<Size2MiB> = addr(0x19400000000);
+    pub const TEXT_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800000000000);
+    pub const RODATA_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800001000000);
+    pub const DATA_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800002000000);
+    pub const STACK_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800004000000);
+    pub const SUPERVISOR_SERVICES_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800006000000);
+    pub const LOG_BUFFER_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800007000000);
+    pub const INIT_FILE_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff809000000000);
+    pub const INPUT_FILE_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff80a000000000);
+
+    pub const LOG_BUFFER: PhysFrame<Size2MiB> = addr(0x90000000000);
 }
 
 pub mod supervisor {
@@ -58,6 +75,9 @@ pub mod supervisor {
     pub const SECRETS: PhysFrame<Size2MiB> = addr(0x200000000);
     pub const SHADOW_STACK: PhysFrame<Size2MiB> = addr(0x240000000);
     pub const SHARED: PhysFrame<Size2MiB> = addr(0x280000000);
+    pub const VMSAS: PhysFrame<Size2MiB> = addr(0x2c0000000);
+
+    pub const LOG_BUFFER: PhysFrame<Size2MiB> = addr(0x90000200000);
 }
 
 // 64 gibibytes of dynamic physical memory that can be hot-plugged and hot-unplugged.
@@ -73,6 +93,8 @@ pub const INPUT_FILE: Range<PhysFrame<Size1GiB>> =
 /// A shared buffer between the kernel and the supervisor to store output
 /// chunks.
 pub const OUTPUT: PhysFrame<Size4KiB> = addr(0x50000000000);
+pub const SUPERVISOR_SERVICES: Range<PhysFrame<Size4KiB>> =
+    addr_range(0x50000000000, 0x5000000ffff);
 
 // Regions for kernel-guest communication during profiling.
 pub const PROFILER_CONTROL: Range<PhysFrame<Size2MiB>> = addr_range(0x80000000000, 0x80000ffffff);

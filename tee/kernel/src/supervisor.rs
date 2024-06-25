@@ -1,22 +1,114 @@
-use core::{
-    cell::SyncUnsafeCell,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::arch::asm;
 
 use crate::spin::mutex::Mutex;
 use arrayvec::ArrayVec;
-use constants::{
-    FINISH_OUTPUT_MSR, HALT_PORT, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT,
-    UPDATE_OUTPUT_MSR,
+use bit_field::BitField;
+use constants::{physical_address::DYNAMIC_2MIB, MAX_APS_COUNT};
+use supervisor_services::{
+    allocation_buffer::SlotIndex,
+    command_buffer::{
+        AllocateMemory, Command, CommandBufferWriter, DeallocateMemory, FailOutput, FinishOutput,
+        StartNextAp, UpdateOutput,
+    },
+    SupervisorServices,
 };
-use x86_64::{
-    instructions::port::PortWriteOnly,
-    registers::model_specific::Msr,
-    structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB},
-    PhysAddr,
-};
+use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
 
 use crate::per_cpu::PerCpu;
+
+#[link_section = ".supervisor_services"]
+static SUPERVISOR_SERVICES: SupervisorServices = SupervisorServices::new();
+
+static WRITER: Mutex<CommandBufferWriter> = Mutex::new(CommandBufferWriter::new(
+    &SUPERVISOR_SERVICES.command_buffer,
+));
+
+fn try_push_command<C>(command: &C) -> Result<(), ()>
+where
+    C: Command,
+{
+    WRITER.lock().push(command).map_err(drop)?;
+    Ok(())
+}
+
+fn arm() {
+    SUPERVISOR_SERVICES
+        .notification_buffer
+        .arm(PerCpu::get().idx);
+}
+
+/// Kick the supervisor thread. If `resume` is true, this method immediately
+/// resumes. If `resume` is false, this method waits for the supervisor to kick
+/// this thread ([`arm`] should be called before this method; spurios wake ups
+/// are possible).
+fn kick_supervisor(resume: bool) {
+    let mut bits = 0u64;
+    bits.set_bit(0, resume);
+
+    unsafe {
+        asm!("mov cr8, rax", in("rax") bits);
+    }
+
+    x86_64::instructions::hlt();
+}
+
+/// Push a command, don't notify the supervisor about it and don't wait for it
+/// to complete.
+fn push_background_command<C>(command: C)
+where
+    C: Command,
+{
+    if try_push_command(&command).is_ok() {
+        return;
+    }
+
+    loop {
+        arm();
+        if try_push_command(&command).is_ok() {
+            return;
+        }
+
+        kick_supervisor(false);
+    }
+}
+
+/// Push a command, immediatly tell the supervisor about it, but don't wait for
+/// it to complete.
+fn push_async_command<C>(command: C)
+where
+    C: Command,
+{
+    push_background_command(command);
+    kick_supervisor(true);
+}
+
+pub fn start_next_ap() {
+    push_async_command(StartNextAp);
+}
+
+fn allocate() -> SlotIndex {
+    let allocation = SUPERVISOR_SERVICES.allocation_buffer.pop_allocation();
+    if let Some(allocation) = allocation {
+        return allocation;
+    }
+
+    loop {
+        arm();
+
+        let allocation = SUPERVISOR_SERVICES.allocation_buffer.pop_allocation();
+        if let Some(allocation) = allocation {
+            return allocation;
+        }
+
+        let _ = try_push_command(&AllocateMemory);
+
+        kick_supervisor(false);
+    }
+}
+
+fn deallocate(slot_idx: SlotIndex) {
+    push_async_command(DeallocateMemory { slot_idx });
+}
 
 pub static ALLOCATOR: Allocator = Allocator::new();
 
@@ -35,7 +127,7 @@ impl Allocator {
 struct AllocatorState {
     /// A cache for frames. Instead of always freeing, we store a limited
     /// amount of frames for rapid reuse.
-    cached: ArrayVec<PhysFrame<Size2MiB>, 8>,
+    cached: ArrayVec<PhysFrame<Size2MiB>, 128>,
 }
 
 impl AllocatorState {
@@ -55,17 +147,8 @@ unsafe impl FrameAllocator<Size2MiB> for &'_ Allocator {
         }
         drop(state);
 
-        // Fall back to allocating a frame.
-        let memory_msr = Msr::new(MEMORY_MSR);
-        let addr = unsafe { memory_msr.read() };
-
-        if addr == 0 {
-            return None;
-        }
-
-        let addr = PhysAddr::new(addr);
-        let frame = PhysFrame::from_start_address(addr).unwrap();
-        Some(frame)
+        let idx = allocate();
+        Some(DYNAMIC_2MIB.start + u64::from(idx.get()))
     }
 }
 
@@ -80,45 +163,22 @@ impl FrameDeallocator<Size2MiB> for &'_ Allocator {
         }
         drop(state);
 
-        // Fall back to deallocating the frame.
-        let addr = frame.start_address().as_u64();
-        let mut memory_msr = Msr::new(MEMORY_MSR);
-        unsafe {
-            memory_msr.write(addr);
-        }
+        let slot_idx = SlotIndex::new(u16::try_from(frame - DYNAMIC_2MIB.start).unwrap());
+        deallocate(slot_idx);
     }
 }
-
-static RUNNING_VCPUS: AtomicU64 = AtomicU64::new(1);
 
 /// Halt this vcpu.
 #[inline(never)]
 pub fn halt() -> Result<(), LastRunningVcpuError> {
-    // Ensure that this vCPU isn't the last one running.
-    let mut running_vcpus = RUNNING_VCPUS.load(Ordering::SeqCst);
-    loop {
-        debug_assert_ne!(running_vcpus, 0);
-        if running_vcpus == 1 {
-            return Err(LastRunningVcpuError);
-        }
-        let res = RUNNING_VCPUS.compare_exchange(
-            running_vcpus,
-            running_vcpus - 1,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        match res {
-            Ok(_) => break,
-            Err(new_running_vcpus) => running_vcpus = new_running_vcpus,
-        }
-    }
+    SCHEDULER.halt()?;
 
     #[cfg(feature = "profiling")]
     crate::profiler::flush();
 
-    unsafe {
-        PortWriteOnly::new(HALT_PORT).write(0u32);
-    }
+    kick_supervisor(false);
+
+    SCHEDULER.resume();
 
     Ok(())
 }
@@ -127,68 +187,116 @@ pub fn halt() -> Result<(), LastRunningVcpuError> {
 #[derive(Debug, Clone, Copy)]
 pub struct LastRunningVcpuError;
 
+pub static SCHEDULER: Scheduler = Scheduler::new();
+
+pub struct Scheduler(Mutex<SchedulerState>);
+
+struct SchedulerState {
+    /// One bit for every vCPU.
+    bits: u128,
+    /// The number of vCPUs that have finished being launched.
+    launched: u8,
+    /// Whether a vCPU is being launched right now.
+    is_launching: bool,
+}
+
+impl Scheduler {
+    pub const fn new() -> Self {
+        Self(Mutex::new(SchedulerState {
+            bits: 1,
+            launched: 0,
+            is_launching: true,
+        }))
+    }
+
+    fn pick_any(&self) -> Option<ScheduledCpu> {
+        let mut state = self.0.lock();
+        let idx = state.bits.trailing_ones() as u8;
+        if idx < state.launched {
+            state.bits.set_bit(usize::from(idx), true);
+
+            Some(ScheduledCpu::Existing(idx))
+        } else {
+            if state.is_launching || idx >= MAX_APS_COUNT {
+                return None;
+            }
+
+            state.is_launching = true;
+            state.bits.set_bit(usize::from(idx), true);
+
+            Some(ScheduledCpu::New)
+        }
+    }
+
+    fn halt(&self) -> Result<(), LastRunningVcpuError> {
+        let mut state = self.0.lock();
+        let mut new_bits = state.bits;
+        new_bits.set_bit(PerCpu::get().idx, false);
+        // Ensure that this vCPU isn't the last one running.
+        if new_bits == 0 {
+            return Err(LastRunningVcpuError);
+        }
+        state.bits = new_bits;
+        Ok(())
+    }
+
+    fn resume(&self) {
+        let mut state = self.0.lock();
+        state.bits.set_bit(PerCpu::get().idx, true);
+    }
+
+    pub fn finish_launch(&self) {
+        let mut state = self.0.lock();
+        assert!(state.is_launching);
+        state.is_launching = false;
+        state.launched += 1;
+    }
+}
+
+enum ScheduledCpu {
+    Existing(u8),
+    New,
+}
+
 /// Tell the supervisor to schedule another vcpu.
 pub fn schedule_vcpu() {
-    RUNNING_VCPUS.fetch_add(1, Ordering::SeqCst);
+    let Some(cpu) = SCHEDULER.pick_any() else {
+        return;
+    };
 
-    unsafe {
-        PortWriteOnly::new(SCHEDULE_PORT).write(1u32);
-    }
-}
-
-pub fn launch_next_ap() {
-    let idx = PerCpu::get().idx;
-
-    // Check if there are more APs to start.
-    let next_idx = idx + 1;
-    if next_idx < usize::from(MAX_APS_COUNT) {
-        RUNNING_VCPUS.fetch_add(1, Ordering::SeqCst);
-
-        let next_idx = u32::try_from(next_idx).unwrap();
-        unsafe {
-            PortWriteOnly::new(KICK_AP_PORT).write(next_idx);
+    match cpu {
+        ScheduledCpu::Existing(cpu) => {
+            SUPERVISOR_SERVICES
+                .notification_buffer
+                .arm(usize::from(cpu));
+            kick_supervisor(true);
         }
+        ScheduledCpu::New => start_next_ap(),
     }
 }
-
-/// This buffer is shared with the supervisor. It's backed by private memory.
-#[link_section = ".output"]
-static OUTPUT: SyncUnsafeCell<[u8; 4096]> = SyncUnsafeCell::new([0; 4096]);
-
-static LOCKED_OUTPUT: Mutex<&SyncUnsafeCell<[u8; 4096]>> = Mutex::new(&OUTPUT);
 
 pub fn output(bytes: &[u8]) {
-    let guard = LOCKED_OUTPUT.lock();
-    let ptr = guard.get();
-
     for chunk in bytes.chunks(0x1000) {
-        unsafe {
-            core::intrinsics::volatile_copy_nonoverlapping_memory(
-                ptr.cast(),
-                chunk.as_ptr(),
-                chunk.len(),
-            );
-        }
-
-        let command = chunk.len() as u64 - 1;
-        unsafe {
-            Msr::new(UPDATE_OUTPUT_MSR).write(command);
-        }
+        push_background_command(UpdateOutput::new(chunk));
     }
 }
 
 /// Tell to supervisor to commit the output and produce and attestation report.
 pub fn commit_output() -> ! {
-    unsafe {
-        Msr::new(FINISH_OUTPUT_MSR).write(1);
+    push_async_command(FinishOutput);
+
+    // Halt.
+    loop {
+        kick_supervisor(false);
     }
-    unreachable!();
 }
 
 /// Tell the supervisor that something went wrong and to discard the output.
 pub fn fail() -> ! {
-    unsafe {
-        Msr::new(FINISH_OUTPUT_MSR).write(0);
+    push_async_command(FailOutput);
+
+    // Halt.
+    loop {
+        kick_supervisor(false);
     }
-    unreachable!();
 }

@@ -27,6 +27,7 @@ use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
+use snp_types::intercept::VMEXIT_CPUID;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -199,6 +200,13 @@ impl Thread {
                                 };
                                 assert!(self.queue_signal(sig_info));
                             }
+                            Exit::Vc(vc) => match vc {
+                                VMEXIT_CPUID => {
+                                    let mut guard = self.cpu_state.lock();
+                                    guard.emulate_cpuid();
+                                }
+                                code => todo!("unimplemented VC error code: {code:#x}"),
+                            },
                             Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
                         }
                     }

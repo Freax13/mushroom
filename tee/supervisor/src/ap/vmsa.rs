@@ -1,13 +1,11 @@
 use core::{
     arch::x86_64::_rdrand64_step,
-    cell::{SyncUnsafeCell, UnsafeCell},
+    cell::SyncUnsafeCell,
     mem::MaybeUninit,
-    ops::{Deref, DerefMut},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use bit_field::BitField;
-use constants::MAX_APS_COUNT;
+use constants::{physical_address::supervisor::VMSAS, MAX_APS_COUNT};
 use snp_types::{
     vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
     VmplPermissions,
@@ -19,49 +17,38 @@ use x86_64::{
         xcontrol::XCr0Flags,
     },
     structures::paging::{Page, PhysFrame, Size4KiB},
-    PhysAddr, VirtAddr,
+    VirtAddr,
 };
 
-use crate::{cpuid::c_bit_location, pagetable::ref_to_pa, rmp::rmpadjust};
+use crate::rmp::rmpadjust;
 
 use super::SEV_FEATURES;
 
-/// Allocate a VMSA out of a pool and initialize it.
-fn allocate_vmsa(vmsa: Vmsa) -> &'static UnsafeCell<Vmsa> {
-    const fn unaligned_slots() -> usize {
-        let potential_unaligned = 1;
-        (MAX_APS_COUNT as usize) + (potential_unaligned as usize)
-    }
+#[link_section = ".vmsas"]
+static SLOTS: [SyncUnsafeCell<MaybeUninit<Vmsa>>; MAX_APS_COUNT as usize] =
+    [const { SyncUnsafeCell::new(MaybeUninit::uninit()) }; MAX_APS_COUNT as usize];
 
-    static SLOTS: [SyncUnsafeCell<MaybeUninit<Vmsa>>; unaligned_slots()] =
-        [const { SyncUnsafeCell::new(MaybeUninit::uninit()) }; unaligned_slots()];
+/// Allocate a VMSA out of a pool and initialize it.
+fn allocate_vmsa(vmsa: Vmsa) -> *mut Vmsa {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    let vmsa_slot = loop {
-        let idx = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let ptr = SLOTS[idx].get();
+    let idx = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let ptr = SLOTS[idx].get();
 
-        // Skips slots that are 2MiB aligned.
-        //
-        // There's an erratum which says that 2MiB aligned VMSAs can cause
-        // spurious #NPFs under certain conditions. For that reason the Linux
-        // kernel rejects all AP Creation events with a 2MiB aligned VMSA.
-        if ptr.is_aligned_to(0x200000) {
-            continue;
-        }
+    // There's an erratum which says that 2MiB aligned VMSAs can cause spurious
+    // #NPFs under certain conditions. For that reason the Linux kernel rejects
+    // all AP Creation events with a 2MiB aligned VMSA.
+    assert!(!ptr.is_aligned_to(0x200000));
 
-        break unsafe { &mut *ptr };
-    };
+    let vmsa_slot = unsafe { &mut *ptr };
 
-    let ptr = vmsa_slot.write(vmsa);
-    let ptr = ptr as *const _ as *const UnsafeCell<Vmsa>;
-    unsafe { &*ptr }
+    vmsa_slot.write(vmsa)
 }
 
 /// A wrapper around a reference to a VMSA.
 pub struct InitializedVmsa {
     /// A reference to an VMSA allocated out of a pool.
-    vmsa: &'static UnsafeCell<Vmsa>,
+    vmsa: *mut Vmsa,
 }
 
 impl InitializedVmsa {
@@ -109,7 +96,7 @@ impl InitializedVmsa {
         // If the supervisor is not hardened, setup the vCPU so that the kernel
         // can be profiled.
         if !cfg!(feature = "harden") {
-            // Allow the kernel to share profiler data with the host.
+            // Allow the kernel to share data with the host for debugging/profiling.
             vmsa.set_virtual_tom(0x80000000000, tweak_bitmap);
 
             // Allow the kernel to query it's processor id through TSC_AUX.
@@ -134,10 +121,10 @@ impl InitializedVmsa {
     }
 
     pub fn phys_addr(&self) -> PhysFrame {
-        let vmsa_addr = ref_to_pa(self.vmsa).unwrap();
-        let mut vmsa_addr = vmsa_addr.as_u64();
-        vmsa_addr.set_bit(c_bit_location(), false);
-        let vmsa_addr = PhysAddr::new(vmsa_addr);
+        let idx = unsafe { self.vmsa.offset_from(SLOTS.as_ptr().cast()) };
+        let idx = u64::try_from(idx).unwrap();
+        let base = VMSAS.start_address() + 0x1000;
+        let vmsa_addr = base + idx * 0x1000;
         PhysFrame::from_start_address(vmsa_addr).unwrap()
     }
 
@@ -154,44 +141,6 @@ impl InitializedVmsa {
 
         unsafe {
             rmpadjust(page, 1, VmplPermissions::empty(), runnable).unwrap();
-        }
-    }
-
-    /// Sets the VMSA as unrunnable and returns a wrapper around mutable
-    /// reference to it. This reference can be used to inspect and modify the
-    /// VMSA.
-    /// The VMSA will automatically be marked as runnable once the wrapper is
-    /// dropped.
-    pub fn modify(&mut self) -> VmsaModifyGuard {
-        unsafe {
-            self.set_runnable(false);
-        }
-        VmsaModifyGuard { vmsa: self }
-    }
-}
-
-pub struct VmsaModifyGuard<'a> {
-    vmsa: &'a mut InitializedVmsa,
-}
-
-impl Deref for VmsaModifyGuard<'_> {
-    type Target = Vmsa;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.vmsa.vmsa.get() }
-    }
-}
-
-impl DerefMut for VmsaModifyGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.vmsa.vmsa.get() }
-    }
-}
-
-impl Drop for VmsaModifyGuard<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.vmsa.set_runnable(true);
         }
     }
 }

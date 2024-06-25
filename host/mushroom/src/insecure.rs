@@ -2,35 +2,34 @@
 //! and without the supervisor.
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::{
-        mpsc::{self, SyncSender},
-        Arc, Condvar, Mutex,
-    },
+    collections::{hash_map::Entry, HashMap, VecDeque},
+    sync::Arc,
+    thread::Thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use bit_field::BitField;
-use bytemuck::bytes_of;
 use constants::{
-    physical_address::DYNAMIC_2MIB, FINISH_OUTPUT_MSR, FIRST_AP, HALT_PORT, KICK_AP_PORT, LOG_PORT,
-    MAX_APS_COUNT, MEMORY_MSR, SCHEDULE_PORT, UPDATE_OUTPUT_MSR,
+    physical_address::{kernel, supervisor, DYNAMIC_2MIB, SUPERVISOR_SERVICES},
+    FIRST_AP, MAX_APS_COUNT,
 };
 use snp_types::PageType;
-use tracing::{debug, info};
-use x86_64::{
-    registers::{
-        control::{Cr0Flags, Cr4Flags},
-        model_specific::EferFlags,
-        xcontrol::XCr0Flags,
-    },
-    structures::paging::{PhysFrame, Size4KiB},
-    PhysAddr,
+use supervisor_services::{
+    allocation_buffer::{AllocationBuffer, SlotIndex},
+    command_buffer::{CommandBufferReader, CommandHandler},
+    SupervisorServices,
+};
+use tracing::info;
+use x86_64::registers::{
+    control::{Cr0Flags, Cr4Flags},
+    model_specific::EferFlags,
+    xcontrol::XCr0Flags,
 };
 
 use crate::{
     kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VmHandle},
+    logging::start_log_collection,
     slot::Slot,
     MushroomResult,
 };
@@ -143,50 +142,64 @@ pub fn main(
 
     // Create a bunch of APs.
     let cpuid_entries = Arc::<[KvmCpuidEntry2]>::from(cpuid_entries);
-    let dynamic_memory_state = Arc::new(DynamicMemory::new(vm.clone()));
-    let (tx, rx) = mpsc::sync_channel(0);
-    let init_scheduler = Arc::new(Scheduler::new(1));
-    let run_scheduler = Arc::new(Scheduler::new(0));
+    let ap_threads = (0..MAX_APS_COUNT)
+        .map(|i| {
+            let id = FIRST_AP + i;
+            run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone())
+        })
+        .collect::<Vec<_>>();
+    ap_threads[0].unpark();
+    start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
+    start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
 
-    for i in 0..MAX_APS_COUNT {
-        let id = FIRST_AP + i;
-        run_ap(
-            id,
-            vm.clone(),
-            cpuid_entries.clone(),
-            dynamic_memory_state.clone(),
-            tx.clone(),
-            init_scheduler.clone(),
-            run_scheduler.clone(),
-        );
-    }
+    let supervisor_services = memory_slots
+        .values()
+        .find(|s| s.gpa() == SUPERVISOR_SERVICES.start)
+        .context("couldn't find supervisor services region")?;
+    let supervisor_services = supervisor_services.shared_mapping();
+    ensure!(
+        supervisor_services.len().get() >= size_of::<SupervisorServices>(),
+        "supervisor services region is too small"
+    );
+    let supervisor_services = unsafe {
+        supervisor_services
+            .as_ptr()
+            .cast::<SupervisorServices>()
+            .as_ref()
+    };
 
-    let mut output = Vec::new();
-    loop {
-        match rx.recv().context("failed to receive output event")? {
-            OutputEvent::Update(mut data) => output.append(&mut data),
-            OutputEvent::Finish => {
-                debug!("received finish event");
-                break;
-            }
+    let mut command_buffer_reader = CommandBufferReader::new(&supervisor_services.command_buffer);
+    let mut handler = InsecureCommandHandler {
+        allocation_buffer: &supervisor_services.allocation_buffer,
+        dynamic_memory: DynamicMemory::new(vm),
+        pending_aps: ap_threads.iter().skip(1).cloned().collect(),
+        output: Vec::new(),
+        finish_status: None,
+    };
+    let finish_status = loop {
+        while command_buffer_reader.handle(&mut handler) {}
+
+        for i in supervisor_services.notification_buffer.reset() {
+            ap_threads[i].unpark();
         }
-    }
+
+        if let Some(finish_status) = handler.finish_status {
+            break finish_status;
+        }
+
+        std::thread::park();
+    };
+    ensure!(finish_status, "workload failed");
 
     Ok(MushroomResult {
-        output,
+        output: handler.output,
         attestation_report: None,
     })
 }
 
-fn run_ap(
-    id: u8,
-    vm: Arc<VmHandle>,
-    cpuid_entries: Arc<[KvmCpuidEntry2]>,
-    dynamic_memory: Arc<DynamicMemory>,
-    tx: SyncSender<OutputEvent>,
-    init_scheduler: Arc<Scheduler>,
-    run_scheduler: Arc<Scheduler>,
-) {
+fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> Thread {
+    let supervisor_thread = std::thread::current();
+
     std::thread::spawn(move || {
         let ap = vm.create_vcpu(i32::from(id)).unwrap();
         ap.set_cpuid(&cpuid_entries).unwrap();
@@ -229,57 +242,26 @@ fn run_ap(
         regs.rsp = 0xffff_8000_0400_3ff8;
         ap.set_regs(regs).unwrap();
 
-        init_scheduler.wait();
+        std::thread::park();
 
         loop {
             // Run the AP.
             ap.run().unwrap();
 
             // Check the exit.
-            let exit = kvm_run.read().exit();
+            let kvm_run = kvm_run.read();
+            let exit = kvm_run.exit();
             match exit {
-                KvmExit::Io(io) => match io.port {
-                    LOG_PORT => {
-                        let regs = ap.get_regs().unwrap();
-                        let fpu = ap.get_fpu().unwrap();
-                        let bytes = &bytes_of(&fpu.xmm)[..regs.rax as usize];
-                        let str = String::from_utf8_lossy(bytes);
-                        print!("{str}");
-                    }
-                    SCHEDULE_PORT => run_scheduler.schedule(),
-                    KICK_AP_PORT => init_scheduler.schedule(),
-                    HALT_PORT => run_scheduler.wait(),
-                    other => todo!("unimplemented IO port access: {other:#06x}"),
-                },
-                KvmExit::RdMsr(mut msr) => {
-                    match msr.index {
-                        MEMORY_MSR => {
-                            msr.data = dynamic_memory.allocate_slot_id().unwrap();
-                        }
-                        idx => todo!("unimplemented MSR access: {idx:#010x}"),
-                    }
+                KvmExit::Hlt => {
+                    let resume = kvm_run.cr8.get_bit(0);
 
-                    kvm_run.update(|mut kvm_run| {
-                        kvm_run.set_exit(KvmExit::RdMsr(msr));
-                        kvm_run
-                    });
+                    supervisor_thread.unpark();
+
+                    if !resume {
+                        std::thread::park();
+                    }
                 }
-                KvmExit::WrMsr(msr) => match msr.index {
-                    UPDATE_OUTPUT_MSR => {
-                        let gfn =
-                            PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
-                        let len = ((msr.data & 0xfff) + 1) as usize;
-
-                        let data = dynamic_memory.read(gfn, len).unwrap();
-
-                        tx.send(OutputEvent::Update(data)).unwrap();
-                    }
-                    FINISH_OUTPUT_MSR => {
-                        tx.send(OutputEvent::Finish).unwrap();
-                        return;
-                    }
-                    idx => todo!("unimplemented MSR access: {idx:#010x}"),
-                },
+                KvmExit::SetTpr => {}
                 exit => {
                     let regs = ap.get_regs().unwrap();
                     println!("{:x}", regs.rip);
@@ -288,28 +270,29 @@ fn run_ap(
                 }
             }
         }
-    });
+    })
+    .thread()
+    .clone()
 }
 
 const SLOTS: usize = 1 << 15;
 
 struct DynamicMemory {
     vm: Arc<VmHandle>,
-    state: Mutex<HashMap<u16, Slot>>,
+    slots: HashMap<u16, Slot>,
 }
 
 impl DynamicMemory {
     pub fn new(vm: Arc<VmHandle>) -> Self {
         Self {
             vm,
-            state: Mutex::new(HashMap::new()),
+            slots: HashMap::new(),
         }
     }
 
-    pub fn allocate_slot_id(&self) -> Option<u64> {
-        let mut guard = self.state.lock().unwrap();
+    pub fn allocate_slot_id(&mut self) -> Option<SlotIndex> {
         for slot_id in 0..SLOTS as u16 {
-            if let Entry::Vacant(entry) = guard.entry(slot_id) {
+            if let Entry::Vacant(entry) = self.slots.entry(slot_id) {
                 let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
                 let slot = entry.insert(Slot::new(&self.vm, gpa, false).unwrap());
 
@@ -319,61 +302,60 @@ impl DynamicMemory {
                     self.vm.map_encrypted_memory(kvm_slot_id, slot).unwrap();
                 }
 
-                return Some(gpa.start_address().as_u64());
+                return Some(SlotIndex::new(slot_id));
             }
         }
 
         None
     }
 
-    fn read(&self, gfn: PhysFrame, len: usize) -> Option<Vec<u8>> {
-        let mut guard = self.state.lock().unwrap();
-
-        let slot = guard.values_mut().find(|slot| {
-            let num_frames = u64::try_from(slot.shared_mapping().len().get() / 0x1000).unwrap();
-            (slot.gpa()..slot.gpa() + num_frames).contains(&gfn)
-        })?;
-
-        let output_buffer = slot.read::<[u8; 4096]>(gfn.start_address()).ok()?;
-
-        Some(output_buffer[..len].to_vec())
+    pub fn deallcoate_slot_id(&mut self, id: SlotIndex) {
+        let slot = self.slots.remove(&id.get()).unwrap();
+        let base = 1 << 6;
+        let kvm_slot_id = base + id.get();
+        unsafe {
+            self.vm.unmap_encrypted_memory(kvm_slot_id, &slot).unwrap();
+        }
     }
 }
-
-enum OutputEvent {
-    Update(Vec<u8>),
-    Finish,
+struct InsecureCommandHandler<'a> {
+    allocation_buffer: &'a AllocationBuffer,
+    dynamic_memory: DynamicMemory,
+    pending_aps: VecDeque<Thread>,
+    output: Vec<u8>,
+    finish_status: Option<bool>,
 }
 
-struct Scheduler {
-    permits: Mutex<u64>,
-    condvar: Condvar,
-}
+impl CommandHandler for InsecureCommandHandler<'_> {
+    fn start_next_ap(&mut self) {
+        let Some(pending_ap) = self.pending_aps.pop_front() else {
+            return;
+        };
+        pending_ap.unpark();
+    }
 
-impl Scheduler {
-    pub fn new(start: u64) -> Self {
-        Self {
-            permits: Mutex::new(start),
-            condvar: Condvar::new(),
+    fn allocate_memory(&mut self) {
+        while let Some(entry) = self.allocation_buffer.find_free_entry() {
+            let Some(slot_idx) = self.dynamic_memory.allocate_slot_id() else {
+                break;
+            };
+            entry.set(slot_idx);
         }
     }
 
-    pub fn wait(&self) {
-        let mut guard = self.permits.lock().unwrap();
-        loop {
-            if let Some(new_count) = guard.checked_sub(1) {
-                *guard = new_count;
-                return;
-            }
-            guard = self.condvar.wait(guard).unwrap();
-        }
+    fn deallocate_memory(&mut self, slot_idx: SlotIndex) {
+        self.dynamic_memory.deallcoate_slot_id(slot_idx);
     }
 
-    pub fn schedule(&self) {
-        let mut guard = self.permits.lock().unwrap();
-        *guard += 1;
-        drop(guard);
+    fn update_output(&mut self, output: &[u8]) {
+        self.output.extend_from_slice(output);
+    }
 
-        self.condvar.notify_all();
+    fn finish_output(&mut self) {
+        self.finish_status.get_or_insert(true);
+    }
+
+    fn fail_output(&mut self) {
+        self.finish_status.get_or_insert(false);
     }
 }

@@ -1,11 +1,9 @@
 #![no_std]
 #![no_main]
 #![feature(
-    abi_x86_interrupt,
     asm_const,
     const_mut_refs,
     core_intrinsics,
-    layout_for_ptr,
     naked_functions,
     pointer_is_aligned_to,
     sync_unsafe_cell
@@ -14,15 +12,12 @@
 
 use core::ops::Deref;
 
-use log::{debug, LevelFilter};
+use log::{debug, info, LevelFilter};
 
-use crate::{ap::run_aps, logging::SerialLogger};
+use crate::{ap::start_next_ap, logging::SerialLogger};
 
 mod ap;
-mod cpuid;
-mod doorbell;
 mod dynamic;
-mod exception;
 mod ghcb;
 mod input;
 mod logging;
@@ -31,6 +26,7 @@ mod pagetable;
 mod panic;
 mod reset_vector;
 mod rmp;
+mod services;
 
 fn main() -> ! {
     if cfg!(not(feature = "harden")) {
@@ -39,16 +35,13 @@ fn main() -> ! {
         debug!("initialized logger");
     }
 
-    // Setup an IDT and negotiate with the Hypervisor how interrupts are
-    // signaled to us.
-    exception::init();
-    doorbell::init();
-
     // Fetch the input data for the workload.
     input::verify_and_load();
 
     // Run the workload.
-    run_aps();
+    info!("booting first AP");
+    start_next_ap();
+    services::run();
 }
 
 /// The supervisor runs singlethreaded, so we don't need statics to be `Sync`.
