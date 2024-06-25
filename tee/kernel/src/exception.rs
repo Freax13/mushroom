@@ -6,6 +6,7 @@ use core::{alloc::Layout, arch::asm, ptr::null_mut};
 use crate::spin::lazy::Lazy;
 use alloc::alloc::alloc;
 use log::{debug, error, trace};
+use x86_64::structures::gdt::SegmentSelector;
 use x86_64::{
     instructions::tables::load_tss,
     registers::{
@@ -58,6 +59,63 @@ fn allocate_stack() -> VirtAddr {
     VirtAddr::from_ptr(end_of_stack)
 }
 
+#[derive(Clone, Copy)]
+struct Selectors {
+    kernel_cs: SegmentSelector,
+    kernel_ds: SegmentSelector,
+    _user32_cs: SegmentSelector,
+    user_ds: SegmentSelector,
+    user_cs: SegmentSelector,
+}
+
+static BASE_GDT_WITH_SELECTORS: (GlobalDescriptorTable, Selectors) = {
+    let mut gdt = GlobalDescriptorTable::new();
+    let kernel_cs = gdt.append(Descriptor::kernel_code_segment());
+    let kernel_ds = gdt.append(Descriptor::kernel_data_segment());
+    let user32_cs = gdt.append(Descriptor::UserSegment(DescriptorFlags::USER_CODE32.bits()));
+    let user_ds = gdt.append(Descriptor::user_data_segment());
+    let user_cs = gdt.append(Descriptor::user_code_segment());
+    (
+        gdt,
+        Selectors {
+            kernel_cs,
+            kernel_ds,
+            _user32_cs: user32_cs,
+            user_ds,
+            user_cs,
+        },
+    )
+};
+
+/// Load a Global Descriptor Table. The old GDT setup by the reset vector is
+/// no longer accessible.
+pub fn load_early_gdt() {
+    let (ref gdt, selectors) = BASE_GDT_WITH_SELECTORS;
+
+    debug!("loading global descriptor table");
+    gdt.load();
+
+    unsafe {
+        // Safety: kernel_cs points to a 64 bit code segment.
+        CS::set_reg(selectors.kernel_cs);
+    }
+    unsafe {
+        // Safety: kernel_ds points to a data segment.
+        SS::set_reg(selectors.kernel_ds);
+        DS::set_reg(selectors.kernel_ds);
+        ES::set_reg(selectors.kernel_ds);
+    }
+
+    // Initialize the segment selectors in `Star` msr for `syscall`/`sysret`.
+    Star::write(
+        selectors.user_cs,
+        selectors.user_ds,
+        selectors.kernel_cs,
+        selectors.kernel_ds,
+    )
+    .unwrap();
+}
+
 /// Load a Global Descriptor Table. The old GDT setup by the reset vector is
 /// no longer accessible.
 pub fn load_gdt() {
@@ -68,12 +126,7 @@ pub fn load_gdt() {
     per_cpu.tss.set(tss).expect("TSS was already initialized");
     let tss = per_cpu.tss.get().unwrap();
 
-    let mut gdt = GlobalDescriptorTable::new();
-    let kernel_cs = gdt.append(Descriptor::kernel_code_segment());
-    let kernel_ds = gdt.append(Descriptor::kernel_data_segment());
-    let _user32_cs = gdt.append(Descriptor::UserSegment(DescriptorFlags::USER_CODE32.bits()));
-    let user_ds = gdt.append(Descriptor::user_data_segment());
-    let user_cs = gdt.append(Descriptor::user_code_segment());
+    let mut gdt = BASE_GDT_WITH_SELECTORS.0.clone();
     let tss_seg = gdt.append(Descriptor::tss_segment(tss));
     per_cpu.gdt.set(gdt).unwrap();
     let gdt = per_cpu.gdt.get().unwrap();
@@ -85,20 +138,6 @@ pub fn load_gdt() {
     unsafe {
         load_tss(tss_seg);
     }
-
-    unsafe {
-        // Safety: kernel_cs points to a 64 bit code segment.
-        CS::set_reg(kernel_cs);
-    }
-    unsafe {
-        // Safety: kernel_ds points to a data segment.
-        SS::set_reg(kernel_ds);
-        DS::set_reg(kernel_ds);
-        ES::set_reg(kernel_ds);
-    }
-
-    // Initialize the segment selectors in `Star` msr for `syscall`/`sysret`.
-    Star::write(user_cs, user_ds, kernel_cs, kernel_ds).unwrap();
 }
 
 /// Load an IDT.

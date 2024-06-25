@@ -81,6 +81,9 @@ unsafe fn main() -> ! {
         }
     }
 
+    exception::load_early_gdt();
+    exception::load_idt();
+
     switch_stack(init)
 }
 
