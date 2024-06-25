@@ -9,6 +9,7 @@ PHDRS
     secrets      PT_LOAD AT(0x00200000000) FLAGS((1 << 2) | (1 << 29));
     shadow_stack PT_LOAD AT(0x00240000000);
     shared       PT_LOAD AT(0x00280000000) FLAGS((1 << 30));
+    vmsas        PT_LOAD AT(0x002c0001000);
     log_buffer   PT_LOAD AT(0x90000200000) FLAGS((1 << 30));
     cpuid_page   PT_LOAD FLAGS((1 << 2) | (1 << 28));
     pagetables   PT_LOAD FLAGS((1 << 2));
@@ -66,6 +67,11 @@ SECTIONS {
     {
         *(.log_buffer .log_buffer.*)
     } :log_buffer
+
+    .vmsas (0x44c01000) :
+    {
+        *(.vmsas .vmsas.*)
+    } :vmsas
 
     .cpuid_page (0xffa00000) : 
     {

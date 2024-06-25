@@ -74,6 +74,7 @@ pub mod supervisor {
     pub const SECRETS: PhysFrame<Size2MiB> = addr(0x200000000);
     pub const SHADOW_STACK: PhysFrame<Size2MiB> = addr(0x240000000);
     pub const SHARED: PhysFrame<Size2MiB> = addr(0x280000000);
+    pub const VMSAS: PhysFrame<Size2MiB> = addr(0x2c0000000);
 
     pub const LOG_BUFFER: PhysFrame<Size2MiB> = addr(0x90000200000);
 }
