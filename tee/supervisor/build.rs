@@ -6,4 +6,8 @@ fn main() {
         "cargo:rustc-link-arg-bins=--script={}",
         local_path.join("linker.ld").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        local_path.join("linker.ld").display()
+    );
 }
