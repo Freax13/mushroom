@@ -4,16 +4,7 @@ pub mod process;
 
 pub fn run() -> ! {
     loop {
-        let mut should_halt = true;
-
-        let polled = poll();
-        if polled {
-            should_halt = false;
-        }
-
-        if !should_halt {
-            continue;
-        }
+        while poll() {}
 
         // Halt the vCPU.
 
