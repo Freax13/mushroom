@@ -54,7 +54,7 @@ mushroom could be the basis of a secure remote build system: mushroom could be u
 
 ## Usage
 
-KVM host support for SEV-SNP has no yet been upstreamed into the Linux kernel. Until then a [custom host kernel](https://github.com/Freax13/linux/tree/snp-host-v10-with-my-patches) is required.
+KVM host support for SEV-SNP has no yet been upstreamed into the Linux kernel. Until then a [custom host kernel](https://github.com/Freax13/linux/tree/snp-guest-req-v1b-mushroom) is required.
 
 The host folder contains cargo-make files to simplify the process of running a workload.
 

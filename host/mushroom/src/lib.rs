@@ -9,25 +9,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{bail, Context, Result};
 use bit_field::BitField;
 use bytemuck::NoUninit;
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
-use kvm::{KvmCpuidEntry2, KvmHandle, Page, VcpuHandle};
+use kvm::{KvmCpuidEntry2, KvmExitHypercall, KvmHandle, Page, VcpuHandle, KVM_HC_MAP_GPA_RANGE};
 use logging::start_log_collection;
 use profiler::ProfileFolder;
-use snp_types::{
-    ghcb::{
-        self,
-        msr_protocol::{GhcbInfo, PageOperation},
-        Ghcb, PageSize, PageStateChangeEntry, PageStateChangeHeader,
-    },
-    guest_policy::GuestPolicy,
-    PageType,
-};
+use snp_types::{guest_policy::GuestPolicy, PageType};
 use tracing::{debug, info};
 use volatile::{
     access::{ReadOnly, Readable},
@@ -39,9 +31,7 @@ use x86_64::{
 };
 
 use crate::{
-    kvm::{
-        KvmCap, KvmExit, KvmExitUnknown, KvmExitVmgexit, KvmMemoryAttributes, SevHandle, VmHandle,
-    },
+    kvm::{KvmCap, KvmExit, KvmExitUnknown, KvmMemoryAttributes, SevHandle, VmHandle},
     profiler::start_profile_collection,
     slot::Slot,
 };
@@ -111,6 +101,8 @@ impl VmContext {
         let vm = kvm_handle.create_snp_vm()?;
         let vm = Arc::new(vm);
 
+        vm.enable_capability(KvmCap::EXIT_HYPERCALL, 1 << KVM_HC_MAP_GPA_RANGE)?;
+
         const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
         const KVM_MSR_EXIT_REASON_FILTER: u64 = 2;
         vm.enable_capability(
@@ -149,7 +141,7 @@ impl VmContext {
             });
 
             // Coalesce multiple contigous load commands with the same page type.
-            for i in 1..0xfffff {
+            for i in 1.. {
                 let following_load_command = load_commands.next_if(|next_load_segment| {
                     next_load_segment.physical_address > gpa
                         && next_load_segment.physical_address - gpa == i
@@ -174,19 +166,19 @@ impl VmContext {
             if let Some(first_page_type) = first_page_type {
                 let update_start = Instant::now();
 
-                vm.sev_snp_launch_update(
-                    gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
-                    u32::try_from(slot.shared_mapping().len().get())?,
-                    first_page_type,
-                    first_vmpl1_perms,
-                    sev_handle,
-                )?;
-
                 vm.set_memory_attributes(
                     gpa.start_address().as_u64(),
                     u64::try_from(slot.shared_mapping().len().get())?,
                     KvmMemoryAttributes::PRIVATE,
+                )?;
+
+                vm.sev_snp_launch_update(
+                    gpa.start_address().as_u64(),
+                    u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
+                    slot.shared_mapping().len().get() as u64,
+                    first_page_type,
+                    first_vmpl1_perms,
+                    sev_handle,
                 )?;
 
                 num_launch_pages += pages.len();
@@ -248,7 +240,24 @@ impl VmContext {
                 KvmExit::Unknown(KvmExitUnknown {
                     hardware_exit_reason: 0,
                 }) => {}
-                KvmExit::Debug(_) => {}
+                KvmExit::Hypercall(
+                    mut hypercall @ KvmExitHypercall {
+                        nr: KVM_HC_MAP_GPA_RANGE,
+                        args: [address, num_pages, attrs, ..],
+                        ..
+                    },
+                ) => {
+                    let mut attributes = KvmMemoryAttributes::empty();
+                    attributes.set(KvmMemoryAttributes::PRIVATE, attrs.get_bit(4));
+                    self.vm
+                        .set_memory_attributes(address, num_pages * 0x1000, attributes)?;
+
+                    kvm_run.update(|mut run| {
+                        hypercall.ret = 0;
+                        run.set_exit(KvmExit::Hypercall(hypercall));
+                        run
+                    });
+                }
                 KvmExit::Io(io) => {
                     assert_eq!(io.size, 4, "accesses to the ports should have size 4");
 
@@ -321,94 +330,6 @@ impl VmContext {
                 KvmExit::MemoryFault(fault) => {
                     dbg!(fault);
                 }
-                KvmExit::Vmgexit(vmgexit) => {
-                    let info = GhcbInfo::try_from(vmgexit.ghcb_msr)
-                        .map_err(|_| anyhow!("invalid value in ghcb msr protocol"))?;
-                    debug!(?info, "handling vmgexit");
-                    match info {
-                        GhcbInfo::GhcbGuestPhysicalAddress { address } => {
-                            let ghcb_slot = find_slot(address, &mut self.memory_slots)?;
-                            let ghcb = ghcb_slot.read::<Ghcb>(address.start_address())?;
-
-                            let exit_code = ghcb.sw_exit_code;
-                            debug!(exit_code = %format_args!("{exit_code:#010x}"), "handling ghcb request");
-
-                            match exit_code {
-                                0x8000_0010 => {
-                                    let psc_desc = ghcb.sw_scratch;
-                                    debug!(exit_code = %format_args!("{psc_desc:#018x}"), "handling psc request");
-
-                                    let psc_desc_gpa = PhysAddr::try_new(psc_desc)
-                                        .map_err(|_| anyhow!("psc desc is not a valid gpa"))?;
-                                    let psc_desc_gfn = PhysFrame::containing_address(psc_desc_gpa);
-                                    let psc_desc_slot =
-                                        find_slot(psc_desc_gfn, &mut self.memory_slots)?;
-
-                                    let header = psc_desc_slot
-                                        .shared_ptr::<PageStateChangeHeader>(psc_desc_gpa)?;
-
-                                    loop {
-                                        let cur_entry = map_field!(header.cur_entry).read();
-                                        if cur_entry > map_field!(header.end_entry).read() {
-                                            break;
-                                        }
-
-                                        let entry = psc_desc_slot
-                                            .shared_ptr::<PageStateChangeEntry>(
-                                                psc_desc_gpa + 8u64 + u64::from(cur_entry) * 8,
-                                            )?
-                                            .read();
-
-                                        match entry.page_operation() {
-                                            Ok(ghcb::PageOperation::PageAssignmentShared) => {
-                                                ensure!(
-                                                    entry.page_size() == PageSize::Size4KiB,
-                                                    "only 4kib pages are supported"
-                                                );
-
-                                                self.vm.set_memory_attributes(
-                                                    entry.gfn().start_address().as_u64(),
-                                                    0x1000,
-                                                    KvmMemoryAttributes::empty(),
-                                                )?;
-                                            }
-                                            Ok(op) => bail!("unsupported page operation: {op:?}"),
-                                            Err(op) => bail!("unknown page operation: {op:?}"),
-                                        }
-
-                                        map_field!(header.cur_entry).update(|cur| cur + 1);
-                                    }
-                                }
-                                _ => bail!("unsupported exit code: {exit_code:#x}"),
-                            }
-                        }
-                        GhcbInfo::SnpPageStateChangeRequest { operation, address } => {
-                            let mut attributes = KvmMemoryAttributes::empty();
-                            match operation {
-                                PageOperation::PageAssignmentPrivate => {
-                                    attributes |= KvmMemoryAttributes::PRIVATE;
-                                }
-                                PageOperation::PageAssignmentShared => {}
-                            }
-                            self.vm.set_memory_attributes(
-                                address.start_address().as_u64(),
-                                0x1000,
-                                attributes,
-                            )?;
-
-                            let response =
-                                GhcbInfo::SnpPageStateChangeResponse { error_code: None };
-                            kvm_run.update(|mut run| {
-                                run.set_exit(KvmExit::Vmgexit(KvmExitVmgexit {
-                                    ghcb_msr: response.into(),
-                                    error: 0,
-                                }));
-                                run
-                            });
-                        }
-                        _ => bail!("unsupported msr protocol value: {info:?}"),
-                    }
-                }
                 KvmExit::WrMsr(msr) => match msr.index {
                     UPDATE_OUTPUT_MSR => {
                         let gfn =
@@ -470,6 +391,11 @@ impl VmContext {
             // Note that this doesn't do anything on EPYC Milan.
             const TSC_AUX: u32 = 0xc0000103;
             ap.set_msr(TSC_AUX, u64::from(id - FIRST_AP)).unwrap();
+
+            // Work around a bug where KVM fails to enable LBR virtualization
+            // for SEV-ES vCPUs creating using AP creation.
+            const DEBUG_CTL: u32 = 0x000001d9;
+            ap.set_msr(DEBUG_CTL, 1).unwrap();
 
             let kvm_run = ap.get_kvm_run_block().unwrap();
 
