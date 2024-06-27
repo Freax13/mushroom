@@ -273,14 +273,13 @@ async fn load_vcek_from_cache(
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).context("failed to load VCEK from cache"),
     };
-    let vcek = Vcek::from_bytes(product, &bytes).context("failed to deserialize VCEK")?;
+    let vcek = Vcek::from_bytes(product, bytes).context("failed to deserialize VCEK")?;
     Ok(Some(vcek))
 }
 
 async fn save_vcek_to_cache(cache: &Path, params: VcekParameters, vcek: &Vcek) -> Result<()> {
     let cache_name = cache_file_name(params);
-    let der = vcek.as_ref().to_der().context("failed to serialize VCEK")?;
-    tokio::fs::write(cache.join(cache_name), der)
+    tokio::fs::write(cache.join(cache_name), vcek.raw())
         .await
         .context("failed to save VCEK")?;
     Ok(())
