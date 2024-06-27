@@ -61,7 +61,7 @@ impl Slot {
         let restricted_fd = private
             .then(|| {
                 let fd = vm
-                    .create_guest_memfd(len, KvmGuestMemFdFlags::HUGE_PMD)
+                    .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
                     .context("failed to create guest memfd")?;
                 fallocate(
                     fd.as_raw_fd(),

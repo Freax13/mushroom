@@ -22,13 +22,14 @@ use nix::{
     request_code_none,
     sys::mman::{MapFlags, ProtFlags},
 };
-use snp_types::{guest_policy::GuestPolicy, PageType, VmplPermissions};
+use snp_types::{guest_policy::GuestPolicy, vmsa::SevFeatures, PageType, VmplPermissions};
 use tracing::debug;
 use volatile::VolatilePtr;
 
 use crate::{kvm::hidden::KvmCpuid2, slot::Slot};
 
 const KVMIO: u8 = 0xAE;
+pub const KVM_HC_MAP_GPA_RANGE: u64 = 12;
 
 pub struct KvmHandle {
     fd: OwnedFd,
@@ -76,8 +77,9 @@ impl KvmHandle {
     pub fn create_snp_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
+        const KVM_X86_SNP_VM: i32 = 4;
         ioctl_write_int_bad!(kvm_create_vm, request_code_none!(KVMIO, 0x01));
-        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), 3) };
+        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), KVM_X86_SNP_VM) };
         let raw_fd = res.context("failed to create vm")?;
         let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
@@ -444,11 +446,14 @@ impl VmHandle {
     }
 
     pub fn sev_snp_init(&self) -> Result<()> {
-        let mut data = KvmSnpInit {
-            flags: KvmSnpInitFlags::KVM_SEV_SNP_RESTRICTED_INJET
-                | KvmSnpInitFlags::KVM_SEV_SNP_VMSA_REG_PROT,
+        let mut data = KvmSevInit {
+            vmsa_features: SevFeatures::RESTRICTED_INJECTION | SevFeatures::VMSA_REG_PROT,
+            flags: 0,
+            ghcb_version: 2,
+            _pad1: 0,
+            _pad2: [0; 8],
         };
-        let payload = KvmSevCmdPayload::KvmSevSnpInit { data: &mut data };
+        let payload = KvmSevCmdPayload::KvmSevInit2 { data: &mut data };
         let res = unsafe { self.memory_encrypt_op(payload, None) };
         res.context("failed to initialize sev snp")?;
         Ok(())
@@ -458,11 +463,10 @@ impl VmHandle {
         debug!("starting snp launch");
         let mut data = KvmSevSnpLaunchStart {
             policy,
-            ma_uaddr: 0,
-            ma_en: 0,
-            imi_en: 0,
             gosvw: [0; 16],
-            _pad: [0; 6],
+            flags: 0,
+            pad0: [0; 6],
+            pad1: [0; 4],
         };
         let payload = KvmSevCmdPayload::KvmSevSnpLaunchStart { data: &mut data };
         let res = unsafe { self.memory_encrypt_op(payload, Some(sev_handle)) };
@@ -474,7 +478,7 @@ impl VmHandle {
         &self,
         start_addr: u64,
         uaddr: u64,
-        len: u32,
+        len: u64,
         page_type: PageType,
         vmpl1_perms: VmplPermissions,
         // FIXME: figure out if we need a sev handle for this operation
@@ -486,21 +490,26 @@ impl VmHandle {
             start_addr & 0xfff == 0,
             "start address is not properly aligned"
         );
-        let start_gfn = start_addr >> 12;
+        let gfn_start = start_addr >> 12;
 
         let mut data = KvmSevSnpLaunchUpdate {
-            start_gfn,
+            gfn_start,
             uaddr,
             len,
-            imi_page: 0,
             page_type: page_type as u8,
-            vmpl3_perms: VmplPermissions::empty(),
-            vmpl2_perms: VmplPermissions::empty(),
+            pad0: 0,
+            flags: 0,
             vmpl1_perms,
+            vmpl2_perms: VmplPermissions::empty(),
+            vmpl3_perms: VmplPermissions::empty(),
+            pad1: 0,
+            pad2: [0; 4],
         };
-        let payload = KvmSevCmdPayload::KvmSevSnpLaunchUpdate { data: &mut data };
-        let res = unsafe { self.memory_encrypt_op(payload, Some(sev_handle)) };
-        res.context("failed to update sev snp launch")?;
+        while data.len != 0 {
+            let payload = KvmSevCmdPayload::KvmSevSnpLaunchUpdate { data: &mut data };
+            let res = unsafe { self.memory_encrypt_op(payload, Some(sev_handle)) };
+            res.context("failed to update sev snp launch")?;
+        }
         Ok(())
     }
 
@@ -518,7 +527,10 @@ impl VmHandle {
             id_block_en: 0,
             auth_key_en: 0,
             host_data,
-            _pad: [0; 6],
+            vcek_disabled: 0,
+            pad0: [0; 3],
+            flags: 0,
+            pad1: [0; 4],
         };
         let payload = KvmSevCmdPayload::KvmSevSnpLaunchFinish { data: &mut data };
         let res = unsafe { self.memory_encrypt_op(payload, Some(sev_handle)) };
@@ -593,7 +605,7 @@ impl VmHandle {
         ioctl_write_ptr!(
             kvm_set_memory_attributes,
             KVMIO,
-            0xd3,
+            0xd2,
             KvmSetMemoryAttributes
         );
         let res = unsafe { kvm_set_memory_attributes(self.fd.as_raw_fd(), &data) };
@@ -1153,6 +1165,9 @@ impl KvmRun {
             2 => KvmExit::Io(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitIo>()],
             )),
+            3 => KvmExit::Hypercall(pod_read_unaligned(
+                &self.exit_data[..size_of::<KvmExitHypercall>()],
+            )),
             4 => KvmExit::Debug(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitDebug>()],
             )),
@@ -1182,9 +1197,6 @@ impl KvmRun {
             38 => KvmExit::MemoryFault(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitMemoryFault>()],
             )),
-            50 => KvmExit::Vmgexit(pod_read_unaligned(
-                &self.exit_data[..size_of::<KvmExitVmgexit>()],
-            )),
             51 => KvmExit::ReflectVc,
             exit_reason => KvmExit::Other { exit_reason },
         }
@@ -1192,13 +1204,13 @@ impl KvmRun {
 
     pub fn set_exit(&mut self, exit: KvmExit) {
         match exit {
+            KvmExit::Hypercall(hypercall) => {
+                self.exit_reason = 3;
+                self.exit_data[..size_of_val(&hypercall)].copy_from_slice(bytes_of(&hypercall));
+            }
             KvmExit::RdMsr(msr) => {
                 self.exit_reason = 29;
                 self.exit_data[..size_of_val(&msr)].copy_from_slice(bytes_of(&msr));
-            }
-            KvmExit::Vmgexit(vmgexit) => {
-                self.exit_reason = 50;
-                self.exit_data[..size_of_val(&vmgexit)].copy_from_slice(bytes_of(&vmgexit));
             }
             _ => unimplemented!(),
         }
@@ -1294,6 +1306,7 @@ pub struct KvmVcpuEventsSmi {
 pub enum KvmExit {
     Unknown(KvmExitUnknown),
     Io(KvmExitIo),
+    Hypercall(KvmExitHypercall),
     Debug(KvmExitDebug),
     Hlt,
     Mmio(KvmExitMmio),
@@ -1307,7 +1320,6 @@ pub enum KvmExit {
     RdMsr(KvmExitMsr),
     WrMsr(KvmExitMsr),
     MemoryFault(KvmExitMemoryFault),
-    Vmgexit(KvmExitVmgexit),
     ReflectVc,
     Other { exit_reason: u32 },
 }
@@ -1327,6 +1339,15 @@ pub struct KvmExitIo {
     pub count: u32,
     /// relative to kvm_run start
     pub data_offset: u64,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable, Debug)]
+#[repr(C)]
+pub struct KvmExitHypercall {
+    pub nr: u64,
+    pub args: [u64; 6],
+    pub ret: u64,
+    pub flags: u64,
 }
 
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
@@ -1452,6 +1473,7 @@ impl KvmCap {
     pub const SPLIT_IRQCHIP: Self = Self(121);
     pub const X2APIC_API: Self = Self(129);
     pub const X86_USER_SPACE_MSR: Self = Self(188);
+    pub const EXIT_HYPERCALL: Self = Self(201);
     pub const PRIVATE_MEM: Self = Self(224);
     pub const UNMAPPED_PRIVATE_MEM: Self = Self(240);
 }
@@ -1514,10 +1536,10 @@ struct KvmSevCmd<'a, 'b> {
 #[repr(C, u32)]
 // FIXME: Figure out which ones need `&mut T` and which ones need `&T`
 pub enum KvmSevCmdPayload<'a> {
-    KvmSevSnpInit { data: &'a mut KvmSnpInit } = 22,
-    KvmSevSnpLaunchStart { data: &'a mut KvmSevSnpLaunchStart } = 23,
-    KvmSevSnpLaunchUpdate { data: &'a mut KvmSevSnpLaunchUpdate } = 24,
-    KvmSevSnpLaunchFinish { data: &'a mut KvmSevSnpLaunchFinish } = 25,
+    KvmSevInit2 { data: &'a mut KvmSevInit } = 22,
+    KvmSevSnpLaunchStart { data: &'a mut KvmSevSnpLaunchStart } = 100,
+    KvmSevSnpLaunchUpdate { data: &'a mut KvmSevSnpLaunchUpdate } = 101,
+    KvmSevSnpLaunchFinish { data: &'a mut KvmSevSnpLaunchFinish } = 102,
     KvmSevSnpDbgDecrypt { data: &'a mut KvmSevSnpDbg } = 28,
     KvmSevSnpDbgDecryptVmsa { data: &'a mut KvmSevSnpDbgVmsa } = 29,
 }
@@ -1530,53 +1552,41 @@ pub struct KvmSevDbg {
 }
 
 #[repr(C)]
-pub struct KvmSnpInit {
-    pub flags: KvmSnpInitFlags,
-}
-
-bitflags! {
-    #[derive(Clone, Copy)]
-    #[repr(transparent)]
-    pub struct KvmSnpInitFlags: u64 {
-        const KVM_SEV_SNP_RESTRICTED_INJET = 1 << 0;
-        const KVM_SEV_SNP_RESTRICTED_TIMER_INJET = 1 << 1;
-        const KVM_SEV_SNP_VMSA_REG_PROT = 1 << 2;
-    }
+pub struct KvmSevInit {
+    pub vmsa_features: SevFeatures,
+    pub flags: u32,
+    pub ghcb_version: u16,
+    pub _pad1: u16,
+    pub _pad2: [u32; 8],
 }
 
 #[repr(C)]
 pub struct KvmSevSnpLaunchStart {
     /// Guest policy to use.
     pub policy: GuestPolicy,
-    /// userspace address of migration agent
-    pub ma_uaddr: u64,
-    /// 1 if the migtation agent is enabled
-    pub ma_en: u8,
-    /// set IMI to 1.
-    pub imi_en: u8,
     /// guest OS visible workarounds
     pub gosvw: [u8; 16],
-    pub _pad: [u8; 6],
+    pub flags: u16,
+    pub pad0: [u8; 6],
+    pub pad1: [u64; 4],
 }
 
 #[repr(C)]
 pub struct KvmSevSnpLaunchUpdate {
     /// Guest page number to start from.
-    pub start_gfn: u64,
+    pub gfn_start: u64,
     /// userspace address need to be encrypted
     pub uaddr: u64,
     /// length of memory region
-    pub len: u32,
-    /// 1 if memory is part of the IMI
-    pub imi_page: u8,
-    /// page type
+    pub len: u64,
     pub page_type: u8,
-    /// VMPL3 permission mask
-    pub vmpl3_perms: VmplPermissions,
-    /// VMPL2 permission mask
-    pub vmpl2_perms: VmplPermissions,
-    /// VMPL1 permission mask
+    pub pad0: u8,
+    pub flags: u16,
     pub vmpl1_perms: VmplPermissions,
+    pub vmpl2_perms: VmplPermissions,
+    pub vmpl3_perms: VmplPermissions,
+    pub pad1: u8,
+    pub pad2: [u64; 4],
 }
 
 #[repr(C)]
@@ -1585,8 +1595,11 @@ pub struct KvmSevSnpLaunchFinish {
     id_auth_uaddr: u64,
     id_block_en: u8,
     auth_key_en: u8,
+    vcek_disabled: u8,
     host_data: [u8; 32],
-    _pad: [u8; 6],
+    pad0: [u8; 3],
+    flags: u16,
+    pad1: [u64; 4],
 }
 
 #[repr(C)]
@@ -1619,9 +1632,6 @@ bitflags! {
     #[derive(Debug, Clone, Copy)]
     #[repr(transparent)]
     pub struct KvmMemoryAttributes: u64 {
-        const READ = 1 << 0;
-        const WRITE = 1 << 1;
-        const EXECUTE = 1 << 2;
         const PRIVATE = 1 << 3;
     }
 }
@@ -1629,9 +1639,7 @@ bitflags! {
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     #[repr(transparent)]
-    pub struct KvmGuestMemFdFlags: u64 {
-        const HUGE_PMD = 1 << 0;
-    }
+    pub struct KvmGuestMemFdFlags: u64 { }
 }
 
 #[derive(Debug)]
