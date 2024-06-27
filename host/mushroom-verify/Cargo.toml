@@ -7,7 +7,7 @@ edition = "2021"
 bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"] }
 loader = { workspace = true }
 io = { workspace = true }
-openssl = "0.10.64"
+p384 = "0.13.0"
 sha2 = "0.10.8"
 snp-types = { workspace = true }
 vcek-kds = { workspace = true }

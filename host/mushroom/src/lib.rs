@@ -73,6 +73,7 @@ struct VmContext {
     bsp: VcpuHandle,
     ap_threads: HashMap<u8, JoinHandle<()>>,
     memory_slots: HashMap<u16, Slot>,
+    start: Instant,
 }
 
 impl VmContext {
@@ -205,6 +206,7 @@ impl VmContext {
             ?total_launch_duration,
             "launched"
         );
+        let start = Instant::now();
 
         // Create a bunch of APs.
         let aps = (0..MAX_APS_COUNT)
@@ -226,6 +228,7 @@ impl VmContext {
             bsp,
             ap_threads: aps,
             memory_slots,
+            start,
         })
     }
 
@@ -343,7 +346,7 @@ impl VmContext {
                         output.extend_from_slice(output_slice);
                     }
                     FINISH_OUTPUT_MSR => {
-                        info!("finished");
+                        info!("finished after {:?}", self.start.elapsed());
 
                         let gfn =
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));

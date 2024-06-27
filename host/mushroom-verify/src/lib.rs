@@ -6,7 +6,7 @@ use std::{
 use bytemuck::{bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned, NoUninit};
 use io::input::Header;
 use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
-use openssl::{bn::BigNum, ecdsa::EcdsaSig};
+use p384::ecdsa::{signature::Verifier, Signature};
 use sha2::{Digest, Sha256, Sha384};
 use snp_types::{
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
@@ -82,17 +82,19 @@ impl Configuration {
         // Construct signature.
         let signature = &report.signature[..size_of::<EcdsaP384Sha384Signature>()];
         let signature = pod_read_unaligned::<EcdsaP384Sha384Signature>(signature);
-        let r = BigNum::from_slice(&signature.r).map_err(|_| VerificationError(()))?;
-        let s = BigNum::from_slice(&signature.r).map_err(|_| VerificationError(()))?;
-        let sig = EcdsaSig::from_private_components(r, s).map_err(|_| VerificationError(()))?;
+
+        let (&r, _) = signature.r.split_first_chunk().unwrap();
+        let (&s, _) = signature.s.split_first_chunk().unwrap();
+        let mut r = r;
+        let mut s = s;
+        r.reverse();
+        s.reverse();
+        let signature = Signature::from_scalars(r, s).map_err(|_| VerificationError(()))?;
 
         // Verify signature.
-        let public_key = vcek
-            .as_ref()
-            .public_key()
-            .map_err(|_| VerificationError(()))?;
-        let ec_key = public_key.ec_key().map_err(|_| VerificationError(()))?;
-        sig.verify(&attestation_report[..=0x29f], &ec_key)
+        let public_key = vcek.verifying_key();
+        public_key
+            .verify(&attestation_report[..=0x29f], &signature)
             .map_err(|_| VerificationError(()))?;
 
         Ok(())
