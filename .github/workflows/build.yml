@@ -101,3 +101,31 @@ jobs:
       - name: "Test"
         run: cargo make --profile ${{ matrix.profile }} test-${{ matrix.abi }}
         working-directory: host
+
+  integration-test:
+    name: "Integration Test"
+    runs-on: [snp]
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Build GCC Docker Image"
+        run: |
+          docker build --output type=tar,dest=gcc.tar .
+          gzip gcc.tar -f
+        working-directory: tee/init
+      - name: "Build Init Binary"
+        run: cargo make --profile production build-init
+        working-directory: tee
+      # This tests that mushroom can do the build.
+      - name: "Run"
+        run: cargo make --profile production run run --init ../tee/target/x86_64-unknown-linux-musl/release/init --input ../tee/init/hello-world.c --output output.bin --attestation-report report.bin
+        working-directory: host
+      # This tests that mushroom can attest the build output.
+      - name: "Verify Output"
+        run: cargo make --profile production run verify --init ../tee/target/x86_64-unknown-linux-musl/release/init --input ../tee/init/hello-world.c --output output.bin --attestation-report report.bin
+        working-directory: host
+      # This tests that the build output is a working executable.
+      - name: "Run Output"
+        run: |
+          chmod +x ./output.bin
+          ./output.bin
+        working-directory: host
