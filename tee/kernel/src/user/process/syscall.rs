@@ -2564,7 +2564,7 @@ fn utimensat(
     dfd: FdNum,
     pathname: Pointer<Path>,
     times: Pointer<[Timespec; 2]>,
-    flags: i32,
+    flags: AtFlags,
 ) -> SyscallResult {
     let now = now();
 
@@ -2598,7 +2598,11 @@ fn utimensat(
             let fd = fdtable.get(dfd)?;
             fd.as_dir(&mut ctx)?
         };
-        let node = lookup_and_resolve_node(start_dir, &path, &mut ctx)?;
+        let node = if !flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
+            lookup_and_resolve_node(start_dir, &path, &mut ctx)?
+        } else {
+            lookup_node(start_dir, &path, &mut ctx)?
+        };
         node.update_times(ctime, atime, mtime);
     } else {
         let fd = fdtable.get(dfd)?;
