@@ -8,7 +8,7 @@ use flate2::bufread::GzDecoder;
 use nix::mount::{mount, MsFlags};
 use tar::Archive;
 
-const BYTES: &[u8] = include_bytes!("../../gcc.tar.gz");
+const BYTES: &[u8] = include_bytes!("../gcc.tar.gz");
 
 fn main() -> Result<()> {
     let root = "/";
