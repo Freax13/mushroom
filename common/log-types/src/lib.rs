@@ -48,8 +48,13 @@ impl Write for LogWriter {
                 next_pending_index = 0;
             }
 
-            while next_pending_index == completed_index {
-                completed_index = self.buffer.completed_index.load(Ordering::SeqCst);
+            if next_pending_index == completed_index {
+                self.buffer
+                    .pending_index
+                    .store(pending_index, Ordering::SeqCst);
+                while next_pending_index == completed_index {
+                    completed_index = self.buffer.completed_index.load(Ordering::SeqCst);
+                }
             }
 
             self.buffer.buffer[pending_index].store(b, Ordering::SeqCst);
