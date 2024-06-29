@@ -2,7 +2,7 @@ use core::{
     arch::asm,
     borrow::Borrow,
     cell::SyncUnsafeCell,
-    cmp::Ordering,
+    cmp::{self, Ordering},
     fmt::{self, Display, Write},
     iter::Step,
     mem::{needs_drop, MaybeUninit},
@@ -632,6 +632,40 @@ impl VirtualMemoryWriteGuard<'_> {
         }
     }
 
+    pub fn discard_pages(&mut self, address: VirtAddr, len: u64) -> Result<()> {
+        let mut start_page = Page::from_start_address(address).map_err(|_| err!(Inval))?;
+        let end_page = Page::from_start_address(address + len).map_err(|_| err!(Inval))?;
+
+        // Flush all pages in the range.
+        self.virtual_memory
+            .pagetables
+            .try_unmap_user_pages(start_page..end_page);
+
+        let mut cursor = self
+            .guard
+            .mappings
+            .upper_bound_mut(Bound::Included(&start_page));
+        cursor.prev();
+
+        while start_page != end_page {
+            let (&page, mapping) = cursor.next().ok_or_else(|| err!(NoMem))?;
+            let mapping = mapping.get_mut();
+
+            ensure!(page <= start_page, NoMem);
+            let start_offset = start_page - page;
+            ensure!(usize_from(start_offset) <= mapping.pages.len(), NoMem);
+            let end_offset = cmp::min(end_page - page, u64::from_usize(mapping.pages.len()));
+
+            for offset in start_offset..end_offset {
+                mapping.discard_page(offset)?;
+            }
+
+            start_page = page + end_offset;
+        }
+
+        Ok(())
+    }
+
     pub fn init_brk(&mut self, brk_start: VirtAddr) {
         self.guard.brk_end = brk_start;
     }
@@ -866,6 +900,15 @@ impl Mapping {
         for page in self.pages.iter_mut().flatten() {
             page.set_perms(permissions);
         }
+    }
+
+    pub fn discard_page(&mut self, page_offset: u64) -> Result<()> {
+        let page = self
+            .pages
+            .get_mut(usize_from(page_offset))
+            .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
+        page.take();
+        Ok(())
     }
 }
 

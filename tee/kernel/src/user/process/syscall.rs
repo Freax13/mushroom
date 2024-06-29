@@ -945,8 +945,17 @@ async fn select_impl(
 }
 
 #[syscall(i386 = 219, amd64 = 28)]
-fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
+fn madvise(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    addr: Pointer<c_void>,
+    len: u64,
+    advice: Advice,
+) -> SyscallResult {
     match advice {
+        Advice::DontNeed => {
+            virtual_memory.modify().discard_pages(addr.get(), len)?;
+            Ok(0)
+        }
         Advice::Free => {
             // Ignore the advise.
             Ok(0)

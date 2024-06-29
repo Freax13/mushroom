@@ -811,6 +811,7 @@ bitflags! {
 
 enum_arg! {
     pub enum Advice {
+        DontNeed = 4,
         Free = 8,
     }
 }
