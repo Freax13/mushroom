@@ -25,13 +25,11 @@ use crate::{
     user::process::syscall::args::Stat,
 };
 use alloc::{collections::BTreeMap, ffi::CString, format, sync::Arc, vec::Vec};
-use bit_field::BitField;
 use bitflags::bitflags;
 use log::debug;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
-    align_down, align_up,
-    instructions::random::RdRand,
+    align_up,
     registers::rflags::{self, RFlags},
     structures::{
         idt::PageFaultErrorCode,
@@ -702,50 +700,44 @@ impl VirtualMemoryState {
         }
     }
 
-    fn find_free_address(&self, size: u64, abi: Abi) -> VirtAddr {
+    fn find_free_address(&mut self, size: u64, abi: Abi) -> VirtAddr {
         assert_ne!(size, 0);
         assert!(
             size < (1 << 47),
             "mapping of size {size:#x} can never exist"
         );
+        let size = align_up(size, 0x1000);
 
-        let vm_size = match abi {
-            Abi::I386 => 31,
-            Abi::Amd64 => 47,
+        let dynamic_base_address = match abi {
+            Abi::I386 => 0xff00_0000,
+            Abi::Amd64 => 0x7fff_0000_0000,
         };
-        let align_mask = (1 << vm_size as usize) - 1;
-        const MAX_ATTEMPTS: usize = 64;
-        (0..MAX_ATTEMPTS)
-            .find_map(|_| {
-                static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
-                let candidate = RD_RAND.get_u64()?;
-                let candidate = candidate & align_mask;
-                let candidate = align_down(candidate, 0x1000);
+        let dynamic_base_address = VirtAddr::new(dynamic_base_address);
 
-                let candidate = VirtAddr::new(candidate);
-                let end = Step::forward_checked(candidate, usize_from(size - 1))?;
-                if end.as_u64().get_bit(47) {
-                    return None;
+        // Find the first `address < dynamic_base_address` which can fit `size`.
+        let mut cursor = self
+            .mappings
+            .upper_bound_mut(Bound::Included(&Page::containing_address(
+                dynamic_base_address,
+            )));
+        let mut last_address = dynamic_base_address;
+        while let Some((&page, mapping)) = cursor.prev() {
+            let mapping = mapping.get_mut();
+            let mapping_end = page + u64::from_usize(mapping.pages.len());
+
+            // If `size` fits between this mapping and the previous mapping (or
+            // the base), we found an fitting address.
+            if last_address >= mapping_end.start_address() {
+                let free = last_address - mapping_end.start_address();
+                if free >= size {
+                    break;
                 }
+            }
 
-                // Check if there are already pages in the range.
-                let start = Page::containing_address(candidate);
-                let end = Page::containing_address(end);
-                let mut cursor = self.mappings.upper_bound(Bound::Included(&start));
-                cursor.prev();
-                while let Some((&page, mapping)) = cursor.next() {
-                    let mapping_end = page + u64::from_usize(mapping.lock().pages.len() - 1);
-                    if page <= end && start <= mapping_end {
-                        return None;
-                    }
-                    if page > end {
-                        break;
-                    }
-                }
+            last_address = page.start_address();
+        }
 
-                Some(candidate)
-            })
-            .unwrap()
+        last_address - size
     }
 }
 
