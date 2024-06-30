@@ -269,7 +269,11 @@ where
         _: Abi,
         thread: &ThreadGuard<'_>,
     ) -> fmt::Result {
-        T::display(f, VirtAddr::new(value), thread)
+        if let Ok(addr) = VirtAddr::try_new(value) {
+            T::display(f, addr, thread)
+        } else {
+            write!(f, "{value:#x} (invalid ptr)")
+        }
     }
 }
 
