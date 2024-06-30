@@ -222,6 +222,11 @@ impl Directory for TmpFsDir {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        let guard = self.internal.lock();
+        guard.items.is_empty()
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let parent_ino = self
             .location
@@ -275,13 +280,16 @@ impl Directory for TmpFsDir {
         Ok(())
     }
 
-    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, file_name: FileName<'static>, check_is_empty: bool) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else {
             bail!(NoEnt);
         };
         ensure!(entry.get().ty()? == FileType::Dir, NotDir);
+        if check_is_empty {
+            ensure!(entry.get().is_empty_dir(), NotEmpty);
+        }
         entry.remove();
         Ok(())
     }

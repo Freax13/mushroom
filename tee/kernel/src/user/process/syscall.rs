@@ -28,8 +28,8 @@ use crate::{
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, procfs, read_link, set_mode, unlink_dir,
-            unlink_file, DirEntry, FileAccessContext, OldDirEntry,
+            lookup_and_resolve_node, lookup_node, procfs, read_link, remove_dir, set_mode,
+            unlink_dir, unlink_file, DirEntry, FileAccessContext, OldDirEntry,
         },
         path::Path,
     },
@@ -157,6 +157,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchdir);
     handlers.register(SysRename);
     handlers.register(SysMkdir);
+    handlers.register(SysRmdir);
     handlers.register(SysLink);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
@@ -1644,6 +1645,19 @@ fn mkdir(
         pathname,
         mode,
     )
+}
+
+#[syscall(i386 = 40, amd64 = 84)]
+fn rmdir(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(pathname)?;
+    let start_dir = thread.cwd.clone();
+    remove_dir(start_dir, &pathname, &mut ctx)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 9, amd64 = 86)]

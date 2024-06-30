@@ -137,6 +137,10 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
+    fn is_empty(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let mut entries = vec![DirEntry {
             ino: self.ino,
@@ -173,7 +177,7 @@ impl Directory for ProcFsRoot {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _check_is_empty: bool) -> Result<()> {
         bail!(Perm)
     }
 
@@ -379,6 +383,10 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn is_empty(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let mut entries = vec![DirEntry {
@@ -415,7 +423,7 @@ impl Directory for ProcessDir {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _check_is_empty: bool) -> Result<()> {
         bail!(Perm)
     }
 
@@ -540,6 +548,10 @@ impl Directory for FdDir {
         bail!(NoEnt)
     }
 
+    fn is_empty(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
@@ -555,7 +567,7 @@ impl Directory for FdDir {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _check_is_empty: bool) -> Result<()> {
         bail!(Perm)
     }
 
