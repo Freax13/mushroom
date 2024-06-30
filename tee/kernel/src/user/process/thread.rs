@@ -254,7 +254,9 @@ impl Thread {
                     addr: page_fault.addr,
                 }),
             };
-            assert!(self.queue_signal(sig_info));
+            if !self.queue_signal(sig_info) {
+                self.process().exit_group(WStatus::signaled(Signal::SEGV));
+            }
         }
     }
 
