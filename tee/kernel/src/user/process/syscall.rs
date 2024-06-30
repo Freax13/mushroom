@@ -1,6 +1,11 @@
 use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32, pin::pin};
 
-use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
+use alloc::{
+    ffi::CString,
+    sync::{Arc, Weak},
+    vec,
+    vec::Vec,
+};
 use bit_field::BitArray;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use futures::{
@@ -175,6 +180,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockGettime);
     handlers.register(SysClockNanosleep);
+    handlers.register(SysTgkill);
     handlers.register(SysOpenat);
     handlers.register(SysMkdirat);
     handlers.register(SysExitGroup);
@@ -2113,6 +2119,23 @@ fn epoll_ctl(
         }
     }
 
+    Ok(0)
+}
+
+#[syscall(i386 = 270, amd64 = 234)]
+fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
+    let process = Process::find_by_pid(tgid).ok_or(err!(Srch))?;
+    let threads = process.threads.lock();
+    let thread = threads
+        .iter()
+        .filter_map(Weak::upgrade)
+        .find(|t| t.tid() == pid)
+        .ok_or(err!(Srch))?;
+    thread.queue_signal(SigInfo {
+        signal,
+        code: SigInfoCode::USER,
+        fields: SigFields::None,
+    });
     Ok(0)
 }
 
