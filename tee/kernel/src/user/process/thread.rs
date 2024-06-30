@@ -277,7 +277,7 @@ impl Thread {
                         // Ignore
                         continue;
                     }
-                    signal @ (Signal::SEGV | Signal::PIPE) => {
+                    signal @ (Signal::ABRT | Signal::SEGV | Signal::PIPE) => {
                         // Terminate.
                         drop(state);
                         self.process.exit_group(WStatus::signaled(signal));
@@ -510,7 +510,7 @@ impl ThreadGuard<'_> {
             let ignored = match handler.sa_handler_or_sigaction {
                 Sigaction::SIG_DFL => match pending_signal_info.signal {
                     Signal::CHLD => true,
-                    Signal::SEGV | Signal::PIPE => false,
+                    Signal::ABRT | Signal::SEGV | Signal::PIPE => false,
                     signal => {
                         todo!("unimplemented default for signal {}", signal.get())
                     }
