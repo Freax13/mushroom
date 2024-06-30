@@ -156,8 +156,11 @@ impl FileDescriptorTable {
     }
 
     pub fn close(&self, fd_num: FdNum) -> Result<()> {
-        let fd = self.table.lock().remove(&fd_num.get()).ok_or(err!(BadF))?;
-        fd.fd.close()
+        self.table
+            .lock()
+            .remove(&fd_num.get())
+            .map(drop)
+            .ok_or(err!(BadF))
     }
 
     pub fn prepare_for_execve(&self) -> Self {
@@ -331,10 +334,6 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn truncate(&self, length: usize) -> Result<()> {
         let _ = length;
         bail!(Inval)
-    }
-
-    fn close(&self) -> Result<()> {
-        Ok(())
     }
 
     async fn write_all(&self, mut buf: &[u8]) -> Result<()> {
