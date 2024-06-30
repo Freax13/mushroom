@@ -137,6 +137,10 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
+    fn is_empty(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let mut entries = vec![DirEntry {
             ino: self.ino,
@@ -379,6 +383,10 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn is_empty(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let mut entries = vec![DirEntry {
@@ -538,6 +546,10 @@ impl Directory for FdDir {
         _minor: u8,
     ) -> Result<DynINode> {
         bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {

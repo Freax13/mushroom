@@ -222,6 +222,11 @@ impl Directory for TmpFsDir {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        let guard = self.internal.lock();
+        guard.items.is_empty()
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let parent_ino = self
             .location
@@ -282,6 +287,7 @@ impl Directory for TmpFsDir {
             bail!(NoEnt);
         };
         ensure!(entry.get().ty()? == FileType::Dir, NotDir);
+        ensure!(entry.get().is_empty_dir(), NotEmpty);
         entry.remove();
         Ok(())
     }

@@ -63,6 +63,10 @@ macro_rules! dir_impls {
             Directory::create_char_dev(self, file_name, major, minor)
         }
 
+        fn is_empty_dir(&self) -> bool {
+            Directory::is_empty(self)
+        }
+
         fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
             Directory::list_entries(self, ctx)
         }
@@ -133,6 +137,7 @@ pub trait Directory: INode {
         major: u16,
         minor: u8,
     ) -> Result<DynINode>;
+    fn is_empty(&self) -> bool;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;
     fn delete(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;

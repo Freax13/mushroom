@@ -134,6 +134,10 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn is_empty_dir(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = ctx;
         bail!(NotDir)
