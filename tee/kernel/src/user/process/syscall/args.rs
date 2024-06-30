@@ -1152,6 +1152,7 @@ bitflags! {
 pub struct Signal(u8);
 
 impl Signal {
+    pub const HUP: Self = Self(1);
     pub const ABRT: Self = Self(6);
     pub const FPE: Self = Self(8);
     pub const KILL: Self = Self(9);

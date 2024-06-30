@@ -277,7 +277,10 @@ impl Thread {
                     // Ignore
                     continue;
                 }
-                (Sigaction::SIG_DFL, signal @ (Signal::ABRT | Signal::SEGV | Signal::PIPE))
+                (
+                    Sigaction::SIG_DFL,
+                    signal @ (Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE),
+                )
                 | (_, signal @ Signal::KILL) => {
                     // Terminate.
                     drop(state);
@@ -510,7 +513,9 @@ impl ThreadGuard<'_> {
             let handler = self.signal_handler_table.get(pending_signal_info.signal);
             let ignored = match (handler.sa_handler_or_sigaction, pending_signal_info.signal) {
                 (Sigaction::SIG_DFL, Signal::CHLD) => true,
-                (Sigaction::SIG_DFL, Signal::ABRT | Signal::SEGV | Signal::PIPE) => false,
+                (Sigaction::SIG_DFL, Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE) => {
+                    false
+                }
                 (_, Signal::KILL) => false,
                 (Sigaction::SIG_DFL, signal) => {
                     log::debug!("{pending_signal_info:?}");
