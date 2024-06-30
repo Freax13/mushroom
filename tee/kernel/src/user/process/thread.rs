@@ -739,6 +739,7 @@ impl SigInfoCode {
         self.0
     }
 
+    pub const USER: Self = Self(0);
     pub const CLD_EXITED: Self = Self(1);
     pub const FPE_INTDIV: Self = Self(1);
     pub const SEGV_MAPERR: Self = Self(1);

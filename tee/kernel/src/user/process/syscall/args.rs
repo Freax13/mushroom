@@ -26,7 +26,7 @@ use super::traits::Abi;
 
 pub mod pointee;
 
-pub trait SyscallArg: Display + Send + Copy {
+pub trait SyscallArg: Send + Copy {
     fn parse(value: u64, abi: Abi) -> Result<Self>;
 
     fn display(
@@ -1146,6 +1146,49 @@ impl Signal {
 
     pub fn get(&self) -> usize {
         usize::from(self.0)
+    }
+}
+
+impl SyscallArg for Signal {
+    fn parse(value: u64, _abi: Abi) -> Result<Self> {
+        let value = u8::try_from(value)?;
+        Self::new(value)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        if let Ok(signal) = Self::parse(value, abi) {
+            write!(f, "{signal:?}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
+impl SyscallArg for Option<Signal> {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        Ok(if value == 0 {
+            None
+        } else {
+            Some(Signal::parse(value, abi)?)
+        })
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        if let Ok(signal) = Self::parse(value, abi) {
+            write!(f, "{signal:?}")
+        } else {
+            write!(f, "{value}")
+        }
     }
 }
 

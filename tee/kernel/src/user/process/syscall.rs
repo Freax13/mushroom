@@ -140,6 +140,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExecve);
     handlers.register(SysExit);
     handlers.register(SysWait4);
+    handlers.register(SysKill);
     handlers.register(SysUname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
@@ -1407,6 +1408,32 @@ async fn wait4(
     }
 
     Ok(u64::from(tid))
+}
+
+#[syscall(i386 = 37, amd64 = 62)]
+fn kill(pid: i32, signal: Option<Signal>) -> SyscallResult {
+    match pid {
+        1.. => {
+            let process = Process::find_by_pid(pid as u32).ok_or(err!(Srch))?;
+            if let Some(signal) = signal {
+                process.queue_signal(SigInfo {
+                    signal,
+                    code: SigInfoCode::USER,
+                    fields: SigFields::None,
+                });
+            }
+        }
+        0 => {
+            todo!()
+        }
+        -1 => {
+            todo!()
+        }
+        ..-1 => {
+            todo!()
+        }
+    }
+    Ok(0)
 }
 
 #[syscall(amd64 = 63)]
