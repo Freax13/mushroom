@@ -1136,6 +1136,7 @@ pub struct Signal(u8);
 impl Signal {
     pub const ABRT: Self = Self(6);
     pub const FPE: Self = Self(8);
+    pub const KILL: Self = Self(9);
     pub const SEGV: Self = Self(11);
     pub const PIPE: Self = Self(13);
     pub const CHLD: Self = Self(17);

@@ -21,6 +21,7 @@ use crate::{
 };
 use alloc::{
     collections::VecDeque,
+    string::String,
     sync::{Arc, Weak},
 };
 use bit_field::BitField;
@@ -271,23 +272,22 @@ impl Thread {
             let virtual_memory = state.virtual_memory.clone();
             let sigaction = state.signal_handler_table.get(sig_info.signal);
 
-            match sigaction.sa_handler_or_sigaction {
-                Sigaction::SIG_DFL => match sig_info.signal {
-                    Signal::CHLD => {
-                        // Ignore
-                        continue;
-                    }
-                    signal @ (Signal::ABRT | Signal::SEGV | Signal::PIPE) => {
-                        // Terminate.
-                        drop(state);
-                        self.process.exit_group(WStatus::signaled(signal));
-                        return core::future::pending().await;
-                    }
-                    signal => {
-                        todo!("unimplemented default for signal {signal:?}")
-                    }
-                },
-                Sigaction::SIG_IGN => continue,
+            match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
+                (Sigaction::SIG_DFL, Signal::CHLD) => {
+                    // Ignore
+                    continue;
+                }
+                (Sigaction::SIG_DFL, signal @ (Signal::ABRT | Signal::SEGV | Signal::PIPE))
+                | (_, signal @ Signal::KILL) => {
+                    // Terminate.
+                    drop(state);
+                    self.process.exit_group(WStatus::signaled(signal));
+                    return core::future::pending().await;
+                }
+                (Sigaction::SIG_DFL, signal) => {
+                    todo!("unimplemented default for signal {signal:?}")
+                }
+                (Sigaction::SIG_IGN, _) => continue,
                 _ => {}
             }
 
@@ -495,7 +495,8 @@ impl ThreadGuard<'_> {
     fn get_pending_signal(&mut self) -> Option<bool> {
         loop {
             // Determine the signal that should be handled next.
-            let mask = self.sigmask;
+            let mut mask = self.sigmask;
+            mask.remove(Signal::KILL); // "SIGKILL (...) cannot be (...) blocked (...)."
             if self.pending_signal_info.is_none() {
                 self.pending_signal_info = self.pending_signals.pop(mask);
             }
@@ -507,15 +508,18 @@ impl ThreadGuard<'_> {
             // Check if the signal needs to be handled. If the signal handler
             // wants to ignore the signal we just skip it.
             let handler = self.signal_handler_table.get(pending_signal_info.signal);
-            let ignored = match handler.sa_handler_or_sigaction {
-                Sigaction::SIG_DFL => match pending_signal_info.signal {
-                    Signal::CHLD => true,
-                    Signal::ABRT | Signal::SEGV | Signal::PIPE => false,
-                    signal => {
-                        todo!("unimplemented default for signal {}", signal.get())
-                    }
-                },
-                Sigaction::SIG_IGN => true,
+            let ignored = match (handler.sa_handler_or_sigaction, pending_signal_info.signal) {
+                (Sigaction::SIG_DFL, Signal::CHLD) => true,
+                (Sigaction::SIG_DFL, Signal::ABRT | Signal::SEGV | Signal::PIPE) => false,
+                (_, Signal::KILL) => false,
+                (Sigaction::SIG_DFL, signal) => {
+                    log::debug!("{pending_signal_info:?}");
+                    let maps = self.virtual_memory.maps();
+                    let str = String::from_utf8_lossy(&maps);
+                    log::debug!("{str}");
+                    todo!("unimplemented default for signal {}", signal.get())
+                }
+                (Sigaction::SIG_IGN, _) => true,
                 _ => false,
             };
             if ignored {
@@ -581,6 +585,10 @@ impl Sigset {
 
     pub fn add(&mut self, signal: Signal) {
         self.0 |= 1 << (signal.get() - 1);
+    }
+
+    pub fn remove(&mut self, signal: Signal) {
+        self.0 &= !(1 << (signal.get() - 1));
     }
 
     pub fn contains(&self, signal: Signal) -> bool {
