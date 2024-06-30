@@ -867,6 +867,20 @@ impl Timespec {
 
     pub const UTIME_NOW: u32 = 0x3FFFFFFF;
     pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
+
+    pub fn checked_sub(self, rhs: Self) -> Option<Self> {
+        if self < rhs {
+            return None;
+        }
+
+        let mut tv_sec = self.tv_sec - rhs.tv_sec;
+        let (mut tv_nsec, overflow) = self.tv_nsec.overflowing_sub(rhs.tv_nsec);
+        if overflow {
+            tv_sec -= 1;
+            tv_nsec = tv_nsec.wrapping_add(1_000_000_000);
+        }
+        Some(Self { tv_sec, tv_nsec })
+    }
 }
 
 impl Add for Timespec {
@@ -1138,6 +1152,7 @@ impl Signal {
     pub const FPE: Self = Self(8);
     pub const KILL: Self = Self(9);
     pub const SEGV: Self = Self(11);
+    pub const ALRM: Self = Self(14);
     pub const PIPE: Self = Self(13);
     pub const CHLD: Self = Self(17);
 

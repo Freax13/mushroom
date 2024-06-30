@@ -134,6 +134,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysNanosleep);
+    handlers.register(SysAlarm);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
@@ -1004,6 +1005,16 @@ async fn nanosleep(
     let deadline = now + rqtp;
     sleep_until(deadline).await;
     Ok(0)
+}
+
+#[syscall(i386 = 27, amd64 = 37)]
+fn alarm(thread: &mut ThreadGuard, seconds: u32) -> SyscallResult {
+    let remaining = if seconds != 0 {
+        thread.process().schedule_alarm(seconds)
+    } else {
+        thread.process().cancel_alarm()
+    };
+    Ok(u64::from(remaining))
 }
 
 #[syscall(i386 = 20, amd64 = 39)]
