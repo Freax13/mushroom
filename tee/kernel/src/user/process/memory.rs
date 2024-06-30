@@ -11,7 +11,7 @@ use core::{
 };
 
 use crate::{
-    error::{ensure, err},
+    error::{bail, ensure, err},
     fs::{fd::FileDescriptor, path::Path},
     memory::{
         page::{KernelPage, UserPage},
@@ -668,11 +668,38 @@ impl VirtualMemoryWriteGuard<'_> {
         self.guard.brk_end = brk_start;
     }
 
-    pub fn set_brk_end(&mut self, brk_end: VirtAddr) {
+    fn is_free(&mut self, addr: VirtAddr, len: u64) -> bool {
+        let Some(len_m1) = len.checked_sub(1) else {
+            return true;
+        };
+
+        let start_page = Page::containing_address(addr);
+        let end_page = Page::containing_address(addr + len_m1);
+
+        let mut cursor = self
+            .guard
+            .mappings
+            .upper_bound_mut(Bound::Included(&end_page));
+        let Some((&page, mapping)) = cursor.prev() else {
+            return false;
+        };
+        let mapping = mapping.get_mut();
+        let mapping_end = page + u64::from_usize(mapping.pages.len());
+        start_page >= mapping_end
+    }
+
+    pub fn set_brk_end(&mut self, brk_end: VirtAddr) -> Result<()> {
         let old_brk_end = core::mem::replace(&mut self.guard.brk_end, brk_end);
 
         match old_brk_end.cmp(&brk_end) {
             Ordering::Less => {
+                // Check if the range is free.
+                if !self.is_free(old_brk_end, brk_end - old_brk_end) {
+                    // It's not. Roll back and return an error.
+                    self.guard.brk_end = old_brk_end;
+                    bail!(NoMem)
+                }
+
                 self.mmap_zero(
                     Bias::Fixed(old_brk_end),
                     brk_end - old_brk_end,
@@ -684,6 +711,8 @@ impl VirtualMemoryWriteGuard<'_> {
                 self.unmap(brk_end, old_brk_end - brk_end);
             }
         }
+
+        Ok(())
     }
 }
 
