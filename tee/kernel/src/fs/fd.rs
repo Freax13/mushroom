@@ -1,4 +1,9 @@
-use core::{any::type_name, cmp, ops::Deref};
+use core::{
+    any::type_name,
+    cmp,
+    ops::Deref,
+    sync::atomic::{AtomicI64, Ordering},
+};
 
 use crate::{
     error::{bail, ensure, err},
@@ -7,7 +12,11 @@ use crate::{
         path::FileName,
     },
     memory::page::KernelPage,
-    spin::mutex::Mutex,
+    rt::notify::Notify,
+    spin::{
+        lazy::Lazy,
+        mutex::{Mutex, MutexGuard},
+    },
     user::process::{
         memory::VirtualMemory,
         syscall::args::{
@@ -201,7 +210,11 @@ impl FileDescriptorTable {
     pub fn get_node(&self, fd_num: FdNum) -> Result<DynINode> {
         let guard = self.table.lock();
         let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
-        Ok(Arc::new(FdINode::new(entry.ino, entry.fd.clone())))
+        Ok(Arc::new(FdINode::new(
+            entry.ino,
+            entry.fd.clone(),
+            entry.file_lock_record.get().clone(),
+        )))
     }
 }
 
@@ -209,6 +222,7 @@ struct FileDescriptorTableEntry {
     ino: u64,
     fd: FileDescriptor,
     flags: FdFlags,
+    file_lock_record: LazyFileLockRecord,
 }
 
 impl FileDescriptorTableEntry {
@@ -217,6 +231,7 @@ impl FileDescriptorTableEntry {
             ino: new_ino(),
             fd,
             flags,
+            file_lock_record: LazyFileLockRecord::new(),
         }
     }
 }
@@ -398,6 +413,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = events;
         bail!(Perm)
     }
+
+    fn file_lock(&self) -> Result<&FileLock>;
 }
 
 bitflags! {
@@ -453,4 +470,140 @@ where
             Err(err) => return Err(err),
         }
     }
+}
+
+pub struct LazyFileLockRecord {
+    file_lock_record: Lazy<Arc<FileLockRecord>>,
+}
+
+impl LazyFileLockRecord {
+    pub const fn new() -> Self {
+        Self {
+            file_lock_record: Lazy::new(Default::default),
+        }
+    }
+
+    pub fn get(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+}
+
+pub struct FileLockRecord {
+    /// -1  => exclusive
+    /// 0   => unlocked
+    /// 1.. => shared
+    counter: AtomicI64,
+    notify: Notify,
+}
+
+impl FileLockRecord {
+    pub fn new() -> Self {
+        Self {
+            counter: AtomicI64::new(0),
+            notify: Notify::new(),
+        }
+    }
+}
+
+impl Default for FileLockRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct FileLock {
+    record: Arc<FileLockRecord>,
+    state: Mutex<FileLockState>,
+}
+
+impl FileLock {
+    pub fn new(record: Arc<FileLockRecord>) -> Self {
+        Self {
+            record,
+            state: Mutex::new(FileLockState::Unlocked),
+        }
+    }
+
+    pub fn anonymous() -> Self {
+        Self::new(Arc::new(FileLockRecord::new()))
+    }
+
+    pub async fn lock_shared(&self, non_blocking: bool) -> Result<()> {
+        loop {
+            let wait = non_blocking.then(|| self.record.notify.wait());
+
+            let mut guard = self.state.lock();
+            self.unlock_internal(&mut guard);
+            let res =
+                self.record
+                    .counter
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                        (value >= 0).then_some(value + 1)
+                    });
+            if res.is_ok() {
+                *guard = FileLockState::Shared;
+                return Ok(());
+            }
+            drop(guard);
+
+            wait.ok_or_else(|| err!(Again))?.await;
+        }
+    }
+
+    pub async fn lock_exclusive(&self, non_blocking: bool) -> Result<()> {
+        loop {
+            let wait = non_blocking.then(|| self.record.notify.wait());
+
+            let mut guard = self.state.lock();
+            self.unlock_internal(&mut guard);
+            let res =
+                self.record
+                    .counter
+                    .compare_exchange(0, -1, Ordering::Relaxed, Ordering::Relaxed);
+            if res.is_ok() {
+                *guard = FileLockState::Exclusive;
+                return Ok(());
+            }
+            drop(guard);
+
+            wait.ok_or_else(|| err!(Again))?.await;
+        }
+    }
+
+    pub fn unlock(&self) {
+        let mut guard = self.state.lock();
+        self.unlock_internal(&mut guard)
+    }
+
+    fn unlock_internal(&self, guard: &mut MutexGuard<FileLockState>) {
+        let prev_state = core::mem::replace(&mut **guard, FileLockState::Unlocked);
+        match prev_state {
+            FileLockState::Unlocked => {}
+            FileLockState::Shared => {
+                let value = self.record.counter.fetch_sub(1, Ordering::Relaxed);
+                // If this was the last lock, notify any tasks waiting to
+                // acquire an exclusive lock.
+                if value == 1 {
+                    self.record.notify.notify();
+                }
+            }
+            FileLockState::Exclusive => {
+                self.record.counter.store(0, Ordering::Relaxed);
+                // Notify any tasks waiting to acquire an exclusive lock.
+                self.record.notify.notify();
+            }
+        }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        self.unlock();
+    }
+}
+
+enum FileLockState {
+    Unlocked,
+    Shared,
+    Exclusive,
 }

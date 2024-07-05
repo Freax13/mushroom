@@ -47,11 +47,11 @@ use crate::{
 use self::{
     args::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
-        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
-        FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions,
-        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags,
-        RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time,
-        Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
+        FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec,
+        LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents,
+        ProtFlags, RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64,
+        SyscallArg, Time, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -150,6 +150,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
+    handlers.register(SysFlock);
     handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
@@ -1538,6 +1539,34 @@ fn fcntl64(
             Ok(0)
         }
     }
+}
+
+#[syscall(i386 = 143, amd64 = 73, interruptable, restartable)]
+async fn flock(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    op: FLockOp,
+) -> SyscallResult {
+    let lock_shared = op.contains(FLockOp::SH);
+    let lock_exclusive = op.contains(FLockOp::EX);
+    let unlock = op.contains(FLockOp::UN);
+    let non_blocking = op.contains(FLockOp::NB);
+    // Make sure that exactly one op is set.
+    ensure!(
+        u8::from(lock_shared) + u8::from(lock_exclusive) + u8::from(unlock) == 1,
+        Inval
+    );
+
+    let fd = fdtable.get(fd)?;
+    let file_lock = fd.file_lock()?;
+    if lock_shared {
+        file_lock.lock_shared(non_blocking).await?;
+    } else if lock_exclusive {
+        file_lock.lock_exclusive(non_blocking).await?;
+    } else {
+        file_lock.unlock();
+    }
+    Ok(0)
 }
 
 #[syscall(i386 = 93, amd64 = 77)]

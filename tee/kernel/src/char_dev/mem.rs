@@ -7,7 +7,7 @@ use x86_64::instructions::random::RdRand;
 use crate::{
     error::{bail, Result},
     fs::{
-        fd::{Events, OpenFileDescription},
+        fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
         path::Path,
     },
     memory::page::KernelPage,
@@ -26,6 +26,7 @@ pub struct Null {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    file_lock: FileLock,
 }
 
 #[register]
@@ -34,7 +35,13 @@ impl CharDev for Null {
     const MINOR: u8 = 3;
 
     fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { path, flags, stat })
+        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        Ok(Self {
+            path,
+            flags,
+            stat,
+            file_lock: FileLock::new(RECORD.get().clone()),
+        })
     }
 }
 
@@ -96,6 +103,10 @@ impl OpenFileDescription for Null {
     fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
         bail!(NoDev)
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 pub fn random_bytes() -> impl Iterator<Item = u8> {
@@ -107,6 +118,7 @@ pub struct Random {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    file_lock: FileLock,
 }
 
 #[register]
@@ -115,7 +127,13 @@ impl CharDev for Random {
     const MINOR: u8 = 8;
 
     fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { path, flags, stat })
+        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        Ok(Self {
+            path,
+            flags,
+            stat,
+            file_lock: FileLock::new(RECORD.get().clone()),
+        })
     }
 }
 
@@ -177,12 +195,17 @@ impl OpenFileDescription for Random {
     fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
         bail!(NoDev)
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 pub struct URandom {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    file_lock: FileLock,
 }
 
 #[register]
@@ -191,7 +214,13 @@ impl CharDev for URandom {
     const MINOR: u8 = 9;
 
     fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { path, flags, stat })
+        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        Ok(Self {
+            path,
+            flags,
+            stat,
+            file_lock: FileLock::new(RECORD.get().clone()),
+        })
     }
 }
 
@@ -252,5 +281,9 @@ impl OpenFileDescription for URandom {
 
     fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
         bail!(NoDev)
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

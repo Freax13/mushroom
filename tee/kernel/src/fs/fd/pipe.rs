@@ -13,7 +13,7 @@ use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc};
 use async_trait::async_trait;
 use usize_conversions::FromUsize;
 
-use super::{Events, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     rt::notify::{Notify, NotifyOnDrop},
@@ -37,6 +37,7 @@ pub struct ReadHalf {
     state: Arc<State>,
     notify: NotifyOnDrop,
     flags: Mutex<OpenFlags>,
+    file_lock: FileLock,
 }
 
 #[async_trait]
@@ -174,12 +175,17 @@ impl OpenFileDescription for ReadHalf {
             ctime: Timespec::ZERO,
         })
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 pub struct WriteHalf {
     state: Arc<State>,
     notify: NotifyOnDrop,
     flags: Mutex<OpenFlags>,
+    file_lock: FileLock,
 }
 
 #[async_trait::async_trait]
@@ -320,6 +326,10 @@ impl OpenFileDescription for WriteHalf {
             wait.await;
         }
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
@@ -335,11 +345,13 @@ pub fn new(flags: Pipe2Flags) -> (ReadHalf, WriteHalf) {
             state: state.clone(),
             notify: NotifyOnDrop(notify.clone()),
             flags: Mutex::new(flags),
+            file_lock: FileLock::anonymous(),
         },
         WriteHalf {
             state,
             notify: NotifyOnDrop(notify),
             flags: Mutex::new(flags | OpenFlags::WRONLY),
+            file_lock: FileLock::anonymous(),
         },
     )
 }

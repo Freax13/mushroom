@@ -1224,3 +1224,12 @@ pub struct PSelectSigsetArg {
     #[allow(dead_code)]
     pub ss_len: usize,
 }
+
+bitflags! {
+    pub struct FLockOp {
+        const SH = 1 << 0;
+        const EX = 1 << 1;
+        const NB = 1 << 2;
+        const UN = 1 << 3;
+    }
+}

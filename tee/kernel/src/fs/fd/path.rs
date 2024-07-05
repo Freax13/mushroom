@@ -1,5 +1,5 @@
 use crate::{
-    error::Result,
+    error::{bail, Result},
     fs::{
         node::{DynINode, FileAccessContext},
         path::Path,
@@ -7,7 +7,7 @@ use crate::{
     user::process::syscall::args::{OpenFlags, Stat},
 };
 
-use super::{Events, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription};
 
 pub struct PathFd {
     path: Path,
@@ -39,5 +39,9 @@ impl OpenFileDescription for PathFd {
 
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::empty()
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        bail!(BadF)
     }
 }

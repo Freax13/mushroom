@@ -11,11 +11,12 @@ use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
 
-use super::{Events, FileDescriptor, OpenFileDescription};
+use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
 pub struct Epoll {
     ino: u64,
     interest_list: Mutex<Vec<InterestListEntry>>,
+    file_lock: FileLock,
 }
 
 impl Epoll {
@@ -23,6 +24,7 @@ impl Epoll {
         Self {
             ino: new_ino(),
             interest_list: Mutex::new(Vec::new()),
+            file_lock: FileLock::anonymous(),
         }
     }
 }
@@ -81,6 +83,10 @@ impl OpenFileDescription for Epoll {
 
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::empty()
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }
 

@@ -25,7 +25,7 @@ use self::{
 };
 
 use super::{
-    fd::FileDescriptor,
+    fd::{FileDescriptor, FileLockRecord},
     path::{FileName, Path, PathSegment},
 };
 
@@ -205,6 +205,8 @@ pub trait INode: Any + Send + Sync + 'static {
         let _ = ctx;
         bail!(Inval)
     }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord>;
 }
 
 /// Repeatedly follow symlinks until the end.

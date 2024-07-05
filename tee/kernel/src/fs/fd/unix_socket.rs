@@ -2,7 +2,7 @@ use alloc::{boxed::Box, format};
 use async_trait::async_trait;
 use futures::{select_biased, FutureExt};
 
-use super::{pipe, Events, OpenFileDescription};
+use super::{pipe, Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     fs::{node::new_ino, path::Path},
@@ -19,6 +19,7 @@ pub struct StreamUnixSocket {
     ino: u64,
     write_half: pipe::WriteHalf,
     read_half: pipe::ReadHalf,
+    file_lock: FileLock,
 }
 
 impl StreamUnixSocket {
@@ -41,11 +42,13 @@ impl StreamUnixSocket {
                 ino: new_ino(),
                 write_half: write_half1,
                 read_half: read_half2,
+                file_lock: FileLock::anonymous(),
             },
             Self {
                 ino: new_ino(),
                 write_half: write_half2,
                 read_half: read_half1,
+                file_lock: FileLock::anonymous(),
             },
         )
     }
@@ -130,5 +133,9 @@ impl OpenFileDescription for StreamUnixSocket {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

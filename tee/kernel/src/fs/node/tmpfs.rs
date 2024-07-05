@@ -6,7 +6,7 @@ use crate::{
     fs::fd::{
         dir::open_dir,
         file::{open_file, File},
-        FileDescriptor,
+        FileDescriptor, FileLockRecord, LazyFileLockRecord,
     },
     memory::page::{Buffer, KernelPage},
     spin::mutex::Mutex,
@@ -37,6 +37,7 @@ pub struct TmpFsDir {
     ino: u64,
     this: Weak<Self>,
     location: Location<Self>,
+    file_lock_record: LazyFileLockRecord,
     internal: Mutex<TmpFsDirInternal>,
 }
 
@@ -57,6 +58,7 @@ impl TmpFsDir {
             ino: new_ino(),
             this: this_weak.clone(),
             location: location.into(),
+            file_lock_record: LazyFileLockRecord::new(),
             internal: Mutex::new(TmpFsDirInternal {
                 mode,
                 items: BTreeMap::new(),
@@ -135,6 +137,10 @@ impl INode for TmpFsDir {
             guard.mtime = mtime;
         }
     }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
 }
 
 impl Directory for TmpFsDir {
@@ -188,6 +194,7 @@ impl Directory for TmpFsDir {
                 let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
+                    file_lock_record: Arc::new(FileLockRecord::new()),
                 });
                 entry.insert(TmpFsDirEntry::Symlink(link.clone()));
                 Ok(link)
@@ -197,6 +204,7 @@ impl Directory for TmpFsDir {
                 let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
+                    file_lock_record: Arc::new(FileLockRecord::new()),
                 });
                 entry.insert(TmpFsDirEntry::Symlink(link.clone()));
                 Ok(link)
@@ -502,6 +510,7 @@ pub struct TmpFsFile {
     ino: u64,
     this: Weak<Self>,
     internal: Mutex<TmpFsFileInternal>,
+    file_lock_record: LazyFileLockRecord,
 }
 
 struct TmpFsFileInternal {
@@ -526,6 +535,7 @@ impl TmpFsFile {
                 mtime: now,
                 ctime: now,
             }),
+            file_lock_record: LazyFileLockRecord::new(),
         })
     }
 }
@@ -573,6 +583,10 @@ impl INode for TmpFsFile {
         if let Some(mtime) = mtime {
             guard.mtime = mtime;
         }
+    }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
     }
 }
 
@@ -663,6 +677,7 @@ impl File for TmpFsFile {
 pub struct TmpFsSymlink {
     ino: u64,
     target: Path,
+    file_lock_record: Arc<FileLockRecord>,
 }
 
 impl INode for TmpFsSymlink {
@@ -706,12 +721,17 @@ impl INode for TmpFsSymlink {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
 }
 
 pub struct TmpFsCharDev {
     ino: u64,
     major: u16,
     minor: u8,
+    file_lock_record: Arc<FileLockRecord>,
 }
 
 impl TmpFsCharDev {
@@ -720,6 +740,7 @@ impl TmpFsCharDev {
             ino: new_ino(),
             major,
             minor,
+            file_lock_record: Arc::new(FileLockRecord::new()),
         }
     }
 }
@@ -750,4 +771,8 @@ impl INode for TmpFsCharDev {
     fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
 }
