@@ -467,7 +467,16 @@ fn mmap(
     if flags.contains(MmapFlags::SHARED_VALIDATE) {
         todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::SHARED) {
-        todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
+        assert!(!flags.contains(MmapFlags::ANONYMOUS));
+        let fd = FdNum::parse(fd, abi)?;
+        let fd = fdtable.get(fd)?;
+
+        let permissions = MemoryPermissions::from(prot);
+        let addr =
+            virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions, true)?;
+        Ok(addr.as_u64())
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::ANONYMOUS) {
             let permissions = MemoryPermissions::from(prot);
@@ -478,9 +487,10 @@ fn mmap(
             let fd = fdtable.get(fd)?;
 
             let permissions = MemoryPermissions::from(prot);
-            let addr = virtual_memory
-                .modify()
-                .mmap_file(bias, length, fd, offset, permissions)?;
+            let addr =
+                virtual_memory
+                    .modify()
+                    .mmap_file(bias, length, fd, offset, permissions, false)?;
             Ok(addr.as_u64())
         }
     } else {

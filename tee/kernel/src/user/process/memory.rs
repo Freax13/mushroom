@@ -346,6 +346,7 @@ impl VirtualMemoryWriteGuard<'_> {
         permissions: MemoryPermissions,
         backing: impl Backing,
         page_offset: u64,
+        shared: bool,
     ) -> VirtAddr {
         assert_ne!(len, 0);
 
@@ -370,6 +371,7 @@ impl VirtualMemoryWriteGuard<'_> {
                 page_offset,
                 permissions,
                 pages,
+                shared,
             }),
         );
 
@@ -389,7 +391,7 @@ impl VirtualMemoryWriteGuard<'_> {
             }
         }
 
-        self.mmap(bias, len, permissions, ZeroBacking, 0)
+        self.mmap(bias, len, permissions, ZeroBacking, 0, false)
     }
 
     pub fn mmap_file(
@@ -399,10 +401,20 @@ impl VirtualMemoryWriteGuard<'_> {
         file: FileDescriptor,
         offset: u64,
         permissions: MemoryPermissions,
+        shared: bool,
     ) -> Result<VirtAddr> {
-        self.mmap_file_with_zeros(bias, len, align_up(len, 4096), file, offset, permissions)
+        self.mmap_file_with_zeros(
+            bias,
+            len,
+            align_up(len, 4096),
+            file,
+            offset,
+            permissions,
+            shared,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn mmap_file_with_zeros(
         &mut self,
         bias: Bias,
@@ -411,6 +423,7 @@ impl VirtualMemoryWriteGuard<'_> {
         file: FileDescriptor,
         offset: u64,
         permissions: MemoryPermissions,
+        shared: bool,
     ) -> Result<VirtAddr> {
         ensure!(offset % 0x1000 == u64::from(bias.page_offset()), Inval);
         let page_offset = offset / 0x1000;
@@ -419,6 +432,7 @@ impl VirtualMemoryWriteGuard<'_> {
             file: FileDescriptor,
             zero_offset: u64,
             stat: Stat,
+            shared: bool,
         }
 
         impl Backing for FileBacking {
@@ -428,7 +442,9 @@ impl VirtualMemoryWriteGuard<'_> {
                     0 => Ok(KernelPage::zeroed()),
                     1..=0xfff => {
                         let mut page = self.file.get_page(usize_from(offset))?;
-                        page.zero_range(start_offset..)?;
+                        if !self.shared {
+                            page.zero_range(start_offset.., false)?;
+                        }
                         Ok(page)
                     }
                     _ => self.file.get_page(usize_from(offset)),
@@ -454,8 +470,10 @@ impl VirtualMemoryWriteGuard<'_> {
                 file,
                 zero_offset: offset + file_sz,
                 stat,
+                shared,
             },
             page_offset,
+            shared,
         );
         Ok(addr)
     }
@@ -481,7 +499,7 @@ impl VirtualMemoryWriteGuard<'_> {
             ];
 
             let mut page = KernelPage::zeroed();
-            page.make_mut().unwrap();
+            page.make_mut(false).unwrap();
             let ptr = page.index(..sigreturn_trampoline.len());
             unsafe {
                 core::ptr::copy_nonoverlapping(
@@ -512,6 +530,7 @@ impl VirtualMemoryWriteGuard<'_> {
             MemoryPermissions::READ | MemoryPermissions::EXECUTE,
             TrampolineCode,
             0,
+            false,
         );
     }
 
@@ -867,6 +886,7 @@ pub struct Mapping {
     backing: Arc<dyn Backing>,
     page_offset: u64,
     permissions: MemoryPermissions,
+    shared: bool,
     pages: SplitVec<Option<UserPage>>,
 }
 
@@ -883,6 +903,7 @@ impl Mapping {
                     .get_initial_page(self.page_offset + page_offset)
                     .map_err(PageFaultError::Other)?,
                 self.permissions,
+                self.shared,
             );
             *page = Some(user_page);
         }
@@ -898,6 +919,7 @@ impl Mapping {
             page_offset: self.page_offset + offset,
             permissions: self.permissions,
             pages,
+            shared: self.shared,
         }
     }
 
@@ -913,6 +935,7 @@ impl Mapping {
             page_offset: self.page_offset,
             permissions: self.permissions,
             pages,
+            shared: self.shared,
         })
     }
 
