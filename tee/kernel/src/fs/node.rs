@@ -25,7 +25,7 @@ use self::{
 };
 
 use super::{
-    fd::FileDescriptor,
+    fd::{FileDescriptor, FileLockRecord},
     path::{FileName, Path, PathSegment},
 };
 
@@ -134,6 +134,10 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn is_empty_dir(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = ctx;
         bail!(NotDir)
@@ -201,6 +205,8 @@ pub trait INode: Any + Send + Sync + 'static {
         let _ = ctx;
         bail!(Inval)
     }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord>;
 }
 
 /// Repeatedly follow symlinks until the end.
@@ -391,12 +397,8 @@ pub fn create_link(
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
     let (dir, last) = find_parent(start_dir, path, ctx)?;
-    let file_name = match last {
-        PathSegment::Root => todo!(),
-        PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
-        PathSegment::FileName(file_name) => file_name,
+    let PathSegment::FileName(file_name) = last else {
+        bail!(Exist);
     };
     dir.create_link(file_name.into_owned(), target, true)?;
     Ok(())

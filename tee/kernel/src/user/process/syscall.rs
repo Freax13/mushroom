@@ -1,6 +1,11 @@
-use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32, pin::pin};
+use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
 
-use alloc::{ffi::CString, sync::Arc, vec, vec::Vec};
+use alloc::{
+    ffi::CString,
+    sync::{Arc, Weak},
+    vec,
+    vec::Vec,
+};
 use bit_field::BitArray;
 use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
 use futures::{
@@ -42,11 +47,11 @@ use crate::{
 use self::{
     args::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
-        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FcntlCmd,
-        FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions,
-        MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags,
-        RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time,
-        Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
+        FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec,
+        LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents,
+        ProtFlags, RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64,
+        SyscallArg, Time, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -129,6 +134,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysNanosleep);
+    handlers.register(SysAlarm);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
@@ -140,9 +146,11 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExecve);
     handlers.register(SysExit);
     handlers.register(SysWait4);
+    handlers.register(SysKill);
     handlers.register(SysUname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
+    handlers.register(SysFlock);
     handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
@@ -150,6 +158,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchdir);
     handlers.register(SysRename);
     handlers.register(SysMkdir);
+    handlers.register(SysRmdir);
     handlers.register(SysLink);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
@@ -174,6 +183,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockGettime);
     handlers.register(SysClockNanosleep);
+    handlers.register(SysTgkill);
     handlers.register(SysOpenat);
     handlers.register(SysMkdirat);
     handlers.register(SysExitGroup);
@@ -376,36 +386,92 @@ fn lstat64(
     Ok(0)
 }
 
-#[syscall(i386 = 168, amd64 = 7)]
-fn poll(
+#[syscall(i386 = 168, amd64 = 7, interruptable)]
+async fn poll(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fds: Pointer<Pollfd>,
     nfds: u64,
-    timeout: u64,
+    timeout: i32,
 ) -> SyscallResult {
-    if timeout != 0 {
-        todo!()
-    }
+    let deadline = match timeout {
+        ..=-1 => Some(None),
+        0 => None,
+        1.. => Some(Some(now() + Timespec::from_ms(timeout as u64))),
+    };
+
+    // Read the pollfds.
+    let mut pollfds = (0..usize_from(nfds))
+        .map(|i| virtual_memory.read(fds.bytes_offset(i * size_of::<Pollfd>())))
+        .collect::<Result<Vec<_>>>()?;
 
     let mut num_non_zero = 0;
+    let mut futures = FuturesUnordered::new();
+    loop {
+        futures.clear();
 
-    for i in 0..usize_from(nfds) {
-        let mut pollfd = virtual_memory.read(fds.bytes_offset(i * size_of::<Pollfd>()))?;
+        for pollfd in pollfds.iter_mut() {
+            if pollfd.fd.get() < 0 {
+                pollfd.revents = PollEvents::empty();
+            } else if let Ok(fd) = fdtable.get(pollfd.fd) {
+                let events = Events::from(pollfd.events) | Events::HUP | Events::ERR;
+                let revents = fd.poll_ready(events);
+                pollfd.revents = PollEvents::from(revents);
 
-        if let Ok(fd) = fdtable.get(pollfd.fd) {
-            let events = Events::from(pollfd.events);
-            let revents = fd.poll_ready(events);
-            pollfd.revents = PollEvents::from(revents);
-        } else {
-            pollfd.revents = PollEvents::NVAL;
+                futures.push(async move { fd.ready(events).await });
+            } else {
+                pollfd.revents = PollEvents::NVAL;
+            }
+
+            if !pollfd.revents.is_empty() {
+                num_non_zero += 1;
+            }
         }
 
+        // Exit if a file descriptor is ready.
+        if num_non_zero != 0 {
+            break;
+        }
+
+        // Exit early if non-blocking behavior was requested.
+        let Some(deadline) = deadline else {
+            break;
+        };
+
+        // Wait for a file descriptor to become ready or for the timeout to
+        // expire.
+        let ready_fut = futures.next();
+        let sleep_fut = async {
+            if let Some(deadline) = deadline {
+                sleep_until(deadline).await;
+            } else {
+                // Infinite timeout.
+                pending::<()>().await;
+            }
+        };
+        let ready_fut = pin!(ready_fut);
+        let sleep_fut = pin!(sleep_fut);
+        let res = future::select(ready_fut, sleep_fut).await;
+        match res {
+            Either::Left((res, _)) => {
+                if let Some(res) = res {
+                    // A file descriptor became ready.
+                    res?;
+                } else {
+                    // There are no file descriptors. Exit early.
+                    break;
+                }
+            }
+            Either::Right(_) => {
+                // The timeout expired.
+                break;
+            }
+        }
+    }
+
+    // Write the results back.
+    for (i, pollfd) in pollfds.into_iter().enumerate() {
         virtual_memory.write(fds.bytes_offset(i * size_of::<Pollfd>()), pollfd)?;
-
-        if !pollfd.revents.is_empty() {
-            num_non_zero += 1;
-        }
     }
 
     Ok(num_non_zero)
@@ -457,7 +523,16 @@ fn mmap(
     if flags.contains(MmapFlags::SHARED_VALIDATE) {
         todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::SHARED) {
-        todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
+        assert!(!flags.contains(MmapFlags::ANONYMOUS));
+        let fd = FdNum::parse(fd, abi)?;
+        let fd = fdtable.get(fd)?;
+
+        let permissions = MemoryPermissions::from(prot);
+        let addr =
+            virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions, true)?;
+        Ok(addr.as_u64())
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::ANONYMOUS) {
             let permissions = MemoryPermissions::from(prot);
@@ -468,9 +543,10 @@ fn mmap(
             let fd = fdtable.get(fd)?;
 
             let permissions = MemoryPermissions::from(prot);
-            let addr = virtual_memory
-                .modify()
-                .mmap_file(bias, length, fd, offset, permissions)?;
+            let addr =
+                virtual_memory
+                    .modify()
+                    .mmap_file(bias, length, fd, offset, permissions, false)?;
             Ok(addr.as_u64())
         }
     } else {
@@ -532,15 +608,13 @@ fn munmap(
 fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallResult {
     ensure!(brk_value % 0x1000 == 0, Inval);
 
-    if brk_value == 0 {
-        return Ok(virtual_memory.brk_end().as_u64());
+    if brk_value != 0 {
+        let _ = virtual_memory
+            .modify()
+            .set_brk_end(VirtAddr::new(brk_value));
     }
 
-    virtual_memory
-        .modify()
-        .set_brk_end(VirtAddr::new(brk_value));
-
-    Ok(brk_value)
+    Ok(virtual_memory.brk_end().as_u64())
 }
 
 #[syscall(i386 = 174, amd64 = 13)]
@@ -945,8 +1019,17 @@ async fn select_impl(
 }
 
 #[syscall(i386 = 219, amd64 = 28)]
-fn madvise(addr: Pointer<c_void>, len: u64, advice: Advice) -> SyscallResult {
+fn madvise(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    addr: Pointer<c_void>,
+    len: u64,
+    advice: Advice,
+) -> SyscallResult {
     match advice {
+        Advice::DontNeed => {
+            virtual_memory.modify().discard_pages(addr.get(), len)?;
+            Ok(0)
+        }
         Advice::Free => {
             // Ignore the advise.
             Ok(0)
@@ -988,6 +1071,16 @@ async fn nanosleep(
     let deadline = now + rqtp;
     sleep_until(deadline).await;
     Ok(0)
+}
+
+#[syscall(i386 = 27, amd64 = 37)]
+fn alarm(thread: &mut ThreadGuard, seconds: u32) -> SyscallResult {
+    let remaining = if seconds != 0 {
+        thread.process().schedule_alarm(seconds)
+    } else {
+        thread.process().cancel_alarm()
+    };
+    Ok(u64::from(remaining))
 }
 
 #[syscall(i386 = 20, amd64 = 39)]
@@ -1400,6 +1493,32 @@ async fn wait4(
     Ok(u64::from(tid))
 }
 
+#[syscall(i386 = 37, amd64 = 62)]
+fn kill(pid: i32, signal: Option<Signal>) -> SyscallResult {
+    match pid {
+        1.. => {
+            let process = Process::find_by_pid(pid as u32).ok_or(err!(Srch))?;
+            if let Some(signal) = signal {
+                process.queue_signal(SigInfo {
+                    signal,
+                    code: SigInfoCode::USER,
+                    fields: SigFields::None,
+                });
+            }
+        }
+        0 => {
+            todo!()
+        }
+        -1 => {
+            todo!()
+        }
+        ..-1 => {
+            todo!()
+        }
+    }
+    Ok(0)
+}
+
 #[syscall(amd64 = 63)]
 fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult {
     const SIZE: usize = 65;
@@ -1486,6 +1605,34 @@ fn fcntl64(
             Ok(0)
         }
     }
+}
+
+#[syscall(i386 = 143, amd64 = 73, interruptable, restartable)]
+async fn flock(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    op: FLockOp,
+) -> SyscallResult {
+    let lock_shared = op.contains(FLockOp::SH);
+    let lock_exclusive = op.contains(FLockOp::EX);
+    let unlock = op.contains(FLockOp::UN);
+    let non_blocking = op.contains(FLockOp::NB);
+    // Make sure that exactly one op is set.
+    ensure!(
+        u8::from(lock_shared) + u8::from(lock_exclusive) + u8::from(unlock) == 1,
+        Inval
+    );
+
+    let fd = fdtable.get(fd)?;
+    let file_lock = fd.file_lock()?;
+    if lock_shared {
+        file_lock.lock_shared(non_blocking).await?;
+    } else if lock_exclusive {
+        file_lock.lock_exclusive(non_blocking).await?;
+    } else {
+        file_lock.unlock();
+    }
+    Ok(0)
 }
 
 #[syscall(i386 = 93, amd64 = 77)]
@@ -1593,6 +1740,19 @@ fn mkdir(
         pathname,
         mode,
     )
+}
+
+#[syscall(i386 = 40, amd64 = 84)]
+fn rmdir(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(pathname)?;
+    let start_dir = thread.cwd.clone();
+    unlink_dir(start_dir, &pathname, &mut ctx)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 9, amd64 = 86)]
@@ -2077,6 +2237,23 @@ fn epoll_ctl(
         }
     }
 
+    Ok(0)
+}
+
+#[syscall(i386 = 270, amd64 = 234)]
+fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
+    let process = Process::find_by_pid(tgid).ok_or(err!(Srch))?;
+    let threads = process.threads.lock();
+    let thread = threads
+        .iter()
+        .filter_map(Weak::upgrade)
+        .find(|t| t.tid() == pid)
+        .ok_or(err!(Srch))?;
+    thread.queue_signal(SigInfo {
+        signal,
+        code: SigInfoCode::USER,
+        fields: SigFields::None,
+    });
     Ok(0)
 }
 

@@ -9,6 +9,8 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use futures::{select_biased, FutureExt};
+use syscall::args::Timespec;
 
 use crate::{
     error::{err, Result},
@@ -18,9 +20,10 @@ use crate::{
         path::Path,
         StaticFile,
     },
-    rt::{notify::Notify, once::OnceCell},
+    rt::{notify::Notify, once::OnceCell, oneshot, spawn},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     supervisor,
+    time::{now, sleep_until},
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
 };
 
@@ -58,6 +61,7 @@ pub struct Process {
     running: AtomicUsize,
     pub inos: ProcessInos,
     exe: RwLock<Path>,
+    alarm: Mutex<Option<AlarmState>>,
 }
 
 impl Process {
@@ -81,6 +85,7 @@ impl Process {
             running: AtomicUsize::new(0),
             inos: ProcessInos::new(),
             exe: RwLock::new(exe),
+            alarm: Mutex::new(None),
         };
         let arc = Arc::new(this);
 
@@ -260,6 +265,62 @@ impl Process {
             queue.extend(process.children.lock().iter().cloned());
             Some(process)
         })
+    }
+
+    pub fn schedule_alarm(self: &Arc<Self>, seconds: u32) -> u32 {
+        let now = now();
+        let (cancel_tx, cancel_rx) = oneshot::new();
+        let deadline = now
+            + Timespec {
+                tv_sec: seconds,
+                tv_nsec: 0,
+            };
+        let new_state = AlarmState {
+            deadline,
+            cancel_tx,
+        };
+
+        let prev_state = self.alarm.lock().replace(new_state);
+
+        let this = self.clone();
+        spawn(async move {
+            select_biased! {
+                _ = cancel_rx.recv().fuse() => {
+                    // The alarm has been cancelled -> do nothing.
+                }
+                _ = sleep_until(deadline).fuse() => {
+                    // The alarm has fired -> queue a signal.
+                    this.queue_signal(SigInfo {
+                        signal: Signal::ALRM,
+                        code: SigInfoCode::KERNEL,
+                        fields: SigFields::None,
+                    });
+                }
+            }
+        });
+
+        AlarmState::remaining_seconds(prev_state, now)
+    }
+
+    pub fn cancel_alarm(&self) -> u32 {
+        let prev_state = self.alarm.lock().take();
+        AlarmState::remaining_seconds(prev_state, now())
+    }
+}
+
+struct AlarmState {
+    deadline: Timespec,
+    cancel_tx: oneshot::Sender<()>,
+}
+
+impl AlarmState {
+    fn remaining_seconds(state: Option<Self>, now: Timespec) -> u32 {
+        if let Some(state) = state {
+            let _ = state.cancel_tx.send(());
+            now.checked_sub(state.deadline).map_or(0, |tv| tv.tv_sec)
+        } else {
+            0
+        }
     }
 }
 

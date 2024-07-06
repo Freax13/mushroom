@@ -13,7 +13,7 @@ use crate::{
         fd::{
             dir::open_dir,
             file::{open_file, File},
-            FileDescriptor,
+            FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         node::DirEntryName,
         path::{FileName, Path},
@@ -40,10 +40,12 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
         dev,
         ino: new_ino(),
         location,
+        file_lock_record: LazyFileLockRecord::new(),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
             dev,
             ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
         }),
     }))
 }
@@ -53,6 +55,7 @@ struct ProcFsRoot {
     dev: u64,
     ino: u64,
     location: MountLocation,
+    file_lock_record: LazyFileLockRecord,
     self_link: Arc<SelfLink>,
 }
 
@@ -84,6 +87,10 @@ impl INode for ProcFsRoot {
     fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
 }
 
 impl Directory for ProcFsRoot {
@@ -135,6 +142,10 @@ impl Directory for ProcFsRoot {
         _minor: u8,
     ) -> Result<DynINode> {
         bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
@@ -202,6 +213,7 @@ struct SelfLink {
     parent: Weak<ProcFsRoot>,
     dev: u64,
     ino: u64,
+    file_lock_record: LazyFileLockRecord,
 }
 
 impl INode for SelfLink {
@@ -244,16 +256,19 @@ impl INode for SelfLink {
             .into_owned();
         Ok(Some((
             start_dir,
-            Arc::new_cyclic(|this| ProcessDir {
-                this: this.clone(),
-                location: StaticLocation::new(self.parent.upgrade().unwrap(), file_name),
-                dev: self.dev,
-                process: Arc::downgrade(&ctx.process),
-            }),
+            ProcessDir::new(
+                StaticLocation::new(self.parent.upgrade().unwrap(), file_name),
+                self.dev,
+                Arc::downgrade(&ctx.process),
+            ),
         )))
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
 }
 
 pub struct ProcessInos {
@@ -280,6 +295,10 @@ struct ProcessDir {
     location: StaticLocation<ProcFsRoot>,
     dev: u64,
     process: Weak<Process>,
+    file_lock_record: LazyFileLockRecord,
+    fd_file_lock_record: LazyFileLockRecord,
+    exe_link_lock_record: LazyFileLockRecord,
+    maps_file_lock_record: LazyFileLockRecord,
 }
 
 impl ProcessDir {
@@ -293,6 +312,10 @@ impl ProcessDir {
             location,
             dev,
             process,
+            file_lock_record: LazyFileLockRecord::new(),
+            fd_file_lock_record: LazyFileLockRecord::new(),
+            exe_link_lock_record: LazyFileLockRecord::new(),
+            maps_file_lock_record: LazyFileLockRecord::new(),
         })
     }
 }
@@ -326,6 +349,10 @@ impl INode for ProcessDir {
     fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
 }
 
 impl Directory for ProcessDir {
@@ -339,11 +366,20 @@ impl Directory for ProcessDir {
                 StaticLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned()),
                 self.dev,
                 self.process.clone(),
+                self.fd_file_lock_record.get().clone(),
             ))
         } else if file_name == "exe" {
-            Ok(ExeLink::new(self.dev, self.process.clone()))
+            Ok(ExeLink::new(
+                self.dev,
+                self.process.clone(),
+                self.exe_link_lock_record.get().clone(),
+            ))
         } else if file_name == "maps" {
-            Ok(MapsFile::new(self.dev, self.process.clone()))
+            Ok(MapsFile::new(
+                self.dev,
+                self.process.clone(),
+                self.maps_file_lock_record.get().clone(),
+            ))
         } else {
             bail!(NoEnt)
         }
@@ -377,6 +413,10 @@ impl Directory for ProcessDir {
         _minor: u8,
     ) -> Result<DynINode> {
         bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
@@ -445,6 +485,7 @@ struct FdDir {
     location: StaticLocation<ProcessDir>,
     dev: u64,
     process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
 }
 
 impl FdDir {
@@ -452,12 +493,14 @@ impl FdDir {
         location: StaticLocation<ProcessDir>,
         dev: u64,
         process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             location,
             dev,
             process,
+            file_lock_record,
         })
     }
 }
@@ -491,6 +534,10 @@ impl INode for FdDir {
     fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
 }
 
 impl Directory for FdDir {
@@ -540,6 +587,10 @@ impl Directory for FdDir {
         bail!(NoEnt)
     }
 
+    fn is_empty(&self) -> bool {
+        false
+    }
+
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
@@ -584,11 +635,16 @@ impl Directory for FdDir {
 pub struct FdINode {
     ino: u64,
     fd: FileDescriptor,
+    file_lock_record: Arc<FileLockRecord>,
 }
 
 impl FdINode {
-    pub fn new(ino: u64, fd: FileDescriptor) -> Self {
-        Self { ino, fd }
+    pub fn new(ino: u64, fd: FileDescriptor, file_lock_record: Arc<FileLockRecord>) -> Self {
+        Self {
+            ino,
+            fd,
+            file_lock_record,
+        }
     }
 }
 
@@ -622,16 +678,29 @@ impl INode for FdINode {
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.fd.path())
     }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
 }
 
 struct ExeLink {
     dev: u64,
     process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
 }
 
 impl ExeLink {
-    pub fn new(dev: u64, process: Weak<Process>) -> Arc<Self> {
-        Arc::new(Self { dev, process })
+    pub fn new(
+        dev: u64,
+        process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            dev,
+            process,
+            file_lock_record,
+        })
     }
 }
 
@@ -679,20 +748,30 @@ impl INode for ExeLink {
         let exe = process.exe();
         lookup_node_with_parent(start_dir, &exe, ctx).map(Some)
     }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
 }
 
 struct MapsFile {
     this: Weak<Self>,
     dev: u64,
     process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
 }
 
 impl MapsFile {
-    pub fn new(dev: u64, process: Weak<Process>) -> Arc<Self> {
+    pub fn new(
+        dev: u64,
+        process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             dev,
             process,
+            file_lock_record,
         })
     }
 }
@@ -724,6 +803,10 @@ impl INode for MapsFile {
     fn set_mode(&self, _mode: FileMode) {}
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
 }
 
 impl File for MapsFile {

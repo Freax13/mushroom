@@ -55,7 +55,7 @@ impl Buffer {
             let start = self.len() % 0x1000;
             let idx = self.len() / 0x1000;
             let page = &mut self.pages[idx];
-            page.zero_range(start..)?;
+            page.zero_range(start.., true)?;
         }
 
         let following_pages = self.len().div_ceil(4096);
@@ -203,7 +203,7 @@ impl Buffer {
             // Calculate the start and end indices in `page` for the copy operation.
             let page_copy_start = copy_start - page_start;
             let page_copy_end = copy_end - page_start;
-            page.make_mut()?;
+            page.make_mut(true)?;
             let content = page.index(page_copy_start..=page_copy_end);
             let dst = content.as_ptr().as_mut_ptr();
 
@@ -265,7 +265,7 @@ impl Buffer {
             // Calculate the start and end indices in `page` for the copy operation.
             let page_copy_start = copy_start - page_start;
             let page_copy_end = copy_end - page_start;
-            page.make_mut()?;
+            page.make_mut(true)?;
             let dst = page.index(page_copy_start..=page_copy_end);
 
             // Calculate the start and end indices in `buf` for the copy operation.

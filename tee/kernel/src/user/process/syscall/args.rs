@@ -26,7 +26,7 @@ use super::traits::Abi;
 
 pub mod pointee;
 
-pub trait SyscallArg: Display + Send + Copy {
+pub trait SyscallArg: Send + Copy {
     fn parse(value: u64, abi: Abi) -> Result<Self>;
 
     fn display(
@@ -269,7 +269,11 @@ where
         _: Abi,
         thread: &ThreadGuard<'_>,
     ) -> fmt::Result {
-        T::display(f, VirtAddr::new(value), thread)
+        if let Ok(addr) = VirtAddr::try_new(value) {
+            T::display(f, addr, thread)
+        } else {
+            write!(f, "{value:#x} (invalid ptr)")
+        }
     }
 }
 
@@ -307,23 +311,17 @@ impl SyscallArg for i64 {
 }
 
 impl SyscallArg for i32 {
-    fn parse(value: u64, abi: Abi) -> Result<Self> {
-        i64::parse(value, abi)
-            .and_then(|value| value.try_into().map_err(Into::into))
-            .or_else(|_| {
-                u32::try_from(value)
-                    .map(|value| value as i32)
-                    .map_err(Into::into)
-            })
+    fn parse(value: u64, _abi: Abi) -> Result<Self> {
+        Ok(value as u32 as i32)
     }
 
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
         abi: Abi,
-        thread: &ThreadGuard<'_>,
+        _thread: &ThreadGuard<'_>,
     ) -> fmt::Result {
-        i64::display(f, value, abi, thread)
+        write!(f, "{}", Self::parse(value, abi).unwrap())
     }
 }
 
@@ -380,6 +378,8 @@ bitflags! {
         const OWNER_WRITE = 0o200;
         const OWNER_READ = 0o400;
         const OWNER_ALL = 0o700;
+        const SET_GROUP_ID = 0o2000;
+        const SET_USER_ID = 0o4000;
     }
 }
 
@@ -447,6 +447,8 @@ impl From<PollEvents> for Events {
         let mut events = Events::empty();
         events.set(Events::READ, value.contains(PollEvents::IN));
         events.set(Events::WRITE, value.contains(PollEvents::OUT));
+        events.set(Events::ERR, value.contains(PollEvents::ERR));
+        events.set(Events::HUP, value.contains(PollEvents::HUP));
         events
     }
 }
@@ -456,6 +458,8 @@ impl From<Events> for PollEvents {
         let mut events = PollEvents::empty();
         events.set(PollEvents::IN, value.contains(Events::READ));
         events.set(PollEvents::OUT, value.contains(Events::WRITE));
+        events.set(PollEvents::ERR, value.contains(Events::ERR));
+        events.set(PollEvents::HUP, value.contains(Events::HUP));
         events
     }
 }
@@ -811,6 +815,7 @@ bitflags! {
 
 enum_arg! {
     pub enum Advice {
+        DontNeed = 4,
         Free = 8,
     }
 }
@@ -866,6 +871,20 @@ impl Timespec {
 
     pub const UTIME_NOW: u32 = 0x3FFFFFFF;
     pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
+
+    pub fn checked_sub(self, rhs: Self) -> Option<Self> {
+        if self < rhs {
+            return None;
+        }
+
+        let mut tv_sec = self.tv_sec - rhs.tv_sec;
+        let (mut tv_nsec, overflow) = self.tv_nsec.overflowing_sub(rhs.tv_nsec);
+        if overflow {
+            tv_sec -= 1;
+            tv_nsec = tv_nsec.wrapping_add(1_000_000_000);
+        }
+        Some(Self { tv_sec, tv_nsec })
+    }
 }
 
 impl Add for Timespec {
@@ -1133,8 +1152,12 @@ bitflags! {
 pub struct Signal(u8);
 
 impl Signal {
+    pub const HUP: Self = Self(1);
+    pub const ABRT: Self = Self(6);
     pub const FPE: Self = Self(8);
+    pub const KILL: Self = Self(9);
     pub const SEGV: Self = Self(11);
+    pub const ALRM: Self = Self(14);
     pub const PIPE: Self = Self(13);
     pub const CHLD: Self = Self(17);
 
@@ -1148,6 +1171,49 @@ impl Signal {
     }
 }
 
+impl SyscallArg for Signal {
+    fn parse(value: u64, _abi: Abi) -> Result<Self> {
+        let value = u8::try_from(value)?;
+        Self::new(value)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        if let Ok(signal) = Self::parse(value, abi) {
+            write!(f, "{signal:?}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
+impl SyscallArg for Option<Signal> {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        Ok(if value == 0 {
+            None
+        } else {
+            Some(Signal::parse(value, abi)?)
+        })
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        if let Ok(signal) = Self::parse(value, abi) {
+            write!(f, "{signal:?}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
 pub struct FdSet {}
 
 impl Pointee for FdSet {}
@@ -1157,4 +1223,13 @@ pub struct PSelectSigsetArg {
     pub ss: Pointer<Sigset>,
     #[allow(dead_code)]
     pub ss_len: usize,
+}
+
+bitflags! {
+    pub struct FLockOp {
+        const SH = 1 << 0;
+        const EX = 1 << 1;
+        const NB = 1 << 2;
+        const UN = 1 << 3;
+    }
 }

@@ -1,6 +1,6 @@
 use log::debug;
 
-use super::{Events, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     fs::{node::new_ino, path::Path},
@@ -11,11 +11,15 @@ use crate::{
 
 pub struct Stdin {
     ino: u64,
+    file_lock: FileLock,
 }
 
 impl Stdin {
     pub fn new() -> Self {
-        Self { ino: new_ino() }
+        Self {
+            ino: new_ino(),
+            file_lock: FileLock::anonymous(),
+        }
     }
 }
 
@@ -49,15 +53,23 @@ impl OpenFileDescription for Stdin {
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::empty()
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 pub struct Stdout {
     ino: u64,
+    file_lock: FileLock,
 }
 
 impl Stdout {
     pub fn new() -> Self {
-        Self { ino: new_ino() }
+        Self {
+            ino: new_ino(),
+            file_lock: FileLock::anonymous(),
+        }
     }
 }
 
@@ -97,15 +109,23 @@ impl OpenFileDescription for Stdout {
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::WRITE
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 pub struct Stderr {
     ino: u64,
+    file_lock: FileLock,
 }
 
 impl Stderr {
     pub fn new() -> Self {
-        Self { ino: new_ino() }
+        Self {
+            ino: new_ino(),
+            file_lock: FileLock::anonymous(),
+        }
     }
 }
 
@@ -144,5 +164,9 @@ impl OpenFileDescription for Stderr {
 
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::WRITE
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

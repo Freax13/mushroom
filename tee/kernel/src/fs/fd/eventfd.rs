@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use bytemuck::pod_read_unaligned;
 
-use super::{Events, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription};
 use crate::{
     error::{ensure, err, Result},
     fs::{node::new_ino, path::Path},
@@ -19,6 +19,7 @@ pub struct EventFd {
     ino: u64,
     notify: Notify,
     counter: AtomicU64,
+    file_lock: FileLock,
 }
 
 impl EventFd {
@@ -27,6 +28,7 @@ impl EventFd {
             ino: new_ino(),
             notify: Notify::new(),
             counter: AtomicU64::new(u64::from(initval)),
+            file_lock: FileLock::anonymous(),
         }
     }
 }
@@ -139,5 +141,9 @@ impl OpenFileDescription for EventFd {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

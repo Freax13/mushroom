@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-use super::{Events, FileDescriptor, OpenFileDescription};
+use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize) -> Result<KernelPage>;
@@ -116,15 +116,18 @@ pub struct ReadonlyFileFileDescription {
     file: Arc<dyn File>,
     flags: OpenFlags,
     cursor_idx: Mutex<usize>,
+    file_lock: FileLock,
 }
 
 impl ReadonlyFileFileDescription {
     pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
+        let file_lock = FileLock::new(file.file_lock_record().clone());
         Self {
             path,
             file,
             flags,
             cursor_idx: Mutex::new(0),
+            file_lock,
         }
     }
 }
@@ -173,7 +176,12 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
-            Whence::End => todo!(),
+            Whence::End => {
+                let size = usize::try_from(self.file.stat()?.size)?;
+                *guard = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
             Whence::Data => {
                 // Ensure that `offset` doesn't point past the file.
                 ensure!(offset < self.file.stat()?.size as usize, XIo);
@@ -214,6 +222,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::READ
     }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
 }
 
 /// A file description for files opened as write-only.
@@ -222,15 +234,18 @@ pub struct WriteonlyFileFileDescription {
     file: Arc<dyn File>,
     flags: OpenFlags,
     cursor_idx: Mutex<usize>,
+    file_lock: FileLock,
 }
 
 impl WriteonlyFileFileDescription {
     pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
+        let file_lock = FileLock::new(file.file_lock_record().clone());
         Self {
             path,
             file,
             flags,
             cursor_idx: Mutex::new(0),
+            file_lock,
         }
     }
 }
@@ -300,8 +315,16 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.stat()
     }
 
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::WRITE
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }
 
@@ -310,11 +333,18 @@ pub struct AppendFileFileDescription {
     path: Path,
     file: Arc<dyn File>,
     flags: OpenFlags,
+    file_lock: FileLock,
 }
 
 impl AppendFileFileDescription {
     pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
-        Self { path, file, flags }
+        let file_lock = FileLock::new(file.file_lock_record().clone());
+        Self {
+            path,
+            file,
+            flags,
+            file_lock,
+        }
     }
 }
 
@@ -353,8 +383,16 @@ impl OpenFileDescription for AppendFileFileDescription {
         self.file.stat()
     }
 
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::WRITE
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }
 
@@ -364,15 +402,18 @@ pub struct ReadWriteFileFileDescription {
     file: Arc<dyn File>,
     flags: OpenFlags,
     cursor_idx: Mutex<usize>,
+    file_lock: FileLock,
 }
 
 impl ReadWriteFileFileDescription {
     pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
+        let file_lock = FileLock::new(file.file_lock_record().clone());
         Self {
             path,
             file,
             flags,
             cursor_idx: Mutex::new(0),
+            file_lock,
         }
     }
 }
@@ -448,7 +489,12 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
-            Whence::End => todo!(),
+            Whence::End => {
+                let size = usize::try_from(self.file.stat()?.size)?;
+                *guard = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
             Whence::Data => todo!(),
             Whence::Hole => todo!(),
         }
@@ -468,7 +514,15 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         self.file.stat()
     }
 
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
         events & (Events::READ | Events::WRITE)
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

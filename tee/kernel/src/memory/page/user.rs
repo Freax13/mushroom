@@ -12,17 +12,23 @@ use super::KernelPage;
 pub struct UserPage {
     page: KernelPage,
     perms: MemoryPermissions,
+    shared: bool,
 }
 
 impl UserPage {
-    pub fn new(page: KernelPage, perms: MemoryPermissions) -> Self {
-        Self { page, perms }
+    pub fn new(page: KernelPage, perms: MemoryPermissions, shared: bool) -> Self {
+        Self {
+            page,
+            perms,
+            shared,
+        }
     }
 
     pub fn clone(&mut self) -> Result<Self> {
         Ok(Self {
             perms: self.perms,
             page: self.page.clone()?,
+            shared: self.shared,
         })
     }
 
@@ -30,7 +36,7 @@ impl UserPage {
         let mut flags = PageTableFlags::USER;
         flags.set(
             PageTableFlags::WRITABLE,
-            self.perms.contains(MemoryPermissions::WRITE) && self.mutable(),
+            self.perms.contains(MemoryPermissions::WRITE) && self.mutable(self.shared),
         );
         flags.set(
             PageTableFlags::EXECUTABLE,
@@ -45,6 +51,10 @@ impl UserPage {
 
     pub fn set_perms(&mut self, perms: MemoryPermissions) {
         self.perms = perms;
+    }
+
+    pub fn make_mut(&mut self) -> Result<()> {
+        self.page.make_mut(self.shared)
     }
 }
 

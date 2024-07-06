@@ -39,7 +39,7 @@ impl KernelPage {
         }
     }
 
-    pub fn is_zero_page(&self) -> bool {
+    fn is_zero_page(&self) -> bool {
         // The ZERO page is special because we never assign it a reference
         // count -> If `self` has a reference count it's not the zero page.
         if self.reference_count.is_some() {
@@ -86,21 +86,25 @@ impl KernelPage {
     }
 
     /// Returns whether page's content may be modified.
-    pub fn mutable(&self) -> bool {
+    pub fn mutable(&self, shared: bool) -> bool {
         if self.is_zero_page() {
             // The zero page should never be modified.
             return false;
         }
 
-        self.reference_count.is_none()
+        self.reference_count.is_none() || shared
     }
 
-    /// Ensure that this `KernelPage` instance is the only one referring to the
-    /// backing memory.
-    pub fn make_mut(&mut self) -> Result<()> {
+    /// Ensure that this `KernelPage` is mutable. Shared memory is always
+    /// mutable (except for the zero page).
+    pub fn make_mut(&mut self, shared: bool) -> Result<()> {
         // Fast-path check to see if we already have unique ownership over
         // `content`.
         if !self.is_zero_page() {
+            if shared {
+                return Ok(());
+            }
+
             let Some(reference_count) = self.reference_count.take() else {
                 // If there is no reference count, we don't need to do anything.
                 return Ok(());
@@ -171,7 +175,7 @@ impl KernelPage {
     }
 
     /// Zero the bytes in the specified range.
-    pub fn zero_range(&mut self, range: impl RangeBounds<usize>) -> Result<()> {
+    pub fn zero_range(&mut self, range: impl RangeBounds<usize>, shared: bool) -> Result<()> {
         // Check if `range` is empty.
         let start = match range.start_bound() {
             Bound::Included(&start) => start,
@@ -193,7 +197,7 @@ impl KernelPage {
             return Ok(());
         }
 
-        self.make_mut()?;
+        self.make_mut(shared)?;
         let content = self.index(range);
         unsafe {
             core::intrinsics::volatile_set_memory(content.as_mut_ptr(), 0, content.len());

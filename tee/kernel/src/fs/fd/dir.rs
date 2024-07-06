@@ -11,14 +11,16 @@ use alloc::{sync::Arc, vec::Vec};
 
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
-use super::{Events, FileDescriptor, OpenFileDescription};
+use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
 pub fn open_dir(path: Path, dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
+    let file_lock = FileLock::new(dir.file_lock_record().clone());
     Ok(FileDescriptor::from(DirectoryFileDescription {
         flags,
         path,
         dir,
         entries: Mutex::new(None),
+        file_lock,
     }))
 }
 
@@ -27,6 +29,7 @@ struct DirectoryFileDescription {
     path: Path,
     dir: Arc<dyn Directory>,
     entries: Mutex<Option<Vec<DirEntry>>>,
+    file_lock: FileLock,
 }
 
 impl OpenFileDescription for DirectoryFileDescription {
@@ -77,5 +80,9 @@ impl OpenFileDescription for DirectoryFileDescription {
 
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::READ
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

@@ -6,7 +6,7 @@ use usize_conversions::FromUsize;
 use crate::{
     error::Result,
     fs::{
-        fd::{Events, OpenFileDescription},
+        fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
         path::Path,
     },
     supervisor,
@@ -24,6 +24,7 @@ pub struct Output {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    file_lock: FileLock,
 }
 
 #[register]
@@ -32,7 +33,13 @@ impl CharDev for Output {
     const MINOR: u8 = 0;
 
     fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
-        Ok(Self { path, flags, stat })
+        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        Ok(Self {
+            path,
+            flags,
+            stat,
+            file_lock: FileLock::new(RECORD.get().clone()),
+        })
     }
 }
 
@@ -80,5 +87,9 @@ impl OpenFileDescription for Output {
         }
 
         Ok(len)
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

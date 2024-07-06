@@ -39,13 +39,20 @@ impl<T> Sender<T> {
             return Err(SendError(value));
         }
 
-        // Wait the future waiting for the value.
+        // Take out the waker.
+        let mut w = None;
         if let State::Waiting(waker) = &*guard {
-            waker.wake_by_ref();
+            w = Some(waker.clone());
         }
 
-        // Otherwise fill the state with the value.
+        // Fill the state with the value.
         *guard = State::Sent(value);
+        drop(guard);
+
+        // Wake the future waiting for the value.
+        if let Some(w) = w {
+            w.wake();
+        }
 
         Ok(())
     }

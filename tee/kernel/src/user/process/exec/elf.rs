@@ -162,6 +162,7 @@ where
                     file.clone(),
                     p_offset,
                     permissions,
+                    false,
                 )?;
 
                 if (p_offset..p_offset + p_filesz).contains(&e_phoff) {

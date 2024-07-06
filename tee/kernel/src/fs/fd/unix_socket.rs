@@ -2,7 +2,7 @@ use alloc::{boxed::Box, format};
 use async_trait::async_trait;
 use futures::{select_biased, FutureExt};
 
-use super::{pipe, Events, OpenFileDescription};
+use super::{pipe, Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     fs::{node::new_ino, path::Path},
@@ -19,6 +19,7 @@ pub struct StreamUnixSocket {
     ino: u64,
     write_half: pipe::WriteHalf,
     read_half: pipe::ReadHalf,
+    file_lock: FileLock,
 }
 
 impl StreamUnixSocket {
@@ -41,11 +42,13 @@ impl StreamUnixSocket {
                 ino: new_ino(),
                 write_half: write_half1,
                 read_half: read_half2,
+                file_lock: FileLock::anonymous(),
             },
             Self {
                 ino: new_ino(),
                 write_half: write_half2,
                 read_half: read_half1,
+                file_lock: FileLock::anonymous(),
             },
         )
     }
@@ -97,8 +100,7 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     fn poll_ready(&self, events: Events) -> Events {
-        self.write_half.poll_ready(events & Events::WRITE)
-            | self.read_half.poll_ready(events & Events::READ)
+        self.write_half.poll_ready(events) | self.read_half.poll_ready(events)
     }
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
@@ -106,8 +108,8 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        let write_ready = self.write_half.ready(events & Events::WRITE);
-        let read_ready = self.read_half.ready(events & Events::READ);
+        let write_ready = self.write_half.ready(events);
+        let read_ready = self.read_half.ready(events);
         select_biased! {
             res = write_ready.fuse() => res,
             res = read_ready.fuse() => res,
@@ -130,5 +132,9 @@ impl OpenFileDescription for StreamUnixSocket {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
     }
 }

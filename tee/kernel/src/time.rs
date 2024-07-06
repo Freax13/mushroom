@@ -28,13 +28,13 @@ impl State {
     pub fn new() -> Self {
         Self {
             // Start at 1 second.
-            clock: 1000,
+            clock: 1_000_000_000,
             timeouts: BinaryHeap::new(),
         }
     }
 
-    fn advance(&mut self, ms: u64) {
-        self.advance_to(self.clock + ms);
+    fn advance(&mut self, ns: u64) {
+        self.advance_to(self.clock + ns);
     }
 
     fn advance_to(&mut self, clock: u64) {
@@ -50,9 +50,8 @@ impl State {
     }
 
     pub fn now(&mut self) -> Timespec {
-        self.advance(1);
-
-        Timespec::from_ms(self.clock)
+        self.advance(5000);
+        Timespec::from_ns(self.clock)
     }
 
     fn advance_to_next_timeout(&mut self) -> Result<(), NoTimeoutScheduledError> {
@@ -121,14 +120,18 @@ impl Ord for Timeout {
 
 impl Timespec {
     pub fn from_ms(ms: u64) -> Self {
+        Self::from_ns(ms * 1_000_000)
+    }
+
+    pub fn from_ns(ns: u64) -> Self {
         Timespec {
-            tv_sec: u32::try_from(ms / 1000).unwrap(),
-            tv_nsec: u32::try_from((ms % 1000) * 1_000_000).unwrap(),
+            tv_sec: u32::try_from(ns / 1_000_000_000).unwrap(),
+            tv_nsec: u32::try_from(ns % 1_000_000_000).unwrap(),
         }
     }
 
-    fn into_ms(self) -> u64 {
-        u64::from(self.tv_sec) * 1000 + u64::from(self.tv_nsec) / 1_000_000
+    fn into_ns(self) -> u64 {
+        u64::from(self.tv_sec) * 1_000_000_000 + u64::from(self.tv_nsec)
     }
 }
 
@@ -137,7 +140,7 @@ pub async fn sleep_until(deadline: Timespec) {
 
     let mut guard = STATE.lock();
     guard.add_timeout(Timeout {
-        time: deadline.into_ms(),
+        time: deadline.into_ns(),
         sender,
     });
     drop(guard);
