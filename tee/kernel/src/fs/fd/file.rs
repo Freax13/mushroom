@@ -315,6 +315,10 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.stat()
     }
 
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::WRITE
     }
@@ -377,6 +381,10 @@ impl OpenFileDescription for AppendFileFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         self.file.stat()
+    }
+
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -504,6 +512,10 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         self.file.stat()
+    }
+
+    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+        self.file.get_page(page_idx)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
