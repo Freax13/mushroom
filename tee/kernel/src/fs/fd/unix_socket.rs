@@ -100,8 +100,7 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     fn poll_ready(&self, events: Events) -> Events {
-        self.write_half.poll_ready(events & Events::WRITE)
-            | self.read_half.poll_ready(events & Events::READ)
+        self.write_half.poll_ready(events) | self.read_half.poll_ready(events)
     }
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
@@ -109,8 +108,8 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        let write_ready = self.write_half.ready(events & Events::WRITE);
-        let read_ready = self.read_half.ready(events & Events::READ);
+        let write_ready = self.write_half.ready(events);
+        let read_ready = self.read_half.ready(events);
         select_biased! {
             res = write_ready.fuse() => res,
             res = read_ready.fuse() => res,
