@@ -1,3 +1,5 @@
+use core::{cmp::Ordering, fmt};
+
 use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit};
 
 use crate::{guest_policy::GuestPolicy, Reserved};
@@ -97,9 +99,15 @@ pub struct EcdsaP384Sha384Signature {
     pub s: [u8; 72],
 }
 
-#[derive(Debug, Clone, Copy, CheckedBitPattern)]
+#[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct TcbVersion([u8; 8]);
+
+impl TcbVersion {
+    pub const fn new(bootloader: u8, tee: u8, snp: u8, microcode: u8) -> Self {
+        Self([bootloader, tee, 0, 0, 0, 0, snp, microcode])
+    }
+}
 
 impl TcbVersion {
     /// SVN of PSP bootloader
@@ -120,5 +128,73 @@ impl TcbVersion {
     /// Lowest current patch level of all cores
     pub fn microcode(&self) -> u8 {
         self.0[7]
+    }
+}
+
+impl PartialEq for TcbVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for TcbVersion {}
+
+impl PartialOrd for TcbVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (
+            self.bootloader().cmp(&other.bootloader()),
+            self.tee().cmp(&other.tee()),
+            self.snp().cmp(&other.snp()),
+            self.microcode().cmp(&other.microcode()),
+        ) {
+            (Ordering::Equal, Ordering::Equal, Ordering::Equal, Ordering::Equal) => {
+                // The versions are equal if all components are equal.
+                Some(Ordering::Equal)
+            }
+            (
+                Ordering::Greater | Ordering::Equal,
+                Ordering::Greater | Ordering::Equal,
+                Ordering::Greater | Ordering::Equal,
+                Ordering::Greater | Ordering::Equal,
+            ) => {
+                // The version is greater if all components are greater or
+                // equal and they're not all equal.
+                Some(Ordering::Greater)
+            }
+            (
+                Ordering::Equal | Ordering::Less,
+                Ordering::Equal | Ordering::Less,
+                Ordering::Equal | Ordering::Less,
+                Ordering::Equal | Ordering::Less,
+            ) => {
+                // The version is less if all components are less or equal and
+                // they're not all equal.
+                Some(Ordering::Less)
+            }
+            // Otherwise some components of `self` are newer and some
+            // components of `other` are newer. We consider these TCB unordered
+            // relative to one another.
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Debug for TcbVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TcbVersion")
+            .field("bootloader", &self.bootloader())
+            .field("tee", &self.tee())
+            .field("snp", &self.snp())
+            .field("microcode", &self.microcode())
+            .finish()
+    }
+}
+
+unsafe impl CheckedBitPattern for TcbVersion {
+    type Bits = [u8; 8];
+
+    fn is_valid_bit_pattern(bits: &Self::Bits) -> bool {
+        // Make sure that the reserved bytes are zero.
+        bits[2..6] == [0; 4]
     }
 }
