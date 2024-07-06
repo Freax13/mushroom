@@ -422,6 +422,8 @@ bitflags! {
     pub struct Events: u8 {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
+        const ERR = 1 << 2;
+        const HUP = 1 << 3;
     }
 }
 

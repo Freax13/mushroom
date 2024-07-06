@@ -136,6 +136,7 @@ impl OpenFileDescription for ReadHalf {
             Events::READ,
             !guard.is_empty() || Arc::strong_count(&self.state) == 1,
         );
+        ready_events.set(Events::HUP, Arc::strong_count(&self.state) == 1);
 
         ready_events &= events;
         ready_events
@@ -304,6 +305,7 @@ impl OpenFileDescription for WriteHalf {
             Events::WRITE,
             guard.len() < CAPACITY || Arc::strong_count(&self.state) == 1,
         );
+        ready_events.set(Events::ERR, Arc::strong_count(&self.state) == 1);
         drop(guard);
 
         ready_events &= events;

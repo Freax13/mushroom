@@ -447,6 +447,8 @@ impl From<PollEvents> for Events {
         let mut events = Events::empty();
         events.set(Events::READ, value.contains(PollEvents::IN));
         events.set(Events::WRITE, value.contains(PollEvents::OUT));
+        events.set(Events::ERR, value.contains(PollEvents::ERR));
+        events.set(Events::HUP, value.contains(PollEvents::HUP));
         events
     }
 }
@@ -456,6 +458,8 @@ impl From<Events> for PollEvents {
         let mut events = PollEvents::empty();
         events.set(PollEvents::IN, value.contains(Events::READ));
         events.set(PollEvents::OUT, value.contains(Events::WRITE));
+        events.set(PollEvents::ERR, value.contains(Events::ERR));
+        events.set(PollEvents::HUP, value.contains(Events::HUP));
         events
     }
 }
