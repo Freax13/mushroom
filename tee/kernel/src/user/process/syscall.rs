@@ -1,4 +1,4 @@
-use core::{cmp, ffi::c_void, fmt, mem::size_of, num::NonZeroU32, pin::pin};
+use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
 
 use alloc::{
     ffi::CString,
@@ -386,36 +386,92 @@ fn lstat64(
     Ok(0)
 }
 
-#[syscall(i386 = 168, amd64 = 7)]
-fn poll(
+#[syscall(i386 = 168, amd64 = 7, interruptable)]
+async fn poll(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fds: Pointer<Pollfd>,
     nfds: u64,
-    timeout: u64,
+    timeout: i32,
 ) -> SyscallResult {
-    if timeout != 0 {
-        todo!()
-    }
+    let deadline = match timeout {
+        ..=-1 => Some(None),
+        0 => None,
+        1.. => Some(Some(now() + Timespec::from_ms(timeout as u64))),
+    };
+
+    // Read the pollfds.
+    let mut pollfds = (0..usize_from(nfds))
+        .map(|i| virtual_memory.read(fds.bytes_offset(i * size_of::<Pollfd>())))
+        .collect::<Result<Vec<_>>>()?;
 
     let mut num_non_zero = 0;
+    let mut futures = FuturesUnordered::new();
+    loop {
+        futures.clear();
 
-    for i in 0..usize_from(nfds) {
-        let mut pollfd = virtual_memory.read(fds.bytes_offset(i * size_of::<Pollfd>()))?;
+        for pollfd in pollfds.iter_mut() {
+            if pollfd.fd.get() < 0 {
+                pollfd.revents = PollEvents::empty();
+            } else if let Ok(fd) = fdtable.get(pollfd.fd) {
+                let events = Events::from(pollfd.events) | Events::HUP | Events::ERR;
+                let revents = fd.poll_ready(events);
+                pollfd.revents = PollEvents::from(revents);
 
-        if let Ok(fd) = fdtable.get(pollfd.fd) {
-            let events = Events::from(pollfd.events);
-            let revents = fd.poll_ready(events);
-            pollfd.revents = PollEvents::from(revents);
-        } else {
-            pollfd.revents = PollEvents::NVAL;
+                futures.push(async move { fd.ready(events).await });
+            } else {
+                pollfd.revents = PollEvents::NVAL;
+            }
+
+            if !pollfd.revents.is_empty() {
+                num_non_zero += 1;
+            }
         }
 
+        // Exit if a file descriptor is ready.
+        if num_non_zero != 0 {
+            break;
+        }
+
+        // Exit early if non-blocking behavior was requested.
+        let Some(deadline) = deadline else {
+            break;
+        };
+
+        // Wait for a file descriptor to become ready or for the timeout to
+        // expire.
+        let ready_fut = futures.next();
+        let sleep_fut = async {
+            if let Some(deadline) = deadline {
+                sleep_until(deadline).await;
+            } else {
+                // Infinite timeout.
+                pending::<()>().await;
+            }
+        };
+        let ready_fut = pin!(ready_fut);
+        let sleep_fut = pin!(sleep_fut);
+        let res = future::select(ready_fut, sleep_fut).await;
+        match res {
+            Either::Left((res, _)) => {
+                if let Some(res) = res {
+                    // A file descriptor became ready.
+                    res?;
+                } else {
+                    // There are no file descriptors. Exit early.
+                    break;
+                }
+            }
+            Either::Right(_) => {
+                // The timeout expired.
+                break;
+            }
+        }
+    }
+
+    // Write the results back.
+    for (i, pollfd) in pollfds.into_iter().enumerate() {
         virtual_memory.write(fds.bytes_offset(i * size_of::<Pollfd>()), pollfd)?;
-
-        if !pollfd.revents.is_empty() {
-            num_non_zero += 1;
-        }
     }
 
     Ok(num_non_zero)
