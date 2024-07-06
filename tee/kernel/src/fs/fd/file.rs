@@ -176,7 +176,12 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
-            Whence::End => todo!(),
+            Whence::End => {
+                let size = usize::try_from(self.file.stat()?.size)?;
+                *guard = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
             Whence::Data => {
                 // Ensure that `offset` doesn't point past the file.
                 ensure!(offset < self.file.stat()?.size as usize, XIo);
@@ -476,7 +481,12 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
-            Whence::End => todo!(),
+            Whence::End => {
+                let size = usize::try_from(self.file.stat()?.size)?;
+                *guard = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
             Whence::Data => todo!(),
             Whence::Hole => todo!(),
         }
