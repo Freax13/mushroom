@@ -311,23 +311,17 @@ impl SyscallArg for i64 {
 }
 
 impl SyscallArg for i32 {
-    fn parse(value: u64, abi: Abi) -> Result<Self> {
-        i64::parse(value, abi)
-            .and_then(|value| value.try_into().map_err(Into::into))
-            .or_else(|_| {
-                u32::try_from(value)
-                    .map(|value| value as i32)
-                    .map_err(Into::into)
-            })
+    fn parse(value: u64, _abi: Abi) -> Result<Self> {
+        Ok(value as u32 as i32)
     }
 
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
         abi: Abi,
-        thread: &ThreadGuard<'_>,
+        _thread: &ThreadGuard<'_>,
     ) -> fmt::Result {
-        i64::display(f, value, abi, thread)
+        write!(f, "{}", Self::parse(value, abi).unwrap())
     }
 }
 
