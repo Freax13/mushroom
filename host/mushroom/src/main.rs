@@ -7,7 +7,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mushroom::profiler::ProfileFolder;
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
-use snp_types::guest_policy::GuestPolicy;
+use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 use tracing::warn;
 use vcek_kds::{Product, Vcek};
 
@@ -180,6 +180,30 @@ struct VerifyCommand {
     /// Path to store cached VCEKs.
     #[arg(long, value_name = "PATH")]
     vcek_cache: Option<PathBuf>,
+    #[command(flatten)]
+    tcb_args: TcbArgs,
+}
+
+#[derive(Args)]
+struct TcbArgs {
+    /// The smallest allowed value for the `bootloader`` field of the launch TCB.
+    #[arg(long, default_value_t = 4)]
+    bootloader: u8,
+    /// The smallest allowed value for the `tee` field of the launch TCB.
+    #[arg(long, default_value_t = 0)]
+    tee: u8,
+    /// The smallest allowed value for the `snp` field of the launch TCB.
+    #[arg(long, default_value_t = 21)]
+    snp: u8,
+    /// The smallest allowed value for the `microcode` field of the launch TCB.
+    #[arg(long, default_value_t = 211)]
+    microcode: u8,
+}
+
+impl TcbArgs {
+    fn min_tcb(&self) -> TcbVersion {
+        TcbVersion::new(self.bootloader, self.tee, self.snp, self.microcode)
+    }
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
@@ -239,6 +263,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         &init,
         run.config.kasan,
         run.config.policy.policy(),
+        run.tcb_args.min_tcb(),
     );
     // FIXME: use proper error type and use `?` instead of unwrap.
     configuration

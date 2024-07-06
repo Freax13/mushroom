@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     fmt::{self, Display},
     mem::size_of,
 };
@@ -18,6 +19,7 @@ use vcek_kds::Vcek;
 pub struct Configuration {
     launch_digest: [u8; 48],
     policy: GuestPolicy,
+    min_tcb: TcbVersion,
 }
 
 impl Configuration {
@@ -27,6 +29,7 @@ impl Configuration {
         init: &[u8],
         load_kasan_shadow_mappings: bool,
         policy: GuestPolicy,
+        min_tcb: TcbVersion,
     ) -> Self {
         let commands =
             generate_base_load_commands(Some(supervisor), kernel, init, load_kasan_shadow_mappings);
@@ -46,6 +49,7 @@ impl Configuration {
         Self {
             launch_digest,
             policy,
+            min_tcb,
         }
     }
 
@@ -78,6 +82,14 @@ impl Configuration {
         verify_eq!({ report.policy }, self.policy);
 
         verify_eq!(report.signature_algo, 1);
+
+        let is_valid_tcb = report
+            .launch_tcb
+            .partial_cmp(&self.min_tcb)
+            .is_some_and(Ordering::is_ge);
+        if !is_valid_tcb {
+            return Err(VerificationError(()));
+        }
 
         // Construct signature.
         let signature = &report.signature[..size_of::<EcdsaP384Sha384Signature>()];
