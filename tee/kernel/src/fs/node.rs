@@ -342,12 +342,8 @@ pub fn create_file(
 ) -> Result<DynINode> {
     loop {
         let (dir, last) = find_parent(start_dir, &path, ctx)?;
-        let file_name = match last {
-            PathSegment::Root => todo!(),
-            PathSegment::Empty => todo!(),
-            PathSegment::Dot => todo!(),
-            PathSegment::DotDot => todo!(),
-            PathSegment::FileName(file_name) => file_name,
+        let PathSegment::FileName(file_name) = last else {
+            bail!(IsDir);
         };
 
         match dir.create_file(file_name.into_owned(), mode)? {
