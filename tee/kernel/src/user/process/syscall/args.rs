@@ -16,7 +16,7 @@ use crate::{
     fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{
         memory::VirtualMemory,
-        thread::{Sigset, ThreadGuard},
+        thread::{Gid, Sigset, ThreadGuard, Uid},
     },
 };
 
@@ -1231,5 +1231,35 @@ bitflags! {
         const EX = 1 << 1;
         const NB = 1 << 2;
         const UN = 1 << 3;
+    }
+}
+
+impl SyscallArg for Uid {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        u32::parse(value, abi).map(Self::new)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        <u32 as SyscallArg>::display(f, value, abi, thread)
+    }
+}
+
+impl SyscallArg for Gid {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        u32::parse(value, abi).map(Self::new)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        <u32 as SyscallArg>::display(f, value, abi, thread)
     }
 }

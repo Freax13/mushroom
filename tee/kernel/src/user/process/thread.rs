@@ -23,6 +23,7 @@ use alloc::{
     collections::VecDeque,
     string::String,
     sync::{Arc, Weak},
+    vec::Vec,
 };
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -85,6 +86,7 @@ pub struct ThreadState {
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
+    pub credentials: Credentials,
 }
 
 impl Thread {
@@ -100,6 +102,7 @@ impl Thread {
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
+        credentials: Credentials,
     ) -> Self {
         Self {
             tid,
@@ -117,6 +120,7 @@ impl Thread {
                 cwd,
                 vfork_done,
                 umask,
+                credentials,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -144,6 +148,7 @@ impl Thread {
             None,
             CpuState::new(0, 0, 0),
             FileMode::empty(),
+            Credentials::super_user(),
         )
     }
 
@@ -395,6 +400,7 @@ impl ThreadGuard<'_> {
             vfork_done,
             cpu_state,
             self.umask,
+            self.credentials.clone(),
         );
 
         let mut guard = thread.lock();
@@ -457,6 +463,8 @@ impl ThreadGuard<'_> {
         self.clear_child_tid = Pointer::NULL;
         self.signal_handler_table = Arc::new(SignalHandlerTable::new());
         self.sigaltstack = Stack::default();
+        self.credentials.saved_set_user_id = self.credentials.effective_user_id;
+        self.credentials.saved_set_group_id = self.credentials.effective_group_id;
     }
 
     pub fn start_executable(
@@ -847,5 +855,72 @@ impl SignalHandlerTable {
 impl Default for SignalHandlerTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct Credentials {
+    pub real_user_id: Uid,
+    pub real_group_id: Gid,
+    pub effective_user_id: Uid,
+    pub effective_group_id: Gid,
+    pub saved_set_user_id: Uid,
+    pub saved_set_group_id: Gid,
+    pub filesystem_user_id: Uid,
+    pub filesystem_group_id: Gid,
+    pub supplementary_group_ids: Vec<Gid>,
+}
+
+impl Credentials {
+    pub const fn super_user() -> Self {
+        Self {
+            real_user_id: Uid::SUPER_USER,
+            real_group_id: Gid::SUPER_USER,
+            effective_user_id: Uid::SUPER_USER,
+            effective_group_id: Gid::SUPER_USER,
+            saved_set_user_id: Uid::SUPER_USER,
+            saved_set_group_id: Gid::SUPER_USER,
+            filesystem_user_id: Uid::SUPER_USER,
+            filesystem_group_id: Gid::SUPER_USER,
+            supplementary_group_ids: Vec::new(),
+        }
+    }
+
+    pub fn is_super_user(&self) -> bool {
+        self.effective_user_id == Uid::SUPER_USER
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct Uid(u32);
+
+impl Uid {
+    pub const SUPER_USER: Self = Self(0);
+    pub const UNCHANGED: Self = Self(!0);
+
+    pub fn new(uid: u32) -> Self {
+        Self(uid)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct Gid(u32);
+
+impl Gid {
+    pub const SUPER_USER: Self = Self(0);
+    pub const UNCHANGED: Self = Self(!0);
+
+    pub fn new(gid: u32) -> Self {
+        Self(gid)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
     }
 }

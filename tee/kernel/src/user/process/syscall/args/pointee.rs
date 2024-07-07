@@ -25,8 +25,8 @@ use crate::{
         memory::VirtualMemory,
         syscall::traits::Abi,
         thread::{
-            SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags,
-            ThreadGuard, UContext,
+            Gid, SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack,
+            StackFlags, ThreadGuard, UContext, Uid,
         },
     },
 };
@@ -1563,3 +1563,9 @@ impl From<PSelectSigsetArg64> for PSelectSigsetArg {
         }
     }
 }
+
+impl Pointee for Uid {}
+impl PrimitivePointee for Uid {}
+
+impl Pointee for Gid {}
+impl PrimitivePointee for Gid {}
