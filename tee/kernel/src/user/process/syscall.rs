@@ -23,8 +23,13 @@ use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
-            do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
-            unix_socket::StreamUnixSocket, Events, FdFlags, FileDescriptor, FileDescriptorTable,
+            do_io, do_io_with_vm,
+            epoll::Epoll,
+            eventfd::EventFd,
+            path::PathFd,
+            pipe,
+            unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
+            Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
@@ -1219,7 +1224,11 @@ fn socketpair(
         Domain::Unix => {
             ensure!(protocol == 0, Inval);
 
-            if r#type.contains(SocketPairType::STREAM) {
+            if r#type.contains(SocketPairType::SEQPACKET) {
+                let (half1, half2) = SeqPacketUnixSocket::new_pair(r#type);
+                res1 = fdtable.insert(half1, FdFlags::from(r#type));
+                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+            } else if r#type.contains(SocketPairType::STREAM) {
                 let (half1, half2) = StreamUnixSocket::new_pair(r#type);
                 res1 = fdtable.insert(half1, FdFlags::from(r#type));
                 res2 = fdtable.insert(half2, FdFlags::from(r#type));

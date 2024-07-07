@@ -925,6 +925,7 @@ enum_arg! {
 bitflags! {
     pub struct SocketPairType {
         const STREAM = 1;
+        const SEQPACKET = 5;
 
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
