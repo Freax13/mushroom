@@ -279,11 +279,10 @@ impl Process {
     pub fn schedule_alarm(self: &Arc<Self>, seconds: u32) -> u32 {
         let now = now();
         let (cancel_tx, cancel_rx) = oneshot::new();
-        let deadline = now
-            + Timespec {
-                tv_sec: seconds,
-                tv_nsec: 0,
-            };
+        let deadline = now.saturating_add(Timespec {
+            tv_sec: seconds,
+            tv_nsec: 0,
+        });
         let new_state = AlarmState {
             deadline,
             cancel_tx,

@@ -872,6 +872,16 @@ impl Timespec {
     pub const UTIME_NOW: u32 = 0x3FFFFFFF;
     pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
 
+    pub fn saturating_add(self, rhs: Self) -> Self {
+        let mut tv_sec = self.tv_sec.saturating_add(rhs.tv_sec);
+        let mut tv_nsec = self.tv_nsec + rhs.tv_nsec;
+        if let Some(new_tv_nsec) = tv_nsec.checked_sub(1_000_000_000) {
+            tv_nsec = new_tv_nsec;
+            tv_sec = tv_sec.saturating_add(1);
+        }
+        Self { tv_sec, tv_nsec }
+    }
+
     pub fn checked_sub(self, rhs: Self) -> Option<Self> {
         if self < rhs {
             return None;
