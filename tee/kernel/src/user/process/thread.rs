@@ -735,7 +735,12 @@ impl PendingSignals {
             .any(|s| s.signal == sig_info.signal);
         // Only queue the signal if it's not already pending.
         if !is_pending {
-            self.pending_signals.push_back(sig_info);
+            // Prioritize SIGKILL over everything else.
+            if sig_info.signal == Signal::KILL {
+                self.pending_signals.push_front(sig_info);
+            } else {
+                self.pending_signals.push_back(sig_info);
+            }
             true
         } else {
             false
