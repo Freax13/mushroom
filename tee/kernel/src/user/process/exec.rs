@@ -7,11 +7,13 @@ use crate::{
         node::{DynINode, FileAccessContext},
     },
     spin::lazy::Lazy,
+    user::process::memory::MemoryPermissions,
 };
 use alloc::{borrow::ToOwned, ffi::CString, vec};
 use bytemuck::{bytes_of_mut, Zeroable};
 use usize_conversions::FromUsize;
 use x86_64::{
+    align_up,
     instructions::random::RdRand,
     structures::paging::{PageSize, Size4KiB},
 };
@@ -19,7 +21,7 @@ use x86_64::{
 use self::elf::{ElfIdent, ElfLoaderParams};
 
 use super::{
-    memory::{Bias, MemoryPermissions, VirtualMemory},
+    memory::{Bias, VirtualMemory},
     syscall::{
         args::{FileMode, OpenFlags},
         cpu_state::CpuState,
@@ -101,30 +103,65 @@ impl VirtualMemory {
         self.modify().init_brk(brk_start);
 
         // Create stack.
-        let len = 0x10_0000;
+        let len = 0x80_0000;
         let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len) + len;
 
-        self.modify().mmap_zero(
-            Bias::Fixed(stack),
-            0x4000,
-            MemoryPermissions::READ | MemoryPermissions::WRITE,
-        );
+        // Sum up the number of pointer-sized values that need to be placed in
+        // a contigous chunk of memory.
+        let mut num_values = 0;
+        num_values += 1; // argc
+        num_values += argv.len(); // argv
+        num_values += 1; // argv null-terminator
+        num_values += envp.len(); // envp
+        num_values += 1; // envp null-terminator
+        num_values += MAX_NUM_AUX_VECTORS; // auxv
+
+        let pointer_size = match E::ABI {
+            Abi::I386 => 4,
+            Abi::Amd64 => 8,
+        };
+        // Calculate the first address where we can place other values (mostly
+        // strings) that don't need to be in a contigous chunk.
+        let start_str_addr = stack + align_up(u64::from_usize(num_values) * pointer_size, 0x1000);
 
         let mut addr = stack;
-        let mut write = |value: u64| match E::ABI {
-            Abi::I386 => {
-                let value = u32::try_from(value).unwrap();
-                self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
-                addr += 4u64;
+        let mut write = |value: u64| {
+            // Double-check that the contigous values don't overlap with the string values.
+            debug_assert!(addr < start_str_addr);
+
+            // Map more memory for each new page we write to.
+            if addr.is_aligned(0x1000u64) {
+                self.modify().mmap_zero(
+                    Bias::Fixed(addr),
+                    0x1000,
+                    MemoryPermissions::WRITE | MemoryPermissions::READ,
+                );
             }
-            Abi::Amd64 => {
-                self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
-                addr += 8u64;
+
+            match E::ABI {
+                Abi::I386 => {
+                    let value = u32::try_from(value).unwrap();
+                    self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
+                }
+                Abi::Amd64 => self.write_bytes(addr, &value.to_ne_bytes()).unwrap(),
             }
+            addr += pointer_size;
         };
 
-        let mut str_addr = stack + 0x800u64;
+        let mut str_addr = start_str_addr;
         let mut write_bytes = |value: &[u8]| {
+            // Map more memory for each new page we write to.
+            for addr in (str_addr..)
+                .take(value.len())
+                .filter(|addr| addr.is_aligned(0x1000u64))
+            {
+                self.modify().mmap_zero(
+                    Bias::Fixed(addr),
+                    0x1000,
+                    MemoryPermissions::WRITE | MemoryPermissions::READ,
+                );
+            }
+
             let addr = str_addr;
             self.write_bytes(str_addr, value)?;
             str_addr += u64::from_usize(value.len());
@@ -132,6 +169,7 @@ impl VirtualMemory {
         };
         let mut write_str = |value: &CStr| write_bytes(value.to_bytes_with_nul());
 
+        // write argc + argv.
         write(u64::from_usize(argv.len())); // argc
         for arg in argv {
             let arg = write_str(arg.as_ref())?;
@@ -139,34 +177,46 @@ impl VirtualMemory {
         }
         write(0);
 
+        // write enpv.
         for env in envp {
             let env = write_str(env.as_ref())?;
             write(env.as_u64());
         }
         write(0);
 
-        if let Some(phdr) = info.phdr {
-            write(3); // AT_PHDR
-            write(phdr);
+        // write auxv.
+        const MAX_NUM_AUX_VECTORS: usize = 9;
+        #[derive(Clone, Copy)]
+        enum AuxVector {
+            End = 0,
+            Phdr = 3,
+            Phent = 4,
+            Phnum = 5,
+            Pagesz = 6,
+            Base = 7,
+            Entry = 9,
+            ClkTck = 17,
+            Random = 25,
         }
-        write(4); // AT_PHENT
-        write(u64::from(info.phentsize));
-        write(5); // AT_PHNUM
-        write(u64::from(info.phnum));
-        write(6); // AT_PAGESZ
-        write(4096);
-        if let Some(at_base) = at_base {
-            write(7); // AT_BASE
-            write(at_base);
-        } else {
-            write(7); // AT_BASE
-            write(0);
+        let aux_vectors = info
+            .phdr
+            .into_iter()
+            .map(|phdr| (AuxVector::Phdr, phdr))
+            .chain([
+                (AuxVector::Phent, u64::from(info.phentsize)),
+                (AuxVector::Phnum, u64::from(info.phnum)),
+                (AuxVector::Pagesz, 0x1000),
+                (AuxVector::Base, at_base.unwrap_or_default()),
+                (AuxVector::Entry, info.entry),
+                (AuxVector::ClkTck, 100),
+                (AuxVector::Random, write_bytes(&random_bytes())?.as_u64()),
+                (AuxVector::End, 0),
+            ]);
+        assert!(aux_vectors.clone().count() <= MAX_NUM_AUX_VECTORS);
+        for (vector, value) in aux_vectors {
+            write(vector as u64);
+            write(value);
         }
-        write(9); // AT_ENTRY
-        write(info.entry);
-        write(25); // AT_RANDOM
-        write(write_bytes(&random_bytes())?.as_u64());
-        write(0); // AT_NULL
 
         let cs = match E::ABI {
             Abi::I386 => 0x1b,
@@ -188,8 +238,6 @@ impl VirtualMemory {
         let mut bytes = [0; 128];
         let len = file.pread(0, &mut bytes)?;
         let bytes = &bytes[..len];
-
-        log::debug!("{bytes:02x?}");
 
         // Strip shebang.
         let bytes = bytes.strip_prefix(b"#!").ok_or(err!(Inval))?;
