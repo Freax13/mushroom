@@ -274,13 +274,15 @@ impl Thread {
     }
 
     async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
+        self.process.wait_until_not_stopped().await;
+
         let mut state = self.lock();
         while let Some(sig_info) = state.pop_signal() {
             let virtual_memory = state.virtual_memory.clone();
             let sigaction = state.signal_handler_table.get(sig_info.signal);
 
             match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
-                (Sigaction::SIG_DFL, Signal::CHLD) => {
+                (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => {
                     // Ignore
                     continue;
                 }
@@ -294,6 +296,7 @@ impl Thread {
                     self.process.exit_group(WStatus::signaled(signal));
                     return core::future::pending().await;
                 }
+                (_, Signal::STOP) => continue,
                 (Sigaction::SIG_DFL, signal) => {
                     todo!("unimplemented default for signal {signal:?}")
                 }
@@ -509,7 +512,9 @@ impl ThreadGuard<'_> {
         loop {
             // Determine the signal that should be handled next.
             let mut mask = self.sigmask;
-            mask.remove(Signal::KILL); // "SIGKILL (...) cannot be (...) blocked (...)."
+            // "SIGKILL and SIGSTOP cannot be (...) blocked (...)."
+            mask.remove(Signal::KILL);
+            mask.remove(Signal::STOP);
             if self.pending_signal_info.is_none() {
                 self.pending_signal_info = self.pending_signals.pop(mask);
             }
@@ -522,10 +527,11 @@ impl ThreadGuard<'_> {
             // wants to ignore the signal we just skip it.
             let handler = self.signal_handler_table.get(pending_signal_info.signal);
             let ignored = match (handler.sa_handler_or_sigaction, pending_signal_info.signal) {
-                (Sigaction::SIG_DFL, Signal::CHLD) => true,
+                (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => true,
                 (Sigaction::SIG_DFL, Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE) => {
                     false
                 }
+                (_, Signal::STOP) => true,
                 (_, Signal::KILL) => false,
                 (Sigaction::SIG_DFL, signal) => {
                     log::debug!("{pending_signal_info:?}");

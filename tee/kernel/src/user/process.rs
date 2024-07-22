@@ -1,7 +1,8 @@
 use core::{
     ffi::CStr,
     iter::from_fn,
-    sync::atomic::{AtomicUsize, Ordering},
+    ops::Not,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use alloc::{
@@ -62,6 +63,7 @@ pub struct Process {
     pub inos: ProcessInos,
     exe: RwLock<Path>,
     alarm: Mutex<Option<AlarmState>>,
+    stop_state: StopState,
 }
 
 impl Process {
@@ -86,6 +88,7 @@ impl Process {
             inos: ProcessInos::new(),
             exe: RwLock::new(exe),
             alarm: Mutex::new(None),
+            stop_state: StopState::default(),
         };
         let arc = Arc::new(this);
 
@@ -241,6 +244,12 @@ impl Process {
     }
 
     pub fn queue_signal(&self, sig_info: SigInfo) {
+        match sig_info.signal {
+            Signal::CONT | Signal::KILL => self.stop_state.cont(),
+            Signal::STOP => self.stop_state.stop(),
+            _ => {}
+        }
+
         self.pending_signals.lock().add(sig_info);
         self.signals_notify.notify();
     }
@@ -306,6 +315,10 @@ impl Process {
         let prev_state = self.alarm.lock().take();
         AlarmState::remaining_seconds(prev_state, now())
     }
+
+    pub async fn wait_until_not_stopped(&self) {
+        self.stop_state.wait().await;
+    }
 }
 
 struct AlarmState {
@@ -321,6 +334,29 @@ impl AlarmState {
         } else {
             0
         }
+    }
+}
+
+#[derive(Default)]
+struct StopState {
+    stopped: AtomicBool,
+    notify: Notify,
+}
+
+impl StopState {
+    async fn wait(&self) {
+        self.notify
+            .wait_until(|| self.stopped.load(Ordering::Relaxed).not().then_some(()))
+            .await;
+    }
+
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Relaxed);
+    }
+
+    fn cont(&self) {
+        self.stopped.store(false, Ordering::Relaxed);
+        self.notify.notify();
     }
 }
 

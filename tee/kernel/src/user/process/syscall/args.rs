@@ -1161,6 +1161,8 @@ impl Signal {
     pub const ALRM: Self = Self(14);
     pub const PIPE: Self = Self(13);
     pub const CHLD: Self = Self(17);
+    pub const CONT: Self = Self(18);
+    pub const STOP: Self = Self(19);
 
     pub fn new(value: u8) -> Result<Self> {
         ensure!((1..=64).contains(&value), Inval);

@@ -135,6 +135,12 @@ impl Notify {
     }
 }
 
+impl Default for Notify {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A wrapper around `Arc<Notify>` that sends a notification when it's dropped.
 pub struct NotifyOnDrop(pub Arc<Notify>);
 
