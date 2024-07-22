@@ -23,6 +23,7 @@ use alloc::{
     collections::VecDeque,
     string::String,
     sync::{Arc, Weak},
+    vec::Vec,
 };
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -85,6 +86,7 @@ pub struct ThreadState {
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
+    pub credentials: Credentials,
 }
 
 impl Thread {
@@ -100,6 +102,7 @@ impl Thread {
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
+        credentials: Credentials,
     ) -> Self {
         Self {
             tid,
@@ -117,6 +120,7 @@ impl Thread {
                 cwd,
                 vfork_done,
                 umask,
+                credentials,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -144,6 +148,7 @@ impl Thread {
             None,
             CpuState::new(0, 0, 0),
             FileMode::empty(),
+            Credentials::super_user(),
         )
     }
 
@@ -269,19 +274,25 @@ impl Thread {
     }
 
     async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
+        self.process.wait_until_not_stopped().await;
+
         let mut state = self.lock();
         while let Some(sig_info) = state.pop_signal() {
             let virtual_memory = state.virtual_memory.clone();
             let sigaction = state.signal_handler_table.get(sig_info.signal);
 
             match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
-                (Sigaction::SIG_DFL, Signal::CHLD) => {
+                (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => {
                     // Ignore
                     continue;
                 }
                 (
                     Sigaction::SIG_DFL,
-                    signal @ (Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE),
+                    signal @ (Signal::HUP
+                    | Signal::ABRT
+                    | Signal::SEGV
+                    | Signal::PIPE
+                    | Signal::TERM),
                 )
                 | (_, signal @ Signal::KILL) => {
                     // Terminate.
@@ -289,6 +300,7 @@ impl Thread {
                     self.process.exit_group(WStatus::signaled(signal));
                     return core::future::pending().await;
                 }
+                (_, Signal::STOP) => continue,
                 (Sigaction::SIG_DFL, signal) => {
                     todo!("unimplemented default for signal {signal:?}")
                 }
@@ -395,6 +407,7 @@ impl ThreadGuard<'_> {
             vfork_done,
             cpu_state,
             self.umask,
+            self.credentials.clone(),
         );
 
         let mut guard = thread.lock();
@@ -457,6 +470,8 @@ impl ThreadGuard<'_> {
         self.clear_child_tid = Pointer::NULL;
         self.signal_handler_table = Arc::new(SignalHandlerTable::new());
         self.sigaltstack = Stack::default();
+        self.credentials.saved_set_user_id = self.credentials.effective_user_id;
+        self.credentials.saved_set_group_id = self.credentials.effective_group_id;
     }
 
     pub fn start_executable(
@@ -501,7 +516,9 @@ impl ThreadGuard<'_> {
         loop {
             // Determine the signal that should be handled next.
             let mut mask = self.sigmask;
-            mask.remove(Signal::KILL); // "SIGKILL (...) cannot be (...) blocked (...)."
+            // "SIGKILL and SIGSTOP cannot be (...) blocked (...)."
+            mask.remove(Signal::KILL);
+            mask.remove(Signal::STOP);
             if self.pending_signal_info.is_none() {
                 self.pending_signal_info = self.pending_signals.pop(mask);
             }
@@ -514,10 +531,12 @@ impl ThreadGuard<'_> {
             // wants to ignore the signal we just skip it.
             let handler = self.signal_handler_table.get(pending_signal_info.signal);
             let ignored = match (handler.sa_handler_or_sigaction, pending_signal_info.signal) {
-                (Sigaction::SIG_DFL, Signal::CHLD) => true,
-                (Sigaction::SIG_DFL, Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE) => {
-                    false
-                }
+                (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => true,
+                (
+                    Sigaction::SIG_DFL,
+                    Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE | Signal::TERM,
+                ) => false,
+                (_, Signal::STOP) => true,
                 (_, Signal::KILL) => false,
                 (Sigaction::SIG_DFL, signal) => {
                     log::debug!("{pending_signal_info:?}");
@@ -716,7 +735,12 @@ impl PendingSignals {
             .any(|s| s.signal == sig_info.signal);
         // Only queue the signal if it's not already pending.
         if !is_pending {
-            self.pending_signals.push_back(sig_info);
+            // Prioritize SIGKILL over everything else.
+            if sig_info.signal == Signal::KILL {
+                self.pending_signals.push_front(sig_info);
+            } else {
+                self.pending_signals.push_back(sig_info);
+            }
             true
         } else {
             false
@@ -847,5 +871,72 @@ impl SignalHandlerTable {
 impl Default for SignalHandlerTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct Credentials {
+    pub real_user_id: Uid,
+    pub real_group_id: Gid,
+    pub effective_user_id: Uid,
+    pub effective_group_id: Gid,
+    pub saved_set_user_id: Uid,
+    pub saved_set_group_id: Gid,
+    pub filesystem_user_id: Uid,
+    pub filesystem_group_id: Gid,
+    pub supplementary_group_ids: Vec<Gid>,
+}
+
+impl Credentials {
+    pub const fn super_user() -> Self {
+        Self {
+            real_user_id: Uid::SUPER_USER,
+            real_group_id: Gid::SUPER_USER,
+            effective_user_id: Uid::SUPER_USER,
+            effective_group_id: Gid::SUPER_USER,
+            saved_set_user_id: Uid::SUPER_USER,
+            saved_set_group_id: Gid::SUPER_USER,
+            filesystem_user_id: Uid::SUPER_USER,
+            filesystem_group_id: Gid::SUPER_USER,
+            supplementary_group_ids: Vec::new(),
+        }
+    }
+
+    pub fn is_super_user(&self) -> bool {
+        self.effective_user_id == Uid::SUPER_USER
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct Uid(u32);
+
+impl Uid {
+    pub const SUPER_USER: Self = Self(0);
+    pub const UNCHANGED: Self = Self(!0);
+
+    pub fn new(uid: u32) -> Self {
+        Self(uid)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct Gid(u32);
+
+impl Gid {
+    pub const SUPER_USER: Self = Self(0);
+    pub const UNCHANGED: Self = Self(!0);
+
+    pub fn new(gid: u32) -> Self {
+        Self(gid)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
     }
 }

@@ -225,6 +225,14 @@ impl VirtualMemory {
         Ok(value)
     }
 
+    /// Read a pointee from userspace and return the amount of bytes read.
+    pub fn read_sized<T, P>(&self, pointer: Pointer<T>) -> Result<(usize, T)>
+    where
+        T: ReadablePointee<P> + AbiAgnosticPointee,
+    {
+        self.read_sized_with_abi(pointer, Abi::Amd64)
+    }
+
     /// Read a pointee from userspace.
     pub fn read<T, P>(&self, pointer: Pointer<T>) -> Result<T>
     where

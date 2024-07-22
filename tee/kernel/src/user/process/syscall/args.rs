@@ -16,7 +16,7 @@ use crate::{
     fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{
         memory::VirtualMemory,
-        thread::{Sigset, ThreadGuard},
+        thread::{Gid, Sigset, ThreadGuard, Uid},
     },
 };
 
@@ -872,6 +872,16 @@ impl Timespec {
     pub const UTIME_NOW: u32 = 0x3FFFFFFF;
     pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
 
+    pub fn saturating_add(self, rhs: Self) -> Self {
+        let mut tv_sec = self.tv_sec.saturating_add(rhs.tv_sec);
+        let mut tv_nsec = self.tv_nsec + rhs.tv_nsec;
+        if let Some(new_tv_nsec) = tv_nsec.checked_sub(1_000_000_000) {
+            tv_nsec = new_tv_nsec;
+            tv_sec = tv_sec.saturating_add(1);
+        }
+        Self { tv_sec, tv_nsec }
+    }
+
     pub fn checked_sub(self, rhs: Self) -> Option<Self> {
         if self < rhs {
             return None;
@@ -925,6 +935,7 @@ enum_arg! {
 bitflags! {
     pub struct SocketPairType {
         const STREAM = 1;
+        const SEQPACKET = 5;
 
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
@@ -1159,7 +1170,10 @@ impl Signal {
     pub const SEGV: Self = Self(11);
     pub const ALRM: Self = Self(14);
     pub const PIPE: Self = Self(13);
+    pub const TERM: Self = Self(15);
     pub const CHLD: Self = Self(17);
+    pub const CONT: Self = Self(18);
+    pub const STOP: Self = Self(19);
 
     pub fn new(value: u8) -> Result<Self> {
         ensure!((1..=64).contains(&value), Inval);
@@ -1231,5 +1245,35 @@ bitflags! {
         const EX = 1 << 1;
         const NB = 1 << 2;
         const UN = 1 << 3;
+    }
+}
+
+impl SyscallArg for Uid {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        u32::parse(value, abi).map(Self::new)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        <u32 as SyscallArg>::display(f, value, abi, thread)
+    }
+}
+
+impl SyscallArg for Gid {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        u32::parse(value, abi).map(Self::new)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        <u32 as SyscallArg>::display(f, value, abi, thread)
     }
 }

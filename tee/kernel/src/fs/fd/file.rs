@@ -295,7 +295,12 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
-            Whence::End => todo!(),
+            Whence::End => {
+                let size = usize::try_from(self.file.stat()?.size)?;
+                *guard = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
             Whence::Data => todo!(),
             Whence::Hole => todo!(),
         }

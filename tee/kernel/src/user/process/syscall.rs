@@ -23,8 +23,13 @@ use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
-            do_io, do_io_with_vm, epoll::Epoll, eventfd::EventFd, path::PathFd, pipe,
-            unix_socket::StreamUnixSocket, Events, FdFlags, FileDescriptor, FileDescriptorTable,
+            do_io, do_io_with_vm,
+            epoll::Epoll,
+            eventfd::EventFd,
+            path::PathFd,
+            pipe,
+            unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
+            Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
@@ -59,8 +64,8 @@ use self::{
 use super::{
     memory::{Bias, VirtualMemory},
     thread::{
-        new_tid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags,
-        Thread, ThreadGuard,
+        new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
+        StackFlags, Thread, ThreadGuard, Uid,
     },
     Process,
 };
@@ -170,8 +175,23 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetrlimit);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
+    handlers.register(SysSetuid);
+    handlers.register(SysSetgid);
     handlers.register(SysGeteuid);
     handlers.register(SysGetegid);
+    handlers.register(SysGetppid);
+    handlers.register(SysGetpgrp);
+    handlers.register(SysSetreuid);
+    handlers.register(SysSetregid);
+    handlers.register(SysGetgroups);
+    handlers.register(SysSetgroups);
+    handlers.register(SysSetresuid);
+    handlers.register(SysGetresuid);
+    handlers.register(SysSetresgid);
+    handlers.register(SysGetresgid);
+    handlers.register(SysSetfsuid);
+    handlers.register(SysSetfsgid);
+    handlers.register(SysGetpgrp);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -1204,7 +1224,11 @@ fn socketpair(
         Domain::Unix => {
             ensure!(protocol == 0, Inval);
 
-            if r#type.contains(SocketPairType::STREAM) {
+            if r#type.contains(SocketPairType::SEQPACKET) {
+                let (half1, half2) = SeqPacketUnixSocket::new_pair(r#type);
+                res1 = fdtable.insert(half1, FdFlags::from(r#type));
+                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+            } else if r#type.contains(SocketPairType::STREAM) {
                 let (half1, half2) = StreamUnixSocket::new_pair(r#type);
                 res1 = fdtable.insert(half1, FdFlags::from(r#type));
                 res2 = fdtable.insert(half2, FdFlags::from(r#type));
@@ -1897,22 +1921,303 @@ fn getrlimit(
 }
 
 #[syscall(i386 = 199, amd64 = 102)]
-fn getuid() -> SyscallResult {
-    Ok(0)
+fn getuid(thread: &mut ThreadGuard) -> SyscallResult {
+    Ok(u64::from(thread.credentials.real_user_id.get()))
 }
 
 #[syscall(i386 = 200, amd64 = 104)]
-fn getgid() -> SyscallResult {
+fn getgid(thread: &mut ThreadGuard) -> SyscallResult {
+    Ok(u64::from(thread.credentials.real_group_id.get()))
+}
+
+#[syscall(i386 = 213, amd64 = 105)]
+fn setuid(thread: &mut ThreadGuard, uid: Uid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    ensure!(
+        credentials.is_super_user()
+            || credentials.saved_set_user_id == uid
+            || credentials.real_user_id == uid,
+        Perm
+    );
+    credentials.real_user_id = uid;
+    Ok(0)
+}
+
+#[syscall(i386 = 214, amd64 = 106)]
+fn setgid(thread: &mut ThreadGuard, gid: Gid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    ensure!(
+        credentials.is_super_user()
+            || credentials.saved_set_group_id == gid
+            || credentials.real_group_id == gid,
+        Perm
+    );
+    credentials.real_group_id = gid;
     Ok(0)
 }
 
 #[syscall(i386 = 201, amd64 = 107)]
-fn geteuid() -> SyscallResult {
-    Ok(0)
+fn geteuid(thread: &mut ThreadGuard) -> SyscallResult {
+    Ok(u64::from(thread.credentials.effective_user_id.get()))
 }
 
 #[syscall(i386 = 202, amd64 = 108)]
-fn getegid() -> SyscallResult {
+fn getegid(thread: &mut ThreadGuard) -> SyscallResult {
+    Ok(u64::from(thread.credentials.effective_group_id.get()))
+}
+
+#[syscall(i386 = 64, amd64 = 110)]
+fn getppid(thread: &mut ThreadGuard) -> SyscallResult {
+    let ppid = thread
+        .process()
+        .parent
+        .upgrade()
+        .map_or(1, |parent| parent.pid);
+    Ok(u64::from(ppid))
+}
+
+#[syscall(i386 = 65, amd64 = 111)]
+fn getpgrp(thread: &mut ThreadGuard) -> SyscallResult {
+    let pgrp = thread.process().pid;
+    Ok(u64::from(pgrp))
+}
+
+#[syscall(i386 = 203, amd64 = 113)]
+fn setreuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    let mut new_credentials = credentials.clone();
+
+    if euid != Uid::UNCHANGED {
+        ensure!(
+            credentials.is_super_user()
+                || euid == credentials.real_user_id
+                || euid == credentials.effective_user_id
+                || euid == credentials.saved_set_user_id,
+            Perm
+        );
+        new_credentials.effective_user_id = euid;
+        new_credentials.filesystem_user_id = euid;
+    }
+
+    if ruid != Uid::UNCHANGED {
+        ensure!(
+            credentials.is_super_user()
+                || ruid == credentials.real_user_id
+                || ruid == credentials.effective_user_id,
+            Perm
+        );
+        new_credentials.real_user_id = euid;
+    }
+
+    if ruid != Uid::UNCHANGED || (euid != Uid::UNCHANGED && euid != credentials.real_user_id) {
+        new_credentials.saved_set_user_id = new_credentials.effective_user_id;
+    }
+
+    *credentials = new_credentials;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 204, amd64 = 114)]
+fn setregid(thread: &mut ThreadGuard, rguid: Gid, eguid: Gid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    let mut new_credentials = credentials.clone();
+
+    if eguid != Gid::UNCHANGED {
+        ensure!(
+            credentials.is_super_user()
+                || eguid == credentials.real_group_id
+                || eguid == credentials.effective_group_id
+                || eguid == credentials.saved_set_group_id,
+            Perm
+        );
+        new_credentials.effective_group_id = eguid;
+        new_credentials.filesystem_group_id = eguid;
+    }
+
+    if rguid != Gid::UNCHANGED {
+        ensure!(
+            credentials.is_super_user()
+                || rguid == credentials.real_group_id
+                || rguid == credentials.effective_group_id,
+            Perm
+        );
+        new_credentials.real_group_id = eguid;
+    }
+
+    if rguid != Gid::UNCHANGED || (eguid != Gid::UNCHANGED && eguid != credentials.real_group_id) {
+        new_credentials.saved_set_group_id = new_credentials.effective_group_id;
+    }
+
+    *credentials = new_credentials;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 205, amd64 = 115)]
+fn getgroups(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    size: i32,
+    list: Pointer<Gid>,
+) -> SyscallResult {
+    let credentials = &thread.credentials;
+
+    let size = usize::try_from(size)?;
+    if size != 0 {
+        ensure!(size >= credentials.supplementary_group_ids.len(), Inval);
+
+        let mut list = list;
+        for gid in credentials.supplementary_group_ids.iter().copied() {
+            let written = virtual_memory.write(list, gid)?;
+            list = list.bytes_offset(written);
+        }
+    }
+
+    Ok(u64::from_usize(credentials.supplementary_group_ids.len()))
+}
+
+#[syscall(i386 = 206, amd64 = 116)]
+fn setgroups(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    size: i32,
+    list: Pointer<Gid>,
+) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+
+    ensure!(credentials.is_super_user(), Perm);
+
+    let size = usize::try_from(size)?;
+    const NGROUPS_MAX: usize = 65536;
+    ensure!(size <= NGROUPS_MAX, Inval);
+
+    let mut gids = Vec::with_capacity(size);
+
+    let mut list = list;
+    for _ in 0..size {
+        let (read, gid) = virtual_memory.read_sized(list)?;
+        list = list.bytes_offset(read);
+        gids.push(gid);
+    }
+    credentials.supplementary_group_ids = gids;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 208, amd64 = 117)]
+fn setresuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid, suid: Uid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    let mut new_credentials = credentials.clone();
+
+    for (dest, src) in [
+        (&mut new_credentials.real_user_id, ruid),
+        (&mut new_credentials.effective_user_id, euid),
+        (&mut new_credentials.saved_set_user_id, suid),
+    ] {
+        if src == Uid::UNCHANGED {
+            continue;
+        }
+        ensure!(
+            credentials.is_super_user()
+                || src == credentials.real_user_id
+                || src == credentials.effective_user_id
+                || src == credentials.saved_set_user_id,
+            Perm
+        );
+        *dest = src;
+    }
+    new_credentials.filesystem_user_id = new_credentials.effective_user_id;
+
+    *credentials = new_credentials;
+    Ok(0)
+}
+
+#[syscall(i386 = 209, amd64 = 118)]
+fn getresuid(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    ruid: Pointer<Uid>,
+    euid: Pointer<Uid>,
+    suid: Pointer<Uid>,
+) -> SyscallResult {
+    let credentials = &thread.credentials;
+    virtual_memory.write(ruid, credentials.real_user_id)?;
+    virtual_memory.write(euid, credentials.effective_user_id)?;
+    virtual_memory.write(suid, credentials.saved_set_user_id)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 210, amd64 = 119)]
+fn setresgid(thread: &mut ThreadGuard, rgid: Gid, egid: Gid, sgid: Gid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    let mut new_credentials = credentials.clone();
+
+    for (dest, src) in [
+        (&mut new_credentials.real_group_id, rgid),
+        (&mut new_credentials.effective_group_id, egid),
+        (&mut new_credentials.saved_set_group_id, sgid),
+    ] {
+        if src == Gid::UNCHANGED {
+            continue;
+        }
+        ensure!(
+            credentials.is_super_user()
+                || src == credentials.real_group_id
+                || src == credentials.effective_group_id
+                || src == credentials.saved_set_group_id,
+            Perm
+        );
+        *dest = src;
+    }
+    new_credentials.filesystem_group_id = new_credentials.effective_group_id;
+
+    *credentials = new_credentials;
+    Ok(0)
+}
+
+#[syscall(i386 = 211, amd64 = 120)]
+fn getresgid(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    rgid: Pointer<Gid>,
+    egid: Pointer<Gid>,
+    sgid: Pointer<Gid>,
+) -> SyscallResult {
+    let credentials = &thread.credentials;
+    virtual_memory.write(rgid, credentials.real_group_id)?;
+    virtual_memory.write(egid, credentials.effective_group_id)?;
+    virtual_memory.write(sgid, credentials.saved_set_group_id)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 215, amd64 = 122)]
+fn setfsuid(thread: &mut ThreadGuard, fsuid: Uid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    ensure!(
+        credentials.is_super_user()
+            || credentials.real_user_id == fsuid
+            || credentials.effective_user_id == fsuid
+            || credentials.saved_set_user_id == fsuid
+            || credentials.filesystem_user_id == fsuid,
+        Perm
+    );
+    credentials.filesystem_user_id = fsuid;
+    Ok(0)
+}
+
+#[syscall(i386 = 216, amd64 = 123)]
+fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
+    let credentials = &mut thread.credentials;
+    ensure!(
+        credentials.is_super_user()
+            || credentials.real_group_id == fsgid
+            || credentials.effective_group_id == fsgid
+            || credentials.saved_set_group_id == fsgid
+            || credentials.filesystem_group_id == fsgid,
+        Perm
+    );
+    credentials.filesystem_group_id = fsgid;
     Ok(0)
 }
 
