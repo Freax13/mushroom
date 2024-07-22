@@ -1160,6 +1160,7 @@ impl Signal {
     pub const SEGV: Self = Self(11);
     pub const ALRM: Self = Self(14);
     pub const PIPE: Self = Self(13);
+    pub const TERM: Self = Self(15);
     pub const CHLD: Self = Self(17);
     pub const CONT: Self = Self(18);
     pub const STOP: Self = Self(19);
