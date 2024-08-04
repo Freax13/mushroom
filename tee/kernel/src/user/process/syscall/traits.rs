@@ -123,9 +123,11 @@ impl SyscallHandlers {
         T: Syscall<execute(): Send + 'static>,
     {
         if let Some(no) = T::NO_I386 {
+            assert!(self.i386_handlers[no].is_none());
             self.i386_handlers[no] = Some(SyscallHandler::new::<T>());
         }
         if let Some(no) = T::NO_AMD64 {
+            assert!(self.amd64_handlers[no].is_none());
             self.amd64_handlers[no] = Some(SyscallHandler::new::<T>());
         }
         core::mem::forget(val);

@@ -191,7 +191,6 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetresgid);
     handlers.register(SysSetfsuid);
     handlers.register(SysSetfsgid);
-    handlers.register(SysGetpgrp);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
