@@ -191,6 +191,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetresgid);
     handlers.register(SysSetfsuid);
     handlers.register(SysSetfsgid);
+    handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -2218,6 +2219,31 @@ fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
     );
     credentials.filesystem_group_id = fsgid;
     Ok(0)
+}
+
+#[syscall(i386 = 179, amd64 = 130)]
+async fn rt_sigsuspend(
+    thread: Arc<Thread>,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    unewset: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let sigmask = virtual_memory.read_with_abi(unewset, abi)?;
+
+    // Replace the signal mask.
+    let mut guard = thread.lock();
+    let old_mask = core::mem::replace(&mut guard.sigmask, sigmask);
+    drop(guard);
+
+    // Wait for the thread to be interrupted.
+    let res = thread.interruptable(pending(), false).await;
+
+    // Restore the signal mask.
+    let mut guard = thread.lock();
+    guard.sigmask = old_mask;
+
+    res
 }
 
 #[syscall(i386 = 186, amd64 = 131)]
