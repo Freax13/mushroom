@@ -216,6 +216,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRenameat);
     handlers.register(SysLinkat);
     handlers.register(SysSymlinkat);
+    handlers.register(SysReadlinkat);
     handlers.register(SysFchmodat);
     handlers.register(SysFaccessat);
     handlers.register(SysPselect6);
@@ -1858,25 +1859,22 @@ fn symlink(
 fn readlink(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] mut ctx: FileAccessContext,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     pathname: Pointer<Path>,
     buf: Pointer<[u8]>,
     bufsiz: u64,
 ) -> SyscallResult {
-    let bufsiz = usize_from(bufsiz);
-
-    let pathname = virtual_memory.read(pathname)?;
-    let target = read_link(thread.process().cwd(), &pathname, &mut ctx)?;
-
-    let bytes = target.as_bytes();
-    // Truncate to `bufsiz`.
-    let len = cmp::min(bytes.len(), bufsiz);
-    let bytes = &bytes[..len];
-
-    virtual_memory.write_bytes(buf.get(), bytes)?;
-
-    let len = u64::from_usize(len);
-    Ok(len)
+    readlinkat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        pathname,
+        buf,
+        bufsiz,
+    )
 }
 
 #[syscall(i386 = 15, amd64 = 90)]
@@ -2906,6 +2904,40 @@ fn symlinkat(
     create_link(newdfd, &newname, oldname, &mut ctx)?;
 
     Ok(0)
+}
+
+#[syscall(i386 = 305, amd64 = 267)]
+fn readlinkat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    buf: Pointer<[u8]>,
+    bufsiz: u64,
+) -> SyscallResult {
+    let bufsiz = usize_from(bufsiz);
+
+    let dfd = if dfd == FdNum::CWD {
+        thread.process().cwd()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let pathname = virtual_memory.read(pathname)?;
+    let target = read_link(dfd, &pathname, &mut ctx)?;
+
+    let bytes = target.as_bytes();
+    // Truncate to `bufsiz`.
+    let len = cmp::min(bytes.len(), bufsiz);
+    let bytes = &bytes[..len];
+
+    virtual_memory.write_bytes(buf.get(), bytes)?;
+
+    let len = u64::from_usize(len);
+    Ok(len)
 }
 
 #[syscall(i386 = 306, amd64 = 268)]
