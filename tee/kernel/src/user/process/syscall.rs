@@ -43,8 +43,8 @@ use crate::{
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{
-            AccessMode, ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, PSelectSigsetArg,
-            Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
+            AccessMode, ClockNanosleepFlags, Dup3Flags, FaccessatFlags, FdSet, LongOffset,
+            PSelectSigsetArg, Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
         },
     },
 };
@@ -2991,7 +2991,7 @@ fn faccessat(
     dfd: FdNum,
     pathname: Pointer<Path>,
     mode: AccessMode,
-    flags: u64,
+    flags: FaccessatFlags,
 ) -> SyscallResult {
     let start_dir = if dfd == FdNum::CWD {
         thread.process().cwd()
@@ -3002,7 +3002,18 @@ fn faccessat(
 
     let pathname = virtual_memory.read(pathname)?;
 
-    let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
+    let node = if flags.contains(FaccessatFlags::SYMLINK_NOFOLLOW) {
+        lookup_node(start_dir, &pathname, &mut ctx)?
+    } else {
+        lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?
+    };
+
+    if !flags.contains(FaccessatFlags::EACCESS) {
+        let credentials = thread.process().credentials.lock();
+        ctx.filesystem_user_id = credentials.real_user_id;
+        ctx.filesystem_group_id = credentials.real_group_id;
+    }
+
     let stat = node.stat()?;
     if mode.contains(AccessMode::READ) {
         ctx.check_permissions(&stat, Permission::Read)?;

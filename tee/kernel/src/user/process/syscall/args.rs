@@ -1286,3 +1286,10 @@ bitflags! {
         const READ = 1 << 2;
     }
 }
+
+bitflags! {
+    pub struct FaccessatFlags {
+        const SYMLINK_NOFOLLOW = 1 << 8;
+        const EACCESS = 1 << 9;
+    }
+}
