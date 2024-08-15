@@ -34,7 +34,7 @@ use crate::{
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
             lookup_and_resolve_node, lookup_node, procfs, read_link, set_mode, unlink_dir,
-            unlink_file, DirEntry, FileAccessContext, OldDirEntry,
+            unlink_file, DirEntry, FileAccessContext, OldDirEntry, Permission,
         },
         path::Path,
     },
@@ -43,8 +43,8 @@ use crate::{
     user::process::{
         memory::MemoryPermissions,
         syscall::args::{
-            ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, PSelectSigsetArg, Pollfd, Resource,
-            SpliceFlags, Timeval, UserDesc,
+            AccessMode, ClockNanosleepFlags, Dup3Flags, FdSet, LongOffset, PSelectSigsetArg,
+            Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
         },
     },
 };
@@ -1467,7 +1467,8 @@ async fn execve(
     // Open the executable.
     let cwd = thread.process().cwd();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
-    ensure!(node.mode()?.contains(FileMode::OTHER_EXECUTE), Acces);
+    let stat = node.stat()?;
+    ctx.check_permissions(&stat, Permission::Execute)?;
     let file = node.open(pathname.clone(), OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
@@ -2653,11 +2654,26 @@ fn openat(
                 flags,
                 &mut ctx,
             )?
-        } else if flags.contains(OpenFlags::NOFOLLOW) {
-            lookup_node(start_dir.clone(), &filename, &mut ctx)?
         } else {
-            lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
+            let node = if flags.contains(OpenFlags::NOFOLLOW) {
+                lookup_node(start_dir.clone(), &filename, &mut ctx)?
+            } else {
+                lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
+            };
+
+            let stat = node.stat()?;
+            if flags.contains(OpenFlags::WRONLY) {
+                ctx.check_permissions(&stat, Permission::Write)?;
+            } else if flags.contains(OpenFlags::RDWR) {
+                ctx.check_permissions(&stat, Permission::Read)?;
+                ctx.check_permissions(&stat, Permission::Write)?;
+            } else {
+                ctx.check_permissions(&stat, Permission::Read)?;
+            }
+
+            node
         };
+
         node.open(filename, flags)?
     };
 
@@ -2974,7 +2990,7 @@ fn faccessat(
     #[state] mut ctx: FileAccessContext,
     dfd: FdNum,
     pathname: Pointer<Path>,
-    mode: FileMode,
+    mode: AccessMode,
     flags: u64,
 ) -> SyscallResult {
     let start_dir = if dfd == FdNum::CWD {
@@ -2988,32 +3004,14 @@ fn faccessat(
 
     let node = lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?;
     let stat = node.stat()?;
-    let file_mode = stat.mode.mode();
-
-    let groups = {
-        [
-            (
-                FileMode::OTHER_EXECUTE,
-                [FileMode::GROUP_EXECUTE, FileMode::OWNER_EXECUTE],
-            ),
-            (
-                FileMode::OTHER_WRITE,
-                [FileMode::GROUP_WRITE, FileMode::OWNER_WRITE],
-            ),
-            (
-                FileMode::OTHER_READ,
-                [FileMode::GROUP_READ, FileMode::OWNER_READ],
-            ),
-        ]
-    };
-    for (bit, alternatives) in groups {
-        if mode.contains(bit) {
-            ensure!(
-                (file_mode.contains(bit)
-                    || alternatives.into_iter().any(|bit| file_mode.contains(bit))),
-                Acces
-            );
-        }
+    if mode.contains(AccessMode::READ) {
+        ctx.check_permissions(&stat, Permission::Read)?;
+    }
+    if mode.contains(AccessMode::WRITE) {
+        ctx.check_permissions(&stat, Permission::Write)?;
+    }
+    if mode.contains(AccessMode::EXECUTE) {
+        ctx.check_permissions(&stat, Permission::Execute)?;
     }
 
     Ok(0)

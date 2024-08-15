@@ -1278,3 +1278,11 @@ impl SyscallArg for Gid {
         <u32 as SyscallArg>::display(f, value, abi, thread)
     }
 }
+
+bitflags! {
+    pub struct AccessMode {
+        const EXECUTE = 1 << 0;
+        const WRITE = 1 << 1;
+        const READ = 1 << 2;
+    }
+}

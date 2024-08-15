@@ -267,17 +267,63 @@ impl FileAccessContext {
         Ok(())
     }
 
-    pub fn check_is_user_or_su(&self, uid: Uid) -> Result<()> {
-        ensure!(
-            self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_user_id == uid,
-            Perm
-        );
+    #[track_caller]
+    pub fn check_permissions(&self, stat: &Stat, permission: Permission) -> Result<()> {
+        if self.filesystem_user_id == Uid::SUPER_USER {
+            // Access checks are special for the super user: Read and write
+            // checks are omitted completly, but for execute at least one
+            // execute flag has to be set.
+            if matches!(permission, Permission::Execute) {
+                ensure!(
+                    stat.mode.mode().intersects(
+                        FileMode::OWNER_EXECUTE | FileMode::GROUP_EXECUTE | FileMode::OTHER_EXECUTE,
+                    ),
+                    Acces
+                );
+            }
+            return Ok(());
+        }
+
+        let mode_bit = if self.is_user(stat.uid) {
+            match permission {
+                Permission::Read => FileMode::OWNER_READ,
+                Permission::Write => FileMode::OWNER_WRITE,
+                Permission::Execute => FileMode::OWNER_EXECUTE,
+            }
+        } else if self.is_in_group(stat.gid) {
+            match permission {
+                Permission::Read => FileMode::GROUP_READ,
+                Permission::Write => FileMode::GROUP_WRITE,
+                Permission::Execute => FileMode::GROUP_EXECUTE,
+            }
+        } else {
+            match permission {
+                Permission::Read => FileMode::OTHER_READ,
+                Permission::Write => FileMode::OTHER_WRITE,
+                Permission::Execute => FileMode::OTHER_EXECUTE,
+            }
+        };
+        ensure!(stat.mode.mode().contains(mode_bit), Acces);
+
         Ok(())
     }
 
-    pub fn is_in_group(&self, gid: Gid) -> bool {
-        self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_group_id == gid
+    pub fn is_user(&self, uid: Uid) -> bool {
+        self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_user_id == uid
     }
+
+    pub fn is_in_group(&self, gid: Gid) -> bool {
+        self.filesystem_user_id == Uid::SUPER_USER
+            || self.filesystem_group_id == gid
+            || self.supplementary_group_ids.contains(&gid)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Permission {
+    Read,
+    Write,
+    Execute,
 }
 
 impl ExtractableThreadState for FileAccessContext {
@@ -314,11 +360,16 @@ fn lookup_node_with_parent(
         |(start_dir, node), segment| -> Result<_> {
             let node = resolve_links(node, start_dir.clone(), ctx)?;
 
+            let stat = node.stat()?;
+            if !matches!(segment, PathSegment::Root) {
+                ctx.check_permissions(&stat, Permission::Execute)?;
+            }
+
             match segment {
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
                 PathSegment::Empty | PathSegment::Dot => {
                     // Make sure that the node is a directory.
-                    ensure!(node.ty()? == FileType::Dir, NotDir);
+                    ensure!(stat.mode.ty() == FileType::Dir, NotDir);
                     Ok((start_dir, node))
                 }
                 PathSegment::DotDot => {
@@ -369,6 +420,8 @@ fn find_parent<'a>(
                     resolve_links(node, dir, ctx)?
                 }
             };
+            let stat = dir.stat()?;
+            ctx.check_permissions(&stat, Permission::Execute)?;
             Ok((dir, next_segment))
         },
     )?;
