@@ -10,7 +10,7 @@ use crate::{
     error::bail,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
-        node::{DynINode, FileAccessContext},
+        node::FileAccessContext,
     },
     rt::notify::Notify,
     spin::mutex::{Mutex, MutexGuard},
@@ -81,7 +81,6 @@ pub struct ThreadState {
     pub pending_signals: PendingSignals,
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
-    pub cwd: DynINode,
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
@@ -96,7 +95,6 @@ impl Thread {
         sigmask: Sigset,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
-        cwd: DynINode,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
@@ -114,7 +112,6 @@ impl Thread {
                 pending_signals: PendingSignals::new(),
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
-                cwd,
                 vfork_done,
                 umask,
             }),
@@ -136,12 +133,12 @@ impl Thread {
                 None,
                 Path::new(b"/bin/init".to_vec()).unwrap(),
                 Credentials::super_user(),
+                ROOT_NODE.clone(),
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::with_standard_io()),
-            ROOT_NODE.clone(),
             None,
             CpuState::new(0, 0, 0),
             FileMode::empty(),
@@ -399,7 +396,6 @@ impl ThreadGuard<'_> {
             self.sigmask,
             virtual_memory,
             fdtable,
-            self.cwd.clone(),
             vfork_done,
             cpu_state,
             self.umask,
@@ -483,7 +479,7 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let cpu_state =
-            virtual_memory.start_executable(path, file, argv, envp, ctx, self.cwd.clone())?;
+            virtual_memory.start_executable(path, file, argv, envp, ctx, self.process().cwd())?;
 
         // Success! Commit the new state to the thread.
 

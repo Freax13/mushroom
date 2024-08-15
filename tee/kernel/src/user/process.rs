@@ -18,7 +18,7 @@ use crate::{
     error::{err, Result},
     fs::{
         fd::FileDescriptorTable,
-        node::{procfs::ProcessInos, tmpfs::TmpFsFile, FileAccessContext, INode},
+        node::{procfs::ProcessInos, tmpfs::TmpFsFile, DynINode, FileAccessContext, INode},
         path::Path,
         StaticFile,
     },
@@ -66,6 +66,7 @@ pub struct Process {
     alarm: Mutex<Option<AlarmState>>,
     stop_state: StopState,
     pub credentials: Mutex<Credentials>,
+    cwd: Mutex<DynINode>,
 }
 
 impl Process {
@@ -75,6 +76,7 @@ impl Process {
         termination_signal: Option<Signal>,
         exe: Path,
         credentials: Credentials,
+        cwd: DynINode,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -93,6 +95,7 @@ impl Process {
             alarm: Mutex::new(None),
             stop_state: StopState::default(),
             credentials: Mutex::new(credentials),
+            cwd: Mutex::new(cwd),
         };
         let arc = Arc::new(this);
 
@@ -109,6 +112,14 @@ impl Process {
 
     pub fn exe(&self) -> Path {
         self.exe.read().clone()
+    }
+
+    pub fn cwd(&self) -> DynINode {
+        self.cwd.lock().clone()
+    }
+
+    pub fn chdir(&self, cwd: DynINode) {
+        *self.cwd.lock() = cwd;
     }
 
     pub fn add_thread(&self, thread: WeakThread) {

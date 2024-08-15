@@ -325,7 +325,7 @@ fn stat(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_and_resolve_node(thread.cwd.clone(), &filename, &mut ctx)?;
+    let node = lookup_and_resolve_node(thread.process().cwd(), &filename, &mut ctx)?;
     let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
@@ -343,7 +343,7 @@ fn stat64(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_and_resolve_node(thread.cwd.clone(), &filename, &mut ctx)?;
+    let node = lookup_and_resolve_node(thread.process().cwd(), &filename, &mut ctx)?;
     let stat = node.stat()?;
     let stat64 = Stat64::from(stat);
 
@@ -379,7 +379,7 @@ fn lstat(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_node(thread.cwd.clone(), &filename, &mut ctx)?;
+    let node = lookup_node(thread.process().cwd(), &filename, &mut ctx)?;
     let stat = node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
@@ -397,7 +397,7 @@ fn lstat64(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_node(thread.cwd.clone(), &filename, &mut ctx)?;
+    let node = lookup_node(thread.process().cwd(), &filename, &mut ctx)?;
     let stat = node.stat()?;
 
     let stat64 = Stat64::from(stat);
@@ -866,7 +866,7 @@ fn access(
     mode: u64, // FIXME: use correct type
 ) -> SyscallResult {
     let path = virtual_memory.read(pathname)?;
-    let _node = lookup_and_resolve_node(thread.cwd.clone(), &path, &mut ctx)?;
+    let _node = lookup_and_resolve_node(thread.process().cwd(), &path, &mut ctx)?;
     // FIXME: implement the actual access checks.
     Ok(0)
 }
@@ -1298,6 +1298,7 @@ async fn clone(
             termination_signal,
             process.exe.read().clone(),
             process.credentials.lock().clone(),
+            process.cwd(),
         ))
     };
 
@@ -1463,7 +1464,7 @@ async fn execve(
     log::info!("execve({pathname:?}, {args:?}, {envs:?})");
 
     // Open the executable.
-    let cwd = thread.lock().cwd.clone();
+    let cwd = thread.process().cwd();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
     ensure!(node.mode()?.contains(FileMode::OTHER_EXECUTE), Acces);
     let file = node.open(pathname.clone(), OpenFlags::empty())?;
@@ -1706,7 +1707,7 @@ fn getcwd(
     path: Pointer<Path>,
     size: u64,
 ) -> SyscallResult {
-    let cwd = thread.cwd.path(&mut ctx)?;
+    let cwd = thread.process().cwd().path(&mut ctx)?;
     ensure!(cwd.as_bytes().len() < usize_from(size), Range);
 
     virtual_memory.write(path, cwd)?;
@@ -1721,7 +1722,8 @@ fn chdir(
     path: Pointer<Path>,
 ) -> SyscallResult {
     let path = virtual_memory.read(path)?;
-    thread.cwd = lookup_and_resolve_node(thread.cwd.clone(), &path, &mut ctx)?;
+    let new_cwd = lookup_and_resolve_node(thread.process().cwd(), &path, &mut ctx)?;
+    thread.process().chdir(new_cwd);
     Ok(0)
 }
 
@@ -1733,7 +1735,7 @@ fn fchdir(
     fd: FdNum,
 ) -> SyscallResult {
     let dirfd = fdtable.get(fd)?;
-    thread.cwd = dirfd.as_dir(&mut ctx)?;
+    thread.process().chdir(dirfd.as_dir(&mut ctx)?);
     Ok(0)
 }
 
@@ -1786,7 +1788,7 @@ fn rmdir(
     pathname: Pointer<Path>,
 ) -> SyscallResult {
     let pathname = virtual_memory.read(pathname)?;
-    let start_dir = thread.cwd.clone();
+    let start_dir = thread.process().cwd();
     unlink_dir(start_dir, &pathname, &mut ctx)?;
     Ok(0)
 }
@@ -1864,7 +1866,7 @@ fn readlink(
     let bufsiz = usize_from(bufsiz);
 
     let pathname = virtual_memory.read(pathname)?;
-    let target = read_link(thread.cwd.clone(), &pathname, &mut ctx)?;
+    let target = read_link(thread.process().cwd(), &pathname, &mut ctx)?;
 
     let bytes = target.as_bytes();
     // Truncate to `bufsiz`.
@@ -1886,9 +1888,7 @@ fn chmod(
     mode: FileMode,
 ) -> SyscallResult {
     let path = virtual_memory.read(filename)?;
-
-    set_mode(thread.cwd.clone(), &path, mode, &mut ctx)?;
-
+    set_mode(thread.process().cwd(), &path, mode, &mut ctx)?;
     Ok(0)
 }
 
@@ -2627,7 +2627,7 @@ fn openat(
     let filename = virtual_memory.read(filename)?;
 
     let start_dir = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -2678,7 +2678,7 @@ fn mkdirat(
     mode: u64,
 ) -> SyscallResult {
     let start_dir = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -2714,7 +2714,7 @@ fn futimesat(
     times: Pointer<[Timeval; 2]>,
 ) -> SyscallResult {
     let start_dir = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -2758,7 +2758,7 @@ fn newfstatat(
         let pathname = virtual_memory.read(pathname.cast::<u8>())?;
         if pathname == 0 {
             let stat = if dfd == FdNum::CWD {
-                thread.cwd.stat()?
+                thread.process().cwd().stat()?
             } else {
                 let fd = fdtable.get(dfd)?;
                 fd.stat()?
@@ -2771,7 +2771,7 @@ fn newfstatat(
     }
 
     let start_dir = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -2804,7 +2804,7 @@ fn unlinkat(
     let pathname = virtual_memory.read(pathname)?;
 
     let start_dir = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -2859,13 +2859,13 @@ fn linkat(
     let newpath = virtual_memory.read(newpath)?;
 
     let olddir = if olddirfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(olddirfd)?;
         fd.as_dir(&mut ctx)?
     };
     let newdir = if newdirfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(newdirfd)?;
         fd.as_dir(&mut ctx)?
@@ -2894,7 +2894,7 @@ fn symlinkat(
     newname: Pointer<Path>,
 ) -> SyscallResult {
     let newdfd = if newdfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(newdfd)?;
         fd.as_dir(&mut ctx)?
@@ -2921,7 +2921,7 @@ fn fchmodat(
     let mode = FileMode::from_bits_truncate(mode);
 
     let newdfd = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -2946,7 +2946,7 @@ fn faccessat(
     flags: u64,
 ) -> SyscallResult {
     let start_dir = if dfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(&mut ctx)?
@@ -3129,7 +3129,7 @@ fn utimensat(
 
     if let Some(path) = path {
         let start_dir = if dfd == FdNum::CWD {
-            thread.cwd.clone()
+            thread.process().cwd()
         } else {
             let fd = fdtable.get(dfd)?;
             fd.as_dir(&mut ctx)?
@@ -3251,14 +3251,14 @@ fn renameat2(
     flags: u64,
 ) -> SyscallResult {
     let oldd = if olddfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(olddfd)?;
         fd.as_dir(&mut ctx)?
     };
 
     let newd = if newdfd == FdNum::CWD {
-        thread.cwd.clone()
+        thread.process().cwd()
     } else {
         let fd = fdtable.get(newdfd)?;
         fd.as_dir(&mut ctx)?
