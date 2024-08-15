@@ -862,14 +862,21 @@ async fn writev(
 fn access(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] mut ctx: FileAccessContext,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     pathname: Pointer<Path>,
-    mode: u64, // FIXME: use correct type
+    mode: AccessMode,
 ) -> SyscallResult {
-    let path = virtual_memory.read(pathname)?;
-    let _node = lookup_and_resolve_node(thread.process().cwd(), &path, &mut ctx)?;
-    // FIXME: implement the actual access checks.
-    Ok(0)
+    faccessat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        pathname,
+        mode,
+        FaccessatFlags::empty(),
+    )
 }
 
 #[syscall(i386 = 42, amd64 = 22)]
