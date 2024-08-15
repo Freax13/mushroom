@@ -23,7 +23,6 @@ use alloc::{
     collections::VecDeque,
     string::String,
     sync::{Arc, Weak},
-    vec::Vec,
 };
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -884,11 +883,11 @@ pub struct Credentials {
     pub saved_set_group_id: Gid,
     pub filesystem_user_id: Uid,
     pub filesystem_group_id: Gid,
-    pub supplementary_group_ids: Vec<Gid>,
+    pub supplementary_group_ids: Arc<[Gid]>,
 }
 
 impl Credentials {
-    pub const fn super_user() -> Self {
+    pub fn super_user() -> Self {
         Self {
             real_user_id: Uid::SUPER_USER,
             real_group_id: Gid::SUPER_USER,
@@ -898,7 +897,7 @@ impl Credentials {
             saved_set_group_id: Gid::SUPER_USER,
             filesystem_user_id: Uid::SUPER_USER,
             filesystem_group_id: Gid::SUPER_USER,
-            supplementary_group_ids: Vec::new(),
+            supplementary_group_ids: Arc::new([]),
         }
     }
 
@@ -907,7 +906,7 @@ impl Credentials {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct Uid(u32);
 
@@ -924,7 +923,7 @@ impl Uid {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct Gid(u32);
 

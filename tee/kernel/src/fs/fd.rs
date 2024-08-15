@@ -22,6 +22,7 @@ use crate::{
         syscall::args::{
             EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
         },
+        thread::{Gid, Uid},
     },
 };
 use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
@@ -81,11 +82,26 @@ impl FileDescriptorTable {
     pub fn with_standard_io() -> Self {
         let this = Self::empty();
 
-        let stdin = this.insert(std::Stdin::new(), FdFlags::empty()).unwrap();
+        let stdin = this
+            .insert(
+                std::Stdin::new(Uid::SUPER_USER, Gid::SUPER_USER),
+                FdFlags::empty(),
+            )
+            .unwrap();
         assert_eq!(stdin.get(), 0);
-        let stdout = this.insert(std::Stdout::new(), FdFlags::empty()).unwrap();
+        let stdout = this
+            .insert(
+                std::Stdout::new(Uid::SUPER_USER, Gid::SUPER_USER),
+                FdFlags::empty(),
+            )
+            .unwrap();
         assert_eq!(stdout.get(), 1);
-        let stderr = this.insert(std::Stderr::new(), FdFlags::empty()).unwrap();
+        let stderr = this
+            .insert(
+                std::Stderr::new(Uid::SUPER_USER, Gid::SUPER_USER),
+                FdFlags::empty(),
+            )
+            .unwrap();
         assert_eq!(stderr.get(), 2);
 
         this
@@ -207,11 +223,13 @@ impl FileDescriptorTable {
             .collect()
     }
 
-    pub fn get_node(&self, fd_num: FdNum) -> Result<DynINode> {
+    pub fn get_node(&self, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
         let guard = self.table.lock();
         let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(
             entry.ino,
+            uid,
+            gid,
             entry.fd.clone(),
             entry.file_lock_record.get().clone(),
         )))
@@ -359,10 +377,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Ok(())
     }
 
-    fn set_mode(&self, mode: FileMode) -> Result<()> {
-        let _ = mode;
-        bail!(Io)
-    }
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()>;
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
         let _ = ctime;

@@ -875,9 +875,10 @@ fn access(
 fn pipe(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     pipefd: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
-    pipe2(virtual_memory, fdtable, pipefd, Pipe2Flags::empty())
+    pipe2(virtual_memory, fdtable, ctx, pipefd, Pipe2Flags::empty())
 }
 
 #[syscall(i386 = 82, amd64 = 23, interruptable)]
@@ -1212,6 +1213,7 @@ async fn recv_from(
 fn socketpair(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     domain: Domain,
     r#type: SocketPairType,
     protocol: i32,
@@ -1225,11 +1227,19 @@ fn socketpair(
             ensure!(protocol == 0, Inval);
 
             if r#type.contains(SocketPairType::SEQPACKET) {
-                let (half1, half2) = SeqPacketUnixSocket::new_pair(r#type);
+                let (half1, half2) = SeqPacketUnixSocket::new_pair(
+                    r#type,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                );
                 res1 = fdtable.insert(half1, FdFlags::from(r#type));
                 res2 = fdtable.insert(half2, FdFlags::from(r#type));
             } else if r#type.contains(SocketPairType::STREAM) {
-                let (half1, half2) = StreamUnixSocket::new_pair(r#type);
+                let (half1, half2) = StreamUnixSocket::new_pair(
+                    r#type,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                );
                 res1 = fdtable.insert(half1, FdFlags::from(r#type));
                 res2 = fdtable.insert(half2, FdFlags::from(r#type));
             } else {
@@ -1453,7 +1463,7 @@ async fn execve(
     // Open the executable.
     let cwd = thread.lock().cwd.clone();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
-    ensure!(node.mode()?.contains(FileMode::EXECUTE), Acces);
+    ensure!(node.mode()?.contains(FileMode::OTHER_EXECUTE), Acces);
     let file = node.open(pathname.clone(), OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
@@ -1881,22 +1891,28 @@ fn chmod(
 }
 
 #[syscall(i386 = 94, amd64 = 91)]
-fn fchmod(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, mode: u64) -> SyscallResult {
+fn fchmod(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    mode: u64,
+) -> SyscallResult {
     let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
-    fd.set_mode(mode)?;
+    fd.chmod(mode, &ctx)?;
     Ok(0)
 }
 
 #[syscall(i386 = 207, amd64 = 93)]
 fn fchown(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
-    user: u32,
-    group: u32,
+    user: Uid,
+    group: Gid,
 ) -> SyscallResult {
-    // FIXME: implement this
-    let _fd = fdtable.get(fd)?;
+    let fd = fdtable.get(fd)?;
+    fd.chown(user, group, &ctx)?;
     Ok(0)
 }
 
@@ -2100,7 +2116,7 @@ fn setgroups(
         list = list.bytes_offset(read);
         gids.push(gid);
     }
-    credentials.supplementary_group_ids = gids;
+    credentials.supplementary_group_ids = Arc::from(gids);
 
     Ok(0)
 }
@@ -2935,14 +2951,17 @@ fn faccessat(
     let groups = {
         [
             (
-                FileMode::EXECUTE,
+                FileMode::OTHER_EXECUTE,
                 [FileMode::GROUP_EXECUTE, FileMode::OWNER_EXECUTE],
             ),
             (
-                FileMode::WRITE,
+                FileMode::OTHER_WRITE,
                 [FileMode::GROUP_WRITE, FileMode::OWNER_WRITE],
             ),
-            (FileMode::READ, [FileMode::GROUP_READ, FileMode::OWNER_READ]),
+            (
+                FileMode::OTHER_READ,
+                [FileMode::GROUP_READ, FileMode::OWNER_READ],
+            ),
         ]
     };
     for (bit, alternatives) in groups {
@@ -3122,19 +3141,27 @@ fn utimensat(
 #[syscall(i386 = 323, amd64 = 290)]
 fn eventfd(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     initval: u32,
     flags: EventFdFlags,
 ) -> SyscallResult {
-    let fd_num = fdtable.insert(EventFd::new(initval), flags)?;
+    let fd_num = fdtable.insert(
+        EventFd::new(initval, ctx.filesystem_user_id, ctx.filesystem_group_id),
+        flags,
+    )?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
 #[syscall(i386 = 329, amd64 = 291)]
 fn epoll_create1(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     flags: EpollCreate1Flags,
 ) -> SyscallResult {
-    let fd_num = fdtable.insert(Epoll::new(), flags)?;
+    let fd_num = fdtable.insert(
+        Epoll::new(ctx.filesystem_user_id, ctx.filesystem_group_id),
+        flags,
+    )?;
     Ok(fd_num.get().try_into().unwrap())
 }
 
@@ -3160,10 +3187,11 @@ fn dup3(
 fn pipe2(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
-    let (read_half, write_half) = pipe::new(flags);
+    let (read_half, write_half) = pipe::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
 
     // Insert the first read half.
     let read_half = fdtable.insert(read_half, flags)?;

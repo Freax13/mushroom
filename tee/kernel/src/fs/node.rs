@@ -8,7 +8,7 @@ use crate::{
     spin::lazy::Lazy,
     user::process::{
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
-        thread::ThreadGuard,
+        thread::{Gid, ThreadGuard, Uid},
         Process,
     },
 };
@@ -40,6 +40,8 @@ pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> = Lazy::new(|| {
         new_dev(),
         Location::root(),
         FileMode::from_bits_truncate(0o755),
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
     )
 });
 
@@ -67,7 +69,9 @@ pub trait INode: Any + Send + Sync + 'static {
         self.stat().map(|stat| stat.mode.mode())
     }
 
-    fn set_mode(&self, mode: FileMode);
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()>;
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>);
 
@@ -92,15 +96,27 @@ pub trait INode: Any + Send + Sync + 'static {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
+        user: Uid,
+        group: Gid,
     ) -> Result<Result<DynINode, DynINode>> {
         let _ = file_name;
         let _ = mode;
+        let _ = user;
+        let _ = group;
         bail!(NotDir)
     }
 
-    fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<DynINode> {
         let _ = file_name;
         let _ = mode;
+        let _ = uid;
+        let _ = gid;
         bail!(NotDir)
     }
 
@@ -108,10 +124,14 @@ pub trait INode: Any + Send + Sync + 'static {
         &self,
         file_name: FileName<'static>,
         target: Path,
+        uid: Uid,
+        gid: Gid,
         create_new: bool,
     ) -> Result<DynINode> {
         let _ = file_name;
         let _ = target;
+        let _ = uid;
+        let _ = gid;
         let _ = create_new;
         bail!(NotDir)
     }
@@ -121,10 +141,16 @@ pub trait INode: Any + Send + Sync + 'static {
         file_name: FileName<'static>,
         major: u16,
         minor: u8,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
     ) -> Result<DynINode> {
         let _ = file_name;
         let _ = major;
         let _ = minor;
+        let _ = mode;
+        let _ = uid;
+        let _ = gid;
         bail!(NotDir)
     }
 
@@ -221,9 +247,13 @@ fn resolve_links(
     Ok(node)
 }
 
+#[derive(Clone)]
 pub struct FileAccessContext {
     pub process: Arc<Process>,
     symlink_recursion_limit: u16,
+    pub filesystem_user_id: Uid,
+    pub filesystem_group_id: Gid,
+    pub supplementary_group_ids: Arc<[Gid]>,
 }
 
 impl FileAccessContext {
@@ -236,6 +266,18 @@ impl FileAccessContext {
             .ok_or(err!(Loop))?;
         Ok(())
     }
+
+    pub fn check_is_user_or_su(&self, uid: Uid) -> Result<()> {
+        ensure!(
+            self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_user_id == uid,
+            Perm
+        );
+        Ok(())
+    }
+
+    pub fn is_in_group(&self, gid: Gid) -> bool {
+        self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_group_id == gid
+    }
 }
 
 impl ExtractableThreadState for FileAccessContext {
@@ -243,6 +285,9 @@ impl ExtractableThreadState for FileAccessContext {
         Self {
             process: guard.process().clone(),
             symlink_recursion_limit: 16,
+            filesystem_user_id: guard.credentials.filesystem_user_id,
+            filesystem_group_id: guard.credentials.filesystem_group_id,
+            supplementary_group_ids: guard.credentials.supplementary_group_ids.clone(),
         }
     }
 }
@@ -346,7 +391,12 @@ pub fn create_file(
             bail!(IsDir);
         };
 
-        match dir.create_file(file_name.into_owned(), mode)? {
+        match dir.create_file(
+            file_name.into_owned(),
+            mode,
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+        )? {
             Ok(file) => return Ok(file),
             Err(existing) => {
                 let stat = existing.stat()?;
@@ -382,7 +432,12 @@ pub fn create_directory(
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             bail!(Exist)
         }
-        PathSegment::FileName(file_name) => dir.create_dir(file_name.into_owned(), mode),
+        PathSegment::FileName(file_name) => dir.create_dir(
+            file_name.into_owned(),
+            mode,
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+        ),
     }
 }
 
@@ -396,7 +451,13 @@ pub fn create_link(
     let PathSegment::FileName(file_name) = last else {
         bail!(Exist);
     };
-    dir.create_link(file_name.into_owned(), target, true)?;
+    dir.create_link(
+        file_name.into_owned(),
+        target,
+        ctx.filesystem_user_id,
+        ctx.filesystem_group_id,
+        true,
+    )?;
     Ok(())
 }
 
@@ -431,8 +492,7 @@ pub fn set_mode(
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
     let node = lookup_and_resolve_node(start_dir, path, ctx)?;
-    node.set_mode(mode);
-    Ok(())
+    node.chmod(mode, ctx)
 }
 
 pub fn unlink_file(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {

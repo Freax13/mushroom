@@ -4,7 +4,10 @@ use crate::{
         node::{DynINode, FileAccessContext},
         path::Path,
     },
-    user::process::syscall::args::{OpenFlags, Stat},
+    user::process::{
+        syscall::args::{FileMode, OpenFlags, Stat},
+        thread::{Gid, Uid},
+    },
 };
 
 use super::{Events, FileLock, OpenFileDescription};
@@ -27,6 +30,14 @@ impl OpenFileDescription for PathFd {
 
     fn path(&self) -> Path {
         self.path.clone()
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(BadF)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        bail!(BadF)
     }
 
     fn stat(&self) -> Result<Stat> {

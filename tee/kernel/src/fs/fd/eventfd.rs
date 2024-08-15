@@ -7,25 +7,39 @@ use bytemuck::pod_read_unaligned;
 use super::{Events, FileLock, OpenFileDescription};
 use crate::{
     error::{ensure, err, Result},
-    fs::{node::new_ino, path::Path},
+    fs::{
+        node::{new_ino, FileAccessContext},
+        ownership::Ownership,
+        path::Path,
+    },
     rt::notify::Notify,
+    spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
         syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
+        thread::{Gid, Uid},
     },
 };
 
 pub struct EventFd {
     ino: u64,
+    internal: Mutex<EventFdInternal>,
     notify: Notify,
     counter: AtomicU64,
     file_lock: FileLock,
 }
 
+struct EventFdInternal {
+    ownership: Ownership,
+}
+
 impl EventFd {
-    pub fn new(initval: u32) -> Self {
+    pub fn new(initval: u32, uid: Uid, gid: Gid) -> Self {
         Self {
             ino: new_ino(),
+            internal: Mutex::new(EventFdInternal {
+                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+            }),
             notify: Notify::new(),
             counter: AtomicU64::new(u64::from(initval)),
             file_lock: FileLock::anonymous(),
@@ -124,15 +138,24 @@ impl OpenFileDescription for EventFd {
         }
     }
 
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.internal.lock().ownership.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.internal.lock().ownership.chown(uid, gid, ctx)
+    }
+
     #[inline]
     fn stat(&self) -> Result<Stat> {
+        let guard = self.internal.lock();
         Ok(Stat {
             dev: 0,
             ino: self.ino,
             nlink: 1,
-            mode: FileTypeAndMode::new(FileType::Unknown, FileMode::from_bits_truncate(0o600)),
-            uid: 0,
-            gid: 0,
+            mode: FileTypeAndMode::new(FileType::Unknown, guard.ownership.mode()),
+            uid: guard.ownership.uid(),
+            gid: guard.ownership.gid(),
             rdev: 0,
             size: 0,
             blksize: 0,

@@ -367,10 +367,11 @@ impl From<OpenFlags> for FdFlags {
 bitflags! {
     pub struct FileMode {
         const ALL = 0o777;
+        const ALL_READ_WRITE = 0o666;
 
-        const EXECUTE = 0o001;
-        const WRITE = 0o002;
-        const READ = 0o004;
+        const OTHER_EXECUTE = 0o001;
+        const OTHER_WRITE = 0o002;
+        const OTHER_READ = 0o004;
         const GROUP_EXECUTE = 0o010;
         const GROUP_WRITE = 0o020;
         const GROUP_READ = 0o040;
@@ -668,8 +669,8 @@ pub struct Stat {
     pub ino: u64,
     pub nlink: u64,
     pub mode: FileTypeAndMode,
-    pub uid: u32,
-    pub gid: u32,
+    pub uid: Uid,
+    pub gid: Gid,
     pub rdev: u64,
     pub size: i64,
     pub blksize: i64,
@@ -700,8 +701,8 @@ pub struct Stat64 {
     pub mode: FileTypeAndMode,
     pub nlink: u32,
 
-    pub uid: u32,
-    pub gid: u32,
+    pub uid: Uid,
+    pub gid: Gid,
 
     pub rdev: u64,
     pub __pad3: [u8; 4],

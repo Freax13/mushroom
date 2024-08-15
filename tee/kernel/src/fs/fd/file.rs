@@ -2,10 +2,16 @@ use core::any::type_name;
 
 use crate::{
     error::{ensure, err},
-    fs::{node::INode, path::Path},
+    fs::{
+        node::{FileAccessContext, INode},
+        path::Path,
+    },
     memory::page::KernelPage,
     spin::mutex::Mutex,
-    user::process::syscall::args::{OpenFlags, Timespec},
+    user::process::{
+        syscall::args::{OpenFlags, Timespec},
+        thread::{Gid, Uid},
+    },
 };
 use alloc::sync::Arc;
 use log::debug;
@@ -202,9 +208,12 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         Ok(*guard)
     }
 
-    fn set_mode(&self, mode: FileMode) -> Result<()> {
-        self.file.set_mode(mode);
-        Ok(())
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chown(uid, gid, ctx)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -307,9 +316,12 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         Ok(*guard)
     }
 
-    fn set_mode(&self, mode: FileMode) -> Result<()> {
-        self.file.set_mode(mode);
-        Ok(())
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chown(uid, gid, ctx)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -375,9 +387,12 @@ impl OpenFileDescription for AppendFileFileDescription {
         self.file.append_from_user(vm, pointer, len)
     }
 
-    fn set_mode(&self, mode: FileMode) -> Result<()> {
-        self.file.set_mode(mode);
-        Ok(())
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chown(uid, gid, ctx)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -506,9 +521,12 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         Ok(*guard)
     }
 
-    fn set_mode(&self, mode: FileMode) -> Result<()> {
-        self.file.set_mode(mode);
-        Ok(())
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.file.chown(uid, gid, ctx)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
