@@ -67,6 +67,7 @@ pub struct Process {
     stop_state: StopState,
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<DynINode>,
+    process_group: Mutex<Arc<ProcessGroup>>,
 }
 
 impl Process {
@@ -77,6 +78,7 @@ impl Process {
         exe: Path,
         credentials: Credentials,
         cwd: DynINode,
+        process_group: Arc<ProcessGroup>,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -96,12 +98,14 @@ impl Process {
             stop_state: StopState::default(),
             credentials: Mutex::new(credentials),
             cwd: Mutex::new(cwd),
+            process_group: Mutex::new(process_group.clone()),
         };
         let arc = Arc::new(this);
 
         if let Some(parent) = parent.upgrade() {
             parent.children.lock().push(arc.clone());
         }
+        process_group.processes.lock().push(Arc::downgrade(&arc));
 
         arc
     }
@@ -277,6 +281,10 @@ impl Process {
         Self::all().find(|p| p.pid == pid)
     }
 
+    pub fn find_by_pid_in(self: &Arc<Self>, pid: u32) -> Option<Arc<Self>> {
+        self.iter().find(|p| p.pid == pid)
+    }
+
     pub fn all() -> impl Iterator<Item = Arc<Self>> {
         INIT_THREAD.process().iter()
     }
@@ -371,6 +379,39 @@ impl StopState {
     fn cont(&self) {
         self.stopped.store(false, Ordering::Relaxed);
         self.notify.notify();
+    }
+}
+
+pub struct ProcessGroup {
+    pgid: u32,
+    session: Mutex<Arc<Session>>,
+    processes: Mutex<Vec<Weak<Process>>>,
+}
+
+impl ProcessGroup {
+    pub fn new(pgid: u32, session: Arc<Session>) -> Arc<Self> {
+        let this = Self {
+            pgid,
+            session: Mutex::new(session.clone()),
+            processes: Mutex::new(Vec::new()),
+        };
+        let arc = Arc::new(this);
+        session.process_groups.lock().push(Arc::downgrade(&arc));
+        arc
+    }
+}
+
+pub struct Session {
+    _sid: u32,
+    process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
+}
+
+impl Session {
+    pub fn new(sid: u32) -> Self {
+        Self {
+            _sid: sid,
+            process_groups: Mutex::new(Vec::new()),
+        }
     }
 }
 

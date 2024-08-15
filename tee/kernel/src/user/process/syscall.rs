@@ -46,6 +46,7 @@ use crate::{
             AccessMode, ClockNanosleepFlags, Dup3Flags, FaccessatFlags, FdSet, LongOffset,
             PSelectSigsetArg, Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
         },
+        ProcessGroup,
     },
 };
 
@@ -179,6 +180,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetgid);
     handlers.register(SysGeteuid);
     handlers.register(SysGetegid);
+    handlers.register(SysSetpgid);
     handlers.register(SysGetppid);
     handlers.register(SysGetpgrp);
     handlers.register(SysSetreuid);
@@ -1307,6 +1309,7 @@ async fn clone(
             process.exe.read().clone(),
             process.credentials.lock().clone(),
             process.cwd(),
+            process.process_group.lock().clone(),
         ))
     };
 
@@ -1996,6 +1999,50 @@ fn getegid(thread: &mut ThreadGuard) -> SyscallResult {
     Ok(u64::from(
         thread.process().credentials.lock().effective_group_id.get(),
     ))
+}
+
+#[syscall(i386 = 57, amd64 = 109)]
+fn setpgid(thread: &mut ThreadGuard, pid: u32, pgid: u32) -> SyscallResult {
+    let pid = if pid == 0 {
+        thread.process().pid()
+    } else {
+        pid
+    };
+    let pgid = if pid == 0 { pgid } else { pid };
+
+    let self_process = thread.process();
+
+    let process = self_process.find_by_pid_in(pid).ok_or(err!(Srch))?;
+
+    // TODO: Make sure that the children haven't execve'd.
+
+    let mut group_guard = process.process_group.lock();
+
+    // Make sure that the process is not a process group leader.
+    ensure!(group_guard.pgid != pid, Perm);
+
+    if pgid == pid {
+        // Create a new process group.
+        let session = group_guard.session.lock().clone();
+        *group_guard = ProcessGroup::new(pgid, session);
+    } else {
+        // Join an existing process group.
+
+        // Find the other process group in the same session.
+        let session_guard = group_guard.session.lock();
+        let process_groups = session_guard.process_groups.lock();
+        let existing_process_group = process_groups
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|pg| pg.pgid == pgid)
+            .ok_or(err!(Perm))?;
+        drop(process_groups);
+        drop(session_guard);
+
+        *group_guard = existing_process_group.clone();
+    }
+
+    Ok(0)
 }
 
 #[syscall(i386 = 64, amd64 = 110)]

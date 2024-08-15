@@ -43,7 +43,7 @@ use super::{
         args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
-    Process,
+    Process, ProcessGroup, Session,
 };
 
 pub mod running_state;
@@ -134,6 +134,7 @@ impl Thread {
                 Path::new(b"/bin/init".to_vec()).unwrap(),
                 Credentials::super_user(),
                 ROOT_NODE.clone(),
+                ProcessGroup::new(tid, Arc::new(Session::new(tid))),
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
