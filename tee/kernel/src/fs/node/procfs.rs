@@ -591,12 +591,12 @@ impl Directory for FdDir {
         let fd_num = FdNum::new(fd_num);
 
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
-        let guard = thread.lock();
-        let uid = guard.credentials.real_user_id;
-        let gid = guard.credentials.real_group_id;
+        let guard = process.credentials.lock();
+        let uid = guard.real_user_id;
+        let gid = guard.real_group_id;
         drop(guard);
 
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
         fdtable.get_node(fd_num, uid, gid)
     }

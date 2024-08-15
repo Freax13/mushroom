@@ -12,7 +12,7 @@ use alloc::{
 };
 use futures::{select_biased, FutureExt};
 use syscall::args::Timespec;
-use thread::{Gid, Uid};
+use thread::{Credentials, Gid, Uid};
 
 use crate::{
     error::{err, Result},
@@ -65,6 +65,7 @@ pub struct Process {
     exe: RwLock<Path>,
     alarm: Mutex<Option<AlarmState>>,
     stop_state: StopState,
+    pub credentials: Mutex<Credentials>,
 }
 
 impl Process {
@@ -73,6 +74,7 @@ impl Process {
         parent: Weak<Self>,
         termination_signal: Option<Signal>,
         exe: Path,
+        credentials: Credentials,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -90,6 +92,7 @@ impl Process {
             exe: RwLock::new(exe),
             alarm: Mutex::new(None),
             stop_state: StopState::default(),
+            credentials: Mutex::new(credentials),
         };
         let arc = Arc::new(this);
 

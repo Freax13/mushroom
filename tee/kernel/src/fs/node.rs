@@ -282,12 +282,13 @@ impl FileAccessContext {
 
 impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
+        let credentials_guard = guard.process().credentials.lock();
         Self {
             process: guard.process().clone(),
             symlink_recursion_limit: 16,
-            filesystem_user_id: guard.credentials.filesystem_user_id,
-            filesystem_group_id: guard.credentials.filesystem_group_id,
-            supplementary_group_ids: guard.credentials.supplementary_group_ids.clone(),
+            filesystem_user_id: credentials_guard.filesystem_user_id,
+            filesystem_group_id: credentials_guard.filesystem_group_id,
+            supplementary_group_ids: credentials_guard.supplementary_group_ids.clone(),
         }
     }
 }

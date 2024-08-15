@@ -85,7 +85,6 @@ pub struct ThreadState {
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
-    pub credentials: Credentials,
 }
 
 impl Thread {
@@ -101,7 +100,6 @@ impl Thread {
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
-        credentials: Credentials,
     ) -> Self {
         Self {
             tid,
@@ -119,7 +117,6 @@ impl Thread {
                 cwd,
                 vfork_done,
                 umask,
-                credentials,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -138,6 +135,7 @@ impl Thread {
                 Weak::new(),
                 None,
                 Path::new(b"/bin/init".to_vec()).unwrap(),
+                Credentials::super_user(),
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
@@ -147,7 +145,6 @@ impl Thread {
             None,
             CpuState::new(0, 0, 0),
             FileMode::empty(),
-            Credentials::super_user(),
         )
     }
 
@@ -406,7 +403,6 @@ impl ThreadGuard<'_> {
             vfork_done,
             cpu_state,
             self.umask,
-            self.credentials.clone(),
         );
 
         let mut guard = thread.lock();
@@ -469,8 +465,10 @@ impl ThreadGuard<'_> {
         self.clear_child_tid = Pointer::NULL;
         self.signal_handler_table = Arc::new(SignalHandlerTable::new());
         self.sigaltstack = Stack::default();
-        self.credentials.saved_set_user_id = self.credentials.effective_user_id;
-        self.credentials.saved_set_group_id = self.credentials.effective_group_id;
+
+        let mut guard = self.thread.process.credentials.lock();
+        guard.saved_set_user_id = guard.effective_user_id;
+        guard.saved_set_group_id = guard.effective_group_id;
     }
 
     pub fn start_executable(

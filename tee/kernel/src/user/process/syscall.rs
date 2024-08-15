@@ -1291,11 +1291,13 @@ async fn clone(
     let new_process = if flags.contains(CloneFlags::THREAD) {
         None
     } else {
+        let process = thread.process();
         Some(Process::new(
             new_tid,
-            Arc::downgrade(thread.process()),
+            Arc::downgrade(process),
             termination_signal,
-            thread.process().exe.read().clone(),
+            process.exe.read().clone(),
+            process.credentials.lock().clone(),
         ))
     };
 
@@ -1938,17 +1940,21 @@ fn getrlimit(
 
 #[syscall(i386 = 199, amd64 = 102)]
 fn getuid(thread: &mut ThreadGuard) -> SyscallResult {
-    Ok(u64::from(thread.credentials.real_user_id.get()))
+    Ok(u64::from(
+        thread.process().credentials.lock().real_user_id.get(),
+    ))
 }
 
 #[syscall(i386 = 200, amd64 = 104)]
 fn getgid(thread: &mut ThreadGuard) -> SyscallResult {
-    Ok(u64::from(thread.credentials.real_group_id.get()))
+    Ok(u64::from(
+        thread.process().credentials.lock().real_group_id.get(),
+    ))
 }
 
 #[syscall(i386 = 213, amd64 = 105)]
 fn setuid(thread: &mut ThreadGuard, uid: Uid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
             || credentials.saved_set_user_id == uid
@@ -1961,7 +1967,7 @@ fn setuid(thread: &mut ThreadGuard, uid: Uid) -> SyscallResult {
 
 #[syscall(i386 = 214, amd64 = 106)]
 fn setgid(thread: &mut ThreadGuard, gid: Gid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
             || credentials.saved_set_group_id == gid
@@ -1974,12 +1980,16 @@ fn setgid(thread: &mut ThreadGuard, gid: Gid) -> SyscallResult {
 
 #[syscall(i386 = 201, amd64 = 107)]
 fn geteuid(thread: &mut ThreadGuard) -> SyscallResult {
-    Ok(u64::from(thread.credentials.effective_user_id.get()))
+    Ok(u64::from(
+        thread.process().credentials.lock().effective_user_id.get(),
+    ))
 }
 
 #[syscall(i386 = 202, amd64 = 108)]
 fn getegid(thread: &mut ThreadGuard) -> SyscallResult {
-    Ok(u64::from(thread.credentials.effective_group_id.get()))
+    Ok(u64::from(
+        thread.process().credentials.lock().effective_group_id.get(),
+    ))
 }
 
 #[syscall(i386 = 64, amd64 = 110)]
@@ -2000,7 +2010,7 @@ fn getpgrp(thread: &mut ThreadGuard) -> SyscallResult {
 
 #[syscall(i386 = 203, amd64 = 113)]
 fn setreuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
     if euid != Uid::UNCHANGED {
@@ -2036,7 +2046,7 @@ fn setreuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid) -> SyscallResult {
 
 #[syscall(i386 = 204, amd64 = 114)]
 fn setregid(thread: &mut ThreadGuard, rguid: Gid, eguid: Gid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
     if eguid != Gid::UNCHANGED {
@@ -2077,7 +2087,7 @@ fn getgroups(
     size: i32,
     list: Pointer<Gid>,
 ) -> SyscallResult {
-    let credentials = &thread.credentials;
+    let credentials = thread.process().credentials.lock();
 
     let size = usize::try_from(size)?;
     if size != 0 {
@@ -2100,7 +2110,7 @@ fn setgroups(
     size: i32,
     list: Pointer<Gid>,
 ) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
 
     ensure!(credentials.is_super_user(), Perm);
 
@@ -2123,7 +2133,7 @@ fn setgroups(
 
 #[syscall(i386 = 208, amd64 = 117)]
 fn setresuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid, suid: Uid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
     for (dest, src) in [
@@ -2157,7 +2167,7 @@ fn getresuid(
     euid: Pointer<Uid>,
     suid: Pointer<Uid>,
 ) -> SyscallResult {
-    let credentials = &thread.credentials;
+    let credentials = thread.process().credentials.lock();
     virtual_memory.write(ruid, credentials.real_user_id)?;
     virtual_memory.write(euid, credentials.effective_user_id)?;
     virtual_memory.write(suid, credentials.saved_set_user_id)?;
@@ -2166,7 +2176,7 @@ fn getresuid(
 
 #[syscall(i386 = 210, amd64 = 119)]
 fn setresgid(thread: &mut ThreadGuard, rgid: Gid, egid: Gid, sgid: Gid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
     for (dest, src) in [
@@ -2200,7 +2210,7 @@ fn getresgid(
     egid: Pointer<Gid>,
     sgid: Pointer<Gid>,
 ) -> SyscallResult {
-    let credentials = &thread.credentials;
+    let credentials = thread.process().credentials.lock();
     virtual_memory.write(rgid, credentials.real_group_id)?;
     virtual_memory.write(egid, credentials.effective_group_id)?;
     virtual_memory.write(sgid, credentials.saved_set_group_id)?;
@@ -2209,7 +2219,7 @@ fn getresgid(
 
 #[syscall(i386 = 215, amd64 = 122)]
 fn setfsuid(thread: &mut ThreadGuard, fsuid: Uid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
             || credentials.real_user_id == fsuid
@@ -2224,7 +2234,7 @@ fn setfsuid(thread: &mut ThreadGuard, fsuid: Uid) -> SyscallResult {
 
 #[syscall(i386 = 216, amd64 = 123)]
 fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
-    let credentials = &mut thread.credentials;
+    let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
             || credentials.real_group_id == fsgid
