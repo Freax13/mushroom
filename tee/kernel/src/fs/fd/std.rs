@@ -1,3 +1,4 @@
+use alloc::format;
 use log::debug;
 
 use super::{Events, FileLock, OpenFileDescription};
@@ -43,7 +44,7 @@ impl OpenFileDescription for Stdin {
     }
 
     fn path(&self) -> Path {
-        Path::new(b"pipe:[0]".to_vec()).unwrap()
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -110,7 +111,7 @@ impl OpenFileDescription for Stdout {
     }
 
     fn path(&self) -> Path {
-        Path::new(b"pipe:[1]".to_vec()).unwrap()
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -183,7 +184,7 @@ impl OpenFileDescription for Stderr {
     }
 
     fn path(&self) -> Path {
-        Path::new(b"pipe:[2]".to_vec()).unwrap()
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
