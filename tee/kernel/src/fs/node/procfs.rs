@@ -8,12 +8,12 @@ use alloc::{
 };
 
 use crate::{
-    error::{bail, err, Result},
+    error::{bail, ensure, err, Result},
     fs::{
         fd::{
             dir::open_dir,
             file::{open_file, File},
-            FileDescriptor, FileLockRecord, LazyFileLockRecord,
+            reopen, FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         node::DirEntryName,
         path::{FileName, Path},
@@ -728,22 +728,71 @@ impl INode for FdINode {
         })
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
-        Ok(self.fd.clone())
+    fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
+        bail!(Loop)
     }
 
-    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.fd.chmod(mode, ctx)
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(OpNotSupp)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.fd.chown(uid, gid, ctx)
+        ensure!(ctx.is_user(uid), Perm);
+        ensure!(ctx.is_in_group(gid), Perm);
+        Ok(())
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.fd.path())
+    }
+
+    fn try_resolve_link(
+        &self,
+        start_dir: DynINode,
+        ctx: &mut FileAccessContext,
+    ) -> Result<Option<(DynINode, DynINode)>> {
+        ctx.follow_symlink()?;
+        Ok(Some((
+            start_dir,
+            Arc::new(FollowedFdINode {
+                fd: self.fd.clone(),
+                file_lock_record: self.file_lock_record.clone(),
+            }),
+        )))
+    }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+}
+
+/// This is the INode that's returned after following the link at an fd inode.
+struct FollowedFdINode {
+    fd: FileDescriptor,
+    file_lock_record: Arc<FileLockRecord>,
+}
+
+impl INode for FollowedFdINode {
+    fn stat(&self) -> Result<Stat> {
+        reopen(self.fd.clone(), OpenFlags::empty())?.stat()
+    }
+
+    fn open(&self, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        reopen(self.fd.clone(), flags)
+    }
+
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        reopen(self.fd.clone(), OpenFlags::empty())?.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        reopen(self.fd.clone(), OpenFlags::empty())?.chown(uid, gid, ctx)
+    }
+
+    fn update_times(&self, _: Timespec, _: Option<Timespec>, _: Option<Timespec>) {
+        // TODO: Implement this.
     }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {

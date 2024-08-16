@@ -97,6 +97,7 @@ pub enum ErrorKind {
     NotEmpty = 39,
     NameTooLong = 78,
     Loop = 90,
+    OpNotSupp = 95,
     TimedOut = 110,
     RestartNoIntr = 512,
 }
