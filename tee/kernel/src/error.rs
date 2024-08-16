@@ -1,5 +1,6 @@
 use core::{convert::Infallible, num::TryFromIntError};
 
+use alloc::collections::TryReserveError;
 use bytemuck::checked::CheckedCastError;
 use x86_64::addr::VirtAddrNotValid;
 
@@ -126,6 +127,13 @@ impl From<VirtAddrNotValid> for Error {
     #[track_caller]
     fn from(_: VirtAddrNotValid) -> Self {
         err!(Fault)
+    }
+}
+
+impl From<TryReserveError> for Error {
+    #[track_caller]
+    fn from(_: TryReserveError) -> Self {
+        err!(NoMem)
     }
 }
 

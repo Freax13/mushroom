@@ -37,6 +37,10 @@ unsafe impl Allocator for HugeAllocator {
         let units = layout.size().div_ceil(min_size);
         let pages = units * (min_size / 0x1000);
 
+        if pages > 0x10000 {
+            return Err(AllocError);
+        }
+
         let size = pages * 0x1000;
         let len = u64::from_usize(size);
         let addr = if layout.align() <= min_size {

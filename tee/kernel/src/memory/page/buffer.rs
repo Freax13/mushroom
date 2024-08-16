@@ -39,6 +39,7 @@ impl Buffer {
         let num_pages = total_len.div_ceil(0x1000);
         let new_pages = num_pages.saturating_sub(self.pages.len());
 
+        self.pages.try_reserve(new_pages)?;
         self.pages
             .extend(repeat_with(KernelPage::zeroed).take(new_pages));
 
