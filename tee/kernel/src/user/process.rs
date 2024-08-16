@@ -277,6 +277,41 @@ impl Process {
         self.pending_signals.lock().pop(mask)
     }
 
+    pub fn can_send_signal(&self, target: &Process, signal: Signal) -> bool {
+        // A process can always send a signal to itself.
+        if core::ptr::eq(self, target) {
+            return true;
+        }
+
+        if signal == Signal::CONT {
+            // > In the case of SIGCONT, it suffices when the sending and
+            // > receiving processes belong to the same session.
+
+            let (self_process_group, target_process_group) =
+                self.process_group.lock_two(&target.process_group);
+
+            // If the processes are part of the same process group, they're also part of the same session.
+            if self_process_group.pgid == target_process_group.pgid {
+                return true;
+            }
+
+            let (self_session, target_session) = self_process_group
+                .session
+                .lock_two(&target_process_group.session);
+            if self_session.sid == target_session.sid {
+                return true;
+            }
+        }
+
+        let (self_guard, target_guard) = self.credentials.lock_two(&target.credentials);
+        if self_guard.is_super_user() {
+            return true;
+        }
+        [self_guard.real_user_id, self_guard.effective_user_id]
+            .into_iter()
+            .any(|uid| [target_guard.real_user_id, target_guard.saved_set_user_id].contains(&uid))
+    }
+
     pub fn find_by_pid(pid: u32) -> Option<Arc<Self>> {
         Self::all().find(|p| p.pid == pid)
     }
@@ -402,14 +437,14 @@ impl ProcessGroup {
 }
 
 pub struct Session {
-    _sid: u32,
+    sid: u32,
     process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
 }
 
 impl Session {
     pub fn new(sid: u32) -> Self {
         Self {
-            _sid: sid,
+            sid,
             process_groups: Mutex::new(Vec::new()),
         }
     }

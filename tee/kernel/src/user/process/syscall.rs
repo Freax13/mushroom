@@ -1543,26 +1543,74 @@ async fn wait4(
 }
 
 #[syscall(i386 = 37, amd64 = 62)]
-fn kill(pid: i32, signal: Option<Signal>) -> SyscallResult {
+fn kill(thread: &mut ThreadGuard, pid: i32, signal: Option<Signal>) -> SyscallResult {
+    let sig_info = signal.map(|signal| SigInfo {
+        signal,
+        code: SigInfoCode::USER,
+        fields: SigFields::None,
+    });
+
     match pid {
         1.. => {
-            let process = Process::find_by_pid(pid as u32).ok_or(err!(Srch))?;
-            if let Some(signal) = signal {
-                process.queue_signal(SigInfo {
-                    signal,
-                    code: SigInfoCode::USER,
-                    fields: SigFields::None,
-                });
+            let target = Process::find_by_pid(pid as u32).ok_or(err!(Srch))?;
+            if let Some(sig_info) = sig_info {
+                ensure!(
+                    thread.process().can_send_signal(&target, sig_info.signal),
+                    Perm
+                );
+                target.queue_signal(sig_info);
             }
         }
         0 => {
-            todo!()
+            let process_group = thread.process().process_group.lock();
+            let guard = process_group.processes.lock();
+            let processes = guard.iter().filter_map(Weak::upgrade).collect::<Vec<_>>();
+            drop(guard);
+            drop(process_group);
+
+            ensure!(!processes.is_empty(), Srch);
+
+            if let Some(sig_info) = sig_info {
+                let mut processes = processes
+                    .into_iter()
+                    .filter(|target| thread.process().can_send_signal(target, sig_info.signal))
+                    .peekable();
+                processes.peek().ok_or(err!(Perm))?;
+                for target in processes {
+                    target.queue_signal(sig_info);
+                }
+            }
         }
         -1 => {
-            todo!()
+            let mut processes = Process::all().filter(|p| p.pid != 1).peekable();
+            processes.peek().ok_or(err!(Srch))?;
+            if let Some(sig_info) = sig_info {
+                let mut processes = processes
+                    .filter(|target| thread.process().can_send_signal(target, sig_info.signal))
+                    .peekable();
+                processes.peek().ok_or(err!(Perm))?;
+                for target in processes {
+                    target.queue_signal(sig_info);
+                }
+            }
         }
         ..-1 => {
-            todo!()
+            let process_group = thread.process().process_group.lock();
+            let target = process_group
+                .processes
+                .lock()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|p| p.pid == -pid as u32)
+                .ok_or(err!(Srch))?;
+            drop(process_group);
+            if let Some(sig_info) = sig_info {
+                ensure!(
+                    thread.process().can_send_signal(&target, sig_info.signal),
+                    Perm
+                );
+                target.queue_signal(sig_info);
+            }
         }
     }
     Ok(0)
