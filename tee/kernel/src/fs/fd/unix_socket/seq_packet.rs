@@ -81,7 +81,7 @@ impl SeqPacketUnixSocket {
                     ),
                 }),
                 write_half: write_half1,
-                read_half: read_half2,
+                read_half: read_half1,
                 file_lock: FileLock::anonymous(),
             },
             Self {
@@ -95,7 +95,7 @@ impl SeqPacketUnixSocket {
                     ),
                 }),
                 write_half: write_half2,
-                read_half: read_half1,
+                read_half: read_half2,
                 file_lock: FileLock::anonymous(),
             },
         )
