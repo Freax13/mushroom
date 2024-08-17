@@ -48,6 +48,8 @@ pub struct CpuState {
     xsave_area: XSaveArea,
     last_exit_was_syscall: bool,
     ignore_syscall_result: bool,
+    #[cfg(not(feature = "harden"))]
+    last_exit: Option<Exit>,
 }
 
 impl CpuState {
@@ -71,6 +73,8 @@ impl CpuState {
             xsave_area: XSaveArea::new(),
             last_exit_was_syscall: false,
             ignore_syscall_result: false,
+            #[cfg(not(feature = "harden"))]
+            last_exit: None,
         }
     }
 
@@ -365,7 +369,12 @@ impl CpuState {
 
         let raw_exit = per_cpu.exit.get();
         self.last_exit_was_syscall = matches!(raw_exit, RawExit::Syscall);
-        Ok(self.gather_exit(raw_exit))
+        let exit = self.gather_exit(raw_exit);
+        #[cfg(not(feature = "harden"))]
+        {
+            self.last_exit = Some(exit);
+        }
+        Ok(exit)
     }
 
     fn gather_exit(&self, raw_exit: RawExit) -> Exit {
@@ -782,6 +791,11 @@ impl CpuState {
 
         // skip over the cpuid instruction.
         self.registers.rip += 2;
+    }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn last_exit(&self) -> Option<Exit> {
+        self.last_exit
     }
 }
 

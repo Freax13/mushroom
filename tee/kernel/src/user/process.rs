@@ -1,3 +1,5 @@
+#[cfg(not(feature = "harden"))]
+use core::fmt::{self, Write};
 use core::{
     ffi::CStr,
     iter::from_fn,
@@ -5,6 +7,8 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[cfg(not(feature = "harden"))]
+use alloc::string::String;
 use alloc::{
     collections::VecDeque,
     sync::{Arc, Weak},
@@ -375,6 +379,45 @@ impl Process {
 
     pub async fn wait_until_not_stopped(&self) {
         self.stop_state.wait().await;
+    }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
+        let process_group_guard = self.process_group.lock();
+        let session_guard = process_group_guard.session.lock();
+        let pgid = process_group_guard.pgid;
+        let sid = session_guard.sid;
+        drop(session_guard);
+        drop(process_group_guard);
+        writeln!(
+            write,
+            "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?}",
+            "",
+            self.pid,
+            self.exit_status.try_get()
+        )?;
+
+        let indent = indent + 2;
+        let threads_guard = self.threads.lock();
+        for guard in threads_guard.iter().filter_map(Weak::upgrade) {
+            guard.dump(indent, &mut *write)?;
+        }
+
+        let threads_guard = self.children.lock();
+        for guard in threads_guard.iter() {
+            guard.dump(indent, &mut *write)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "harden"))]
+pub fn dump() {
+    let mut buf = String::new();
+    INIT_THREAD.process().dump(0, &mut buf).unwrap();
+    for line in buf.lines() {
+        log::info!("{line}");
     }
 }
 

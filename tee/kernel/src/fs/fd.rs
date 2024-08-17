@@ -1,3 +1,5 @@
+#[cfg(not(feature = "harden"))]
+use core::fmt;
 use core::{
     any::type_name,
     cmp,
@@ -234,6 +236,22 @@ impl FileDescriptorTable {
             entry.file_lock_record.get().clone(),
         )))
     }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
+        writeln!(write, "{:indent$}fd table:", "")?;
+        let indent = indent + 2;
+        for (num, fd) in self.table.lock().iter() {
+            writeln!(
+                write,
+                "{:indent$}{num} {} {:?}",
+                "",
+                fd.fd.type_name(),
+                fd.flags
+            )?;
+        }
+        Ok(())
+    }
 }
 
 struct FileDescriptorTableEntry {
@@ -270,7 +288,7 @@ impl Clone for FileDescriptorTable {
 }
 
 bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub struct FdFlags: u64 {
         const CLOEXEC = 1;
     }
@@ -439,6 +457,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn reopen(&self, flags: OpenFlags) -> Result<Option<FileDescriptor>> {
         let _ = flags;
         Ok(None)
+    }
+
+    #[cfg(not(feature = "harden"))]
+    fn type_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
     }
 }
 

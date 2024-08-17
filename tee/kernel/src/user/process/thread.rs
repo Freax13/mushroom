@@ -1,3 +1,5 @@
+#[cfg(not(feature = "harden"))]
+use core::fmt;
 use core::{
     ffi::{c_void, CStr},
     fmt::Debug,
@@ -362,6 +364,28 @@ impl Thread {
             },
             res = f.fuse() => res,
         }
+    }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
+        use super::syscall::traits::dump_syscall_exit;
+
+        writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
+        let indent = indent + 2;
+        let exit = self.cpu_state.lock().last_exit();
+        if let Some(exit) = exit {
+            match exit {
+                Exit::Syscall(args) => dump_syscall_exit(&self.lock(), args, indent, &mut write)?,
+                Exit::DivideError
+                | Exit::GeneralProtectionFault
+                | Exit::Vc(_)
+                | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+            }
+        } else {
+            writeln!(write, "{:indent$}thread has never exited", "")?;
+        }
+        self.fdtable.lock().dump(indent, write)?;
+        Ok(())
     }
 }
 
