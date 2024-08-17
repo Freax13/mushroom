@@ -114,10 +114,24 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
                 "non-async syscalls cannot be interrupted",
             ));
         }
-        quote! {
-            async move {
+
+        let needs_thread = input.sig.inputs.iter().any(|arg| match arg {
+            FnArg::Receiver(_) => false,
+            FnArg::Typed(t) => match &*t.pat {
+                Pat::Ident(ident) => ident.ident == "thread",
+                _ => false,
+            },
+        });
+        let thread = needs_thread.then(|| {
+            quote! {
                 let mut thread = thread.lock();
                 let thread = &mut thread;
+            }
+        });
+
+        quote! {
+            async move {
+                #thread
                 #syscall_ident(#(#function_invocation_args),*)
             }
         }

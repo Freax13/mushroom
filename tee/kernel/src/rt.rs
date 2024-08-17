@@ -10,7 +10,7 @@ use crate::spin::mutex::Mutex;
 use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
-use log::{debug, warn};
+use log::warn;
 
 use crate::supervisor::schedule_vcpu;
 
@@ -66,7 +66,6 @@ impl Task {
 
             // Mark the task as done if the future has finished.
             if res.is_ready() {
-                debug!("{self:?} finished");
                 self.state.store(TaskState::Done);
                 return;
             }

@@ -7,12 +7,14 @@ use crate::{
     error::Result,
     fs::{
         fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
+        node::FileAccessContext,
         path::Path,
     },
     supervisor,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{OpenFlags, Pointer, Stat},
+        syscall::args::{FileMode, OpenFlags, Pointer, Stat},
+        thread::{Gid, Uid},
     },
 };
 
@@ -50,6 +52,14 @@ impl OpenFileDescription for Output {
 
     fn path(&self) -> Path {
         self.path.clone()
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        todo!()
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        todo!()
     }
 
     fn stat(&self) -> Result<Stat> {

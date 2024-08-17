@@ -1,3 +1,5 @@
+#[cfg(not(feature = "harden"))]
+use core::fmt::{self, Write};
 use core::{
     ffi::CStr,
     iter::from_fn,
@@ -5,6 +7,8 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[cfg(not(feature = "harden"))]
+use alloc::string::String;
 use alloc::{
     collections::VecDeque,
     sync::{Arc, Weak},
@@ -12,12 +16,13 @@ use alloc::{
 };
 use futures::{select_biased, FutureExt};
 use syscall::args::Timespec;
+use thread::{Credentials, Gid, Uid};
 
 use crate::{
     error::{err, Result},
     fs::{
         fd::FileDescriptorTable,
-        node::{procfs::ProcessInos, tmpfs::TmpFsFile, FileAccessContext, INode},
+        node::{procfs::ProcessInos, tmpfs::TmpFsFile, DynINode, FileAccessContext, INode},
         path::Path,
         StaticFile,
     },
@@ -64,6 +69,9 @@ pub struct Process {
     exe: RwLock<Path>,
     alarm: Mutex<Option<AlarmState>>,
     stop_state: StopState,
+    pub credentials: Mutex<Credentials>,
+    cwd: Mutex<DynINode>,
+    process_group: Mutex<Arc<ProcessGroup>>,
 }
 
 impl Process {
@@ -72,6 +80,9 @@ impl Process {
         parent: Weak<Self>,
         termination_signal: Option<Signal>,
         exe: Path,
+        credentials: Credentials,
+        cwd: DynINode,
+        process_group: Arc<ProcessGroup>,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -89,12 +100,16 @@ impl Process {
             exe: RwLock::new(exe),
             alarm: Mutex::new(None),
             stop_state: StopState::default(),
+            credentials: Mutex::new(credentials),
+            cwd: Mutex::new(cwd),
+            process_group: Mutex::new(process_group.clone()),
         };
         let arc = Arc::new(this);
 
         if let Some(parent) = parent.upgrade() {
             parent.children.lock().push(arc.clone());
         }
+        process_group.processes.lock().push(Arc::downgrade(&arc));
 
         arc
     }
@@ -105,6 +120,14 @@ impl Process {
 
     pub fn exe(&self) -> Path {
         self.exe.read().clone()
+    }
+
+    pub fn cwd(&self) -> DynINode {
+        self.cwd.lock().clone()
+    }
+
+    pub fn chdir(&self, cwd: DynINode) {
+        *self.cwd.lock() = cwd;
     }
 
     pub fn add_thread(&self, thread: WeakThread) {
@@ -258,8 +281,47 @@ impl Process {
         self.pending_signals.lock().pop(mask)
     }
 
+    pub fn can_send_signal(&self, target: &Process, signal: Signal) -> bool {
+        // A process can always send a signal to itself.
+        if core::ptr::eq(self, target) {
+            return true;
+        }
+
+        if signal == Signal::CONT {
+            // > In the case of SIGCONT, it suffices when the sending and
+            // > receiving processes belong to the same session.
+
+            let (self_process_group, target_process_group) =
+                self.process_group.lock_two(&target.process_group);
+
+            // If the processes are part of the same process group, they're also part of the same session.
+            if self_process_group.pgid == target_process_group.pgid {
+                return true;
+            }
+
+            let (self_session, target_session) = self_process_group
+                .session
+                .lock_two(&target_process_group.session);
+            if self_session.sid == target_session.sid {
+                return true;
+            }
+        }
+
+        let (self_guard, target_guard) = self.credentials.lock_two(&target.credentials);
+        if self_guard.is_super_user() {
+            return true;
+        }
+        [self_guard.real_user_id, self_guard.effective_user_id]
+            .into_iter()
+            .any(|uid| [target_guard.real_user_id, target_guard.saved_set_user_id].contains(&uid))
+    }
+
     pub fn find_by_pid(pid: u32) -> Option<Arc<Self>> {
         Self::all().find(|p| p.pid == pid)
+    }
+
+    pub fn find_by_pid_in(self: &Arc<Self>, pid: u32) -> Option<Arc<Self>> {
+        self.iter().find(|p| p.pid == pid)
     }
 
     pub fn all() -> impl Iterator<Item = Arc<Self>> {
@@ -318,6 +380,45 @@ impl Process {
     pub async fn wait_until_not_stopped(&self) {
         self.stop_state.wait().await;
     }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
+        let process_group_guard = self.process_group.lock();
+        let session_guard = process_group_guard.session.lock();
+        let pgid = process_group_guard.pgid;
+        let sid = session_guard.sid;
+        drop(session_guard);
+        drop(process_group_guard);
+        writeln!(
+            write,
+            "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?}",
+            "",
+            self.pid,
+            self.exit_status.try_get()
+        )?;
+
+        let indent = indent + 2;
+        let threads_guard = self.threads.lock();
+        for guard in threads_guard.iter().filter_map(Weak::upgrade) {
+            guard.dump(indent, &mut *write)?;
+        }
+
+        let threads_guard = self.children.lock();
+        for guard in threads_guard.iter() {
+            guard.dump(indent, &mut *write)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "harden"))]
+pub fn dump() {
+    let mut buf = String::new();
+    INIT_THREAD.process().dump(0, &mut buf).unwrap();
+    for line in buf.lines() {
+        log::info!("{line}");
+    }
 }
 
 struct AlarmState {
@@ -359,6 +460,39 @@ impl StopState {
     }
 }
 
+pub struct ProcessGroup {
+    pgid: u32,
+    session: Mutex<Arc<Session>>,
+    processes: Mutex<Vec<Weak<Process>>>,
+}
+
+impl ProcessGroup {
+    pub fn new(pgid: u32, session: Arc<Session>) -> Arc<Self> {
+        let this = Self {
+            pgid,
+            session: Mutex::new(session.clone()),
+            processes: Mutex::new(Vec::new()),
+        };
+        let arc = Arc::new(this);
+        session.process_groups.lock().push(Arc::downgrade(&arc));
+        arc
+    }
+}
+
+pub struct Session {
+    sid: u32,
+    process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
+}
+
+impl Session {
+    pub fn new(sid: u32) -> Self {
+        Self {
+            sid,
+            process_groups: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let tid = new_tid();
     assert_eq!(tid, 1);
@@ -367,7 +501,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let mut guard = thread.lock();
     let mut ctx = FileAccessContext::extract_from_thread(&guard);
 
-    let file = TmpFsFile::new(FileMode::all());
+    let file = TmpFsFile::new(FileMode::all(), Uid::SUPER_USER, Gid::SUPER_USER);
     StaticFile::init_file().copy_to(&file).unwrap();
     let path = Path::new(b"/bin/init".to_vec()).unwrap();
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();

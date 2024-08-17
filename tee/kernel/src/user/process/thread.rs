@@ -1,3 +1,5 @@
+#[cfg(not(feature = "harden"))]
+use core::fmt;
 use core::{
     ffi::{c_void, CStr},
     fmt::Debug,
@@ -10,7 +12,7 @@ use crate::{
     error::bail,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
-        node::{DynINode, FileAccessContext},
+        node::FileAccessContext,
     },
     rt::notify::Notify,
     spin::mutex::{Mutex, MutexGuard},
@@ -23,7 +25,6 @@ use alloc::{
     collections::VecDeque,
     string::String,
     sync::{Arc, Weak},
-    vec::Vec,
 };
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -44,7 +45,7 @@ use super::{
         args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
-    Process,
+    Process, ProcessGroup, Session,
 };
 
 pub mod running_state;
@@ -82,11 +83,9 @@ pub struct ThreadState {
     pub pending_signals: PendingSignals,
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
-    pub cwd: DynINode,
     pub vfork_done: Option<oneshot::Sender<()>>,
     // FIXME: Use this field.
     pub umask: FileMode,
-    pub credentials: Credentials,
 }
 
 impl Thread {
@@ -98,11 +97,9 @@ impl Thread {
         sigmask: Sigset,
         virtual_memory: Arc<VirtualMemory>,
         fdtable: Arc<FileDescriptorTable>,
-        cwd: DynINode,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         umask: FileMode,
-        credentials: Credentials,
     ) -> Self {
         Self {
             tid,
@@ -117,10 +114,8 @@ impl Thread {
                 pending_signals: PendingSignals::new(),
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
-                cwd,
                 vfork_done,
                 umask,
-                credentials,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -139,16 +134,17 @@ impl Thread {
                 Weak::new(),
                 None,
                 Path::new(b"/bin/init".to_vec()).unwrap(),
+                Credentials::super_user(),
+                ROOT_NODE.clone(),
+                ProcessGroup::new(tid, Arc::new(Session::new(tid))),
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
             Arc::new(VirtualMemory::new()),
             Arc::new(FileDescriptorTable::with_standard_io()),
-            ROOT_NODE.clone(),
             None,
             CpuState::new(0, 0, 0),
             FileMode::empty(),
-            Credentials::super_user(),
         )
     }
 
@@ -369,6 +365,28 @@ impl Thread {
             res = f.fuse() => res,
         }
     }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
+        use super::syscall::traits::dump_syscall_exit;
+
+        writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
+        let indent = indent + 2;
+        let exit = self.cpu_state.lock().last_exit();
+        if let Some(exit) = exit {
+            match exit {
+                Exit::Syscall(args) => dump_syscall_exit(&self.lock(), args, indent, &mut write)?,
+                Exit::DivideError
+                | Exit::GeneralProtectionFault
+                | Exit::Vc(_)
+                | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+            }
+        } else {
+            writeln!(write, "{:indent$}thread has never exited", "")?;
+        }
+        self.fdtable.lock().dump(indent, write)?;
+        Ok(())
+    }
 }
 
 pub struct ThreadGuard<'a> {
@@ -403,11 +421,9 @@ impl ThreadGuard<'_> {
             self.sigmask,
             virtual_memory,
             fdtable,
-            self.cwd.clone(),
             vfork_done,
             cpu_state,
             self.umask,
-            self.credentials.clone(),
         );
 
         let mut guard = thread.lock();
@@ -470,8 +486,10 @@ impl ThreadGuard<'_> {
         self.clear_child_tid = Pointer::NULL;
         self.signal_handler_table = Arc::new(SignalHandlerTable::new());
         self.sigaltstack = Stack::default();
-        self.credentials.saved_set_user_id = self.credentials.effective_user_id;
-        self.credentials.saved_set_group_id = self.credentials.effective_group_id;
+
+        let mut guard = self.thread.process.credentials.lock();
+        guard.saved_set_user_id = guard.effective_user_id;
+        guard.saved_set_group_id = guard.effective_group_id;
     }
 
     pub fn start_executable(
@@ -486,7 +504,7 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let cpu_state =
-            virtual_memory.start_executable(path, file, argv, envp, ctx, self.cwd.clone())?;
+            virtual_memory.start_executable(path, file, argv, envp, ctx, self.process().cwd())?;
 
         // Success! Commit the new state to the thread.
 
@@ -884,11 +902,11 @@ pub struct Credentials {
     pub saved_set_group_id: Gid,
     pub filesystem_user_id: Uid,
     pub filesystem_group_id: Gid,
-    pub supplementary_group_ids: Vec<Gid>,
+    pub supplementary_group_ids: Arc<[Gid]>,
 }
 
 impl Credentials {
-    pub const fn super_user() -> Self {
+    pub fn super_user() -> Self {
         Self {
             real_user_id: Uid::SUPER_USER,
             real_group_id: Gid::SUPER_USER,
@@ -898,7 +916,7 @@ impl Credentials {
             saved_set_group_id: Gid::SUPER_USER,
             filesystem_user_id: Uid::SUPER_USER,
             filesystem_group_id: Gid::SUPER_USER,
-            supplementary_group_ids: Vec::new(),
+            supplementary_group_ids: Arc::new([]),
         }
     }
 
@@ -907,7 +925,7 @@ impl Credentials {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct Uid(u32);
 
@@ -924,7 +942,7 @@ impl Uid {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct Gid(u32);
 

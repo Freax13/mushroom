@@ -8,12 +8,12 @@ use alloc::{
 };
 
 use crate::{
-    error::{bail, err, Result},
+    error::{bail, ensure, err, Result},
     fs::{
         fd::{
             dir::open_dir,
             file::{open_file, File},
-            FileDescriptor, FileLockRecord, LazyFileLockRecord,
+            reopen, FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         node::DirEntryName,
         path::{FileName, Path},
@@ -24,6 +24,7 @@ use crate::{
         syscall::args::{
             FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
         },
+        thread::{Gid, Uid},
         Process,
     },
 };
@@ -68,8 +69,8 @@ impl INode for ProcFsRoot {
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o777)),
-            uid: 0,
-            gid: 0,
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -84,7 +85,13 @@ impl INode for ProcFsRoot {
         open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
@@ -116,13 +123,15 @@ impl Directory for ProcFsRoot {
 
     fn create_file(
         &self,
-        _file_name: FileName<'static>,
-        _mode: FileMode,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
     ) -> Result<Result<DynINode, DynINode>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _file_name: FileName<'static>, _mode: FileMode) -> Result<DynINode> {
+    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -130,6 +139,8 @@ impl Directory for ProcFsRoot {
         &self,
         _file_name: FileName<'static>,
         _target: Path,
+        _uid: Uid,
+        _gid: Gid,
         _create_new: bool,
     ) -> Result<DynINode> {
         bail!(NoEnt)
@@ -140,6 +151,9 @@ impl Directory for ProcFsRoot {
         _file_name: FileName<'static>,
         _major: u16,
         _minor: u8,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
     ) -> Result<DynINode> {
         bail!(NoEnt)
     }
@@ -223,8 +237,8 @@ impl INode for SelfLink {
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
-            uid: 0,
-            gid: 0,
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -239,7 +253,13 @@ impl INode for SelfLink {
         bail!(Loop)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
 
     fn read_link(&self, ctx: &FileAccessContext) -> Result<Path> {
         Path::new(ctx.process.pid().to_string().into_bytes())
@@ -330,8 +350,8 @@ impl INode for ProcessDir {
             ino: process.inos.root_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
-            uid: 0,
-            gid: 0,
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -346,7 +366,13 @@ impl INode for ProcessDir {
         open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
@@ -387,13 +413,15 @@ impl Directory for ProcessDir {
 
     fn create_file(
         &self,
-        _file_name: FileName<'static>,
-        _mode: FileMode,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
     ) -> Result<Result<DynINode, DynINode>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _file_name: FileName<'static>, _mode: FileMode) -> Result<DynINode> {
+    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -401,6 +429,8 @@ impl Directory for ProcessDir {
         &self,
         _file_name: FileName<'static>,
         _target: Path,
+        _uid: Uid,
+        _gid: Gid,
         _create_new: bool,
     ) -> Result<DynINode> {
         bail!(NoEnt)
@@ -411,6 +441,9 @@ impl Directory for ProcessDir {
         _file_name: FileName<'static>,
         _major: u16,
         _minor: u8,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
     ) -> Result<DynINode> {
         bail!(NoEnt)
     }
@@ -515,8 +548,8 @@ impl INode for FdDir {
             ino: process.inos.fd_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
-            uid: 0,
-            gid: 0,
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -531,7 +564,13 @@ impl INode for FdDir {
         open_dir(path, self.this.upgrade().unwrap(), flags)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
@@ -552,20 +591,27 @@ impl Directory for FdDir {
         let fd_num = FdNum::new(fd_num);
 
         let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let guard = process.credentials.lock();
+        let uid = guard.real_user_id;
+        let gid = guard.real_group_id;
+        drop(guard);
+
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
-        fdtable.get_node(fd_num)
+        fdtable.get_node(fd_num, uid, gid)
     }
 
     fn create_file(
         &self,
-        _file_name: FileName<'static>,
-        _mode: FileMode,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
     ) -> Result<Result<DynINode, DynINode>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _file_name: FileName<'static>, _mode: FileMode) -> Result<DynINode> {
+    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -573,6 +619,8 @@ impl Directory for FdDir {
         &self,
         _file_name: FileName<'static>,
         _target: Path,
+        _uid: Uid,
+        _gid: Gid,
         _create_new: bool,
     ) -> Result<DynINode> {
         bail!(NoEnt)
@@ -583,6 +631,9 @@ impl Directory for FdDir {
         _file_name: FileName<'static>,
         _major: u16,
         _minor: u8,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
     ) -> Result<DynINode> {
         bail!(NoEnt)
     }
@@ -634,14 +685,24 @@ impl Directory for FdDir {
 #[derive(Clone)]
 pub struct FdINode {
     ino: u64,
+    uid: Uid,
+    gid: Gid,
     fd: FileDescriptor,
     file_lock_record: Arc<FileLockRecord>,
 }
 
 impl FdINode {
-    pub fn new(ino: u64, fd: FileDescriptor, file_lock_record: Arc<FileLockRecord>) -> Self {
+    pub fn new(
+        ino: u64,
+        uid: Uid,
+        gid: Gid,
+        fd: FileDescriptor,
+        file_lock_record: Arc<FileLockRecord>,
+    ) -> Self {
         Self {
             ino,
+            uid,
+            gid,
             fd,
             file_lock_record,
         }
@@ -655,8 +716,8 @@ impl INode for FdINode {
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::OWNER_ALL),
-            uid: 0,
-            gid: 0,
+            uid: self.uid,
+            gid: self.gid,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -667,16 +728,71 @@ impl INode for FdINode {
         })
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
-        Ok(self.fd.clone())
+    fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
+        bail!(Loop)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(OpNotSupp)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        ensure!(ctx.is_user(uid), Perm);
+        ensure!(ctx.is_in_group(gid), Perm);
+        Ok(())
+    }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         Ok(self.fd.path())
+    }
+
+    fn try_resolve_link(
+        &self,
+        start_dir: DynINode,
+        ctx: &mut FileAccessContext,
+    ) -> Result<Option<(DynINode, DynINode)>> {
+        ctx.follow_symlink()?;
+        Ok(Some((
+            start_dir,
+            Arc::new(FollowedFdINode {
+                fd: self.fd.clone(),
+                file_lock_record: self.file_lock_record.clone(),
+            }),
+        )))
+    }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+}
+
+/// This is the INode that's returned after following the link at an fd inode.
+struct FollowedFdINode {
+    fd: FileDescriptor,
+    file_lock_record: Arc<FileLockRecord>,
+}
+
+impl INode for FollowedFdINode {
+    fn stat(&self) -> Result<Stat> {
+        reopen(self.fd.clone(), OpenFlags::empty())?.stat()
+    }
+
+    fn open(&self, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        reopen(self.fd.clone(), flags)
+    }
+
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        reopen(self.fd.clone(), OpenFlags::empty())?.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        reopen(self.fd.clone(), OpenFlags::empty())?.chown(uid, gid, ctx)
+    }
+
+    fn update_times(&self, _: Timespec, _: Option<Timespec>, _: Option<Timespec>) {
+        // TODO: Implement this.
     }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
@@ -712,8 +828,8 @@ impl INode for ExeLink {
             ino: process.inos.exe_link,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
-            uid: 0,
-            gid: 0,
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -728,7 +844,13 @@ impl INode for ExeLink {
         bail!(Loop)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
@@ -784,8 +906,8 @@ impl INode for MapsFile {
             ino: process.inos.maps_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
-            uid: 0,
-            gid: 0,
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
             rdev: 0,
             size: 0,
             blksize: 0,
@@ -800,7 +922,13 @@ impl INode for MapsFile {
         open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
-    fn set_mode(&self, _mode: FileMode) {}
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 

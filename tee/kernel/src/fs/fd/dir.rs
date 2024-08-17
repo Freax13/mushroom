@@ -5,7 +5,10 @@ use crate::{
         path::Path,
     },
     spin::mutex::Mutex,
-    user::process::syscall::args::{OpenFlags, Timespec},
+    user::process::{
+        syscall::args::{FileMode, OpenFlags, Timespec},
+        thread::{Gid, Uid},
+    },
 };
 use alloc::{sync::Arc, vec::Vec};
 
@@ -43,6 +46,14 @@ impl OpenFileDescription for DirectoryFileDescription {
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
         self.dir.update_times(ctime, atime, mtime);
+    }
+
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.dir.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.dir.chown(uid, gid, ctx)
     }
 
     fn stat(&self) -> Result<Stat> {

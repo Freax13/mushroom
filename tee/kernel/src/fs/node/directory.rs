@@ -6,7 +6,10 @@ use crate::{
         path::{FileName, Path},
     },
     spin::mutex::Mutex,
-    user::process::syscall::args::{FileMode, FileType},
+    user::process::{
+        syscall::args::{FileMode, FileType},
+        thread::{Gid, Uid},
+    },
 };
 use alloc::{
     sync::{Arc, Weak},
@@ -37,21 +40,31 @@ macro_rules! dir_impls {
             &self,
             file_name: FileName<'static>,
             mode: FileMode,
+            uid: Uid,
+            gid: Gid,
         ) -> Result<Result<DynINode, DynINode>> {
-            Directory::create_file(self, file_name, mode)
+            Directory::create_file(self, file_name, mode, uid, gid)
         }
 
-        fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode> {
-            Directory::create_dir(self, file_name, mode)
+        fn create_dir(
+            &self,
+            file_name: FileName<'static>,
+            mode: FileMode,
+            uid: Uid,
+            gid: Gid,
+        ) -> Result<DynINode> {
+            Directory::create_dir(self, file_name, mode, uid, gid)
         }
 
         fn create_link(
             &self,
             file_name: FileName<'static>,
             target: Path,
+            uid: Uid,
+            gid: Gid,
             create_new: bool,
         ) -> Result<DynINode> {
-            Directory::create_link(self, file_name, target, create_new)
+            Directory::create_link(self, file_name, target, uid, gid, create_new)
         }
 
         fn create_char_dev(
@@ -59,8 +72,11 @@ macro_rules! dir_impls {
             file_name: FileName<'static>,
             major: u16,
             minor: u8,
+            mode: FileMode,
+            uid: Uid,
+            gid: Gid,
         ) -> Result<DynINode> {
-            Directory::create_char_dev(self, file_name, major, minor)
+            Directory::create_char_dev(self, file_name, major, minor, mode, uid, gid)
         }
 
         fn is_empty_dir(&self) -> bool {
@@ -123,12 +139,22 @@ pub trait Directory: INode {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
+        uid: Uid,
+        gid: Gid,
     ) -> Result<Result<DynINode, DynINode>>;
-    fn create_dir(&self, file_name: FileName<'static>, mode: FileMode) -> Result<DynINode>;
+    fn create_dir(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<DynINode>;
     fn create_link(
         &self,
         file_name: FileName<'static>,
         target: Path,
+        uid: Uid,
+        gid: Gid,
         create_new: bool,
     ) -> Result<DynINode>;
     fn create_char_dev(
@@ -136,6 +162,9 @@ pub trait Directory: INode {
         file_name: FileName<'static>,
         major: u16,
         minor: u8,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
     ) -> Result<DynINode>;
     fn is_empty(&self) -> bool;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;

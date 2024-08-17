@@ -1,4 +1,6 @@
 use alloc::sync::Arc;
+#[cfg(not(feature = "harden"))]
+use core::fmt::Write;
 use core::{
     fmt::{self, Display},
     future::Future,
@@ -123,9 +125,11 @@ impl SyscallHandlers {
         T: Syscall<execute(): Send + 'static>,
     {
         if let Some(no) = T::NO_I386 {
+            assert!(self.i386_handlers[no].is_none());
             self.i386_handlers[no] = Some(SyscallHandler::new::<T>());
         }
         if let Some(no) = T::NO_AMD64 {
+            assert!(self.amd64_handlers[no].is_none());
             self.amd64_handlers[no] = Some(SyscallHandler::new::<T>());
         }
         core::mem::forget(val);
@@ -193,6 +197,30 @@ impl SyscallHandlers {
         }
 
         res
+    }
+}
+
+#[cfg(not(feature = "harden"))]
+pub fn dump_syscall_exit(
+    thread: &ThreadGuard,
+    args: SyscallArgs,
+    indent: usize,
+    mut write: impl Write,
+) -> fmt::Result {
+    let handlers = match args.abi {
+        Abi::I386 => SYSCALL_HANDLERS.i386_handlers.as_slice(),
+        Abi::Amd64 => SYSCALL_HANDLERS.amd64_handlers.as_slice(),
+    };
+
+    if let Some(handler) = handlers.get(usize_from(args.no)).cloned().flatten() {
+        let formatted_syscall = FormattedSyscall {
+            handler,
+            args,
+            thread,
+        };
+        writeln!(write, "{:indent$}{formatted_syscall}", "")
+    } else {
+        writeln!(write, "{:indent$}unknown syscall", "")
     }
 }
 

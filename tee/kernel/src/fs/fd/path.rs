@@ -4,10 +4,13 @@ use crate::{
         node::{DynINode, FileAccessContext},
         path::Path,
     },
-    user::process::syscall::args::{OpenFlags, Stat},
+    user::process::{
+        syscall::args::{FileMode, OpenFlags, Stat},
+        thread::{Gid, Uid},
+    },
 };
 
-use super::{Events, FileLock, OpenFileDescription};
+use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
 pub struct PathFd {
     path: Path,
@@ -29,6 +32,14 @@ impl OpenFileDescription for PathFd {
         self.path.clone()
     }
 
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(BadF)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        bail!(BadF)
+    }
+
     fn stat(&self) -> Result<Stat> {
         self.node.stat()
     }
@@ -43,5 +54,9 @@ impl OpenFileDescription for PathFd {
 
     fn file_lock(&self) -> Result<&FileLock> {
         bail!(BadF)
+    }
+
+    fn reopen(&self, flags: OpenFlags) -> Result<Option<FileDescriptor>> {
+        self.node.open(self.path.clone(), flags).map(Some)
     }
 }

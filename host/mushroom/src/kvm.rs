@@ -5,10 +5,7 @@ use std::{
     fs::OpenOptions,
     mem::{size_of, size_of_val},
     num::{NonZeroU8, NonZeroUsize},
-    os::{
-        fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
-        unix::prelude::OpenOptionsExt,
-    },
+    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
 };
 
 use anyhow::{anyhow, ensure, Context, Result};
@@ -18,7 +15,6 @@ use bytemuck::{bytes_of, pod_read_unaligned, Contiguous, Pod, Zeroable};
 use nix::{
     errno::Errno,
     ioctl_none, ioctl_read, ioctl_readwrite, ioctl_write_int_bad, ioctl_write_ptr,
-    libc::O_SYNC,
     request_code_none,
     sys::mman::{MapFlags, ProtFlags},
 };
@@ -39,8 +35,6 @@ impl KvmHandle {
     pub fn new() -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
-            .custom_flags(O_SYNC)
             .open("/dev/kvm")
             .context("failed to open /dev/kvm")?;
         let fd = OwnedFd::from(file);
@@ -1516,8 +1510,6 @@ impl SevHandle {
     pub fn new() -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
-            .custom_flags(O_SYNC)
             .open("/dev/sev")
             .context("failed to open /dev/sev")?;
         let fd = OwnedFd::from(file);

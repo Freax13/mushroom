@@ -8,6 +8,7 @@ use crate::fs::fd::file::File;
 
 pub mod fd;
 pub mod node;
+pub mod ownership;
 pub mod path;
 
 extern "C" {

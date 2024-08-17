@@ -14,7 +14,17 @@ pub fn run() -> ! {
         if res.is_err() {
             // We're the last vCPU running.
             // Advance simulated time.
-            advance_time().unwrap();
+            let res = advance_time();
+
+            if res.is_err() {
+                // There are no futures than are ready to be polled.
+
+                // Dump the state of processes to aid with debugging.
+                #[cfg(not(feature = "harden"))]
+                process::dump();
+
+                panic!("no future is ready");
+            }
         }
     }
 }
