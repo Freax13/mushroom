@@ -179,7 +179,10 @@ where
     _marker: PhantomData<T>,
 }
 
-impl<T> Pointer<T> {
+impl<T> Pointer<T>
+where
+    T: ?Sized,
+{
     pub const NULL: Self = Self::new(0);
 
     pub const fn new(addr: u64) -> Self {
@@ -243,7 +246,7 @@ impl<T> From<VirtAddr> for Pointer<T> {
     }
 }
 
-impl<T: Default> Default for Pointer<T>
+impl<T> Default for Pointer<T>
 where
     T: ?Sized,
 {

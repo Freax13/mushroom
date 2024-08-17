@@ -163,7 +163,6 @@ pub fn load_idt() {
 }
 
 #[naked]
-#[no_sanitize(address)]
 extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
     unsafe {
         asm!(
@@ -192,7 +191,6 @@ extern "x86-interrupt" fn kernel_divide_error_handler(frame: InterruptStackFrame
 }
 
 #[naked]
-#[no_sanitize(address)]
 extern "x86-interrupt" fn page_fault_handler(
     frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
@@ -299,7 +297,6 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
 }
 
 #[naked]
-#[no_sanitize(address)]
 extern "x86-interrupt" fn general_protection_fault_handler(
     frame: InterruptStackFrame,
     error_code: u64,
@@ -341,7 +338,6 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
 }
 
 #[naked]
-#[no_sanitize(address)]
 extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64) {
     unsafe {
         asm!(
@@ -366,7 +362,6 @@ extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64
     }
 }
 
-#[no_sanitize(address)]
 #[naked]
 extern "x86-interrupt" fn kernel_vc_handler(frame: InterruptStackFrame, code: u64) {
     unsafe {
@@ -468,7 +463,6 @@ extern "C" fn kernel_vc_handler_impl(registers: &mut VcStackFrame) {
     }
 }
 
-#[no_sanitize(address)]
 #[naked]
 extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // The code that entered userspace stored addresses where execution should

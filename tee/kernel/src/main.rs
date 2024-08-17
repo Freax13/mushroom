@@ -4,30 +4,23 @@
     abi_x86_interrupt,
     alloc_error_handler,
     allocator_api,
-    asm_const,
     btree_cursors,
     cfg_sanitize,
     const_mut_refs,
     core_intrinsics,
-    drain_keep_rest,
     extract_if,
     generic_const_exprs,
-    int_roundings,
-    linked_list_cursors,
     maybe_uninit_array_assume_init,
     maybe_uninit_uninit_array,
     naked_functions,
     new_uninit,
     no_sanitize,
-    noop_waker,
     pointer_is_aligned_to,
     ptr_metadata,
-    return_type_notation,
     slice_ptr_get,
     step_trait,
     sync_unsafe_cell,
-    trait_upcasting,
-    try_trait_v2
+    trait_upcasting
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![allow(incomplete_features, internal_features)]

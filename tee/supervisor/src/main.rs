@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(
-    asm_const,
     const_mut_refs,
     core_intrinsics,
     naked_functions,
