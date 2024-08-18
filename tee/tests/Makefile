@@ -11,10 +11,6 @@ CARGO_TARGET_amd64 = x86_64-unknown-linux-musl
 CARGO_TARGET_i386  = i686-unknown-linux-musl
 CARGO_TARGET = $(CARGO_TARGET_$(TEST_TARGET))
 
-ifeq ($(PROFILE),kasan)
-export KASAN = true
-endif
-
 test:
 	cargo test --target $(CARGO_TARGET)
 

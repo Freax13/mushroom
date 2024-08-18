@@ -10,6 +10,10 @@ ifneq ($(KNOWN_PROFILE),1)
 $(error unknown profile $(PROFILE))
 endif
 
+ifeq ($(PROFILE),kasan)
+export KASAN = true
+endif
+
 # Determine file locations for binaries.
 
 mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
