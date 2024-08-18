@@ -121,21 +121,21 @@ args = [
 ]
 env = { RUSTFLAGS = { unset = true }, CARGO_TARGET_X86_64_UNKNOWN_NONE_RUSTFLAGS = "-Z instrument-mcount -C passes=ee-instrument<post-inline>" }
 
-[tasks.build-init]
-dependencies = ["build-init-development", "build-init-production"]
+[tasks.build-example]
+dependencies = ["build-example-development", "build-example-production"]
 
-[tasks.build-init-development]
+[tasks.build-example-development]
 extend = "cargo"
 condition = { profiles = ["development", "kasan"] }
-args = ["build", "-p", "init", "--target", "x86_64-unknown-linux-musl"]
+args = ["build", "-p", "example", "--target", "x86_64-unknown-linux-musl"]
 
-[tasks.build-init-production]
+[tasks.build-example-production]
 extend = "cargo"
 condition = { profiles = ["production", "profiling"] }
 args = [
     "build",
     "-p",
-    "init",
+    "example",
     "--target",
     "x86_64-unknown-linux-musl",
     "--release",
