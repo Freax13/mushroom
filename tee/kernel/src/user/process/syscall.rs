@@ -157,6 +157,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysFlock);
+    handlers.register(SysFsync);
+    handlers.register(SysFdatasync);
     handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
@@ -1729,6 +1731,18 @@ async fn flock(
     } else {
         file_lock.unlock();
     }
+    Ok(0)
+}
+
+#[syscall(i386 = 118, amd64 = 74)]
+fn fsync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
+    fdtable.get(fd)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 148, amd64 = 75)]
+fn fdatasync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
+    fdtable.get(fd)?;
     Ok(0)
 }
 
