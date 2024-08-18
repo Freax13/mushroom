@@ -10,6 +10,10 @@ ifneq ($(KNOWN_PROFILE),1)
 $(error unknown profile $(PROFILE))
 endif
 
+ifeq ($(PROFILE),kasan)
+export KASAN = true
+endif
+
 # Determine file locations for binaries.
 
 mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
@@ -55,3 +59,13 @@ endif
 
 OUTPUT ?= output.bin
 ATTESTATION_REPORT ?= report.bin
+
+INSECURE ?= false
+
+# Make sure that the requested insecure value is supported.
+KNOWN_INSECURITY_false = 1
+KNOWN_INSECURITY_true  = 1
+KNOWN_INSECURITY = $(KNOWN_INSECURITY_$(INSECURE))
+ifneq ($(KNOWN_INSECURITY),1)
+$(error unknown value for insecure $(INSECURE))
+endif
