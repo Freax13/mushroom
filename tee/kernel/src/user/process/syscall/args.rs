@@ -486,7 +486,11 @@ impl FdNum {
 
 impl Display for FdNum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        if *self == Self::CWD {
+            f.pad("AT_CWD")
+        } else {
+            self.0.fmt(f)
+        }
     }
 }
 
