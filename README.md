@@ -73,3 +73,24 @@ Ok
 ```
 
 See [tee/init/README.md](./tee/init/README.md) for an example workload.
+
+# Known Issues
+
+## Time
+
+Securely keeping track of time inside an AMD SEV-SNP VM is difficult.
+Even with SecureTSC enabled, the hypervisor can change the VM's perception of time e.g. by frequently pausing execution of the VM for a brief moment.
+
+The two main requirements for a time-keeping implementation are:
+1. The hypervisor should not be able to mess with the workload's perception of time.
+2. The clock should be accurate.
+
+We are not aware of any way to achieve both of these goals under AMD SEV-SNP.
+Instead, we implement two different "time backends" and let the user pick one of them at compile time:
+
+1. The `fake` time backend doesn't use any of the CPU's native time-keeping facilities and meerly increments a counter by a fixed amount every time the current time is requested. This clock is completly deterministic and can't be influenced by the hypervisor, but it's also very inaccurate.
+2. The `real` time backend, uses the SecureTSC SEV feature and the `rdtsc` instruction to query the current time. This clock backend is accurate *if and only if* the hypervisor doesn't mess with the guest.
+
+The different time backends can be enabled by passing either `TIME_BACKEND=fake` or `TIME_BACKEND=real` to `make`. By default, the `fake` time backend is enabled for optimal security.
+
+Note that regardless of the selected time backend, the mushroom kernel may skip forward in time when it determines that no tasks can be executed until the clock advances to a certain timestamp. This is transparent to the workload.

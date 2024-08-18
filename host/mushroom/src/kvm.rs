@@ -629,6 +629,13 @@ impl VmHandle {
         let num = res.context("failed to create guest memory")?;
         Ok(unsafe { OwnedFd::from_raw_fd(num) })
     }
+
+    pub fn set_tsc_khz(&self, tsc_khz: u64) -> Result<()> {
+        ioctl_write_int_bad!(kvm_set_tsc_khz, request_code_none!(KVMIO, 0xa2));
+        let res = unsafe { kvm_set_tsc_khz(self.fd.as_raw_fd(), tsc_khz as i32) };
+        res.context("failed to set tsc khz")?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]

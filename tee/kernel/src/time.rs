@@ -1,10 +1,24 @@
-//! We don't expose the real time to userspace, we simulate it.
+use core::cmp;
 
 use crate::spin::{lazy::Lazy, mutex::Mutex};
 use alloc::collections::BinaryHeap;
 use log::debug;
 
 use crate::{rt::oneshot, user::process::syscall::args::Timespec};
+
+#[cfg(all(feature = "fake-time", feature = "real-time"))]
+compile_error!("the fake-time and real-time features are both enabled");
+#[cfg(not(any(feature = "fake-time", feature = "real-time")))]
+compile_error!("neither the fake-time nor real-time features are enabled");
+
+#[cfg(feature = "fake-time")]
+mod fake;
+#[cfg(feature = "fake-time")]
+use fake as backend;
+#[cfg(feature = "real-time")]
+mod real;
+#[cfg(feature = "real-time")]
+use real as backend;
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::new()));
 
@@ -20,7 +34,8 @@ pub struct NoTimeoutScheduledError;
 
 /// The global state of the simulated time.
 struct State {
-    clock: u64,
+    backend_offset: u64,
+    skip_offset: u64,
     timeouts: BinaryHeap<Timeout>,
 }
 
@@ -28,20 +43,16 @@ impl State {
     pub fn new() -> Self {
         Self {
             // Start at 1 second.
-            clock: 1_000_000_000,
+            backend_offset: 0,
+            skip_offset: 1_000_000_000,
             timeouts: BinaryHeap::new(),
         }
     }
 
-    fn advance(&mut self, ns: u64) {
-        self.advance_to(self.clock + ns);
-    }
-
-    fn advance_to(&mut self, clock: u64) {
-        self.clock = clock;
-
+    fn fire_clocks(&mut self) {
+        let now = self.combine();
         while let Some(first) = self.timeouts.peek() {
-            if !first.has_expired(clock) {
+            if !first.has_expired(now) {
                 break;
             };
             let first = self.timeouts.pop().unwrap();
@@ -49,9 +60,12 @@ impl State {
         }
     }
 
-    pub fn now(&mut self) -> Timespec {
-        self.advance(5000);
-        Timespec::from_ns(self.clock)
+    pub fn refresh(&mut self) -> Timespec {
+        let new_backend_offset = backend::current_offset();
+        self.backend_offset = cmp::max(self.backend_offset, new_backend_offset);
+        self.fire_clocks();
+
+        Timespec::from_ns(self.combine())
     }
 
     fn advance_to_next_timeout(&mut self) -> Result<(), NoTimeoutScheduledError> {
@@ -60,23 +74,29 @@ impl State {
             .iter()
             .find(|t| t.valid())
             .ok_or(NoTimeoutScheduledError)?;
-        self.advance_to(timeout.time);
+        let current = self.combine();
+        self.skip_offset += timeout.time.saturating_sub(current);
+        self.fire_clocks();
         Ok(())
     }
 
     fn add_timeout(&mut self, timeout: Timeout) {
         // Immediatly queue expired timeouts.
-        if timeout.has_expired(self.clock) {
+        if timeout.has_expired(self.combine()) {
             timeout.fire();
             return;
         }
 
         self.timeouts.push(timeout);
     }
+
+    fn combine(&self) -> u64 {
+        self.backend_offset + self.skip_offset
+    }
 }
 
 pub fn now() -> Timespec {
-    STATE.lock().now()
+    STATE.lock().refresh()
 }
 
 struct Timeout {
