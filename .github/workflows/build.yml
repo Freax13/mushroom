@@ -90,6 +90,9 @@ jobs:
           - development
           - release
           - kasan
+        time_backend:
+          - fake
+          - real
         test_target:
           - amd64
           - i386
@@ -101,6 +104,7 @@ jobs:
         run: make test
         env:
           PROFILE: ${{ matrix.profile }}
+          TIME_BACKEND: ${{ matrix.time_backend }}
           TEST_TARGET: ${{ matrix.test_target }}
 
   integration-test:
