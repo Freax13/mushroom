@@ -1940,13 +1940,20 @@ fn readlink(
 fn chmod(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] mut ctx: FileAccessContext,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     filename: Pointer<Path>,
-    mode: FileMode,
+    mode: u64,
 ) -> SyscallResult {
-    let path = virtual_memory.read(filename)?;
-    set_mode(thread.process().cwd(), &path, mode, &mut ctx)?;
-    Ok(0)
+    fchmodat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        filename,
+        mode,
+    )
 }
 
 #[syscall(i386 = 94, amd64 = 91)]
