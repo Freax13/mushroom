@@ -1,6 +1,11 @@
 include ../../config.mk
 
+ifeq ($(INSECURE),true)
+RUNNER = $(CLI) run --input /dev/null --output /dev/null --insecure --init
+else
 RUNNER = $(CLI) run --input /dev/null --output /dev/null --attestation-report /dev/null --init
+endif
+
 ifeq ($(TEST_TARGET),amd64)
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER = $(RUNNER)
 else ifeq ($(TEST_TARGET),i386)
