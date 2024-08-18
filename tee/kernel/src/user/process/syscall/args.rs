@@ -1303,3 +1303,9 @@ bitflags! {
         const EXCHANGE = 1 << 1;
     }
 }
+
+bitflags! {
+    pub struct FchownatFlags {
+        const SYMLINK_NOFOLLOW = 1 << 8;
+    }
+}

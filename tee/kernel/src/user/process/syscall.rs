@@ -54,10 +54,11 @@ use self::{
     args::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
-        FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec,
-        LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents,
-        ProtFlags, RLimit, RLimit64, Renameat2Flags, RtSigprocmaskHow, Signal, SocketPairType,
-        Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        FchownatFlags, FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags,
+        GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags,
+        Pointer, PollEvents, ProtFlags, RLimit, RLimit64, Renameat2Flags, RtSigprocmaskHow, Signal,
+        SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus,
+        WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -2829,13 +2830,31 @@ fn mkdirat(
 
 #[syscall(i386 = 298, amd64 = 260)]
 fn fchownat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     dfd: FdNum,
     pathname: Pointer<Path>,
-    user: u32,
-    group: u32,
-    flag: AtFlags,
+    uid: Uid,
+    gid: Gid,
+    flags: FchownatFlags,
 ) -> SyscallResult {
-    // FIXME: Implement this.
+    let newdfd = if dfd == FdNum::CWD {
+        thread.process().cwd()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let path = virtual_memory.read(pathname)?;
+    let node = if flags.contains(FchownatFlags::SYMLINK_NOFOLLOW) {
+        lookup_node(newdfd, &path, &mut ctx)?
+    } else {
+        lookup_and_resolve_node(newdfd, &path, &mut ctx)?
+    };
+
+    node.chown(uid, gid, &ctx)?;
     Ok(0)
 }
 
