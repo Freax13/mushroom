@@ -27,7 +27,7 @@ jobs:
       matrix:
         profile:
           - development
-          - production
+          - release
           - kasan
           - profiling
     name: "Build"
@@ -41,11 +41,10 @@ jobs:
             common
             host
             tee
-      - name: "Install cargo-make"
-        run: cargo install cargo-make
       - name: "Build"
-        run: cargo make --profile ${{ matrix.profile }} build
-        working-directory: host
+        run: make
+        env:
+          PROFILE: ${{ matrix.profile }}
 
   clippy:
     name: "Clippy"
@@ -89,9 +88,9 @@ jobs:
       matrix:
         profile:
           - development
-          - production
+          - release
           - kasan
-        abi:
+        test_target:
           - amd64
           - i386
     name: "Test"
@@ -99,33 +98,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: "Test"
-        run: cargo make --profile ${{ matrix.profile }} test-${{ matrix.abi }}
-        working-directory: host
+        run: make test
+        env:
+          PROFILE: ${{ matrix.profile }}
+          TEST_TARGET: ${{ matrix.test_target }}
 
   integration-test:
     name: "Integration Test"
     runs-on: [snp]
     steps:
       - uses: actions/checkout@v4
-      - name: "Build GCC Docker Image"
-        run: |
-          docker build --output type=tar,dest=gcc.tar .
-          gzip gcc.tar -f
-        working-directory: tee/example
-      - name: "Build Example Binary"
-        run: cargo make --profile production build-example
-        working-directory: tee
-      # This tests that mushroom can do the build.
-      - name: "Run"
-        run: cargo make --profile production run run --init ../tee/target/x86_64-unknown-linux-musl/release/example --input ../tee/example/hello-world.c --output output.bin --attestation-report report.bin
-        working-directory: host
-      # This tests that mushroom can attest the build output.
-      - name: "Verify Output"
-        run: cargo make --profile production run verify --init ../tee/target/x86_64-unknown-linux-musl/release/example --input ../tee/example/hello-world.c --output output.bin --attestation-report report.bin
-        working-directory: host
-      # This tests that the build output is a working executable.
-      - name: "Run Output"
-        run: |
-          chmod +x ./output.bin
-          ./output.bin
-        working-directory: host
+      - name: "Build & Run Example Init Binary"
+        run: make run-example
+  

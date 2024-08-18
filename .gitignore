@@ -1,2 +1,4 @@
 target
 uftrace.data
+output.bin
+report.bin
