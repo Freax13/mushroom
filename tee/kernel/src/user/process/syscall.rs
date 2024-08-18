@@ -174,6 +174,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysReadlink);
     handlers.register(SysChmod);
     handlers.register(SysFchmod);
+    handlers.register(SysChown);
     handlers.register(SysFchown);
     handlers.register(SysUmask);
     handlers.register(SysGetrlimit);
@@ -1982,6 +1983,29 @@ fn fchmod(
     let fd = fdtable.get(fd)?;
     fd.chmod(mode, &ctx)?;
     Ok(0)
+}
+
+#[syscall(i386 = 212, amd64 = 92)]
+fn chown(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    filename: Pointer<Path>,
+    user: Uid,
+    group: Gid,
+) -> SyscallResult {
+    fchownat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        filename,
+        user,
+        group,
+        FchownatFlags::empty(),
+    )
 }
 
 #[syscall(i386 = 207, amd64 = 93)]
