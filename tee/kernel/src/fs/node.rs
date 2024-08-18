@@ -362,6 +362,7 @@ fn lookup_node_with_parent(
 
             let stat = node.stat()?;
             if !matches!(segment, PathSegment::Root) {
+                ensure!(stat.mode.ty() == FileType::Dir, NotDir);
                 ctx.check_permissions(&stat, Permission::Execute)?;
             }
 
@@ -369,7 +370,6 @@ fn lookup_node_with_parent(
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
                 PathSegment::Empty | PathSegment::Dot => {
                     // Make sure that the node is a directory.
-                    ensure!(stat.mode.ty() == FileType::Dir, NotDir);
                     Ok((start_dir, node))
                 }
                 PathSegment::DotDot => {
@@ -421,6 +421,7 @@ fn find_parent<'a>(
                 }
             };
             let stat = dir.stat()?;
+            ensure!(stat.mode.ty() == FileType::Dir, NotDir);
             ctx.check_permissions(&stat, Permission::Execute)?;
             Ok((dir, next_segment))
         },
