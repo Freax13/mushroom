@@ -484,6 +484,16 @@ pub fn create_file(
                 ensure!(stat.mode.ty() != FileType::Dir, Exist);
                 ensure!(!flags.contains(OpenFlags::EXCL), Exist);
 
+                // Check that the existing file can be opened.
+                if flags.contains(OpenFlags::WRONLY) {
+                    ctx.check_permissions(&stat, Permission::Write)?;
+                } else if flags.contains(OpenFlags::RDWR) {
+                    ctx.check_permissions(&stat, Permission::Read)?;
+                    ctx.check_permissions(&stat, Permission::Write)?;
+                } else {
+                    ctx.check_permissions(&stat, Permission::Read)?;
+                }
+
                 return Ok(existing);
             }
         }
