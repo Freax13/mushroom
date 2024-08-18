@@ -564,12 +564,12 @@ pub fn set_mode(
 
 pub fn unlink_file(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
     let (parent, segment) = find_parent(start_dir, path, ctx)?;
-    match segment {
-        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            bail!(IsDir)
-        }
-        PathSegment::FileName(filename) => parent.delete_non_dir(filename.into_owned()),
-    }
+    let PathSegment::FileName(filename) = segment else {
+        bail!(IsDir)
+    };
+    let stat = parent.stat()?;
+    ctx.check_permissions(&stat, Permission::Write)?;
+    parent.delete_non_dir(filename.into_owned())
 }
 
 pub fn unlink_dir(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
@@ -579,7 +579,11 @@ pub fn unlink_dir(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext)
         PathSegment::Empty => todo!(),
         PathSegment::Dot => todo!(),
         PathSegment::DotDot => todo!(),
-        PathSegment::FileName(filename) => parent.delete_dir(filename.into_owned()),
+        PathSegment::FileName(filename) => {
+            let stat = parent.stat()?;
+            ctx.check_permissions(&stat, Permission::Write)?;
+            parent.delete_dir(filename.into_owned())
+        }
     }
 }
 
