@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription};
 
 pub struct PathFd {
     path: Path,
@@ -56,7 +56,7 @@ impl OpenFileDescription for PathFd {
         bail!(BadF)
     }
 
-    fn reopen(&self, flags: OpenFlags) -> Result<Option<FileDescriptor>> {
-        self.node.open(self.path.clone(), flags).map(Some)
+    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
+        Some((self.path.clone(), self.node.clone()))
     }
 }

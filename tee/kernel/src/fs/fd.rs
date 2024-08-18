@@ -451,25 +451,16 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn file_lock(&self) -> Result<&FileLock>;
 
-    /// For path file descriptors, this method should return the node pointed
-    /// to by that fd, for everything else, this method should return
-    /// `Ok(None)`.
-    fn reopen(&self, flags: OpenFlags) -> Result<Option<FileDescriptor>> {
-        let _ = flags;
-        Ok(None)
+    /// For path file descriptors, this method should return the pointed to
+    /// path and INode.
+    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
+        None
     }
 
     #[cfg(not(feature = "harden"))]
     fn type_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }
-}
-
-pub fn reopen(mut fd: FileDescriptor, flags: OpenFlags) -> Result<FileDescriptor> {
-    while let Some(new_fd) = fd.reopen(flags)? {
-        fd = new_fd;
-    }
-    Ok(fd)
 }
 
 bitflags! {

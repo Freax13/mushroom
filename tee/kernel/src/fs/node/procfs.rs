@@ -8,12 +8,12 @@ use alloc::{
 };
 
 use crate::{
-    error::{bail, ensure, err, Result},
+    error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
             dir::open_dir,
             file::{open_file, File},
-            reopen, FileDescriptor, FileLockRecord, LazyFileLockRecord,
+            FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         node::DirEntryName,
         path::{FileName, Path},
@@ -803,19 +803,49 @@ struct FollowedFdINode {
 
 impl INode for FollowedFdINode {
     fn stat(&self) -> Result<Stat> {
-        reopen(self.fd.clone(), OpenFlags::empty())?.stat()
+        if let Some((_, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the stat call to the pointed
+            // to node.
+            node.stat()
+        } else {
+            self.fd.stat()
+        }
     }
 
     fn open(&self, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        reopen(self.fd.clone(), flags)
+        if let Some((path, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the open call to the pointed
+            // to node.
+            node.open(path, flags)
+        } else {
+            Ok(self.fd.clone())
+        }
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        reopen(self.fd.clone(), OpenFlags::empty())?.chmod(mode, ctx)
+        if let Some((_, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the chmod call to the pointed
+            // to node, but rewrite ELOOP to EOPNOTSUPP.
+            node.chmod(mode, ctx).map_err(|err| {
+                if err.kind() == ErrorKind::Loop {
+                    err!(OpNotSupp)
+                } else {
+                    err
+                }
+            })
+        } else {
+            self.fd.chmod(mode, ctx)
+        }
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        reopen(self.fd.clone(), OpenFlags::empty())?.chown(uid, gid, ctx)
+        if let Some((_, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the chown call to the pointed
+            // to node.
+            node.chown(uid, gid, ctx)
+        } else {
+            self.fd.chown(uid, gid, ctx)
+        }
     }
 
     fn update_times(&self, _: Timespec, _: Option<Timespec>, _: Option<Timespec>) {
