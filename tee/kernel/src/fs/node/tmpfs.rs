@@ -452,6 +452,51 @@ impl Directory for TmpFsDir {
         }
     }
 
+    fn exchange(
+        &self,
+        oldname: FileName<'static>,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()> {
+        let new_dir =
+            Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
+        ensure!(new_dir.dev == self.dev, XDev);
+
+        if core::ptr::eq(self, &*new_dir) {
+            if newname == oldname {
+                Ok(())
+            } else {
+                let mut guard = self.internal.lock();
+
+                // Do the exchange.
+                let entry = guard
+                    .items
+                    .get(&oldname)
+                    .ok_or_else(|| err!(NoEnt))?
+                    .clone();
+                let Entry::Occupied(mut map_entry) = guard.items.entry(newname) else {
+                    bail!(NoEnt);
+                };
+                let entry = map_entry.insert(entry);
+                guard.items.insert(oldname, entry);
+
+                Ok(())
+            }
+        } else {
+            let (mut old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+
+            // Do the exchange.
+            let entry = old_guard.items.get(&oldname).ok_or_else(|| err!(NoEnt))?;
+            let Entry::Occupied(mut map_entry) = new_guard.items.entry(newname) else {
+                bail!(NoEnt);
+            };
+            let entry = map_entry.insert(entry.clone());
+            old_guard.items.insert(oldname, entry);
+
+            Ok(())
+        }
+    }
+
     fn hard_link(
         &self,
         oldname: FileName<'static>,

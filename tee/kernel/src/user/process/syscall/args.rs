@@ -1293,3 +1293,9 @@ bitflags! {
         const EACCESS = 1 << 9;
     }
 }
+
+bitflags! {
+    pub struct Renameat2Flags {
+        const EXCHANGE = 1 << 1;
+    }
+}

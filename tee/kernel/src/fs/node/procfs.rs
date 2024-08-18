@@ -212,6 +212,15 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn hard_link(
         &self,
         _oldname: FileName<'static>,
@@ -502,6 +511,15 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn hard_link(
         &self,
         _oldname: FileName<'static>,
@@ -665,6 +683,15 @@ impl Directory for FdDir {
         &self,
         _oldname: FileName<'static>,
         _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
     ) -> Result<()> {

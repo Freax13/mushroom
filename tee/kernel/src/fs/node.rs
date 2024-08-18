@@ -198,6 +198,18 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn exchange(
+        &self,
+        oldname: FileName<'static>,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()> {
+        let _ = oldname;
+        let _ = new_dir;
+        let _ = newname;
+        bail!(NotDir)
+    }
+
     fn hard_link(
         &self,
         oldname: FileName<'static>,
@@ -638,6 +650,34 @@ pub fn rename(
         new_parent,
         new_name.into_owned(),
     )?;
+
+    Ok(())
+}
+
+pub fn exchange(
+    oldd: DynINode,
+    old_path: &Path,
+    newd: DynINode,
+    new_path: &Path,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (old_parent, segment) = find_parent(oldd, old_path, ctx)?;
+    let old_name = match segment {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(IsDir)
+        }
+        PathSegment::FileName(filename) => filename,
+    };
+
+    let (new_parent, segment) = find_parent(newd, new_path, ctx)?;
+    let new_name = match segment {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(IsDir)
+        }
+        PathSegment::FileName(filename) => filename,
+    };
+
+    old_parent.exchange(old_name.into_owned(), new_parent, new_name.into_owned())?;
 
     Ok(())
 }

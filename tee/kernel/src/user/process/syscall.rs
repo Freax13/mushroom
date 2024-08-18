@@ -56,8 +56,8 @@ use self::{
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
         FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec,
         LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents,
-        ProtFlags, RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64,
-        SyscallArg, Time, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        ProtFlags, RLimit, RLimit64, Renameat2Flags, RtSigprocmaskHow, Signal, SocketPairType,
+        Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -2955,7 +2955,7 @@ fn renameat(
         oldname,
         newdfd,
         newname,
-        0,
+        Renameat2Flags::empty(),
     )
 }
 
@@ -3391,7 +3391,7 @@ fn renameat2(
     oldname: Pointer<Path>,
     newdfd: FdNum,
     newname: Pointer<Path>,
-    flags: u64,
+    flags: Renameat2Flags,
 ) -> SyscallResult {
     let oldd = if olddfd == FdNum::CWD {
         thread.process().cwd()
@@ -3410,7 +3410,11 @@ fn renameat2(
     let oldname = virtual_memory.read(oldname)?;
     let newname = virtual_memory.read(newname)?;
 
-    node::rename(oldd, &oldname, newd, &newname, &mut ctx)?;
+    if flags.contains(Renameat2Flags::EXCHANGE) {
+        node::exchange(oldd, &oldname, newd, &newname, &mut ctx)?;
+    } else {
+        node::rename(oldd, &oldname, newd, &newname, &mut ctx)?;
+    }
 
     Ok(0)
 }

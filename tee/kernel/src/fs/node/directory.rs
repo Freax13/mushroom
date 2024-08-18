@@ -109,6 +109,15 @@ macro_rules! dir_impls {
             Directory::rename(self, oldname, check_is_dir, new_dir, newname)
         }
 
+        fn exchange(
+            &self,
+            oldname: FileName<'static>,
+            new_dir: DynINode,
+            newname: FileName<'static>,
+        ) -> Result<()> {
+            Directory::exchange(self, oldname, new_dir, newname)
+        }
+
         fn hard_link(
             &self,
             oldname: FileName<'static>,
@@ -175,6 +184,12 @@ pub trait Directory: INode {
         &self,
         oldname: FileName<'static>,
         check_is_dir: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()>;
+    fn exchange(
+        &self,
+        oldname: FileName<'static>,
         new_dir: DynINode,
         newname: FileName<'static>,
     ) -> Result<()>;
