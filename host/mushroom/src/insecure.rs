@@ -34,6 +34,8 @@ use crate::{
     MushroomResult,
 };
 
+const TSC_MHZ: u64 = 100;
+
 /// Create the VM, load the kernel, init & input and run the APs.
 pub fn main(
     kernel: &[u8],
@@ -72,6 +74,8 @@ pub fn main(
         KvmCap::X86_USER_SPACE_MSR,
         KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
     )?;
+
+    vm.set_tsc_khz(TSC_MHZ * 1000)?;
 
     let (load_commands, _host_data) =
         loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, input);
@@ -249,11 +253,11 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
             ap.run().unwrap();
 
             // Check the exit.
-            let kvm_run = kvm_run.read();
-            let exit = kvm_run.exit();
+            let kvm_run_value = kvm_run.read();
+            let mut exit = kvm_run_value.exit();
             match exit {
                 KvmExit::Hlt => {
-                    let resume = kvm_run.cr8.get_bit(0);
+                    let resume = kvm_run_value.cr8.get_bit(0);
 
                     supervisor_thread.unpark();
 
@@ -262,6 +266,18 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
                     }
                 }
                 KvmExit::SetTpr => {}
+                KvmExit::RdMsr(ref mut msr) => {
+                    const GUEST_TSC_FREQ: u32 = 0xC001_0134;
+                    match msr.index {
+                        GUEST_TSC_FREQ => msr.data = TSC_MHZ,
+                        _ => todo!(),
+                    }
+
+                    kvm_run.update(|mut k| {
+                        k.set_exit(exit);
+                        k
+                    });
+                }
                 exit => {
                     let regs = ap.get_regs().unwrap();
                     println!("{:x}", regs.rip);

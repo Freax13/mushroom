@@ -93,6 +93,14 @@ impl InitializedVmsa {
         vmsa.set_rsp(0xffff_8000_0400_3ff8, tweak_bitmap);
         vmsa.set_sev_features(SEV_FEATURES, tweak_bitmap);
 
+        // Enable SecureTSC.
+        let sev_features = vmsa.sev_features(tweak_bitmap);
+        vmsa.set_sev_features(sev_features | SevFeatures::SECURE_TSC, tweak_bitmap);
+        // Set TSC scaling to 1.
+        vmsa.set_guest_tsc_scale(0x01_00000000, tweak_bitmap);
+        // Disable TSC offset.
+        vmsa.set_guest_tsc_offset(0, tweak_bitmap);
+
         // If the supervisor is not hardened, setup the vCPU so that the kernel
         // can be profiled.
         if !cfg!(feature = "harden") {
@@ -102,14 +110,6 @@ impl InitializedVmsa {
             // Allow the kernel to query it's processor id through TSC_AUX.
             // Note that this doesn't do anything on EPYC Milan.
             vmsa.set_tsc_aux(tsc_aux, tweak_bitmap);
-
-            // Enable SecureTSC.
-            let sev_features = vmsa.sev_features(tweak_bitmap);
-            vmsa.set_sev_features(sev_features | SevFeatures::SECURE_TSC, tweak_bitmap);
-            // Set TSC scaling to 1.
-            vmsa.set_guest_tsc_scale(0x01_00000000, tweak_bitmap);
-            // Disable TSC offset.
-            vmsa.set_guest_tsc_offset(0, tweak_bitmap);
         }
 
         // Randomize that starting nonce.

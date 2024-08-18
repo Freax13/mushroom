@@ -33,6 +33,16 @@ CLI_kasan       = $(CLI_development)
 CLI_profiling   = $(CLI_release)
 CLI = $(mkfile_dir)/$(CLI_$(PROFILE))
 
+TIME_BACKEND ?= fake
+
+# Make sure that the requested time backend is supported.
+KNOWN_TIME_BACKEND_fake = 1
+KNOWN_TIME_BACKEND_real = 1
+KNOWN_TIME_BACKEND = $(KNOWN_TIME_BACKEND_$(TIME_BACKEND))
+ifneq ($(KNOWN_TIME_BACKEND),1)
+$(error unknown time backend $(TIME_BACKEND))
+endif
+
 TEST_TARGET ?= amd64
 
 # Make sure that the requested test target is supported.
