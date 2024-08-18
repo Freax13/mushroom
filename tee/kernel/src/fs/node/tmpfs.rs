@@ -429,6 +429,20 @@ impl Directory for TmpFsDir {
             let Entry::Occupied(old_entry) = old_guard.items.entry(oldname) else {
                 bail!(NoEnt);
             };
+
+            // Make sure that the old_entry isn't new_dir or any of its parents.
+            let mut parent = new_dir.clone() as DynINode;
+            loop {
+                ensure!(!core::ptr::addr_eq(&**old_entry.get(), &*parent), Inval);
+                let new_parent = parent.clone().parent()?;
+                let old_parent = core::mem::replace(&mut parent, new_parent);
+
+                // Exit the loop if we've reached the root node.
+                if Arc::ptr_eq(&parent, &old_parent) {
+                    break;
+                }
+            }
+
             let new_entry = new_guard.items.entry(newname);
             let new = match &new_entry {
                 Entry::Vacant(_) => None,
@@ -490,6 +504,20 @@ impl Directory for TmpFsDir {
             let Entry::Occupied(mut map_entry) = new_guard.items.entry(newname) else {
                 bail!(NoEnt);
             };
+
+            // Make sure that the old_entry isn't new_dir or any of its parents.
+            let mut parent = new_dir.clone() as DynINode;
+            loop {
+                ensure!(!core::ptr::addr_eq(&**map_entry.get(), &*parent), Inval);
+                let new_parent = parent.clone().parent()?;
+                let old_parent = core::mem::replace(&mut parent, new_parent);
+
+                // Exit the loop if we've reached the root node.
+                if Arc::ptr_eq(&parent, &old_parent) {
+                    break;
+                }
+            }
+
             let entry = map_entry.insert(entry.clone());
             old_guard.items.insert(oldname, entry);
 
