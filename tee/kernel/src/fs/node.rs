@@ -440,7 +440,9 @@ fn find_parent<'a>(
     )?;
 
     // Make sure that the parent is a directory.
-    ensure!(parent.ty()? == FileType::Dir, NotDir);
+    let stat = parent.stat()?;
+    ensure!(stat.mode.ty() == FileType::Dir, NotDir);
+    ctx.check_permissions(&stat, Permission::Execute)?;
 
     Ok((parent, segment))
 }
