@@ -3346,9 +3346,23 @@ fn utimensat(
         } else {
             lookup_node(start_dir, &path, &mut ctx)?
         };
+
+        let stat = node.stat()?;
+        ensure!(
+            ctx.is_user(stat.uid) || ctx.check_permissions(&stat, Permission::Write).is_ok(),
+            Acces
+        );
+
         node.update_times(ctime, atime, mtime);
     } else {
         let fd = fdtable.get(dfd)?;
+
+        let stat = fd.stat()?;
+        ensure!(
+            ctx.is_user(stat.uid) || ctx.check_permissions(&stat, Permission::Write).is_ok(),
+            Acces
+        );
+
         fd.update_times(ctime, atime, mtime);
     }
 
