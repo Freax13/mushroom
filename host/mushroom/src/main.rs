@@ -193,7 +193,7 @@ struct TcbArgs {
     #[arg(long, default_value_t = 0)]
     tee: u8,
     /// The smallest allowed value for the `snp` field of the launch TCB.
-    #[arg(long, default_value_t = 21)]
+    #[arg(long, default_value_t = 22)]
     snp: u8,
     /// The smallest allowed value for the `microcode` field of the launch TCB.
     #[arg(long, default_value_t = 211)]
