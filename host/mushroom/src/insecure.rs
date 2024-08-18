@@ -28,6 +28,7 @@ use x86_64::registers::{
 };
 
 use crate::{
+    is_efault,
     kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VmHandle},
     logging::start_log_collection,
     slot::Slot,
@@ -250,7 +251,17 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
 
         loop {
             // Run the AP.
-            ap.run().unwrap();
+            let res = ap.run();
+            match res {
+                Ok(_) => {}
+                Err(err) if is_efault(&err) => {
+                    // The VM has been shut down.
+                    break;
+                }
+                Err(err) => {
+                    panic!("{err}");
+                }
+            }
 
             // Check the exit.
             let kvm_run_value = kvm_run.read();

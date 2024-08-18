@@ -409,8 +409,16 @@ impl VmContext {
 
                 // Run the AP.
                 let res = ap.run();
-
-                res.unwrap();
+                match res {
+                    Ok(_) => {}
+                    Err(err) if is_efault(&err) => {
+                        // The VM has been shut down.
+                        break;
+                    }
+                    Err(err) => {
+                        panic!("{err}");
+                    }
+                }
 
                 // Check the exit.
                 let kvm_run = kvm_run.read();
@@ -464,4 +472,9 @@ where
 pub struct MushroomResult {
     pub output: Vec<u8>,
     pub attestation_report: Option<Vec<u8>>,
+}
+
+fn is_efault(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<nix::Error>()
+        .is_some_and(|&err| err == nix::Error::EFAULT)
 }
