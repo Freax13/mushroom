@@ -60,14 +60,14 @@ The host folder contains cargo-make files to simplify the process of running a w
 
 To execute a workload use:
 ```shell
-freax13@workstation:~/mushroom/host$ cargo make --profile production run run --input input-file --output output.bin --attestation-report report.bin
+freax13@workstation:~/mushroom$ make run PROFILE=release INPUT=input-file OUTPUT=output.bin ATTESTATION_REPORT=report.bin
 [...]
 2023-07-07T20:45:00.670741Z  INFO mushroom: launched num_launch_pages=16102 num_data_pages=16100 total_launch_duration=16.47807905s
 2023-07-07T20:45:02.570740Z  INFO mushroom: finished
 ```
 To verify the output with attestation report simply swap out the `run` subcommand with `verify`:
 ```shell
-freax13@workstation:~/mushroom/host$ cargo make --profile production run verify --input input-file --output output.bin --attestation-report report.bin
+freax13@workstation:~/mushroom$ make verify PROFILE=release INPUT=input-file OUTPUT=output.bin ATTESTATION_REPORT=report.bin
 [...]
 Ok
 ```
