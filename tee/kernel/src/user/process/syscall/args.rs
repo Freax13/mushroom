@@ -179,7 +179,10 @@ where
     _marker: PhantomData<T>,
 }
 
-impl<T> Pointer<T> {
+impl<T> Pointer<T>
+where
+    T: ?Sized,
+{
     pub const NULL: Self = Self::new(0);
 
     pub const fn new(addr: u64) -> Self {

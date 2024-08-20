@@ -119,6 +119,106 @@ impl OpenFileDescription for Null {
     }
 }
 
+pub struct Zero {
+    path: Path,
+    flags: OpenFlags,
+    stat: Stat,
+    file_lock: FileLock,
+}
+
+#[register]
+impl CharDev for Zero {
+    const MAJOR: u16 = MAJOR;
+    const MINOR: u8 = 5;
+
+    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        Ok(Self {
+            path,
+            flags,
+            stat,
+            file_lock: FileLock::new(RECORD.get().clone()),
+        })
+    }
+}
+
+impl OpenFileDescription for Zero {
+    fn flags(&self) -> OpenFlags {
+        self.flags
+    }
+
+    fn path(&self) -> Path {
+        self.path.clone()
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        todo!()
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        todo!()
+    }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.stat)
+    }
+
+    fn poll_ready(&self, events: Events) -> Events {
+        events & (Events::READ | Events::WRITE)
+    }
+
+    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        buf.fill(0);
+        Ok(buf.len())
+    }
+
+    fn read_to_user(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        for i in 0..len {
+            vm.write(pointer.cast::<u8>().bytes_offset(i), 0u8)?;
+        }
+        Ok(len)
+    }
+
+    fn pread(&self, _pos: usize, buf: &mut [u8]) -> Result<usize> {
+        buf.fill(0);
+        Ok(buf.len())
+    }
+
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn write_from_user(
+        &self,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> crate::error::Result<usize> {
+        Ok(len)
+    }
+
+    fn pwrite(&self, _pos: usize, buf: &[u8]) -> Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+        Ok(KernelPage::zeroed())
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
+}
+
 pub fn random_bytes() -> impl Iterator<Item = u8> {
     static RD_RAND: Lazy<RdRand> = Lazy::new(|| RdRand::new().unwrap());
     from_fn(|| RD_RAND.get_u64()).flat_map(u64::to_ne_bytes)
