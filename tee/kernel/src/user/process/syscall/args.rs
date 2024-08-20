@@ -931,6 +931,15 @@ impl From<Timeval> for Timespec {
     }
 }
 
+impl From<Timespec> for Timeval {
+    fn from(value: Timespec) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_usec: value.tv_nsec / 1000,
+        }
+    }
+}
+
 enum_arg! {
     pub enum Domain {
         Unix = 1,

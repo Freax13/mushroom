@@ -1139,6 +1139,24 @@ impl From<Timeval64> for Timeval {
     }
 }
 
+impl From<Timeval> for Timeval32 {
+    fn from(value: Timeval) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_usec: value.tv_usec,
+        }
+    }
+}
+
+impl From<Timeval> for Timeval64 {
+    fn from(value: Timeval) -> Self {
+        Self {
+            tv_sec: u64::from(value.tv_sec),
+            tv_usec: u64::from(value.tv_usec),
+        }
+    }
+}
+
 impl Pointee for Time {}
 
 impl AbiDependentPointee for Time {

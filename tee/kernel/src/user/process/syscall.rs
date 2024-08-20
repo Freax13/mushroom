@@ -177,6 +177,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysChown);
     handlers.register(SysFchown);
     handlers.register(SysUmask);
+    handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
@@ -2026,6 +2027,26 @@ fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
     let old = core::mem::replace(&mut thread.umask, umask);
     SyscallResult::Ok(old.bits())
+}
+
+#[syscall(i386 = 78, amd64 = 96)]
+fn gettimeofday(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    tv: Pointer<Timeval>,
+    tz: Pointer<c_void>,
+) -> SyscallResult {
+    if !tz.is_null() {
+        todo!();
+    }
+
+    if !tv.is_null() {
+        let time = now();
+        let time = Timeval::from(time);
+        virtual_memory.write_with_abi(tv, time, abi)?;
+    }
+
+    Ok(0)
 }
 
 #[syscall(i386 = 76, amd64 = 97)]
