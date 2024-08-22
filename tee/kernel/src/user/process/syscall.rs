@@ -1315,6 +1315,7 @@ async fn clone(
             process.credentials.lock().clone(),
             process.cwd(),
             process.process_group.lock().clone(),
+            *process.limits.read(),
         ))
     };
 
@@ -2057,7 +2058,7 @@ fn getrlimit(
     resource: Resource,
     rlim: Pointer<RLimit>,
 ) -> SyscallResult {
-    let value = thread.getrlimit(resource);
+    let value = thread.process().limits.read()[resource];
     virtual_memory.write_with_abi(rlim, value, abi)?;
     Ok(0)
 }
@@ -3464,17 +3465,39 @@ fn pipe2(
 fn prlimit64(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    pid: i32,
+    pid: u32,
     resource: Resource,
     new_rlim: Pointer<RLimit64>,
     old_rlim: Pointer<RLimit64>,
 ) -> SyscallResult {
-    ensure!(new_rlim.is_null(), Perm);
+    let process = if pid != 0 {
+        Process::find_by_pid(pid).ok_or_else(|| err!(Srch))?
+    } else {
+        thread.process().clone()
+    };
+
+    let mut guard = process.limits.write();
 
     if !old_rlim.is_null() {
-        let value = thread.getrlimit(resource);
+        let value = guard[resource];
         let value = RLimit64::from(value);
         virtual_memory.write(old_rlim, value)?;
+    }
+
+    if !new_rlim.is_null() {
+        let value = virtual_memory.read(new_rlim)?;
+        let value = RLimit::try_from(value)?;
+        let limit = &mut guard[resource];
+
+        // Make sure that the limit is well-formed.
+        ensure!(value.rlim_cur <= value.rlim_max, Inval);
+
+        // Make sure that the user can set the hard limit.
+        if thread.process().credentials.lock().effective_user_id != Uid::SUPER_USER {
+            ensure!(value.rlim_max <= limit.rlim_max, Perm);
+        }
+
+        *limit = value;
     }
 
     Ok(0)

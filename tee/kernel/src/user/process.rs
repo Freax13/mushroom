@@ -15,6 +15,7 @@ use alloc::{
     vec::Vec,
 };
 use futures::{select_biased, FutureExt};
+use limits::Limits;
 use syscall::args::Timespec;
 use thread::{Credentials, Gid, Uid};
 
@@ -48,6 +49,7 @@ use self::{
 
 mod exec;
 mod futex;
+pub mod limits;
 pub mod memory;
 pub mod syscall;
 pub mod thread;
@@ -72,9 +74,12 @@ pub struct Process {
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<DynINode>,
     process_group: Mutex<Arc<ProcessGroup>>,
+
+    pub limits: RwLock<Limits>,
 }
 
 impl Process {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         first_tid: u32,
         parent: Weak<Self>,
@@ -83,6 +88,7 @@ impl Process {
         credentials: Credentials,
         cwd: DynINode,
         process_group: Arc<ProcessGroup>,
+        limits: Limits,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -103,6 +109,7 @@ impl Process {
             credentials: Mutex::new(credentials),
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
+            limits: RwLock::new(limits),
         };
         let arc = Arc::new(this);
 

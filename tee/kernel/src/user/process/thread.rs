@@ -40,9 +40,10 @@ use crate::{
 };
 
 use super::{
+    limits::Limits,
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, Pointer, RLimit, Resource, Signal, UserDesc, WStatus},
+        args::{FileMode, Pointer, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     Process, ProcessGroup, Session,
@@ -137,6 +138,7 @@ impl Thread {
                 Credentials::super_user(),
                 ROOT_NODE.clone(),
                 ProcessGroup::new(tid, Arc::new(Session::new(tid))),
+                Limits::default(),
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
@@ -513,18 +515,6 @@ impl ThreadGuard<'_> {
         self.clear_child_tid = Pointer::NULL;
 
         Ok(())
-    }
-
-    pub fn getrlimit(&self, resource: Resource) -> RLimit {
-        match resource {
-            Resource::NoFile => {
-                let limit = u32::try_from(FileDescriptorTable::MAX_FD).unwrap();
-                RLimit {
-                    rlim_cur: limit,
-                    rlim_max: limit,
-                }
-            }
-        }
     }
 
     /// Determines whether a signal is pending and whether the currently

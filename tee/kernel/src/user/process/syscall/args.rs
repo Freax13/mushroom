@@ -12,7 +12,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{bail, ensure, err, Result},
+    error::{bail, ensure, err, Error, Result},
     fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{
         memory::VirtualMemory,
@@ -1148,6 +1148,17 @@ impl From<RLimit> for RLimit64 {
             rlim_cur: u64::from(value.rlim_cur),
             rlim_max: u64::from(value.rlim_max),
         }
+    }
+}
+
+impl TryFrom<RLimit64> for RLimit {
+    type Error = Error;
+
+    fn try_from(value: RLimit64) -> Result<Self> {
+        Ok(Self {
+            rlim_cur: u32::try_from(value.rlim_cur)?,
+            rlim_max: u32::try_from(value.rlim_max)?,
+        })
     }
 }
 
