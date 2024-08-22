@@ -346,6 +346,8 @@ bitflags! {
         const CLOEXEC = 1 << 19;
         const SYNC = 1 << 20;
         const PATH = 1 << 21;
+
+        const _ALL = !0;
     }
 }
 
