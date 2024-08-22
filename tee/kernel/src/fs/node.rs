@@ -372,18 +372,16 @@ fn lookup_node_with_parent(
         |(start_dir, node), segment| -> Result<_> {
             let node = resolve_links(node, start_dir.clone(), ctx)?;
 
-            let stat = node.stat()?;
             if !matches!(segment, PathSegment::Root) {
+                // Make sure that the node is a directory.
+                let stat = node.stat()?;
                 ensure!(stat.mode.ty() == FileType::Dir, NotDir);
                 ctx.check_permissions(&stat, Permission::Execute)?;
             }
 
             match segment {
                 PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
-                PathSegment::Empty | PathSegment::Dot => {
-                    // Make sure that the node is a directory.
-                    Ok((start_dir, node))
-                }
+                PathSegment::Empty | PathSegment::Dot => Ok((start_dir, node)),
                 PathSegment::DotDot => {
                     let parent = node.parent()?;
                     Ok((parent.clone(), parent))
