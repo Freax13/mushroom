@@ -64,6 +64,7 @@ use self::{
 };
 
 use super::{
+    limits::CurrentNoFileLimit,
     memory::{Bias, VirtualMemory},
     thread::{
         new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
@@ -300,6 +301,7 @@ fn open(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     pathname: Pointer<Path>,
     flags: OpenFlags,
     mode: u64,
@@ -309,6 +311,7 @@ fn open(
         virtual_memory,
         fdtable,
         ctx,
+        no_file_limit,
         FdNum::CWD,
         pathname,
         flags,
@@ -891,9 +894,17 @@ fn pipe(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     pipefd: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
-    pipe2(virtual_memory, fdtable, ctx, pipefd, Pipe2Flags::empty())
+    pipe2(
+        virtual_memory,
+        fdtable,
+        ctx,
+        no_file_limit,
+        pipefd,
+        Pipe2Flags::empty(),
+    )
 }
 
 #[syscall(i386 = 82, amd64 = 23, interruptable)]
@@ -1074,9 +1085,13 @@ fn madvise(
 }
 
 #[syscall(i386 = 41, amd64 = 32)]
-fn dup(#[state] fdtable: Arc<FileDescriptorTable>, fildes: FdNum) -> SyscallResult {
+fn dup(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fildes: FdNum,
+) -> SyscallResult {
     let fd = fdtable.get(fildes)?;
-    let newfd = fdtable.insert(fd, FdFlags::empty())?;
+    let newfd = fdtable.insert(fd, FdFlags::empty(), no_file_limit)?;
 
     Ok(newfd.get() as u64)
 }
@@ -1229,6 +1244,7 @@ fn socketpair(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     domain: Domain,
     r#type: SocketPairType,
     protocol: i32,
@@ -1247,16 +1263,16 @@ fn socketpair(
                     ctx.filesystem_user_id,
                     ctx.filesystem_group_id,
                 );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type));
-                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             } else if r#type.contains(SocketPairType::STREAM) {
                 let (half1, half2) = StreamUnixSocket::new_pair(
                     r#type,
                     ctx.filesystem_user_id,
                     ctx.filesystem_group_id,
                 );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type));
-                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             } else {
                 todo!()
             }
@@ -1645,6 +1661,7 @@ fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult 
 #[syscall(i386 = 55, amd64 = 72)]
 fn fcntl(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
@@ -1659,7 +1676,7 @@ fn fcntl(
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
 
-            let fd_num = fdtable.insert_after(min, fd, flags)?;
+            let fd_num = fdtable.insert_after(min, fd, flags, no_file_limit)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => Ok(flags.bits()),
@@ -1679,6 +1696,7 @@ fn fcntl(
 #[syscall(i386 = 221)]
 fn fcntl64(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
@@ -1693,7 +1711,7 @@ fn fcntl64(
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
 
-            let fd_num = fdtable.insert_after(min, fd, flags)?;
+            let fd_num = fdtable.insert_after(min, fd, flags, no_file_limit)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => Ok(flags.bits()),
@@ -2788,6 +2806,7 @@ fn openat(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     dfd: FdNum,
     filename: Pointer<Path>,
     flags: OpenFlags,
@@ -2847,7 +2866,7 @@ fn openat(
         node.open(filename, flags)?
     };
 
-    let fd = fdtable.insert(fd, flags)?;
+    let fd = fdtable.insert(fd, flags, no_file_limit)?;
     Ok(fd.get() as u64)
 }
 
@@ -3395,12 +3414,14 @@ fn utimensat(
 fn eventfd(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     initval: u32,
     flags: EventFdFlags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
         EventFd::new(initval, ctx.filesystem_user_id, ctx.filesystem_group_id),
         flags,
+        no_file_limit,
     )?;
     Ok(fd_num.get().try_into().unwrap())
 }
@@ -3409,11 +3430,13 @@ fn eventfd(
 fn epoll_create1(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     flags: EpollCreate1Flags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
         Epoll::new(ctx.filesystem_user_id, ctx.filesystem_group_id),
         flags,
+        no_file_limit,
     )?;
     Ok(fd_num.get().try_into().unwrap())
 }
@@ -3441,15 +3464,16 @@ fn pipe2(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
     let (read_half, write_half) = pipe::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
 
     // Insert the first read half.
-    let read_half = fdtable.insert(read_half, flags)?;
+    let read_half = fdtable.insert(read_half, flags, no_file_limit)?;
     // Insert the second write half.
-    let res = fdtable.insert(write_half, flags);
+    let res = fdtable.insert(write_half, flags, no_file_limit);
     // Ensure that we close the first fd, if inserting the second failed.
     if res.is_err() {
         let _ = fdtable.close(read_half);

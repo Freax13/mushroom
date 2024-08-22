@@ -20,6 +20,7 @@ use crate::{
         mutex::{Mutex, MutexGuard},
     },
     user::process::{
+        limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::args::{
             EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
@@ -83,11 +84,13 @@ impl FileDescriptorTable {
 
     pub fn with_standard_io() -> Self {
         let this = Self::empty();
+        let no_file_limit = CurrentNoFileLimit::new(3);
 
         let stdin = this
             .insert(
                 std::Stdin::new(Uid::SUPER_USER, Gid::SUPER_USER),
                 FdFlags::empty(),
+                no_file_limit,
             )
             .unwrap();
         assert_eq!(stdin.get(), 0);
@@ -95,6 +98,7 @@ impl FileDescriptorTable {
             .insert(
                 std::Stdout::new(Uid::SUPER_USER, Gid::SUPER_USER),
                 FdFlags::empty(),
+                no_file_limit,
             )
             .unwrap();
         assert_eq!(stdout.get(), 1);
@@ -102,6 +106,7 @@ impl FileDescriptorTable {
             .insert(
                 std::Stderr::new(Uid::SUPER_USER, Gid::SUPER_USER),
                 FdFlags::empty(),
+                no_file_limit,
             )
             .unwrap();
         assert_eq!(stderr.get(), 2);
@@ -113,15 +118,20 @@ impl FileDescriptorTable {
         &self,
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
-        self.insert_after(0, fd, flags)
+        self.insert_after(0, fd, flags, no_file_limit)
     }
 
-    fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptorTableEntry>, min: i32) -> Result<i32> {
+    fn find_free_fd_num(
+        table: &BTreeMap<i32, FileDescriptorTableEntry>,
+        min: i32,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<i32> {
         let min = cmp::max(0, min);
 
         let fd_iter = table.keys().copied().skip_while(|i| *i < min);
-        let mut counter_iter = min..Self::MAX_FD;
+        let mut counter_iter = min..no_file_limit.get() as i32;
 
         fd_iter
             .zip(counter_iter.by_ref())
@@ -136,9 +146,10 @@ impl FileDescriptorTable {
         min: i32,
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
         let mut guard = self.table.lock();
-        let fd_num = Self::find_free_fd_num(&guard, min)?;
+        let fd_num = Self::find_free_fd_num(&guard, min, no_file_limit)?;
         guard.insert(
             fd_num,
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
