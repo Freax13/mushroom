@@ -218,11 +218,15 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
+                let now = now();
                 let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
                     internal: Mutex::new(TmpFsSymlinkInternal {
                         ownership: Ownership::new(FileMode::ALL, uid, gid),
+                        atime: now,
+                        mtime: now,
+                        ctime: now,
                     }),
                     file_lock_record: Arc::new(FileLockRecord::new()),
                 });
@@ -231,11 +235,15 @@ impl Directory for TmpFsDir {
             }
             Entry::Occupied(mut entry) => {
                 ensure!(!create_new, Exist);
+                let now = now();
                 let link = Arc::new(TmpFsSymlink {
                     ino: new_ino(),
                     target,
                     internal: Mutex::new(TmpFsSymlinkInternal {
                         ownership: Ownership::new(FileMode::ALL, uid, gid),
+                        atime: now,
+                        mtime: now,
+                        ctime: now,
                     }),
                     file_lock_record: Arc::new(FileLockRecord::new()),
                 });
@@ -799,6 +807,9 @@ pub struct TmpFsSymlink {
 #[derive(Clone)]
 struct TmpFsSymlinkInternal {
     ownership: Ownership,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl INode for TmpFsSymlink {
@@ -815,9 +826,9 @@ impl INode for TmpFsSymlink {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         })
     }
 
@@ -846,7 +857,16 @@ impl INode for TmpFsSymlink {
         lookup_node_with_parent(start_dir, &self.target, ctx).map(Some)
     }
 
-    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let mut guard = self.internal.lock();
+        guard.ctime = ctime;
+        if let Some(atime) = atime {
+            guard.atime = atime;
+        }
+        if let Some(mtime) = mtime {
+            guard.mtime = mtime;
+        }
+    }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
