@@ -611,6 +611,9 @@ pub fn hard_link(
     };
     let new_filename = new_filename.into_owned();
 
+    let stat = new_parent.stat()?;
+    ctx.check_permissions(&stat, Permission::Write)?;
+
     loop {
         let (old_parent, old_filename) = find_parent(target_dir, &target_path, ctx)?;
         let PathSegment::FileName(old_filename) = old_filename else {
