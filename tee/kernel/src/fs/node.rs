@@ -658,10 +658,15 @@ pub fn rename(
     let (new_parent, segment) = find_parent(newd, new_path, ctx)?;
     let new_name = match segment {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            bail!(IsDir)
+            bail!(Exist)
         }
         PathSegment::FileName(filename) => filename,
     };
+
+    let stat = old_parent.stat()?;
+    ctx.check_permissions(&stat, Permission::Write)?;
+    let stat = new_parent.stat()?;
+    ctx.check_permissions(&stat, Permission::Write)?;
 
     let check_is_dir = old_path.has_trailing_slash() || new_path.has_trailing_slash();
     old_parent.rename(
@@ -697,6 +702,11 @@ pub fn exchange(
         }
         PathSegment::FileName(filename) => filename,
     };
+
+    let stat = old_parent.stat()?;
+    ctx.check_permissions(&stat, Permission::Write)?;
+    let stat = new_parent.stat()?;
+    ctx.check_permissions(&stat, Permission::Write)?;
 
     old_parent.exchange(old_name.into_owned(), new_parent, new_name.into_owned())?;
 
