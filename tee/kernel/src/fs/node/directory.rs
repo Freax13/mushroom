@@ -105,8 +105,9 @@ macro_rules! dir_impls {
             check_is_dir: bool,
             new_dir: DynINode,
             newname: FileName<'static>,
+            no_replace: bool,
         ) -> Result<()> {
-            Directory::rename(self, oldname, check_is_dir, new_dir, newname)
+            Directory::rename(self, oldname, check_is_dir, new_dir, newname, no_replace)
         }
 
         fn exchange(
@@ -186,6 +187,7 @@ pub trait Directory: INode {
         check_is_dir: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        no_replace: bool,
     ) -> Result<()>;
     fn exchange(
         &self,

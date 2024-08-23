@@ -342,6 +342,7 @@ impl Directory for TmpFsDir {
         check_is_dir: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        no_replace: bool,
     ) -> Result<()> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
@@ -400,6 +401,8 @@ impl Directory for TmpFsDir {
                     bail!(NoEnt);
                 };
 
+                ensure!(!no_replace, Exist);
+
                 // Make sure that we can rename the old entry over the missing entry.
                 can_rename(old, None, check_is_dir)?;
 
@@ -412,6 +415,8 @@ impl Directory for TmpFsDir {
                     bail!(NoEnt);
                 };
                 let new = guard.items.get(&newname);
+
+                ensure!(!no_replace || new.is_none(), Exist);
 
                 // Make sure that we can rename the old entry over the new entry.
                 can_rename(old, new, check_is_dir)?;
@@ -451,6 +456,8 @@ impl Directory for TmpFsDir {
 
             // Make sure that we can rename the old entry over the new entry.
             can_rename(old_entry.get(), new, check_is_dir)?;
+
+            ensure!(!no_replace || new.is_none(), Exist);
 
             // Do the rename.
             match new_entry {

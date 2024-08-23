@@ -3558,7 +3558,14 @@ fn renameat2(
     if flags.contains(Renameat2Flags::EXCHANGE) {
         node::exchange(oldd, &oldname, newd, &newname, &mut ctx)?;
     } else {
-        node::rename(oldd, &oldname, newd, &newname, &mut ctx)?;
+        node::rename(
+            oldd,
+            &oldname,
+            newd,
+            &newname,
+            flags.contains(Renameat2Flags::NOREPLACE),
+            &mut ctx,
+        )?;
     }
 
     Ok(0)

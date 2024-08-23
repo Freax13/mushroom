@@ -190,11 +190,13 @@ pub trait INode: Any + Send + Sync + 'static {
         check_is_dir: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        no_replace: bool,
     ) -> Result<()> {
         let _ = oldname;
         let _ = check_is_dir;
         let _ = new_dir;
         let _ = newname;
+        let _ = no_replace;
         bail!(NotDir)
     }
 
@@ -642,6 +644,7 @@ pub fn rename(
     old_path: &Path,
     newd: DynINode,
     new_path: &Path,
+    no_replace: bool,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
     let (old_parent, segment) = find_parent(oldd, old_path, ctx)?;
@@ -666,6 +669,7 @@ pub fn rename(
         check_is_dir,
         new_parent,
         new_name.into_owned(),
+        no_replace,
     )?;
 
     Ok(())

@@ -1325,6 +1325,7 @@ bitflags! {
 
 bitflags! {
     pub struct Renameat2Flags {
+        const NOREPLACE = 1 << 0;
         const EXCHANGE = 1 << 1;
     }
 }

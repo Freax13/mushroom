@@ -208,6 +208,7 @@ impl Directory for ProcFsRoot {
         _check_is_dir: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _no_replace: bool,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -507,6 +508,7 @@ impl Directory for ProcessDir {
         _check_is_dir: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _no_replace: bool,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -685,6 +687,7 @@ impl Directory for FdDir {
         _check_is_dir: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _no_replace: bool,
     ) -> Result<()> {
         bail!(NoEnt)
     }
