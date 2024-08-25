@@ -177,6 +177,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchmod);
     handlers.register(SysChown);
     handlers.register(SysFchown);
+    handlers.register(SysLchown);
     handlers.register(SysUmask);
     handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
@@ -2038,6 +2039,29 @@ fn fchown(
     let fd = fdtable.get(fd)?;
     fd.chown(user, group, &ctx)?;
     Ok(0)
+}
+
+#[syscall(i386 = 198, amd64 = 94)]
+fn lchown(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    filename: Pointer<Path>,
+    user: Uid,
+    group: Gid,
+) -> SyscallResult {
+    fchownat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        filename,
+        user,
+        group,
+        FchownatFlags::SYMLINK_NOFOLLOW,
+    )
 }
 
 #[syscall(i386 = 60, amd64 = 95)]
