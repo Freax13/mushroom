@@ -85,8 +85,6 @@ pub struct ThreadState {
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub vfork_done: Option<oneshot::Sender<()>>,
-    // FIXME: Use this field.
-    pub umask: FileMode,
 }
 
 impl Thread {
@@ -100,7 +98,6 @@ impl Thread {
         fdtable: Arc<FileDescriptorTable>,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
-        umask: FileMode,
     ) -> Self {
         Self {
             tid,
@@ -116,7 +113,6 @@ impl Thread {
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 vfork_done,
-                umask,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -139,6 +135,7 @@ impl Thread {
                 ROOT_NODE.clone(),
                 ProcessGroup::new(tid, Arc::new(Session::new(tid))),
                 Limits::default(),
+                FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
@@ -146,7 +143,6 @@ impl Thread {
             Arc::new(FileDescriptorTable::with_standard_io()),
             None,
             CpuState::new(0, 0, 0),
-            FileMode::empty(),
         )
     }
 
@@ -425,7 +421,6 @@ impl ThreadGuard<'_> {
             fdtable,
             vfork_done,
             cpu_state,
-            self.umask,
         );
 
         let mut guard = thread.lock();

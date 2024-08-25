@@ -1334,6 +1334,7 @@ async fn clone(
             process.cwd(),
             process.process_group.lock().clone(),
             *process.limits.read(),
+            *process.umask.lock(),
         ))
     };
 
@@ -2068,7 +2069,7 @@ fn lchown(
 #[syscall(i386 = 60, amd64 = 95)]
 fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
-    let old = core::mem::replace(&mut thread.umask, umask);
+    let old = core::mem::replace(&mut *thread.process().umask.lock(), umask);
     SyscallResult::Ok(old.bits())
 }
 

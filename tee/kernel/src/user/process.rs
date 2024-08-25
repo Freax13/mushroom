@@ -74,8 +74,8 @@ pub struct Process {
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<DynINode>,
     process_group: Mutex<Arc<ProcessGroup>>,
-
     pub limits: RwLock<Limits>,
+    pub umask: Mutex<FileMode>,
 }
 
 impl Process {
@@ -89,6 +89,7 @@ impl Process {
         cwd: DynINode,
         process_group: Arc<ProcessGroup>,
         limits: Limits,
+        umask: FileMode,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -110,6 +111,7 @@ impl Process {
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
             limits: RwLock::new(limits),
+            umask: Mutex::new(umask),
         };
         let arc = Arc::new(this);
 
