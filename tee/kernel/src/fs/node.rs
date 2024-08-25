@@ -368,7 +368,9 @@ fn lookup_node_with_parent(
                 // Make sure that the node is a directory.
                 let stat = node.stat()?;
                 ensure!(stat.mode.ty() == FileType::Dir, NotDir);
-                ctx.check_permissions(&stat, Permission::Execute)?;
+                if !matches!(segment, PathSegment::Dot) {
+                    ctx.check_permissions(&stat, Permission::Execute)?;
+                }
             }
 
             match segment {
