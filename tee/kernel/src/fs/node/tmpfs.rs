@@ -96,7 +96,7 @@ impl TmpFsDir {
                 entry.insert(TmpFsDirEntry::File(node.clone()));
                 Ok(Ok(node))
             }
-            Entry::Occupied(entry) => Ok(Err(entry.get().clone().into())),
+            Entry::Occupied(entry) => Ok(Err(entry.get().node())),
         }
     }
 }
@@ -170,8 +170,7 @@ impl Directory for TmpFsDir {
             .lock()
             .items
             .get(path_segment)
-            .cloned()
-            .map(Into::into)
+            .map(TmpFsDirEntry::node)
             .ok_or(err!(NoEnt))
     }
 
@@ -556,7 +555,7 @@ impl Directory for TmpFsDir {
             let entry = guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
 
             if follow_symlink {
-                if let TmpFsDirEntry::Symlink(symlink) = entry {
+                if let TmpFsDirEntry::Symlink(symlink) = &entry {
                     return Ok(Some(symlink.target.clone()));
                 }
             }
@@ -576,7 +575,7 @@ impl Directory for TmpFsDir {
             let entry = old_guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
 
             if follow_symlink {
-                if let TmpFsDirEntry::Symlink(symlink) = entry {
+                if let TmpFsDirEntry::Symlink(symlink) = &entry {
                     return Ok(Some(symlink.target.clone()));
                 }
             }
@@ -597,13 +596,39 @@ impl Directory for TmpFsDir {
     }
 }
 
-#[derive(Clone)]
 enum TmpFsDirEntry {
     File(Arc<TmpFsFile>),
     Dir(Arc<TmpFsDir>),
     Symlink(Arc<TmpFsSymlink>),
     CharDev(Arc<TmpFsCharDev>),
     Mount(DynINode),
+}
+
+impl TmpFsDirEntry {
+    fn node(&self) -> DynINode {
+        match self {
+            TmpFsDirEntry::File(file) => file.clone(),
+            TmpFsDirEntry::Dir(dir) => dir.clone(),
+            TmpFsDirEntry::Symlink(symlink) => symlink.clone(),
+            TmpFsDirEntry::CharDev(char_dev) => char_dev.clone(),
+            TmpFsDirEntry::Mount(node) => node.clone(),
+        }
+    }
+}
+
+impl Clone for TmpFsDirEntry {
+    fn clone(&self) -> Self {
+        match self {
+            Self::File(file) => {
+                file.increase_link_count();
+                Self::File(file.clone())
+            }
+            Self::Dir(dir) => Self::Dir(dir.clone()),
+            Self::Symlink(symlink) => Self::Symlink(symlink.clone()),
+            Self::CharDev(char_dev) => Self::CharDev(char_dev.clone()),
+            Self::Mount(mount) => Self::Mount(mount.clone()),
+        }
+    }
 }
 
 impl Deref for TmpFsDirEntry {
@@ -620,14 +645,10 @@ impl Deref for TmpFsDirEntry {
     }
 }
 
-impl From<TmpFsDirEntry> for DynINode {
-    fn from(value: TmpFsDirEntry) -> Self {
-        match value {
-            TmpFsDirEntry::File(file) => file,
-            TmpFsDirEntry::Dir(dir) => dir,
-            TmpFsDirEntry::Symlink(symlink) => symlink,
-            TmpFsDirEntry::CharDev(char_dev) => char_dev,
-            TmpFsDirEntry::Mount(node) => node,
+impl Drop for TmpFsDirEntry {
+    fn drop(&mut self) {
+        if let Self::File(file) = self {
+            file.decrease_link_count();
         }
     }
 }
@@ -645,6 +666,7 @@ struct TmpFsFileInternal {
     atime: Timespec,
     mtime: Timespec,
     ctime: Timespec,
+    links: u64,
 }
 
 impl TmpFsFile {
@@ -660,9 +682,18 @@ impl TmpFsFile {
                 atime: now,
                 mtime: now,
                 ctime: now,
+                links: 1,
             }),
             file_lock_record: LazyFileLockRecord::new(),
         })
+    }
+
+    fn increase_link_count(&self) {
+        self.internal.lock().links += 1;
+    }
+
+    fn decrease_link_count(&self) {
+        self.internal.lock().links -= 1;
     }
 }
 
@@ -673,7 +704,7 @@ impl INode for TmpFsFile {
         Ok(Stat {
             dev: 0,
             ino: self.ino,
-            nlink: 1,
+            nlink: guard.links,
             mode: FileTypeAndMode::new(FileType::File, guard.ownership.mode()),
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
