@@ -566,7 +566,8 @@ impl Directory for TmpFsDir {
 
             match guard.items.entry(newname) {
                 Entry::Vacant(e) => {
-                    e.insert(entry);
+                    let node = e.insert(entry);
+                    node.update_times(now(), None, None);
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
@@ -585,7 +586,8 @@ impl Directory for TmpFsDir {
 
             match new_guard.items.entry(newname) {
                 Entry::Vacant(e) => {
-                    e.insert(entry);
+                    let node = e.insert(entry);
+                    node.update_times(now(), None, None);
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
