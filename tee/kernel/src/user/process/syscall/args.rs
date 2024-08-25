@@ -384,6 +384,7 @@ bitflags! {
         const OWNER_WRITE = 0o200;
         const OWNER_READ = 0o400;
         const OWNER_ALL = 0o700;
+        const STICKY = 0o1000;
         const SET_GROUP_ID = 0o2000;
         const SET_USER_ID = 0o4000;
     }
