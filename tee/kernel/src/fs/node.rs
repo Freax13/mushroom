@@ -474,6 +474,7 @@ pub fn create_file(
                 // If the node is a symlink start over with the destination
                 // path.
                 if stat.mode.ty() == FileType::Link {
+                    ensure!(!flags.contains(OpenFlags::EXCL), Exist);
                     ensure!(!flags.contains(OpenFlags::NOFOLLOW), Loop);
 
                     path = existing.read_link(ctx)?;
