@@ -190,10 +190,6 @@ impl Directory for ProcFsRoot {
         Ok(entries)
     }
 
-    fn delete(&self, _file_name: FileName<'static>) -> Result<()> {
-        bail!(Perm)
-    }
-
     fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
         bail!(Perm)
     }
@@ -490,10 +486,6 @@ impl Directory for ProcessDir {
         Ok(entries)
     }
 
-    fn delete(&self, _file_name: FileName<'static>) -> Result<()> {
-        bail!(Perm)
-    }
-
     fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
         bail!(Perm)
     }
@@ -667,10 +659,6 @@ impl Directory for FdDir {
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
         Ok(fdtable.list_entries())
-    }
-
-    fn delete(&self, _file_name: FileName<'static>) -> Result<()> {
-        bail!(Perm)
     }
 
     fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {

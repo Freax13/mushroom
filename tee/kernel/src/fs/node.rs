@@ -12,7 +12,7 @@ use crate::{
         Process,
     },
 };
-use alloc::{sync::Arc, vec::Vec};
+use alloc::sync::Arc;
 
 use crate::{
     error::Result,
@@ -162,16 +162,6 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn is_empty_dir(&self) -> bool {
         false
-    }
-
-    fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let _ = ctx;
-        bail!(NotDir)
-    }
-
-    fn delete(&self, file_name: FileName<'static>) -> Result<()> {
-        let _ = file_name;
-        bail!(NotDir)
     }
 
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {

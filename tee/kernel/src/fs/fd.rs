@@ -418,10 +418,6 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn stat(&self) -> Result<Stat>;
 
-    fn ty(&self) -> Result<FileType> {
-        Ok(self.stat()?.mode.ty())
-    }
-
     fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
         let _ = ctx;
         bail!(NotDir)
