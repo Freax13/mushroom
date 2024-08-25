@@ -70,8 +70,8 @@ pub trait Syscall {
     ) -> fmt::Result;
 }
 
-const MAX_SYSCALL_I386_HANDLER: usize = 408;
-const MAX_SYSCALL_AMD64_HANDLER: usize = 327;
+const MAX_SYSCALL_I386_HANDLER: usize = 453;
+const MAX_SYSCALL_AMD64_HANDLER: usize = 453;
 
 type DynFuture = dyn Future<Output = SyscallResult> + Send;
 

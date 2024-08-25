@@ -566,16 +566,6 @@ pub fn mount(
     Ok(())
 }
 
-pub fn set_mode(
-    start_dir: DynINode,
-    path: &Path,
-    mode: FileMode,
-    ctx: &mut FileAccessContext,
-) -> Result<()> {
-    let node = lookup_and_resolve_node(start_dir, path, ctx)?;
-    node.chmod(mode, ctx)
-}
-
 pub fn unlink_file(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
     let (parent, segment, trailing_slash) = find_parent(start_dir, path, ctx)?;
     let PathSegment::FileName(filename) = segment else {

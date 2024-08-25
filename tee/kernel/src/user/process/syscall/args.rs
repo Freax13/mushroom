@@ -1335,3 +1335,9 @@ bitflags! {
         const SYMLINK_NOFOLLOW = 1 << 8;
     }
 }
+
+bitflags! {
+    pub struct Fchmodat2Flags {
+        const SYMLINK_NOFOLLOW = 1 << 8;
+    }
+}

@@ -33,8 +33,8 @@ use crate::{
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, procfs, read_link, set_mode, unlink_dir,
-            unlink_file, DirEntry, FileAccessContext, OldDirEntry, Permission,
+            lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir, unlink_file,
+            DirEntry, FileAccessContext, OldDirEntry, Permission,
         },
         path::Path,
     },
@@ -54,11 +54,11 @@ use self::{
     args::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
-        FchownatFlags, FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags,
-        GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags,
-        Pointer, PollEvents, ProtFlags, RLimit, RLimit64, Renameat2Flags, RtSigprocmaskHow, Signal,
-        SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec, UnlinkOptions, WStatus,
-        WaitOptions, Whence,
+        Fchmodat2Flags, FchownatFlags, FcntlCmd, FdNum, FileMode, FileType, FutexOp,
+        FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags, Offset,
+        OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags, RLimit, RLimit64, Renameat2Flags,
+        RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec,
+        UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
@@ -239,6 +239,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
+    handlers.register(SysFchmodat2);
 
     handlers
 };
@@ -3191,25 +3192,21 @@ fn fchmodat(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
-    #[state] mut ctx: FileAccessContext,
+    #[state] ctx: FileAccessContext,
     dfd: FdNum,
     filename: Pointer<Path>,
     mode: u64,
 ) -> SyscallResult {
-    let mode = FileMode::from_bits_truncate(mode);
-
-    let newdfd = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
-    let path = virtual_memory.read(filename)?;
-
-    set_mode(newdfd, &path, mode, &mut ctx)?;
-
-    Ok(0)
+    fchmodat2(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        dfd,
+        filename,
+        mode,
+        Fchmodat2Flags::empty(),
+    )
 }
 
 #[syscall(i386 = 307, amd64 = 269)]
@@ -3633,4 +3630,36 @@ async fn copy_file_range(
         SpliceFlags::empty(),
     )
     .await
+}
+
+#[syscall(i386 = 452, amd64 = 452)]
+fn fchmodat2(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
+    filename: Pointer<Path>,
+    mode: u64,
+    flags: Fchmodat2Flags,
+) -> SyscallResult {
+    let mode = FileMode::from_bits_truncate(mode);
+
+    let newdfd = if dfd == FdNum::CWD {
+        thread.process().cwd()
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(&mut ctx)?
+    };
+
+    let path = virtual_memory.read(filename)?;
+
+    let node = if flags.contains(Fchmodat2Flags::SYMLINK_NOFOLLOW) {
+        lookup_node(newdfd, &path, &mut ctx)?
+    } else {
+        lookup_and_resolve_node(newdfd, &path, &mut ctx)?
+    };
+    node.chmod(mode, &ctx)?;
+
+    Ok(0)
 }
