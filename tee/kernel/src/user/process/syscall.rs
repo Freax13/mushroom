@@ -2861,13 +2861,9 @@ fn openat(
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
-            create_file(
-                start_dir,
-                filename.clone(),
-                FileMode::from_bits_truncate(mode),
-                flags,
-                &mut ctx,
-            )?
+            let mut mode = FileMode::from_bits_truncate(mode);
+            mode &= !*thread.process().umask.lock();
+            create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
         } else {
             let node = if flags.contains(OpenFlags::NOFOLLOW) {
                 lookup_node(start_dir.clone(), &filename, &mut ctx)?
@@ -2912,7 +2908,8 @@ fn mkdirat(
         fd.as_dir(&mut ctx)?
     };
 
-    let mode = FileMode::from_bits_truncate(mode);
+    let mut mode = FileMode::from_bits_truncate(mode);
+    mode &= !*thread.process().umask.lock();
     let pathname = virtual_memory.read(pathname)?;
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
     Ok(0)
