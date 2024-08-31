@@ -16,7 +16,7 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{ensure, Error, Result},
     fs::{
         node::{DirEntry, OldDirEntry},
         path::{Path, PATH_MAX},
@@ -726,12 +726,17 @@ impl From<Timespec> for Timespec64 {
     }
 }
 
-impl From<Timespec32> for Timespec {
-    fn from(value: Timespec32) -> Self {
-        Self {
+impl TryFrom<Timespec32> for Timespec {
+    type Error = Error;
+
+    fn try_from(value: Timespec32) -> Result<Self> {
+        if !matches!(value.tv_nsec, Self::UTIME_NOW | Self::UTIME_OMIT) {
+            ensure!(value.tv_nsec < 1_000_000_000, Inval);
+        }
+        Ok(Self {
             tv_sec: value.tv_sec,
             tv_nsec: value.tv_nsec,
-        }
+        })
     }
 }
 
@@ -745,6 +750,7 @@ impl TryFrom<Timespec64> for Timespec {
             // If tv_nsec is set to one of these special values ignore tv_sec.
             Ok(Self { tv_sec: 0, tv_nsec })
         } else {
+            ensure!(tv_nsec < 1_000_000_000, Inval);
             Ok(Self {
                 tv_sec: u32::try_from(value.tv_sec)?,
                 tv_nsec,
