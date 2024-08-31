@@ -586,10 +586,10 @@ pub fn unlink_file(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext
 pub fn unlink_dir(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
     let (parent, segment, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     match segment {
-        PathSegment::Root => todo!(),
+        PathSegment::Root => bail!(NotEmpty),
         PathSegment::Empty => todo!(),
-        PathSegment::Dot => todo!(),
-        PathSegment::DotDot => todo!(),
+        PathSegment::Dot => bail!(Inval),
+        PathSegment::DotDot => bail!(NotEmpty),
         PathSegment::FileName(filename) => {
             let stat = parent.stat()?;
             ctx.check_permissions(&stat, Permission::Write)?;
