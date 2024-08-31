@@ -613,8 +613,9 @@ pub fn hard_link(
     ctx.check_permissions(&stat, Permission::Write)?;
 
     loop {
-        let (old_parent, old_filename, _trailing_slash) =
+        let (old_parent, old_filename, trailing_slash) =
             find_parent(target_dir, &target_path, ctx)?;
+        ensure!(!trailing_slash, Perm);
         let PathSegment::FileName(old_filename) = old_filename else {
             bail!(Exist);
         };

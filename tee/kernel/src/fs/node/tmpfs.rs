@@ -553,8 +553,10 @@ impl Directory for TmpFsDir {
                     return Ok(Some(symlink.target.clone()));
                 }
             }
-            if let TmpFsDirEntry::Mount(_) = entry {
-                bail!(Busy);
+            match entry {
+                TmpFsDirEntry::Dir(_) => bail!(Perm),
+                TmpFsDirEntry::Mount(_) => bail!(Busy),
+                _ => {}
             }
 
             match guard.items.entry(newname) {
@@ -573,8 +575,10 @@ impl Directory for TmpFsDir {
                     return Ok(Some(symlink.target.clone()));
                 }
             }
-            if let TmpFsDirEntry::Mount(_) = entry {
-                bail!(Busy);
+            match entry {
+                TmpFsDirEntry::Dir(_) => bail!(Perm),
+                TmpFsDirEntry::Mount(_) => bail!(Busy),
+                _ => {}
             }
 
             match new_guard.items.entry(newname) {
