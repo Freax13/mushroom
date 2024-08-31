@@ -1831,10 +1831,10 @@ fn getcwd(
     size: u64,
 ) -> SyscallResult {
     let cwd = thread.process().cwd().path(&mut ctx)?;
-    ensure!(cwd.as_bytes().len() < usize_from(size), Range);
-
+    let len = cwd.as_bytes().len();
+    ensure!(len < usize_from(size), Range);
     virtual_memory.write(path, cwd)?;
-    Ok(0)
+    Ok(u64::from_usize(len))
 }
 
 #[syscall(i386 = 12, amd64 = 80)]
