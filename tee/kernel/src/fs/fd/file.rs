@@ -99,6 +99,8 @@ pub trait File: INode {
 }
 
 pub fn open_file(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
+    ensure!(!flags.contains(OpenFlags::DIRECTORY), IsDir);
+
     if flags.contains(OpenFlags::TRUNC) {
         file.truncate(0)?;
     }

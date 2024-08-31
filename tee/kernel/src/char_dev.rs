@@ -2,7 +2,7 @@ use alloc::sync::Arc;
 use linkme::distributed_slice;
 
 use crate::{
-    error::{err, Result},
+    error::{ensure, err, Result},
     fs::{
         fd::{FileDescriptor, OpenFileDescription},
         path::Path,
@@ -27,6 +27,7 @@ pub fn open(
     stat: Stat,
     fs: Arc<dyn FileSystem>,
 ) -> Result<FileDescriptor> {
+    ensure!(!flags.contains(OpenFlags::DIRECTORY), IsDir);
     let registration = REGISTRATIONS
         .iter()
         .find(|r| u64::from(r.rdev) == stat.rdev)
