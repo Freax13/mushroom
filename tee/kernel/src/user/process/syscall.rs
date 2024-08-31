@@ -23,7 +23,7 @@ use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
-            do_io, do_io_with_vm,
+            do_io,
             epoll::Epoll,
             eventfd::EventFd,
             path::PathFd,
@@ -256,8 +256,8 @@ async fn read(
 
     let count = usize_from(count);
 
-    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
-        fd.read_to_user(vm, buf, count)
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.read_to_user(&virtual_memory, buf, count)
     })
     .await?;
 
@@ -278,8 +278,8 @@ async fn write(
 
     let count = usize_from(count);
 
-    let res = do_io_with_vm(&*fd.clone(), Events::WRITE, virtual_memory, move |vm| {
-        fd.write_from_user(vm, buf, count)
+    let res = do_io(&*fd.clone(), Events::WRITE, || {
+        fd.write_from_user(&virtual_memory, buf, count)
     })
     .await;
 
@@ -1232,8 +1232,8 @@ async fn recv_from(
 
     let count = usize_from(len);
 
-    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
-        fd.recv_from(vm, buf, count)
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.recv_from(&virtual_memory, buf, count)
     })
     .await?;
 

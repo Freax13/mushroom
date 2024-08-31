@@ -485,37 +485,12 @@ pub async fn do_io<R>(
     events: Events,
     mut callback: impl FnMut() -> Result<R>,
 ) -> Result<R> {
-    loop {
-        // Try to execute the closure.
-        let res = callback();
-        match res {
-            Ok(value) => return Ok(value),
-            Err(err) if err.kind() == ErrorKind::Again => {
-                // Wait for the fd to be ready, then try again.
-                fd.ready(events).await?;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-}
-
-pub async fn do_io_with_vm<R, F>(
-    fd: &(impl OpenFileDescription + ?Sized),
-    events: Events,
-    vm: Arc<VirtualMemory>,
-    mut callback: F,
-) -> Result<R>
-where
-    R: Send + 'static,
-    F: FnMut(&VirtualMemory) -> Result<R>,
-{
     let flags = fd.flags();
     let non_blocking = flags.contains(OpenFlags::NONBLOCK);
 
     loop {
         // Try to execute the closure.
-        let res = callback(&vm);
-
+        let res = callback();
         match res {
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
