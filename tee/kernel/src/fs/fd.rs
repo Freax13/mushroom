@@ -457,6 +457,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Perm)
     }
 
+    /// Returns a future that is ready when the file descriptor can process
+    /// write of `size` bytes. Note that this doesn't necessairly mean that all
+    /// `size` bytes will be written.
+    async fn ready_for_write(&self, count: usize) -> Result<()> {
+        let _ = count;
+        self.ready(Events::WRITE).await.map(drop)
+    }
+
     fn file_lock(&self) -> Result<&FileLock>;
 
     /// For path file descriptors, this method should return the pointed to
@@ -497,6 +505,28 @@ pub async fn do_io<R>(
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
                 fd.ready(events).await?;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+pub async fn do_write_io<R>(
+    fd: &(impl OpenFileDescription + ?Sized),
+    count: usize,
+    mut callback: impl FnMut() -> Result<R>,
+) -> Result<R> {
+    let flags = fd.flags();
+    let non_blocking = flags.contains(OpenFlags::NONBLOCK);
+
+    loop {
+        // Try to execute the closure.
+        let res = callback();
+        match res {
+            Ok(value) => return Ok(value),
+            Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
+                // Wait for the fd to be ready, then try again.
+                fd.ready_for_write(count).await?;
             }
             Err(err) => return Err(err),
         }

@@ -21,6 +21,7 @@ use crate::{
 };
 
 const CAPACITY: usize = 0x10000;
+const PIPE_BUF: usize = 0x1000;
 
 fn path(ino: u64) -> Path {
     Path::new(format!("pipe:[{ino}]",).into_bytes()).unwrap()
@@ -33,7 +34,7 @@ struct Internal {
 pub struct ReadHalf {
     ino: u64,
     internal: Arc<Mutex<Internal>>,
-    stream_buffer: stream_buffer::ReadHalf<CAPACITY>,
+    stream_buffer: stream_buffer::ReadHalf<CAPACITY, PIPE_BUF>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
@@ -121,7 +122,7 @@ impl OpenFileDescription for ReadHalf {
 pub struct WriteHalf {
     ino: u64,
     internal: Arc<Mutex<Internal>>,
-    stream_buffer: stream_buffer::WriteHalf<CAPACITY>,
+    stream_buffer: stream_buffer::WriteHalf<CAPACITY, PIPE_BUF>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
@@ -199,6 +200,10 @@ impl OpenFileDescription for WriteHalf {
 
             wait.await;
         }
+    }
+
+    async fn ready_for_write(&self, count: usize) -> Result<()> {
+        self.stream_buffer.ready_for_write(count).await
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

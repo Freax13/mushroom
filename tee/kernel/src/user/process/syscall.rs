@@ -23,7 +23,7 @@ use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
-            do_io,
+            do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             path::PathFd,
@@ -265,7 +265,7 @@ async fn read(
     Ok(len)
 }
 
-#[syscall(i386 = 4, amd64 = 1, interruptable, restartable)]
+#[syscall(i386 = 4, amd64 = 1)]
 async fn write(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -278,11 +278,17 @@ async fn write(
 
     let count = usize_from(count);
 
-    let res = do_io(&*fd.clone(), Events::WRITE, || {
-        fd.write_from_user(&virtual_memory, buf, count)
-    })
-    .await;
-
+    // Start writing to the file descriptor. This first write can be
+    // interrupted and restarted. Any errors that occur are report to
+    // userspace.
+    let res = thread
+        .interruptable(
+            do_write_io(&*fd.clone(), count, || {
+                fd.write_from_user(&virtual_memory, buf, count)
+            }),
+            true,
+        )
+        .await;
     if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
         let sig_info = SigInfo {
             signal: Signal::PIPE,
@@ -292,8 +298,27 @@ async fn write(
         thread.queue_signal(sig_info);
     }
 
-    let len = res?;
-    let len = u64::from_usize(len);
+    // Try to write the rest of the bytes that weren't written in the first
+    // write call. This can be interrupted as well, but if that happens, it
+    // won't be reported to userspace. Any errors that occur also won't be
+    // reported to userspace.
+    let mut written = res?;
+    while written != count {
+        let res = thread
+            .interruptable(
+                do_write_io(&*fd.clone(), count - written, || {
+                    fd.write_from_user(&virtual_memory, buf.bytes_offset(written), count - written)
+                }),
+                false,
+            )
+            .await;
+        let Ok(newly_written) = res else {
+            break;
+        };
+        written += newly_written;
+    }
+
+    let len = u64::from_usize(written);
     Ok(len)
 }
 

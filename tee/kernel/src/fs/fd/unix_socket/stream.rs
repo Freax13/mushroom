@@ -26,8 +26,8 @@ const CAPACITY: usize = 262144;
 pub struct StreamUnixSocket {
     ino: u64,
     internal: Mutex<StreamUnixSocketInternal>,
-    write_half: stream_buffer::WriteHalf<CAPACITY>,
-    read_half: stream_buffer::ReadHalf<CAPACITY>,
+    write_half: stream_buffer::WriteHalf<CAPACITY, 1>,
+    read_half: stream_buffer::ReadHalf<CAPACITY, 1>,
     file_lock: FileLock,
 }
 

@@ -12,7 +12,10 @@ use crate::{
 
 use super::Events;
 
-pub fn new<const MAX_CAPACITY: usize>() -> (ReadHalf<MAX_CAPACITY>, WriteHalf<MAX_CAPACITY>) {
+pub fn new<const MAX_CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize>() -> (
+    ReadHalf<MAX_CAPACITY, ATOMIC_WRITE_SIZE>,
+    WriteHalf<MAX_CAPACITY, ATOMIC_WRITE_SIZE>,
+) {
     let buffer = Arc::new(Mutex::new(VecDeque::new()));
     let notify = Arc::new(Notify::new());
     (
@@ -27,12 +30,12 @@ pub fn new<const MAX_CAPACITY: usize>() -> (ReadHalf<MAX_CAPACITY>, WriteHalf<MA
     )
 }
 
-pub struct ReadHalf<const MAX_CAPACITY: usize> {
+pub struct ReadHalf<const MAX_CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> {
     buffer: Arc<Mutex<VecDeque<u8>>>,
     notify: NotifyOnDrop,
 }
 
-impl<const CAPACITY: usize> ReadHalf<CAPACITY> {
+impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
     pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -50,7 +53,7 @@ impl<const CAPACITY: usize> ReadHalf<CAPACITY> {
             bail!(Again);
         }
 
-        let was_full = CAPACITY == guard.len();
+        let was_full = CAPACITY - guard.len() < ATOMIC_WRITE_SIZE;
 
         let mut read = 0;
         for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.pop_front())) {
@@ -86,7 +89,7 @@ impl<const CAPACITY: usize> ReadHalf<CAPACITY> {
 
             bail!(Again);
         }
-        let was_full = CAPACITY == guard.len();
+        let was_full = CAPACITY - guard.len() < ATOMIC_WRITE_SIZE;
 
         let len = cmp::min(len, guard.len());
         let (slice1, slice2) = guard.as_slices();
@@ -129,12 +132,12 @@ impl<const CAPACITY: usize> ReadHalf<CAPACITY> {
     }
 }
 
-pub struct WriteHalf<const CAPACITY: usize> {
+pub struct WriteHalf<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> {
     buffer: Arc<Mutex<VecDeque<u8>>>,
     notify: NotifyOnDrop,
 }
 
-impl<const CAPACITY: usize> WriteHalf<CAPACITY> {
+impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
     pub fn write(&self, buf: &[u8]) -> Result<usize> {
         // Check if the write half has been closed.
         ensure!(Arc::strong_count(&self.buffer) > 1, Pipe);
@@ -145,8 +148,13 @@ impl<const CAPACITY: usize> WriteHalf<CAPACITY> {
 
         let mut guard = self.buffer.lock();
 
+        let atomic_write = buf.len() <= ATOMIC_WRITE_SIZE;
         let max_remaining_capacity = CAPACITY - guard.len();
-        ensure!(max_remaining_capacity > 0, Again);
+        if atomic_write {
+            ensure!(max_remaining_capacity >= buf.len(), Again);
+        } else {
+            ensure!(max_remaining_capacity > 0, Again);
+        }
         let len = cmp::min(buf.len(), max_remaining_capacity);
         let buf = &buf[..len];
 
@@ -173,8 +181,13 @@ impl<const CAPACITY: usize> WriteHalf<CAPACITY> {
 
         let mut guard = self.buffer.lock();
 
+        let atomic_write = len <= ATOMIC_WRITE_SIZE;
         let max_remaining_capacity = CAPACITY - guard.len();
-        ensure!(max_remaining_capacity > 0, Again);
+        if atomic_write {
+            ensure!(max_remaining_capacity >= len, Again);
+        } else {
+            ensure!(max_remaining_capacity > 0, Again);
+        }
         let len = cmp::min(len, max_remaining_capacity);
 
         let start_idx = guard.len();
@@ -220,6 +233,31 @@ impl<const CAPACITY: usize> WriteHalf<CAPACITY> {
 
         ready_events &= events;
         ready_events
+    }
+
+    pub async fn ready_for_write(&self, count: usize) -> Result<()> {
+        let is_atomic = count <= ATOMIC_WRITE_SIZE;
+
+        loop {
+            let wait = self.notify.wait();
+
+            {
+                let guard = self.buffer.lock();
+                let max_remaining_capacity = CAPACITY - guard.len();
+                let can_write = if is_atomic {
+                    count <= max_remaining_capacity
+                } else {
+                    0 < max_remaining_capacity
+                };
+                if can_write || Arc::strong_count(&self.buffer) == 1 {
+                    break;
+                }
+            }
+
+            wait.await;
+        }
+
+        Ok(())
     }
 
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {
