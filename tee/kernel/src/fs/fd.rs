@@ -47,6 +47,7 @@ pub mod file;
 pub mod path;
 pub mod pipe;
 mod std;
+pub mod stream_buffer;
 pub mod unix_socket;
 
 #[derive(Clone)]
