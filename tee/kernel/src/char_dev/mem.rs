@@ -56,8 +56,8 @@ impl OpenFileDescription for Null {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -157,8 +157,8 @@ impl OpenFileDescription for Zero {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -268,8 +268,8 @@ impl OpenFileDescription for Random {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -369,8 +369,8 @@ impl OpenFileDescription for URandom {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {

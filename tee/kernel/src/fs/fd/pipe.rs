@@ -46,8 +46,8 @@ impl FileSystem for PipeFs {
     }
 }
 
-fn path(ino: u64) -> Path {
-    Path::new(format!("pipe:[{ino}]",).into_bytes()).unwrap()
+fn path(ino: u64) -> Result<Path> {
+    Path::new(format!("pipe:[{ino}]",).into_bytes())
 }
 
 struct Internal {
@@ -72,7 +72,7 @@ impl OpenFileDescription for ReadHalf {
         self.flags.lock().update(flags);
     }
 
-    fn path(&self) -> Path {
+    fn path(&self) -> Result<Path> {
         path(self.ino)
     }
 
@@ -164,7 +164,7 @@ impl OpenFileDescription for WriteHalf {
         self.flags.lock().update(flags);
     }
 
-    fn path(&self) -> Path {
+    fn path(&self) -> Result<Path> {
         path(self.ino)
     }
 

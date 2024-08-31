@@ -39,9 +39,8 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.flags
     }
 
-    fn path(&self) -> Path {
+    fn path(&self) -> Result<Path> {
         Directory::path(&*self.dir, &mut FileAccessContext::root())
-            .unwrap_or_else(|_| Path::new(b"(deleted)".to_vec()).unwrap())
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {

@@ -319,7 +319,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = flags;
     }
 
-    fn path(&self) -> Path;
+    fn path(&self) -> Result<Path>;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;

@@ -144,8 +144,8 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -269,8 +269,8 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -379,8 +379,8 @@ impl OpenFileDescription for AppendFileFileDescription {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -456,8 +456,8 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {

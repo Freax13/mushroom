@@ -109,8 +109,8 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         self.internal.lock().flags
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("socket:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("socket:[{}]", self.ino).into_bytes())
     }
 
     fn set_flags(&self, flags: OpenFlags) {

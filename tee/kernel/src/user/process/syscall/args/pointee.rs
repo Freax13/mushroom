@@ -16,10 +16,10 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{ensure, Error, Result},
+    error::{Error, Result},
     fs::{
         node::{DirEntry, OldDirEntry},
-        path::Path,
+        path::{Path, PATH_MAX},
         StatFs,
     },
     user::process::{
@@ -332,8 +332,6 @@ impl Pointee for Path {
 
 impl AbiAgnosticPointee for Path {}
 
-const PATH_MAX: usize = 0x1000;
-
 impl ReadablePointee for Path {
     fn read(addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<(usize, Self)> {
         let pathname = vm.read_cstring(Pointer::from(addr), PATH_MAX)?;
@@ -345,7 +343,6 @@ impl ReadablePointee for Path {
 
 impl WritablePointee for Path {
     fn write(&self, addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<usize> {
-        ensure!(self.as_bytes().len() < PATH_MAX, NameTooLong);
         vm.write_bytes(addr, self.as_bytes())?;
         vm.write_bytes(addr + u64::from_usize(self.as_bytes().len()), b"\0")?;
         Ok(self.as_bytes().len() + 1)

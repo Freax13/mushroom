@@ -132,7 +132,7 @@ pub trait Directory: INode {
             return Path::new(b"/".to_vec());
         };
         let mut path = parent.path(ctx)?;
-        path = path.join_segment(&name);
+        path = path.join_segment(&name)?;
         Ok(path)
     }
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode>;

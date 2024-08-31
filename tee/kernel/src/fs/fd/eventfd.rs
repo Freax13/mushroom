@@ -54,8 +54,8 @@ impl OpenFileDescription for EventFd {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(b"anon_inode:[eventfd]".to_vec()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(b"anon_inode:[eventfd]".to_vec())
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {

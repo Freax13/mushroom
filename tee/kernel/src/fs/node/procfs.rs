@@ -817,7 +817,7 @@ impl INode for FdINode {
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
-        Ok(self.fd.path())
+        self.fd.path()
     }
 
     fn try_resolve_link(

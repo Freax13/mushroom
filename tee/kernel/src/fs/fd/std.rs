@@ -44,8 +44,8 @@ impl OpenFileDescription for Stdin {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -115,8 +115,8 @@ impl OpenFileDescription for Stdout {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -192,8 +192,8 @@ impl OpenFileDescription for Stderr {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {

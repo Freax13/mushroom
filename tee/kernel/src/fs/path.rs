@@ -7,6 +7,8 @@ use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
 use crate::error::{bail, ensure, Result};
 
+pub const PATH_MAX: usize = 0x1000;
+
 #[derive(Clone)]
 pub struct Path {
     bytes: Arc<[u8]>,
@@ -15,6 +17,7 @@ pub struct Path {
 impl Path {
     pub fn new(path: Vec<u8>) -> Result<Self> {
         ensure!(!path.is_empty(), Inval);
+        ensure!(path.len() < PATH_MAX, NameTooLong);
         Ok(Self { bytes: path.into() })
     }
 
@@ -62,16 +65,16 @@ impl Path {
         self.as_bytes().ends_with(b"/")
     }
 
-    #[must_use]
-    pub fn join_segment(&self, name: &FileName) -> Self {
+    pub fn join_segment(&self, name: &FileName) -> Result<Self> {
         let mut bytes = self.bytes.to_vec();
         if !bytes.ends_with(b"/") {
             bytes.push(b'/');
         }
         bytes.extend_from_slice(&name.0);
-        Self {
+        ensure!(bytes.len() < PATH_MAX, NameTooLong);
+        Ok(Self {
             bytes: Arc::from(bytes),
-        }
+        })
     }
 }
 

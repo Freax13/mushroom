@@ -31,8 +31,8 @@ impl OpenFileDescription for PathFd {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {

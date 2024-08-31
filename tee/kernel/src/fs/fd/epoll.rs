@@ -47,8 +47,8 @@ impl OpenFileDescription for Epoll {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(b"anon_inode:[eventpoll]".to_vec()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(b"anon_inode:[eventpoll]".to_vec())
     }
 
     async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {

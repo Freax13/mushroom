@@ -460,11 +460,15 @@ impl VirtualMemoryWriteGuard<'_> {
             }
 
             fn location(&self) -> (u16, u8, u64, Option<Path>) {
+                let path = self
+                    .file
+                    .path()
+                    .unwrap_or_else(|_| Path::new(b"(inaccessible)".to_vec()).unwrap());
                 (
                     self.stat.major(),
                     self.stat.minor(),
                     self.stat.ino,
-                    Some(self.file.path()),
+                    Some(path),
                 )
             }
         }
