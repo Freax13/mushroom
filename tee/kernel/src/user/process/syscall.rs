@@ -1128,13 +1128,18 @@ fn dup(
 }
 
 #[syscall(i386 = 63, amd64 = 33)]
-fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
+fn dup2(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    oldfd: FdNum,
+    newfd: FdNum,
+) -> SyscallResult {
     ensure!(newfd.get() >= 0, BadF);
 
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
-        fdtable.replace(newfd, fd, FdFlags::empty())?;
+        fdtable.replace(newfd, fd, FdFlags::empty(), no_file_limit)?;
     }
 
     Ok(newfd.get() as u64)
@@ -1703,7 +1708,6 @@ fn fcntl(
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
-            ensure!(min < FileDescriptorTable::MAX_FD, Inval);
 
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
@@ -1737,7 +1741,6 @@ fn fcntl64(
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
-            ensure!(min < FileDescriptorTable::MAX_FD, Inval);
 
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
@@ -3544,18 +3547,14 @@ fn epoll_create1(
 #[syscall(i386 = 330, amd64 = 292)]
 fn dup3(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     oldfd: FdNum,
     newfd: FdNum,
     flags: Dup3Flags,
 ) -> SyscallResult {
     ensure!(oldfd != newfd, Inval);
-    ensure!(
-        (0..FileDescriptorTable::MAX_FD).contains(&newfd.get()),
-        BadF
-    );
-
     let fd = fdtable.get(oldfd)?;
-    fdtable.replace(newfd, fd, flags)?;
+    fdtable.replace(newfd, fd, flags, no_file_limit)?;
     Ok(newfd.get() as u64)
 }
 

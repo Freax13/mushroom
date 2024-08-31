@@ -79,8 +79,6 @@ pub struct FileDescriptorTable {
 }
 
 impl FileDescriptorTable {
-    pub const MAX_FD: i32 = 0x10000;
-
     pub const fn empty() -> Self {
         Self {
             table: Mutex::new(BTreeMap::new()),
@@ -133,6 +131,7 @@ impl FileDescriptorTable {
         min: i32,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<i32> {
+        ensure!(min < no_file_limit.get() as i32, Inval);
         let min = cmp::max(0, min);
 
         let fd_iter = table.keys().copied().skip_while(|i| *i < min);
@@ -167,8 +166,9 @@ impl FileDescriptorTable {
         fd_num: FdNum,
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<()> {
-        ensure!(fd_num.get() < Self::MAX_FD, BadF);
+        ensure!(fd_num.get() < no_file_limit.get() as i32, BadF);
 
         let mut guard = self.table.lock();
         guard.insert(
