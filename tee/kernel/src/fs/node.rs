@@ -253,7 +253,7 @@ fn resolve_links(
 
 #[derive(Clone)]
 pub struct FileAccessContext {
-    pub process: Arc<Process>,
+    pub process: Option<Arc<Process>>,
     symlink_recursion_limit: u16,
     pub filesystem_user_id: Uid,
     pub filesystem_group_id: Gid,
@@ -261,6 +261,16 @@ pub struct FileAccessContext {
 }
 
 impl FileAccessContext {
+    pub fn root() -> Self {
+        Self {
+            process: None,
+            symlink_recursion_limit: 16,
+            filesystem_user_id: Uid::SUPER_USER,
+            filesystem_group_id: Gid::SUPER_USER,
+            supplementary_group_ids: Arc::new([]),
+        }
+    }
+
     /// Record that a symlink was followed and return an error if the recursion
     /// limit was exceeded.
     pub fn follow_symlink(&mut self) -> Result<()> {
@@ -334,7 +344,7 @@ impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
         let credentials_guard = guard.process().credentials.lock();
         Self {
-            process: guard.process().clone(),
+            process: Some(guard.process().clone()),
             symlink_recursion_limit: 16,
             filesystem_user_id: credentials_guard.filesystem_user_id,
             filesystem_group_id: credentials_guard.filesystem_group_id,

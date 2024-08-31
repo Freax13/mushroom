@@ -268,7 +268,14 @@ impl INode for SelfLink {
     }
 
     fn read_link(&self, ctx: &FileAccessContext) -> Result<Path> {
-        Path::new(ctx.process.pid().to_string().into_bytes())
+        Path::new(
+            ctx.process
+                .as_ref()
+                .ok_or_else(|| err!(Srch))?
+                .pid()
+                .to_string()
+                .into_bytes(),
+        )
     }
 
     fn try_resolve_link(
@@ -277,7 +284,8 @@ impl INode for SelfLink {
         ctx: &mut FileAccessContext,
     ) -> Result<Option<(DynINode, DynINode)>> {
         ctx.follow_symlink()?;
-        let file_name = FileName::new(ctx.process.pid().to_string().as_bytes())
+        let process = ctx.process.as_ref().ok_or_else(|| err!(Srch))?;
+        let file_name = FileName::new(process.pid().to_string().as_bytes())
             .unwrap()
             .into_owned();
         Ok(Some((
@@ -285,7 +293,7 @@ impl INode for SelfLink {
             ProcessDir::new(
                 StaticLocation::new(self.parent.upgrade().unwrap(), file_name),
                 self.dev,
-                Arc::downgrade(&ctx.process),
+                Arc::downgrade(process),
             ),
         )))
     }
