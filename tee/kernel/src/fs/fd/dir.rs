@@ -16,11 +16,10 @@ use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Sta
 
 use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
-pub fn open_dir(path: Path, dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
     let file_lock = FileLock::new(dir.file_lock_record().clone());
     Ok(FileDescriptor::from(DirectoryFileDescription {
         flags,
-        path,
         dir,
         entries: Mutex::new(None),
         file_lock,
@@ -29,7 +28,6 @@ pub fn open_dir(path: Path, dir: Arc<dyn Directory>, flags: OpenFlags) -> Result
 
 struct DirectoryFileDescription {
     flags: OpenFlags,
-    path: Path,
     dir: Arc<dyn Directory>,
     entries: Mutex<Option<Vec<DirEntry>>>,
     file_lock: FileLock,
@@ -41,7 +39,8 @@ impl OpenFileDescription for DirectoryFileDescription {
     }
 
     fn path(&self) -> Path {
-        self.path.clone()
+        Directory::path(&*self.dir, &mut FileAccessContext::root())
+            .unwrap_or_else(|_| Path::new(b"(deleted)".to_vec()).unwrap())
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {

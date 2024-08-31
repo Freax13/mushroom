@@ -124,8 +124,8 @@ impl INode for TmpFsDir {
         })
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

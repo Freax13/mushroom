@@ -81,8 +81,8 @@ impl INode for ProcFsRoot {
         })
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -376,8 +376,8 @@ impl INode for ProcessDir {
         })
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -580,8 +580,8 @@ impl INode for FdDir {
         })
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
