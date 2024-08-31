@@ -16,7 +16,7 @@ pub struct Path {
 
 impl Path {
     pub fn new(path: Vec<u8>) -> Result<Self> {
-        ensure!(!path.is_empty(), Inval);
+        ensure!(!path.is_empty(), NoEnt);
         ensure!(path.len() < PATH_MAX, NameTooLong);
         Ok(Self { bytes: path.into() })
     }
