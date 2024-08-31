@@ -170,6 +170,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRename);
     handlers.register(SysMkdir);
     handlers.register(SysRmdir);
+    handlers.register(SysCreat);
     handlers.register(SysLink);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
@@ -1917,6 +1918,28 @@ fn rmdir(
     let start_dir = thread.process().cwd();
     unlink_dir(start_dir, &pathname, &mut ctx)?;
     Ok(0)
+}
+
+#[syscall(i386 = 8, amd64 = 85)]
+fn creat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    pathname: Pointer<Path>,
+    mode: u64,
+) -> SyscallResult {
+    open(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        no_file_limit,
+        pathname,
+        OpenFlags::CREAT | OpenFlags::WRONLY | OpenFlags::TRUNC,
+        mode,
+    )
 }
 
 #[syscall(i386 = 9, amd64 = 86)]
