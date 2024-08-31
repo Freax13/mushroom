@@ -1,15 +1,16 @@
-use alloc::{boxed::Box, format};
+use alloc::{boxed::Box, format, sync::Arc};
 use async_trait::async_trait;
 use futures::{select_biased, FutureExt};
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::Result,
+    error::{bail, Result},
     fs::{
         fd::stream_buffer,
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{
@@ -175,6 +176,10 @@ impl OpenFileDescription for StreamUnixSocket {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        bail!(BadF)
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

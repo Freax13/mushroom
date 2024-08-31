@@ -5,6 +5,7 @@ use crate::{
     fs::{
         node::{FileAccessContext, INode},
         path::Path,
+        FileSystem,
     },
     memory::page::KernelPage,
     spin::mutex::Mutex,
@@ -224,6 +225,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         self.file.stat()
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.file.fs()
+    }
+
     fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
         self.file.get_page(page_idx)
     }
@@ -332,6 +337,10 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.stat()
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.file.fs()
+    }
+
     fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
         self.file.get_page(page_idx)
     }
@@ -401,6 +410,10 @@ impl OpenFileDescription for AppendFileFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         self.file.stat()
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.file.fs()
     }
 
     fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
@@ -535,6 +548,10 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         self.file.stat()
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.file.fs()
     }
 
     fn get_page(&self, page_idx: usize) -> Result<KernelPage> {

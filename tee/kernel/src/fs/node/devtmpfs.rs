@@ -10,11 +10,15 @@ use crate::{
 
 use crate::{error::Result, fs::path::FileName, user::process::syscall::args::FileMode};
 
-use super::{directory::MountLocation, new_dev, tmpfs::TmpFsDir, DynINode, INode};
+use super::{
+    directory::MountLocation,
+    tmpfs::{TmpFs, TmpFsDir},
+    DynINode, INode,
+};
 
 pub fn new(location: MountLocation) -> Result<DynINode> {
     let tmp_fs_dir = TmpFsDir::new(
-        new_dev(),
+        TmpFs::new(),
         location,
         FileMode::from_bits_truncate(0o755),
         Uid::SUPER_USER,

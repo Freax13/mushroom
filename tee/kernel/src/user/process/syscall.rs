@@ -37,6 +37,7 @@ use crate::{
             DirEntry, FileAccessContext, OldDirEntry, Permission,
         },
         path::Path,
+        StatFs,
     },
     rt::oneshot,
     time::{self, now, sleep_until},
@@ -202,6 +203,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetfsgid);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
+    handlers.register(SysStatfs);
+    handlers.register(SysFstatfs);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
@@ -2534,6 +2537,37 @@ fn sigaltstack(
         }
     }
 
+    Ok(0)
+}
+
+#[syscall(i386 = 99, amd64 = 137)]
+fn statfs(
+    abi: Abi,
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+    buf: Pointer<StatFs>,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(pathname)?;
+    let cwd = thread.process().cwd();
+    let node = lookup_and_resolve_node(cwd, &pathname, &mut ctx)?;
+    let statfs = node.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 100, amd64 = 138)]
+fn fstatfs(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<StatFs>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let statfs = fd.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
     Ok(0)
 }
 

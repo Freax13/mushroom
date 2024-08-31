@@ -10,6 +10,7 @@ use crate::{
             FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         ownership::Ownership,
+        FileSystem, StatFs,
     },
     memory::page::{Buffer, KernelPage},
     spin::mutex::Mutex,
@@ -27,7 +28,8 @@ use alloc::{
 
 use super::{
     directory::{dir_impls, Directory, DirectoryLocation, Location},
-    lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext, INode,
+    lookup_node_with_parent, new_dev, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext,
+    INode,
 };
 use crate::{
     error::Result,
@@ -38,8 +40,36 @@ use crate::{
     },
 };
 
-pub struct TmpFsDir {
+pub struct TmpFs {
     dev: u64,
+}
+
+impl TmpFs {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self { dev: new_dev() })
+    }
+}
+
+impl FileSystem for TmpFs {
+    fn stat(&self) -> StatFs {
+        StatFs {
+            ty: 0x01021994,
+            bsize: 0x1000,
+            blocks: 0x200000,
+            bfree: 0x1c0000,
+            bavail: 0x1c0000,
+            files: 0x100000,
+            ffree: 0xc0000,
+            fsid: bytemuck::cast(self.dev),
+            namelen: 255,
+            frsize: 0x1000,
+            flags: 0,
+        }
+    }
+}
+
+pub struct TmpFsDir {
+    fs: Arc<TmpFs>,
     ino: u64,
     this: Weak<Self>,
     location: Location<Self>,
@@ -57,7 +87,7 @@ struct TmpFsDirInternal {
 
 impl TmpFsDir {
     pub fn new(
-        dev: u64,
+        fs: Arc<TmpFs>,
         location: impl Into<Location<Self>>,
         mode: FileMode,
         uid: Uid,
@@ -66,7 +96,7 @@ impl TmpFsDir {
         let now = now();
 
         Arc::new_cyclic(|this_weak| Self {
-            dev,
+            fs,
             ino: new_ino(),
             this: this_weak.clone(),
             location: location.into(),
@@ -92,7 +122,7 @@ impl TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let node = TmpFsFile::new(mode, uid, gid);
+                let node = TmpFsFile::new(self.fs.clone(), mode, uid, gid);
                 entry.insert(TmpFsDirEntry::File(node.clone()));
                 Ok(Ok(node))
             }
@@ -108,7 +138,7 @@ impl INode for TmpFsDir {
         let guard = self.internal.lock();
         // FIXME: Fill in more values.
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, guard.ownership.mode()),
@@ -122,6 +152,10 @@ impl INode for TmpFsDir {
             mtime: guard.mtime,
             ctime: guard.ctime,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -186,7 +220,7 @@ impl Directory for TmpFsDir {
         match entry {
             Entry::Vacant(entry) => {
                 let parent = DirectoryLocation::new(self.this.clone(), file_name);
-                let dir = TmpFsDir::new(self.dev, parent, mode, uid, gid);
+                let dir = TmpFsDir::new(self.fs.clone(), parent, mode, uid, gid);
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 Ok(dir)
             }
@@ -219,6 +253,7 @@ impl Directory for TmpFsDir {
             Entry::Vacant(entry) => {
                 let now = now();
                 let link = Arc::new(TmpFsSymlink {
+                    fs: self.fs.clone(),
                     ino: new_ino(),
                     target,
                     internal: Mutex::new(TmpFsSymlinkInternal {
@@ -236,6 +271,7 @@ impl Directory for TmpFsDir {
                 ensure!(!create_new, Exist);
                 let now = now();
                 let link = Arc::new(TmpFsSymlink {
+                    fs: self.fs.clone(),
                     ino: new_ino(),
                     target,
                     internal: Mutex::new(TmpFsSymlinkInternal {
@@ -265,7 +301,14 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let char_dev = Arc::new(TmpFsCharDev::new(major, minor, mode, uid, gid));
+                let char_dev = Arc::new(TmpFsCharDev::new(
+                    self.fs.clone(),
+                    major,
+                    minor,
+                    mode,
+                    uid,
+                    gid,
+                ));
                 entry.insert(TmpFsDirEntry::CharDev(char_dev.clone()));
                 Ok(char_dev)
             }
@@ -347,7 +390,7 @@ impl Directory for TmpFsDir {
     ) -> Result<()> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
-        ensure!(new_dir.dev == self.dev, XDev);
+        ensure!(Arc::ptr_eq(&new_dir.fs, &self.fs), XDev);
 
         fn can_rename(
             old: &TmpFsDirEntry,
@@ -482,7 +525,7 @@ impl Directory for TmpFsDir {
     ) -> Result<()> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
-        ensure!(new_dir.dev == self.dev, XDev);
+        ensure!(Arc::ptr_eq(&new_dir.fs, &self.fs), XDev);
 
         if core::ptr::eq(self, &*new_dir) {
             if newname == oldname {
@@ -542,7 +585,7 @@ impl Directory for TmpFsDir {
     ) -> Result<Option<Path>> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
-        ensure!(new_dir.dev == self.dev, XDev);
+        ensure!(Arc::ptr_eq(&new_dir.fs, &self.fs), XDev);
 
         if core::ptr::eq(self, &*new_dir) {
             let mut guard = self.internal.lock();
@@ -652,6 +695,7 @@ impl Drop for TmpFsDirEntry {
 }
 
 pub struct TmpFsFile {
+    fs: Arc<TmpFs>,
     ino: u64,
     this: Weak<Self>,
     internal: Mutex<TmpFsFileInternal>,
@@ -668,12 +712,13 @@ struct TmpFsFileInternal {
 }
 
 impl TmpFsFile {
-    pub fn new(mode: FileMode, uid: Uid, gid: Gid) -> Arc<Self> {
+    pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid) -> Arc<Self> {
         let now = now();
 
         Arc::new_cyclic(|this| Self {
-            this: this.clone(),
+            fs,
             ino: new_ino(),
+            this: this.clone(),
             internal: Mutex::new(TmpFsFileInternal {
                 buffer: Buffer::new(),
                 ownership: Ownership::new(mode, uid, gid),
@@ -700,7 +745,7 @@ impl INode for TmpFsFile {
         let guard = self.internal.lock();
         // FIXME: Fill in more values.
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: guard.links,
             mode: FileTypeAndMode::new(FileType::File, guard.ownership.mode()),
@@ -714,6 +759,10 @@ impl INode for TmpFsFile {
             mtime: guard.mtime,
             ctime: guard.ctime,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -829,6 +878,7 @@ impl File for TmpFsFile {
 
 #[derive(Clone)]
 pub struct TmpFsSymlink {
+    fs: Arc<TmpFs>,
     ino: u64,
     target: Path,
     file_lock_record: Arc<FileLockRecord>,
@@ -847,7 +897,7 @@ impl INode for TmpFsSymlink {
     fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::ALL),
@@ -861,6 +911,10 @@ impl INode for TmpFsSymlink {
             mtime: guard.mtime,
             ctime: guard.ctime,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
@@ -905,6 +959,7 @@ impl INode for TmpFsSymlink {
 }
 
 pub struct TmpFsCharDev {
+    fs: Arc<TmpFs>,
     ino: u64,
     major: u16,
     minor: u8,
@@ -917,8 +972,9 @@ struct TmpFsCharDevInternal {
 }
 
 impl TmpFsCharDev {
-    pub fn new(major: u16, minor: u8, mode: FileMode, uid: Uid, gid: Gid) -> Self {
+    pub fn new(fs: Arc<TmpFs>, major: u16, minor: u8, mode: FileMode, uid: Uid, gid: Gid) -> Self {
         Self {
+            fs,
             ino: new_ino(),
             major,
             minor,
@@ -934,7 +990,7 @@ impl INode for TmpFsCharDev {
     fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Char, guard.ownership.mode()),
@@ -950,8 +1006,12 @@ impl INode for TmpFsCharDev {
         })
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        char_dev::open(path, flags, self.stat()?)
+        char_dev::open(path, flags, self.stat()?, self.fs.clone())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

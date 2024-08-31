@@ -6,11 +6,12 @@ use futures::future;
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{err, Result},
+    error::{bail, err, Result},
     fs::{
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem,
     },
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
@@ -216,6 +217,10 @@ impl OpenFileDescription for SeqPacketUnixSocket {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        bail!(BadF)
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

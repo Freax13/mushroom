@@ -20,6 +20,7 @@ use crate::{
     fs::{
         node::{DirEntry, OldDirEntry},
         path::Path,
+        StatFs,
     },
     user::process::{
         memory::VirtualMemory,
@@ -1589,3 +1590,81 @@ impl PrimitivePointee for Uid {}
 
 impl Pointee for Gid {}
 impl PrimitivePointee for Gid {}
+
+impl Pointee for StatFs {}
+impl AbiDependentPointee for StatFs {
+    type I386 = StatFs32;
+    type Amd64 = StatFs64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct StatFs32 {
+    ty: u32,
+    bsize: u32,
+    blocks: u32,
+    bfree: u32,
+    bavail: u32,
+    files: u32,
+    ffree: u32,
+    fsid: [i32; 2],
+    namelen: u32,
+    frsize: u32,
+    flags: u32,
+    spare: [u32; 4],
+}
+
+impl From<StatFs> for StatFs32 {
+    fn from(value: StatFs) -> Self {
+        Self {
+            ty: value.ty as u32,
+            bsize: value.bsize as u32,
+            blocks: value.blocks as u32,
+            bfree: value.bfree as u32,
+            bavail: value.bavail as u32,
+            files: value.files as u32,
+            ffree: value.ffree as u32,
+            fsid: value.fsid,
+            namelen: value.namelen as u32,
+            frsize: value.frsize as u32,
+            flags: value.flags as u32,
+            spare: [0; 4],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct StatFs64 {
+    ty: i64,
+    bsize: i64,
+    blocks: i64,
+    bfree: i64,
+    bavail: i64,
+    files: i64,
+    ffree: i64,
+    fsid: [i32; 2],
+    namelen: i64,
+    frsize: i64,
+    flags: i64,
+    spare: [i64; 4],
+}
+
+impl From<StatFs> for StatFs64 {
+    fn from(value: StatFs) -> Self {
+        Self {
+            ty: value.ty,
+            bsize: value.bsize,
+            blocks: value.blocks,
+            bfree: value.bfree,
+            bavail: value.bavail,
+            files: value.files,
+            ffree: value.ffree,
+            fsid: value.fsid,
+            namelen: value.namelen,
+            frsize: value.frsize,
+            flags: value.flags,
+            spare: [0; 4],
+        }
+    }
+}

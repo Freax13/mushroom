@@ -13,6 +13,7 @@ use crate::{
     },
 };
 use alloc::sync::Arc;
+use tmpfs::TmpFs;
 
 use crate::{
     error::Result,
@@ -27,6 +28,7 @@ use self::{
 use super::{
     fd::{FileDescriptor, FileLockRecord},
     path::{FileName, Path, PathSegment},
+    FileSystem,
 };
 
 pub mod directory;
@@ -37,7 +39,7 @@ pub mod tmpfs;
 
 pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> = Lazy::new(|| {
     TmpFsDir::new(
-        new_dev(),
+        TmpFs::new(),
         Location::root(),
         FileMode::from_bits_truncate(0o755),
         Uid::SUPER_USER,
@@ -62,6 +64,7 @@ pub trait INode: Any + Send + Sync + 'static {
         self.stat().map(|stat| stat.mode.ty())
     }
     fn stat(&self) -> Result<Stat>;
+    fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor>;
 

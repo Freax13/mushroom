@@ -17,6 +17,7 @@ use crate::{
         },
         node::DirEntryName,
         path::{FileName, Path},
+        FileSystem, StatFs,
     },
     memory::page::KernelPage,
     user::process::{
@@ -34,17 +35,39 @@ use super::{
     lookup_node_with_parent, new_dev, new_ino, DirEntry, DynINode, FileAccessContext, INode,
 };
 
+pub struct ProcFs {
+    dev: u64,
+}
+
+impl FileSystem for ProcFs {
+    fn stat(&self) -> StatFs {
+        StatFs {
+            ty: 0x9fa0,
+            bsize: 0x1000,
+            blocks: 0,
+            bfree: 0,
+            bavail: 0,
+            files: 0,
+            ffree: 0,
+            fsid: bytemuck::cast(self.dev),
+            namelen: 255,
+            frsize: 0,
+            flags: 0,
+        }
+    }
+}
+
 pub fn new(location: MountLocation) -> Result<DynINode> {
-    let dev = new_dev();
+    let fs = Arc::new(ProcFs { dev: new_dev() });
     Ok(Arc::new_cyclic(|this| ProcFsRoot {
         this: this.clone(),
-        dev,
+        fs: fs.clone(),
         ino: new_ino(),
         location,
         file_lock_record: LazyFileLockRecord::new(),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
-            dev,
+            fs,
             ino: new_ino(),
             file_lock_record: LazyFileLockRecord::new(),
         }),
@@ -53,7 +76,7 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
 
 struct ProcFsRoot {
     this: Weak<Self>,
-    dev: u64,
+    fs: Arc<ProcFs>,
     ino: u64,
     location: MountLocation,
     file_lock_record: LazyFileLockRecord,
@@ -65,7 +88,7 @@ impl INode for ProcFsRoot {
 
     fn stat(&self) -> Result<Stat> {
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o777)),
@@ -79,6 +102,10 @@ impl INode for ProcFsRoot {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -115,7 +142,7 @@ impl Directory for ProcFsRoot {
             let process = Process::find_by_pid(pid).ok_or(err!(NoEnt))?;
             Ok(ProcessDir::new(
                 StaticLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned()),
-                self.dev,
+                self.fs.clone(),
                 Arc::downgrade(&process),
             ))
         }
@@ -231,7 +258,7 @@ impl Directory for ProcFsRoot {
 
 struct SelfLink {
     parent: Weak<ProcFsRoot>,
-    dev: u64,
+    fs: Arc<ProcFs>,
     ino: u64,
     file_lock_record: LazyFileLockRecord,
 }
@@ -239,7 +266,7 @@ struct SelfLink {
 impl INode for SelfLink {
     fn stat(&self) -> Result<Stat> {
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
@@ -253,6 +280,10 @@ impl INode for SelfLink {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
@@ -292,7 +323,7 @@ impl INode for SelfLink {
             start_dir,
             ProcessDir::new(
                 StaticLocation::new(self.parent.upgrade().unwrap(), file_name),
-                self.dev,
+                self.fs.clone(),
                 Arc::downgrade(process),
             ),
         )))
@@ -327,7 +358,7 @@ impl ProcessInos {
 struct ProcessDir {
     this: Weak<Self>,
     location: StaticLocation<ProcFsRoot>,
-    dev: u64,
+    fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: LazyFileLockRecord,
     fd_file_lock_record: LazyFileLockRecord,
@@ -338,13 +369,13 @@ struct ProcessDir {
 impl ProcessDir {
     pub fn new(
         location: StaticLocation<ProcFsRoot>,
-        dev: u64,
+        fs: Arc<ProcFs>,
         process: Weak<Process>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             location,
-            dev,
+            fs,
             process,
             file_lock_record: LazyFileLockRecord::new(),
             fd_file_lock_record: LazyFileLockRecord::new(),
@@ -360,7 +391,7 @@ impl INode for ProcessDir {
     fn stat(&self) -> Result<Stat> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: process.inos.root_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
@@ -374,6 +405,10 @@ impl INode for ProcessDir {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -404,19 +439,19 @@ impl Directory for ProcessDir {
         if file_name == "fd" {
             Ok(FdDir::new(
                 StaticLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned()),
-                self.dev,
+                self.fs.clone(),
                 self.process.clone(),
                 self.fd_file_lock_record.get().clone(),
             ))
         } else if file_name == "exe" {
             Ok(ExeLink::new(
-                self.dev,
+                self.fs.clone(),
                 self.process.clone(),
                 self.exe_link_lock_record.get().clone(),
             ))
         } else if file_name == "maps" {
             Ok(MapsFile::new(
-                self.dev,
+                self.fs.clone(),
                 self.process.clone(),
                 self.maps_file_lock_record.get().clone(),
             ))
@@ -536,7 +571,7 @@ impl Directory for ProcessDir {
 struct FdDir {
     this: Weak<Self>,
     location: StaticLocation<ProcessDir>,
-    dev: u64,
+    fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
 }
@@ -544,14 +579,14 @@ struct FdDir {
 impl FdDir {
     pub fn new(
         location: StaticLocation<ProcessDir>,
-        dev: u64,
+        fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             location,
-            dev,
+            fs,
             process,
             file_lock_record,
         })
@@ -564,7 +599,7 @@ impl INode for FdDir {
     fn stat(&self) -> Result<Stat> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: process.inos.fd_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
@@ -578,6 +613,10 @@ impl INode for FdDir {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -618,7 +657,7 @@ impl Directory for FdDir {
 
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
-        fdtable.get_node(fd_num, uid, gid)
+        fdtable.get_node(self.fs.clone(), fd_num, uid, gid)
     }
 
     fn create_file(
@@ -710,6 +749,7 @@ impl Directory for FdDir {
 
 #[derive(Clone)]
 pub struct FdINode {
+    fs: Arc<ProcFs>,
     ino: u64,
     uid: Uid,
     gid: Gid,
@@ -719,6 +759,7 @@ pub struct FdINode {
 
 impl FdINode {
     pub fn new(
+        fs: Arc<ProcFs>,
         ino: u64,
         uid: Uid,
         gid: Gid,
@@ -726,6 +767,7 @@ impl FdINode {
         file_lock_record: Arc<FileLockRecord>,
     ) -> Self {
         Self {
+            fs,
             ino,
             uid,
             gid,
@@ -738,7 +780,7 @@ impl FdINode {
 impl INode for FdINode {
     fn stat(&self) -> Result<Stat> {
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::OWNER_ALL),
@@ -752,6 +794,10 @@ impl INode for FdINode {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
@@ -811,6 +857,16 @@ impl INode for FollowedFdINode {
         }
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        if let Some((_, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the open call to the pointed
+            // to node.
+            node.fs()
+        } else {
+            self.fd.fs()
+        }
+    }
+
     fn open(&self, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
         if let Some((path, node)) = self.fd.path_fd_node() {
             // Special case for path fds: Forward the open call to the pointed
@@ -857,19 +913,19 @@ impl INode for FollowedFdINode {
 }
 
 struct ExeLink {
-    dev: u64,
+    fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
 }
 
 impl ExeLink {
     pub fn new(
-        dev: u64,
+        fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            dev,
+            fs,
             process,
             file_lock_record,
         })
@@ -880,7 +936,7 @@ impl INode for ExeLink {
     fn stat(&self) -> Result<Stat> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: process.inos.exe_link,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
@@ -894,6 +950,10 @@ impl INode for ExeLink {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
@@ -934,20 +994,20 @@ impl INode for ExeLink {
 
 struct MapsFile {
     this: Weak<Self>,
-    dev: u64,
+    fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
 }
 
 impl MapsFile {
     pub fn new(
-        dev: u64,
+        fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
-            dev,
+            fs,
             process,
             file_lock_record,
         })
@@ -958,7 +1018,7 @@ impl INode for MapsFile {
     fn stat(&self) -> Result<Stat> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: process.inos.maps_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
@@ -972,6 +1032,10 @@ impl INode for MapsFile {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {

@@ -1,8 +1,11 @@
+use alloc::sync::Arc;
+
 use crate::{
     error::{bail, Result},
     fs::{
         node::{DynINode, FileAccessContext},
         path::Path,
+        FileSystem,
     },
     user::process::{
         syscall::args::{FileMode, OpenFlags, Stat},
@@ -42,6 +45,10 @@ impl OpenFileDescription for PathFd {
 
     fn stat(&self) -> Result<Stat> {
         self.node.stat()
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.node.fs()
     }
 
     fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {

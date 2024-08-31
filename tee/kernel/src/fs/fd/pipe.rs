@@ -3,8 +3,9 @@ use crate::{
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem, StatFs,
     },
-    spin::mutex::Mutex,
+    spin::{lazy::Lazy, mutex::Mutex},
     user::process::{
         memory::VirtualMemory,
         syscall::args::{OpenFlags, Pipe2Flags, Pointer},
@@ -22,6 +23,28 @@ use crate::{
 
 const CAPACITY: usize = 0x10000;
 const PIPE_BUF: usize = 0x1000;
+
+pub static PIPE_FS: Lazy<Arc<PipeFs>> = Lazy::new(|| Arc::new(PipeFs));
+
+pub struct PipeFs;
+
+impl FileSystem for PipeFs {
+    fn stat(&self) -> StatFs {
+        StatFs {
+            ty: 0x50495045,
+            bsize: 0x1000,
+            blocks: 0,
+            bfree: 0,
+            bavail: 0,
+            files: 0,
+            ffree: 0,
+            fsid: [0, 0],
+            namelen: 255,
+            frsize: 0,
+            flags: 0,
+        }
+    }
+}
 
 fn path(ino: u64) -> Path {
     Path::new(format!("pipe:[{ino}]",).into_bytes()).unwrap()
@@ -114,6 +137,10 @@ impl OpenFileDescription for ReadHalf {
         })
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
+    }
+
     fn file_lock(&self) -> Result<&FileLock> {
         Ok(&self.file_lock)
     }
@@ -179,6 +206,10 @@ impl OpenFileDescription for WriteHalf {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {

@@ -1,5 +1,6 @@
 use core::iter::from_fn;
 
+use alloc::sync::Arc;
 use kernel_macros::register;
 use usize_conversions::FromUsize;
 use x86_64::instructions::random::RdRand;
@@ -10,6 +11,7 @@ use crate::{
         fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
         node::FileAccessContext,
         path::Path,
+        FileSystem,
     },
     memory::page::KernelPage,
     spin::lazy::Lazy,
@@ -28,6 +30,7 @@ pub struct Null {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    fs: Arc<dyn FileSystem>,
     file_lock: FileLock,
 }
 
@@ -36,12 +39,13 @@ impl CharDev for Null {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 3;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
             path,
             flags,
             stat,
+            fs,
             file_lock: FileLock::new(RECORD.get().clone()),
         })
     }
@@ -66,6 +70,10 @@ impl OpenFileDescription for Null {
 
     fn stat(&self) -> Result<Stat> {
         Ok(self.stat)
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -123,6 +131,7 @@ pub struct Zero {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    fs: Arc<dyn FileSystem>,
     file_lock: FileLock,
 }
 
@@ -131,12 +140,13 @@ impl CharDev for Zero {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 5;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
             path,
             flags,
             stat,
+            fs,
             file_lock: FileLock::new(RECORD.get().clone()),
         })
     }
@@ -161,6 +171,10 @@ impl OpenFileDescription for Zero {
 
     fn stat(&self) -> Result<Stat> {
         Ok(self.stat)
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -228,6 +242,7 @@ pub struct Random {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    fs: Arc<dyn FileSystem>,
     file_lock: FileLock,
 }
 
@@ -236,12 +251,13 @@ impl CharDev for Random {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 8;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
             path,
             flags,
             stat,
+            fs,
             file_lock: FileLock::new(RECORD.get().clone()),
         })
     }
@@ -266,6 +282,10 @@ impl OpenFileDescription for Random {
 
     fn stat(&self) -> Result<Stat> {
         Ok(self.stat)
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -323,6 +343,7 @@ pub struct URandom {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    fs: Arc<dyn FileSystem>,
     file_lock: FileLock,
 }
 
@@ -331,12 +352,13 @@ impl CharDev for URandom {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 9;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
             path,
             flags,
             stat,
+            fs,
             file_lock: FileLock::new(RECORD.get().clone()),
         })
     }
@@ -361,6 +383,10 @@ impl OpenFileDescription for URandom {
 
     fn stat(&self) -> Result<Stat> {
         Ok(self.stat)
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {

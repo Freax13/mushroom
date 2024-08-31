@@ -3,6 +3,7 @@ use crate::{
     fs::{
         node::{directory::Directory, DynINode, FileAccessContext},
         path::Path,
+        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{
@@ -57,6 +58,10 @@ impl OpenFileDescription for DirectoryFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         self.dir.stat()
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.dir.fs()
     }
 
     fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {

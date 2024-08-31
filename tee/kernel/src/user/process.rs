@@ -23,7 +23,11 @@ use crate::{
     error::{err, Result},
     fs::{
         fd::FileDescriptorTable,
-        node::{procfs::ProcessInos, tmpfs::TmpFsFile, DynINode, FileAccessContext, INode},
+        node::{
+            procfs::ProcessInos,
+            tmpfs::{TmpFs, TmpFsFile},
+            DynINode, FileAccessContext, INode,
+        },
         path::Path,
         StaticFile,
     },
@@ -510,7 +514,12 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let mut guard = thread.lock();
     let mut ctx = FileAccessContext::extract_from_thread(&guard);
 
-    let file = TmpFsFile::new(FileMode::all(), Uid::SUPER_USER, Gid::SUPER_USER);
+    let file = TmpFsFile::new(
+        TmpFs::new(),
+        FileMode::all(),
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+    );
     StaticFile::init_file().copy_to(&file).unwrap();
     let path = Path::new(b"/bin/init".to_vec()).unwrap();
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();

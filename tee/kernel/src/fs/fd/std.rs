@@ -1,13 +1,14 @@
-use alloc::format;
+use alloc::{format, sync::Arc};
 use log::debug;
 
-use super::{Events, FileLock, OpenFileDescription};
+use super::{pipe::PIPE_FS, Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     fs::{
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{
@@ -72,6 +73,10 @@ impl OpenFileDescription for Stdin {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -147,6 +152,10 @@ impl OpenFileDescription for Stdout {
         })
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::WRITE
     }
@@ -218,6 +227,10 @@ impl OpenFileDescription for Stderr {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {

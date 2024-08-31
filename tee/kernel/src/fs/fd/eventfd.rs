@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
@@ -11,6 +11,7 @@ use crate::{
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem, ANON_INODE_FS,
     },
     rt::notify::Notify,
     spin::mutex::Mutex,
@@ -164,6 +165,10 @@ impl OpenFileDescription for EventFd {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(ANON_INODE_FS.clone())
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

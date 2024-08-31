@@ -38,7 +38,11 @@ use crate::{
     fs::node::DirEntry,
 };
 
-use super::{node::procfs::FdINode, path::Path};
+use super::{
+    node::procfs::{FdINode, ProcFs},
+    path::Path,
+    FileSystem,
+};
 
 pub mod dir;
 pub mod epoll;
@@ -237,10 +241,11 @@ impl FileDescriptorTable {
             .collect()
     }
 
-    pub fn get_node(&self, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
+    pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
         let guard = self.table.lock();
         let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(
+            fs,
             entry.ino,
             uid,
             gid,
@@ -418,6 +423,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     }
 
     fn stat(&self) -> Result<Stat>;
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
     fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
         let _ = ctx;
