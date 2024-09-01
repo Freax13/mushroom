@@ -50,8 +50,8 @@ pub unsafe fn set_shadow_n(addr: *mut u8, size: usize, n: u8) {
     unsafe {
         asm! {
             "rep stosb",
-            in("rdi") addr,
-            in("rcx") size,
+            inout("rdi") addr => _,
+            inout("rcx") size => _,
             in("al") n,
         }
     }

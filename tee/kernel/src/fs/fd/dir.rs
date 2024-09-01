@@ -3,6 +3,7 @@ use crate::{
     fs::{
         node::{directory::Directory, DynINode, FileAccessContext},
         path::Path,
+        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{
@@ -16,11 +17,12 @@ use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Sta
 
 use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
-pub fn open_dir(path: Path, dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
+    ensure!(!flags.contains(OpenFlags::WRONLY), IsDir);
+    ensure!(!flags.contains(OpenFlags::RDWR), IsDir);
     let file_lock = FileLock::new(dir.file_lock_record().clone());
     Ok(FileDescriptor::from(DirectoryFileDescription {
         flags,
-        path,
         dir,
         entries: Mutex::new(None),
         file_lock,
@@ -29,7 +31,6 @@ pub fn open_dir(path: Path, dir: Arc<dyn Directory>, flags: OpenFlags) -> Result
 
 struct DirectoryFileDescription {
     flags: OpenFlags,
-    path: Path,
     dir: Arc<dyn Directory>,
     entries: Mutex<Option<Vec<DirEntry>>>,
     file_lock: FileLock,
@@ -40,8 +41,8 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Directory::path(&*self.dir, &mut FileAccessContext::root())
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -58,6 +59,10 @@ impl OpenFileDescription for DirectoryFileDescription {
 
     fn stat(&self) -> Result<Stat> {
         self.dir.stat()
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.dir.fs()
     }
 
     fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {

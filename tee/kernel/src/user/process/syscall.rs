@@ -23,7 +23,7 @@ use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
     fs::{
         fd::{
-            do_io, do_io_with_vm,
+            do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             path::PathFd,
@@ -33,10 +33,11 @@ use crate::{
         },
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, procfs, read_link, set_mode, unlink_dir,
-            unlink_file, DirEntry, FileAccessContext, OldDirEntry, Permission,
+            lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir, unlink_file,
+            DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
         },
         path::Path,
+        StatFs,
     },
     rt::oneshot,
     time::{self, now, sleep_until},
@@ -54,15 +55,17 @@ use self::{
     args::{
         Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
         EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
-        FcntlCmd, FdNum, FileMode, FileType, FutexOp, FutexOpWithFlags, GetRandomFlags, Iovec,
-        LinkOptions, MmapFlags, MountFlags, Offset, OpenFlags, Pipe2Flags, Pointer, PollEvents,
-        ProtFlags, RLimit, RLimit64, RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64,
-        SyscallArg, Time, Timespec, UnlinkOptions, WStatus, WaitOptions, Whence,
+        Fchmodat2Flags, FchownatFlags, FcntlCmd, FdNum, FileMode, FileType, FutexOp,
+        FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags, Offset,
+        OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags, RLimit, RLimit64, Renameat2Flags,
+        RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec,
+        UnlinkOptions, WStatus, WaitOptions, Whence,
     },
     traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
 };
 
 use super::{
+    limits::CurrentNoFileLimit,
     memory::{Bias, VirtualMemory},
     thread::{
         new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
@@ -157,6 +160,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysFlock);
+    handlers.register(SysFsync);
+    handlers.register(SysFdatasync);
     handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
@@ -165,14 +170,18 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRename);
     handlers.register(SysMkdir);
     handlers.register(SysRmdir);
+    handlers.register(SysCreat);
     handlers.register(SysLink);
     handlers.register(SysUnlink);
     handlers.register(SysSymlink);
     handlers.register(SysReadlink);
     handlers.register(SysChmod);
     handlers.register(SysFchmod);
+    handlers.register(SysChown);
     handlers.register(SysFchown);
+    handlers.register(SysLchown);
     handlers.register(SysUmask);
+    handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
@@ -195,6 +204,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetfsgid);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
+    handlers.register(SysStatfs);
+    handlers.register(SysFstatfs);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
@@ -232,6 +243,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
+    handlers.register(SysFchmodat2);
 
     handlers
 };
@@ -248,8 +260,8 @@ async fn read(
 
     let count = usize_from(count);
 
-    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
-        fd.read_to_user(vm, buf, count)
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.read_to_user(&virtual_memory, buf, count)
     })
     .await?;
 
@@ -257,7 +269,7 @@ async fn read(
     Ok(len)
 }
 
-#[syscall(i386 = 4, amd64 = 1, interruptable, restartable)]
+#[syscall(i386 = 4, amd64 = 1)]
 async fn write(
     thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -270,11 +282,17 @@ async fn write(
 
     let count = usize_from(count);
 
-    let res = do_io_with_vm(&*fd.clone(), Events::WRITE, virtual_memory, move |vm| {
-        fd.write_from_user(vm, buf, count)
-    })
-    .await;
-
+    // Start writing to the file descriptor. This first write can be
+    // interrupted and restarted. Any errors that occur are report to
+    // userspace.
+    let res = thread
+        .interruptable(
+            do_write_io(&*fd.clone(), count, || {
+                fd.write_from_user(&virtual_memory, buf, count)
+            }),
+            true,
+        )
+        .await;
     if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
         let sig_info = SigInfo {
             signal: Signal::PIPE,
@@ -284,8 +302,27 @@ async fn write(
         thread.queue_signal(sig_info);
     }
 
-    let len = res?;
-    let len = u64::from_usize(len);
+    // Try to write the rest of the bytes that weren't written in the first
+    // write call. This can be interrupted as well, but if that happens, it
+    // won't be reported to userspace. Any errors that occur also won't be
+    // reported to userspace.
+    let mut written = res?;
+    while written != count {
+        let res = thread
+            .interruptable(
+                do_write_io(&*fd.clone(), count - written, || {
+                    fd.write_from_user(&virtual_memory, buf.bytes_offset(written), count - written)
+                }),
+                false,
+            )
+            .await;
+        let Ok(newly_written) = res else {
+            break;
+        };
+        written += newly_written;
+    }
+
+    let len = u64::from_usize(written);
     Ok(len)
 }
 
@@ -295,6 +332,7 @@ fn open(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     pathname: Pointer<Path>,
     flags: OpenFlags,
     mode: u64,
@@ -304,6 +342,7 @@ fn open(
         virtual_memory,
         fdtable,
         ctx,
+        no_file_limit,
         FdNum::CWD,
         pathname,
         flags,
@@ -740,7 +779,13 @@ fn rt_sigreturn(
 }
 
 #[syscall(i386 = 54, amd64 = 16)]
-fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
+fn ioctl(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    cmd: u32,
+    arg: u64,
+) -> SyscallResult {
+    fdtable.get(fd)?;
     bail!(NoTty)
 }
 
@@ -886,9 +931,17 @@ fn pipe(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     pipefd: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
-    pipe2(virtual_memory, fdtable, ctx, pipefd, Pipe2Flags::empty())
+    pipe2(
+        virtual_memory,
+        fdtable,
+        ctx,
+        no_file_limit,
+        pipefd,
+        Pipe2Flags::empty(),
+    )
 }
 
 #[syscall(i386 = 82, amd64 = 23, interruptable)]
@@ -1069,21 +1122,30 @@ fn madvise(
 }
 
 #[syscall(i386 = 41, amd64 = 32)]
-fn dup(#[state] fdtable: Arc<FileDescriptorTable>, fildes: FdNum) -> SyscallResult {
+fn dup(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fildes: FdNum,
+) -> SyscallResult {
     let fd = fdtable.get(fildes)?;
-    let newfd = fdtable.insert(fd, FdFlags::empty())?;
+    let newfd = fdtable.insert(fd, FdFlags::empty(), no_file_limit)?;
 
     Ok(newfd.get() as u64)
 }
 
 #[syscall(i386 = 63, amd64 = 33)]
-fn dup2(#[state] fdtable: Arc<FileDescriptorTable>, oldfd: FdNum, newfd: FdNum) -> SyscallResult {
+fn dup2(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    oldfd: FdNum,
+    newfd: FdNum,
+) -> SyscallResult {
     ensure!(newfd.get() >= 0, BadF);
 
     let fd = fdtable.get(oldfd)?;
 
     if oldfd != newfd {
-        fdtable.replace(newfd, fd, FdFlags::empty())?;
+        fdtable.replace(newfd, fd, FdFlags::empty(), no_file_limit)?;
     }
 
     Ok(newfd.get() as u64)
@@ -1210,8 +1272,8 @@ async fn recv_from(
 
     let count = usize_from(len);
 
-    let len = do_io_with_vm(&*fd.clone(), Events::READ, virtual_memory, move |vm| {
-        fd.recv_from(vm, buf, count)
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.recv_from(&virtual_memory, buf, count)
     })
     .await?;
 
@@ -1224,6 +1286,7 @@ fn socketpair(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     domain: Domain,
     r#type: SocketPairType,
     protocol: i32,
@@ -1242,16 +1305,16 @@ fn socketpair(
                     ctx.filesystem_user_id,
                     ctx.filesystem_group_id,
                 );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type));
-                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             } else if r#type.contains(SocketPairType::STREAM) {
                 let (half1, half2) = StreamUnixSocket::new_pair(
                     r#type,
                     ctx.filesystem_user_id,
                     ctx.filesystem_group_id,
                 );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type));
-                res2 = fdtable.insert(half2, FdFlags::from(r#type));
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             } else {
                 todo!()
             }
@@ -1310,6 +1373,8 @@ async fn clone(
             process.credentials.lock().clone(),
             process.cwd(),
             process.process_group.lock().clone(),
+            *process.limits.read(),
+            *process.umask.lock(),
         ))
     };
 
@@ -1639,6 +1704,7 @@ fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult 
 #[syscall(i386 = 55, amd64 = 72)]
 fn fcntl(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
@@ -1648,12 +1714,11 @@ fn fcntl(
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
-            ensure!(min < FileDescriptorTable::MAX_FD, Inval);
 
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
 
-            let fd_num = fdtable.insert_after(min, fd, flags)?;
+            let fd_num = fdtable.insert_after(min, fd, flags, no_file_limit)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => Ok(flags.bits()),
@@ -1663,8 +1728,7 @@ fn fcntl(
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
         FcntlCmd::SetFl => {
-            let flags = OpenFlags::from_bits(arg).ok_or(err!(Inval))?;
-            fd.set_flags(flags);
+            fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
     }
@@ -1673,6 +1737,7 @@ fn fcntl(
 #[syscall(i386 = 221)]
 fn fcntl64(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
@@ -1682,12 +1747,11 @@ fn fcntl64(
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
             let min = i32::try_from(arg)?;
-            ensure!(min < FileDescriptorTable::MAX_FD, Inval);
 
             let mut flags = FdFlags::empty();
             flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
 
-            let fd_num = fdtable.insert_after(min, fd, flags)?;
+            let fd_num = fdtable.insert_after(min, fd, flags, no_file_limit)?;
             Ok(fd_num.get().try_into()?)
         }
         FcntlCmd::GetFd => Ok(flags.bits()),
@@ -1697,7 +1761,7 @@ fn fcntl64(
         }
         FcntlCmd::GetFl => Ok(fd.flags().bits()),
         FcntlCmd::SetFl => {
-            let flags = OpenFlags::from_bits(arg).ok_or(err!(Inval))?;
+            let flags = OpenFlags::from_bits_truncate(arg);
             fd.set_flags(flags);
             Ok(0)
         }
@@ -1729,6 +1793,18 @@ async fn flock(
     } else {
         file_lock.unlock();
     }
+    Ok(0)
+}
+
+#[syscall(i386 = 118, amd64 = 74)]
+fn fsync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
+    fdtable.get(fd)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 148, amd64 = 75)]
+fn fdatasync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
+    fdtable.get(fd)?;
     Ok(0)
 }
 
@@ -1768,10 +1844,10 @@ fn getcwd(
     size: u64,
 ) -> SyscallResult {
     let cwd = thread.process().cwd().path(&mut ctx)?;
-    ensure!(cwd.as_bytes().len() < usize_from(size), Range);
-
+    let len = cwd.as_bytes().len();
+    ensure!(len < usize_from(size), Range);
     virtual_memory.write(path, cwd)?;
-    Ok(0)
+    Ok(u64::from_usize(len))
 }
 
 #[syscall(i386 = 12, amd64 = 80)]
@@ -1851,6 +1927,28 @@ fn rmdir(
     let start_dir = thread.process().cwd();
     unlink_dir(start_dir, &pathname, &mut ctx)?;
     Ok(0)
+}
+
+#[syscall(i386 = 8, amd64 = 85)]
+fn creat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    pathname: Pointer<Path>,
+    mode: u64,
+) -> SyscallResult {
+    open(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        no_file_limit,
+        pathname,
+        OpenFlags::CREAT | OpenFlags::WRONLY | OpenFlags::TRUNC,
+        mode,
+    )
 }
 
 #[syscall(i386 = 9, amd64 = 86)]
@@ -1940,13 +2038,20 @@ fn readlink(
 fn chmod(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] mut ctx: FileAccessContext,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     filename: Pointer<Path>,
-    mode: FileMode,
+    mode: u64,
 ) -> SyscallResult {
-    let path = virtual_memory.read(filename)?;
-    set_mode(thread.process().cwd(), &path, mode, &mut ctx)?;
-    Ok(0)
+    fchmodat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        filename,
+        mode,
+    )
 }
 
 #[syscall(i386 = 94, amd64 = 91)]
@@ -1959,7 +2064,31 @@ fn fchmod(
     let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
     fd.chmod(mode, &ctx)?;
+    fd.update_times(now(), None, None);
     Ok(0)
+}
+
+#[syscall(i386 = 212, amd64 = 92)]
+fn chown(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    filename: Pointer<Path>,
+    user: Uid,
+    group: Gid,
+) -> SyscallResult {
+    fchownat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        filename,
+        user,
+        group,
+        FchownatFlags::empty(),
+    )
 }
 
 #[syscall(i386 = 207, amd64 = 93)]
@@ -1975,11 +2104,54 @@ fn fchown(
     Ok(0)
 }
 
+#[syscall(i386 = 198, amd64 = 94)]
+fn lchown(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    filename: Pointer<Path>,
+    user: Uid,
+    group: Gid,
+) -> SyscallResult {
+    fchownat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        filename,
+        user,
+        group,
+        FchownatFlags::SYMLINK_NOFOLLOW,
+    )
+}
+
 #[syscall(i386 = 60, amd64 = 95)]
 fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
-    let old = core::mem::replace(&mut thread.umask, umask);
+    let old = core::mem::replace(&mut *thread.process().umask.lock(), umask);
     SyscallResult::Ok(old.bits())
+}
+
+#[syscall(i386 = 78, amd64 = 96)]
+fn gettimeofday(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    tv: Pointer<Timeval>,
+    tz: Pointer<c_void>,
+) -> SyscallResult {
+    if !tz.is_null() {
+        todo!();
+    }
+
+    if !tv.is_null() {
+        let time = now();
+        let time = Timeval::from(time);
+        virtual_memory.write_with_abi(tv, time, abi)?;
+    }
+
+    Ok(0)
 }
 
 #[syscall(i386 = 76, amd64 = 97)]
@@ -1990,7 +2162,7 @@ fn getrlimit(
     resource: Resource,
     rlim: Pointer<RLimit>,
 ) -> SyscallResult {
-    let value = thread.getrlimit(resource);
+    let value = thread.process().limits.read()[resource];
     virtual_memory.write_with_abi(rlim, value, abi)?;
     Ok(0)
 }
@@ -2401,6 +2573,37 @@ fn sigaltstack(
     Ok(0)
 }
 
+#[syscall(i386 = 99, amd64 = 137)]
+fn statfs(
+    abi: Abi,
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+    buf: Pointer<StatFs>,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(pathname)?;
+    let cwd = thread.process().cwd();
+    let node = lookup_and_resolve_node(cwd, &pathname, &mut ctx)?;
+    let statfs = node.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 100, amd64 = 138)]
+fn fstatfs(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<StatFs>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let statfs = fd.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 384, amd64 = 158)]
 fn arch_prctl(
     thread: &mut ThreadGuard,
@@ -2714,25 +2917,39 @@ fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
     Ok(0)
 }
 
+/// Find the start directory for resolving `path`.
+fn start_dir_for_path(
+    thread: &ThreadGuard,
+    fdtable: &FileDescriptorTable,
+    dfd: FdNum,
+    path: &Path,
+    ctx: &mut FileAccessContext,
+) -> Result<DynINode> {
+    if path.is_absolute() {
+        // Completly ignore `dfd` if path is absolute.
+        Ok(ROOT_NODE.clone())
+    } else if dfd == FdNum::CWD {
+        Ok(thread.process().cwd())
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(ctx)
+    }
+}
+
 #[syscall(i386 = 295, amd64 = 257)]
 fn openat(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     dfd: FdNum,
     filename: Pointer<Path>,
     flags: OpenFlags,
     mode: u64,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
-
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let node = if flags.contains(OpenFlags::NOFOLLOW) {
@@ -2749,13 +2966,9 @@ fn openat(
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
-            create_file(
-                start_dir,
-                filename.clone(),
-                FileMode::from_bits_truncate(mode),
-                flags,
-                &mut ctx,
-            )?
+            let mut mode = FileMode::from_bits_truncate(mode);
+            mode &= !*thread.process().umask.lock();
+            create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
         } else {
             let node = if flags.contains(OpenFlags::NOFOLLOW) {
                 lookup_node(start_dir.clone(), &filename, &mut ctx)?
@@ -2779,7 +2992,7 @@ fn openat(
         node.open(filename, flags)?
     };
 
-    let fd = fdtable.insert(fd, flags)?;
+    let fd = fdtable.insert(fd, flags, no_file_limit)?;
     Ok(fd.get() as u64)
 }
 
@@ -2793,28 +3006,37 @@ fn mkdirat(
     pathname: Pointer<Path>,
     mode: u64,
 ) -> SyscallResult {
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
-    let mode = FileMode::from_bits_truncate(mode);
     let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
+
+    let mut mode = FileMode::from_bits_truncate(mode);
+    mode &= !*thread.process().umask.lock();
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
     Ok(0)
 }
 
 #[syscall(i386 = 298, amd64 = 260)]
 fn fchownat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     dfd: FdNum,
     pathname: Pointer<Path>,
-    user: u32,
-    group: u32,
-    flag: AtFlags,
+    uid: Uid,
+    gid: Gid,
+    flags: FchownatFlags,
 ) -> SyscallResult {
-    // FIXME: Implement this.
+    let path = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
+
+    let node = if flags.contains(FchownatFlags::SYMLINK_NOFOLLOW) {
+        lookup_node(start_dir, &path, &mut ctx)?
+    } else {
+        lookup_and_resolve_node(start_dir, &path, &mut ctx)?
+    };
+
+    node.chown(uid, gid, &ctx)?;
     Ok(0)
 }
 
@@ -2829,16 +3051,11 @@ fn futimesat(
     pathname: Pointer<Path>,
     times: Pointer<[Timeval; 2]>,
 ) -> SyscallResult {
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let path = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
     let now = now();
 
-    let path = virtual_memory.read(pathname)?;
     let times = if !times.is_null() {
         let [atime, mtime] = virtual_memory.read_with_abi(times, abi)?;
         [atime.into(), mtime.into()]
@@ -2886,14 +3103,8 @@ fn newfstatat(
         }
     }
 
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let node = if flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
         lookup_node(start_dir, &pathname, &mut ctx)?
@@ -2918,13 +3129,7 @@ fn unlinkat(
     flags: UnlinkOptions,
 ) -> SyscallResult {
     let pathname = virtual_memory.read(pathname)?;
-
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     if flags.contains(UnlinkOptions::REMOVEDIR) {
         unlink_dir(start_dir, &pathname, &mut ctx)?;
@@ -2955,7 +3160,7 @@ fn renameat(
         oldname,
         newdfd,
         newname,
-        0,
+        Renameat2Flags::empty(),
     )
 }
 
@@ -2973,19 +3178,8 @@ fn linkat(
 ) -> SyscallResult {
     let oldpath = virtual_memory.read(oldpath)?;
     let newpath = virtual_memory.read(newpath)?;
-
-    let olddir = if olddirfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(olddirfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-    let newdir = if newdirfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(newdirfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let olddir = start_dir_for_path(thread, &fdtable, olddirfd, &oldpath, &mut ctx)?;
+    let newdir = start_dir_for_path(thread, &fdtable, newdirfd, &newpath, &mut ctx)?;
 
     hard_link(
         newdir,
@@ -3009,15 +3203,9 @@ fn symlinkat(
     newdfd: FdNum,
     newname: Pointer<Path>,
 ) -> SyscallResult {
-    let newdfd = if newdfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(newdfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let oldname = virtual_memory.read(oldname)?;
     let newname = virtual_memory.read(newname)?;
+    let newdfd = start_dir_for_path(thread, &fdtable, newdfd, &newname, &mut ctx)?;
 
     create_link(newdfd, &newname, oldname, &mut ctx)?;
 
@@ -3037,14 +3225,9 @@ fn readlinkat(
 ) -> SyscallResult {
     let bufsiz = usize_from(bufsiz);
 
-    let dfd = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let pathname = virtual_memory.read(pathname)?;
+    let dfd = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
+
     let target = read_link(dfd, &pathname, &mut ctx)?;
 
     let bytes = target.as_bytes();
@@ -3063,25 +3246,21 @@ fn fchmodat(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
-    #[state] mut ctx: FileAccessContext,
+    #[state] ctx: FileAccessContext,
     dfd: FdNum,
     filename: Pointer<Path>,
     mode: u64,
 ) -> SyscallResult {
-    let mode = FileMode::from_bits_truncate(mode);
-
-    let newdfd = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
-    let path = virtual_memory.read(filename)?;
-
-    set_mode(newdfd, &path, mode, &mut ctx)?;
-
-    Ok(0)
+    fchmodat2(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        dfd,
+        filename,
+        mode,
+        Fchmodat2Flags::empty(),
+    )
 }
 
 #[syscall(i386 = 307, amd64 = 269)]
@@ -3095,14 +3274,8 @@ fn faccessat(
     mode: AccessMode,
     flags: FaccessatFlags,
 ) -> SyscallResult {
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let node = if flags.contains(FaccessatFlags::SYMLINK_NOFOLLOW) {
         lookup_node(start_dir, &pathname, &mut ctx)?
@@ -3271,20 +3444,29 @@ fn utimensat(
     };
 
     if let Some(path) = path {
-        let start_dir = if dfd == FdNum::CWD {
-            thread.process().cwd()
-        } else {
-            let fd = fdtable.get(dfd)?;
-            fd.as_dir(&mut ctx)?
-        };
+        let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
         let node = if !flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
             lookup_and_resolve_node(start_dir, &path, &mut ctx)?
         } else {
             lookup_node(start_dir, &path, &mut ctx)?
         };
+
+        let stat = node.stat()?;
+        ensure!(
+            ctx.is_user(stat.uid) || ctx.check_permissions(&stat, Permission::Write).is_ok(),
+            Acces
+        );
+
         node.update_times(ctime, atime, mtime);
     } else {
         let fd = fdtable.get(dfd)?;
+
+        let stat = fd.stat()?;
+        ensure!(
+            ctx.is_user(stat.uid) || ctx.check_permissions(&stat, Permission::Write).is_ok(),
+            Acces
+        );
+
         fd.update_times(ctime, atime, mtime);
     }
 
@@ -3295,12 +3477,14 @@ fn utimensat(
 fn eventfd(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     initval: u32,
     flags: EventFdFlags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
         EventFd::new(initval, ctx.filesystem_user_id, ctx.filesystem_group_id),
         flags,
+        no_file_limit,
     )?;
     Ok(fd_num.get().try_into().unwrap())
 }
@@ -3309,11 +3493,13 @@ fn eventfd(
 fn epoll_create1(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     flags: EpollCreate1Flags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
         Epoll::new(ctx.filesystem_user_id, ctx.filesystem_group_id),
         flags,
+        no_file_limit,
     )?;
     Ok(fd_num.get().try_into().unwrap())
 }
@@ -3321,18 +3507,14 @@ fn epoll_create1(
 #[syscall(i386 = 330, amd64 = 292)]
 fn dup3(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     oldfd: FdNum,
     newfd: FdNum,
     flags: Dup3Flags,
 ) -> SyscallResult {
     ensure!(oldfd != newfd, Inval);
-    ensure!(
-        (0..FileDescriptorTable::MAX_FD).contains(&newfd.get()),
-        BadF
-    );
-
     let fd = fdtable.get(oldfd)?;
-    fdtable.replace(newfd, fd, flags)?;
+    fdtable.replace(newfd, fd, flags, no_file_limit)?;
     Ok(newfd.get() as u64)
 }
 
@@ -3341,15 +3523,16 @@ fn pipe2(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
     let (read_half, write_half) = pipe::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
 
     // Insert the first read half.
-    let read_half = fdtable.insert(read_half, flags)?;
+    let read_half = fdtable.insert(read_half, flags, no_file_limit)?;
     // Insert the second write half.
-    let res = fdtable.insert(write_half, flags);
+    let res = fdtable.insert(write_half, flags, no_file_limit);
     // Ensure that we close the first fd, if inserting the second failed.
     if res.is_err() {
         let _ = fdtable.close(read_half);
@@ -3365,17 +3548,39 @@ fn pipe2(
 fn prlimit64(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    pid: i32,
+    pid: u32,
     resource: Resource,
     new_rlim: Pointer<RLimit64>,
     old_rlim: Pointer<RLimit64>,
 ) -> SyscallResult {
-    ensure!(new_rlim.is_null(), Perm);
+    let process = if pid != 0 {
+        Process::find_by_pid(pid).ok_or_else(|| err!(Srch))?
+    } else {
+        thread.process().clone()
+    };
+
+    let mut guard = process.limits.write();
 
     if !old_rlim.is_null() {
-        let value = thread.getrlimit(resource);
+        let value = guard[resource];
         let value = RLimit64::from(value);
         virtual_memory.write(old_rlim, value)?;
+    }
+
+    if !new_rlim.is_null() {
+        let value = virtual_memory.read(new_rlim)?;
+        let value = RLimit::try_from(value)?;
+        let limit = &mut guard[resource];
+
+        // Make sure that the limit is well-formed.
+        ensure!(value.rlim_cur <= value.rlim_max, Inval);
+
+        // Make sure that the user can set the hard limit.
+        if thread.process().credentials.lock().effective_user_id != Uid::SUPER_USER {
+            ensure!(value.rlim_max <= limit.rlim_max, Perm);
+        }
+
+        *limit = value;
     }
 
     Ok(0)
@@ -3391,26 +3596,25 @@ fn renameat2(
     oldname: Pointer<Path>,
     newdfd: FdNum,
     newname: Pointer<Path>,
-    flags: u64,
+    flags: Renameat2Flags,
 ) -> SyscallResult {
-    let oldd = if olddfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(olddfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
-    let newd = if newdfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(newdfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let oldname = virtual_memory.read(oldname)?;
     let newname = virtual_memory.read(newname)?;
+    let oldd = start_dir_for_path(thread, &fdtable, olddfd, &oldname, &mut ctx)?;
+    let newd = start_dir_for_path(thread, &fdtable, newdfd, &newname, &mut ctx)?;
 
-    node::rename(oldd, &oldname, newd, &newname, &mut ctx)?;
+    if flags.contains(Renameat2Flags::EXCHANGE) {
+        node::exchange(oldd, &oldname, newd, &newname, &mut ctx)?;
+    } else {
+        node::rename(
+            oldd,
+            &oldname,
+            newd,
+            &newname,
+            flags.contains(Renameat2Flags::NOREPLACE),
+            &mut ctx,
+        )?;
+    }
 
     Ok(0)
 }
@@ -3453,4 +3657,31 @@ async fn copy_file_range(
         SpliceFlags::empty(),
     )
     .await
+}
+
+#[syscall(i386 = 452, amd64 = 452)]
+fn fchmodat2(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dfd: FdNum,
+    filename: Pointer<Path>,
+    mode: u64,
+    flags: Fchmodat2Flags,
+) -> SyscallResult {
+    let mode = FileMode::from_bits_truncate(mode);
+
+    let path = virtual_memory.read(filename)?;
+    let newdfd = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
+
+    let node = if flags.contains(Fchmodat2Flags::SYMLINK_NOFOLLOW) {
+        lookup_node(newdfd, &path, &mut ctx)?
+    } else {
+        lookup_and_resolve_node(newdfd, &path, &mut ctx)?
+    };
+    node.chmod(mode, &ctx)?;
+    node.update_times(now(), None, None);
+
+    Ok(0)
 }

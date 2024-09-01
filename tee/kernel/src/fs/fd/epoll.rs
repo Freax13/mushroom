@@ -1,14 +1,16 @@
 use crate::fs::node::{new_ino, FileAccessContext};
 use crate::fs::ownership::Ownership;
 use crate::fs::path::Path;
+use crate::fs::FileSystem;
 use crate::spin::mutex::Mutex;
 use crate::user::process::thread::{Gid, Uid};
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::{vec, vec::Vec};
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 
-use crate::error::Result;
+use crate::error::{bail, Result};
 use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
@@ -45,8 +47,8 @@ impl OpenFileDescription for Epoll {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(b"anon_inode:[eventpoll]".to_vec()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(b"anon_inode:[eventpoll]".to_vec())
     }
 
     async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {
@@ -99,6 +101,10 @@ impl OpenFileDescription for Epoll {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        bail!(BadF)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

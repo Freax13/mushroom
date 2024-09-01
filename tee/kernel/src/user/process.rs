@@ -15,6 +15,7 @@ use alloc::{
     vec::Vec,
 };
 use futures::{select_biased, FutureExt};
+use limits::Limits;
 use syscall::args::Timespec;
 use thread::{Credentials, Gid, Uid};
 
@@ -22,7 +23,11 @@ use crate::{
     error::{err, Result},
     fs::{
         fd::FileDescriptorTable,
-        node::{procfs::ProcessInos, tmpfs::TmpFsFile, DynINode, FileAccessContext, INode},
+        node::{
+            procfs::ProcessInos,
+            tmpfs::{TmpFs, TmpFsFile},
+            DynINode, FileAccessContext, INode,
+        },
         path::Path,
         StaticFile,
     },
@@ -48,6 +53,7 @@ use self::{
 
 mod exec;
 mod futex;
+pub mod limits;
 pub mod memory;
 pub mod syscall;
 pub mod thread;
@@ -72,9 +78,12 @@ pub struct Process {
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<DynINode>,
     process_group: Mutex<Arc<ProcessGroup>>,
+    pub limits: RwLock<Limits>,
+    pub umask: Mutex<FileMode>,
 }
 
 impl Process {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         first_tid: u32,
         parent: Weak<Self>,
@@ -83,6 +92,8 @@ impl Process {
         credentials: Credentials,
         cwd: DynINode,
         process_group: Arc<ProcessGroup>,
+        limits: Limits,
+        umask: FileMode,
     ) -> Arc<Self> {
         let this = Self {
             pid: first_tid,
@@ -103,6 +114,8 @@ impl Process {
             credentials: Mutex::new(credentials),
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
+            limits: RwLock::new(limits),
+            umask: Mutex::new(umask),
         };
         let arc = Arc::new(this);
 
@@ -501,7 +514,12 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let mut guard = thread.lock();
     let mut ctx = FileAccessContext::extract_from_thread(&guard);
 
-    let file = TmpFsFile::new(FileMode::all(), Uid::SUPER_USER, Gid::SUPER_USER);
+    let file = TmpFsFile::new(
+        TmpFs::new(),
+        FileMode::all(),
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+    );
     StaticFile::init_file().copy_to(&file).unwrap();
     let path = Path::new(b"/bin/init".to_vec()).unwrap();
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();

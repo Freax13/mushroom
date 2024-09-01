@@ -10,6 +10,7 @@ use crate::{
             FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         ownership::Ownership,
+        FileSystem, StatFs,
     },
     memory::page::{Buffer, KernelPage},
     spin::mutex::Mutex,
@@ -27,7 +28,8 @@ use alloc::{
 
 use super::{
     directory::{dir_impls, Directory, DirectoryLocation, Location},
-    lookup_node_with_parent, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext, INode,
+    lookup_node_with_parent, new_dev, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext,
+    INode,
 };
 use crate::{
     error::Result,
@@ -38,8 +40,36 @@ use crate::{
     },
 };
 
-pub struct TmpFsDir {
+pub struct TmpFs {
     dev: u64,
+}
+
+impl TmpFs {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self { dev: new_dev() })
+    }
+}
+
+impl FileSystem for TmpFs {
+    fn stat(&self) -> StatFs {
+        StatFs {
+            ty: 0x01021994,
+            bsize: 0x1000,
+            blocks: 0x200000,
+            bfree: 0x1c0000,
+            bavail: 0x1c0000,
+            files: 0x100000,
+            ffree: 0xc0000,
+            fsid: bytemuck::cast(self.dev),
+            namelen: 255,
+            frsize: 0x1000,
+            flags: 0,
+        }
+    }
+}
+
+pub struct TmpFsDir {
+    fs: Arc<TmpFs>,
     ino: u64,
     this: Weak<Self>,
     location: Location<Self>,
@@ -57,7 +87,7 @@ struct TmpFsDirInternal {
 
 impl TmpFsDir {
     pub fn new(
-        dev: u64,
+        fs: Arc<TmpFs>,
         location: impl Into<Location<Self>>,
         mode: FileMode,
         uid: Uid,
@@ -66,7 +96,7 @@ impl TmpFsDir {
         let now = now();
 
         Arc::new_cyclic(|this_weak| Self {
-            dev,
+            fs,
             ino: new_ino(),
             this: this_weak.clone(),
             location: location.into(),
@@ -92,11 +122,11 @@ impl TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let node = TmpFsFile::new(mode, uid, gid);
+                let node = TmpFsFile::new(self.fs.clone(), mode, uid, gid);
                 entry.insert(TmpFsDirEntry::File(node.clone()));
                 Ok(Ok(node))
             }
-            Entry::Occupied(entry) => Ok(Err(entry.get().clone().into())),
+            Entry::Occupied(entry) => Ok(Err(entry.get().node())),
         }
     }
 }
@@ -108,7 +138,7 @@ impl INode for TmpFsDir {
         let guard = self.internal.lock();
         // FIXME: Fill in more values.
         Ok(Stat {
-            dev: self.dev,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, guard.ownership.mode()),
@@ -124,8 +154,12 @@ impl INode for TmpFsDir {
         })
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        open_dir(path, self.this.upgrade().unwrap(), flags)
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -170,8 +204,7 @@ impl Directory for TmpFsDir {
             .lock()
             .items
             .get(path_segment)
-            .cloned()
-            .map(Into::into)
+            .map(TmpFsDirEntry::node)
             .ok_or(err!(NoEnt))
     }
 
@@ -187,7 +220,7 @@ impl Directory for TmpFsDir {
         match entry {
             Entry::Vacant(entry) => {
                 let parent = DirectoryLocation::new(self.this.clone(), file_name);
-                let dir = TmpFsDir::new(self.dev, parent, mode, uid, gid);
+                let dir = TmpFsDir::new(self.fs.clone(), parent, mode, uid, gid);
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 Ok(dir)
             }
@@ -218,11 +251,16 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
+                let now = now();
                 let link = Arc::new(TmpFsSymlink {
+                    fs: self.fs.clone(),
                     ino: new_ino(),
                     target,
                     internal: Mutex::new(TmpFsSymlinkInternal {
                         ownership: Ownership::new(FileMode::ALL, uid, gid),
+                        atime: now,
+                        mtime: now,
+                        ctime: now,
                     }),
                     file_lock_record: Arc::new(FileLockRecord::new()),
                 });
@@ -231,11 +269,16 @@ impl Directory for TmpFsDir {
             }
             Entry::Occupied(mut entry) => {
                 ensure!(!create_new, Exist);
+                let now = now();
                 let link = Arc::new(TmpFsSymlink {
+                    fs: self.fs.clone(),
                     ino: new_ino(),
                     target,
                     internal: Mutex::new(TmpFsSymlinkInternal {
                         ownership: Ownership::new(FileMode::ALL, uid, gid),
+                        atime: now,
+                        mtime: now,
+                        ctime: now,
                     }),
                     file_lock_record: Arc::new(FileLockRecord::new()),
                 });
@@ -258,7 +301,14 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let char_dev = Arc::new(TmpFsCharDev::new(major, minor, mode, uid, gid));
+                let char_dev = Arc::new(TmpFsCharDev::new(
+                    self.fs.clone(),
+                    major,
+                    minor,
+                    mode,
+                    uid,
+                    gid,
+                ));
                 entry.insert(TmpFsDirEntry::CharDev(char_dev.clone()));
                 Ok(char_dev)
             }
@@ -307,12 +357,6 @@ impl Directory for TmpFsDir {
         Ok(entries)
     }
 
-    fn delete(&self, file_name: FileName<'static>) -> Result<()> {
-        let mut guard = self.internal.lock();
-        guard.items.remove(&file_name).ok_or(err!(NoEnt))?;
-        Ok(())
-    }
-
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
         let mut guard = self.internal.lock();
         let node = guard.items.entry(file_name);
@@ -342,10 +386,11 @@ impl Directory for TmpFsDir {
         check_is_dir: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        no_replace: bool,
     ) -> Result<()> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
-        ensure!(new_dir.dev == self.dev, XDev);
+        ensure!(Arc::ptr_eq(&new_dir.fs, &self.fs), XDev);
 
         fn can_rename(
             old: &TmpFsDirEntry,
@@ -400,6 +445,8 @@ impl Directory for TmpFsDir {
                     bail!(NoEnt);
                 };
 
+                ensure!(!no_replace, Exist);
+
                 // Make sure that we can rename the old entry over the missing entry.
                 can_rename(old, None, check_is_dir)?;
 
@@ -412,6 +459,8 @@ impl Directory for TmpFsDir {
                     bail!(NoEnt);
                 };
                 let new = guard.items.get(&newname);
+
+                ensure!(!no_replace || new.is_none(), Exist);
 
                 // Make sure that we can rename the old entry over the new entry.
                 can_rename(old, new, check_is_dir)?;
@@ -429,6 +478,20 @@ impl Directory for TmpFsDir {
             let Entry::Occupied(old_entry) = old_guard.items.entry(oldname) else {
                 bail!(NoEnt);
             };
+
+            // Make sure that the old_entry isn't new_dir or any of its parents.
+            let mut parent = new_dir.clone() as DynINode;
+            loop {
+                ensure!(!core::ptr::addr_eq(&**old_entry.get(), &*parent), Inval);
+                let new_parent = parent.clone().parent()?;
+                let old_parent = core::mem::replace(&mut parent, new_parent);
+
+                // Exit the loop if we've reached the root node.
+                if Arc::ptr_eq(&parent, &old_parent) {
+                    break;
+                }
+            }
+
             let new_entry = new_guard.items.entry(newname);
             let new = match &new_entry {
                 Entry::Vacant(_) => None,
@@ -437,6 +500,8 @@ impl Directory for TmpFsDir {
 
             // Make sure that we can rename the old entry over the new entry.
             can_rename(old_entry.get(), new, check_is_dir)?;
+
+            ensure!(!no_replace || new.is_none(), Exist);
 
             // Do the rename.
             match new_entry {
@@ -452,6 +517,65 @@ impl Directory for TmpFsDir {
         }
     }
 
+    fn exchange(
+        &self,
+        oldname: FileName<'static>,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+    ) -> Result<()> {
+        let new_dir =
+            Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
+        ensure!(Arc::ptr_eq(&new_dir.fs, &self.fs), XDev);
+
+        if core::ptr::eq(self, &*new_dir) {
+            if newname == oldname {
+                Ok(())
+            } else {
+                let mut guard = self.internal.lock();
+
+                // Do the exchange.
+                let entry = guard
+                    .items
+                    .get(&oldname)
+                    .ok_or_else(|| err!(NoEnt))?
+                    .clone();
+                let Entry::Occupied(mut map_entry) = guard.items.entry(newname) else {
+                    bail!(NoEnt);
+                };
+                let entry = map_entry.insert(entry);
+                guard.items.insert(oldname, entry);
+
+                Ok(())
+            }
+        } else {
+            let (mut old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+
+            // Do the exchange.
+            let entry = old_guard.items.get(&oldname).ok_or_else(|| err!(NoEnt))?;
+            let Entry::Occupied(mut map_entry) = new_guard.items.entry(newname) else {
+                bail!(NoEnt);
+            };
+
+            // Make sure that the old_entry isn't new_dir or any of its parents.
+            let mut parent = new_dir.clone() as DynINode;
+            loop {
+                ensure!(!core::ptr::addr_eq(&**map_entry.get(), &*parent), Inval);
+                let new_parent = parent.clone().parent()?;
+                let old_parent = core::mem::replace(&mut parent, new_parent);
+
+                // Exit the loop if we've reached the root node.
+                if Arc::ptr_eq(&parent, &old_parent) {
+                    break;
+                }
+            }
+
+            let entry = map_entry.insert(entry.clone());
+            old_guard.items.insert(oldname, entry);
+
+            Ok(())
+        }
+    }
+
     fn hard_link(
         &self,
         oldname: FileName<'static>,
@@ -461,24 +585,27 @@ impl Directory for TmpFsDir {
     ) -> Result<Option<Path>> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
-        ensure!(new_dir.dev == self.dev, XDev);
+        ensure!(Arc::ptr_eq(&new_dir.fs, &self.fs), XDev);
 
         if core::ptr::eq(self, &*new_dir) {
             let mut guard = self.internal.lock();
             let entry = guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
 
             if follow_symlink {
-                if let TmpFsDirEntry::Symlink(symlink) = entry {
+                if let TmpFsDirEntry::Symlink(symlink) = &entry {
                     return Ok(Some(symlink.target.clone()));
                 }
             }
-            if let TmpFsDirEntry::Mount(_) = entry {
-                bail!(Busy);
+            match entry {
+                TmpFsDirEntry::Dir(_) => bail!(Perm),
+                TmpFsDirEntry::Mount(_) => bail!(Busy),
+                _ => {}
             }
 
             match guard.items.entry(newname) {
                 Entry::Vacant(e) => {
-                    e.insert(entry);
+                    let node = e.insert(entry);
+                    node.update_times(now(), None, None);
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
@@ -487,17 +614,20 @@ impl Directory for TmpFsDir {
             let entry = old_guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
 
             if follow_symlink {
-                if let TmpFsDirEntry::Symlink(symlink) = entry {
+                if let TmpFsDirEntry::Symlink(symlink) = &entry {
                     return Ok(Some(symlink.target.clone()));
                 }
             }
-            if let TmpFsDirEntry::Mount(_) = entry {
-                bail!(Busy);
+            match entry {
+                TmpFsDirEntry::Dir(_) => bail!(Perm),
+                TmpFsDirEntry::Mount(_) => bail!(Busy),
+                _ => {}
             }
 
             match new_guard.items.entry(newname) {
                 Entry::Vacant(e) => {
-                    e.insert(entry);
+                    let node = e.insert(entry);
+                    node.update_times(now(), None, None);
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
@@ -507,13 +637,39 @@ impl Directory for TmpFsDir {
     }
 }
 
-#[derive(Clone)]
 enum TmpFsDirEntry {
     File(Arc<TmpFsFile>),
     Dir(Arc<TmpFsDir>),
     Symlink(Arc<TmpFsSymlink>),
     CharDev(Arc<TmpFsCharDev>),
     Mount(DynINode),
+}
+
+impl TmpFsDirEntry {
+    fn node(&self) -> DynINode {
+        match self {
+            TmpFsDirEntry::File(file) => file.clone(),
+            TmpFsDirEntry::Dir(dir) => dir.clone(),
+            TmpFsDirEntry::Symlink(symlink) => symlink.clone(),
+            TmpFsDirEntry::CharDev(char_dev) => char_dev.clone(),
+            TmpFsDirEntry::Mount(node) => node.clone(),
+        }
+    }
+}
+
+impl Clone for TmpFsDirEntry {
+    fn clone(&self) -> Self {
+        match self {
+            Self::File(file) => {
+                file.increase_link_count();
+                Self::File(file.clone())
+            }
+            Self::Dir(dir) => Self::Dir(dir.clone()),
+            Self::Symlink(symlink) => Self::Symlink(symlink.clone()),
+            Self::CharDev(char_dev) => Self::CharDev(char_dev.clone()),
+            Self::Mount(mount) => Self::Mount(mount.clone()),
+        }
+    }
 }
 
 impl Deref for TmpFsDirEntry {
@@ -530,19 +686,16 @@ impl Deref for TmpFsDirEntry {
     }
 }
 
-impl From<TmpFsDirEntry> for DynINode {
-    fn from(value: TmpFsDirEntry) -> Self {
-        match value {
-            TmpFsDirEntry::File(file) => file,
-            TmpFsDirEntry::Dir(dir) => dir,
-            TmpFsDirEntry::Symlink(symlink) => symlink,
-            TmpFsDirEntry::CharDev(char_dev) => char_dev,
-            TmpFsDirEntry::Mount(node) => node,
+impl Drop for TmpFsDirEntry {
+    fn drop(&mut self) {
+        if let Self::File(file) = self {
+            file.decrease_link_count();
         }
     }
 }
 
 pub struct TmpFsFile {
+    fs: Arc<TmpFs>,
     ino: u64,
     this: Weak<Self>,
     internal: Mutex<TmpFsFileInternal>,
@@ -555,24 +708,35 @@ struct TmpFsFileInternal {
     atime: Timespec,
     mtime: Timespec,
     ctime: Timespec,
+    links: u64,
 }
 
 impl TmpFsFile {
-    pub fn new(mode: FileMode, uid: Uid, gid: Gid) -> Arc<Self> {
+    pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid) -> Arc<Self> {
         let now = now();
 
         Arc::new_cyclic(|this| Self {
-            this: this.clone(),
+            fs,
             ino: new_ino(),
+            this: this.clone(),
             internal: Mutex::new(TmpFsFileInternal {
                 buffer: Buffer::new(),
                 ownership: Ownership::new(mode, uid, gid),
                 atime: now,
                 mtime: now,
                 ctime: now,
+                links: 1,
             }),
             file_lock_record: LazyFileLockRecord::new(),
         })
+    }
+
+    fn increase_link_count(&self) {
+        self.internal.lock().links += 1;
+    }
+
+    fn decrease_link_count(&self) {
+        self.internal.lock().links -= 1;
     }
 }
 
@@ -581,9 +745,9 @@ impl INode for TmpFsFile {
         let guard = self.internal.lock();
         // FIXME: Fill in more values.
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
-            nlink: 1,
+            nlink: guard.links,
             mode: FileTypeAndMode::new(FileType::File, guard.ownership.mode()),
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
@@ -595,6 +759,10 @@ impl INode for TmpFsFile {
             mtime: guard.mtime,
             ctime: guard.ctime,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
@@ -710,6 +878,7 @@ impl File for TmpFsFile {
 
 #[derive(Clone)]
 pub struct TmpFsSymlink {
+    fs: Arc<TmpFs>,
     ino: u64,
     target: Path,
     file_lock_record: Arc<FileLockRecord>,
@@ -719,13 +888,16 @@ pub struct TmpFsSymlink {
 #[derive(Clone)]
 struct TmpFsSymlinkInternal {
     ownership: Ownership,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl INode for TmpFsSymlink {
     fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::ALL),
@@ -735,10 +907,14 @@ impl INode for TmpFsSymlink {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
@@ -766,7 +942,16 @@ impl INode for TmpFsSymlink {
         lookup_node_with_parent(start_dir, &self.target, ctx).map(Some)
     }
 
-    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
+        let mut guard = self.internal.lock();
+        guard.ctime = ctime;
+        if let Some(atime) = atime {
+            guard.atime = atime;
+        }
+        if let Some(mtime) = mtime {
+            guard.mtime = mtime;
+        }
+    }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
@@ -774,6 +959,7 @@ impl INode for TmpFsSymlink {
 }
 
 pub struct TmpFsCharDev {
+    fs: Arc<TmpFs>,
     ino: u64,
     major: u16,
     minor: u8,
@@ -786,8 +972,9 @@ struct TmpFsCharDevInternal {
 }
 
 impl TmpFsCharDev {
-    pub fn new(major: u16, minor: u8, mode: FileMode, uid: Uid, gid: Gid) -> Self {
+    pub fn new(fs: Arc<TmpFs>, major: u16, minor: u8, mode: FileMode, uid: Uid, gid: Gid) -> Self {
         Self {
+            fs,
             ino: new_ino(),
             major,
             minor,
@@ -803,7 +990,7 @@ impl INode for TmpFsCharDev {
     fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         Ok(Stat {
-            dev: 0,
+            dev: self.fs.dev,
             ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Char, guard.ownership.mode()),
@@ -819,8 +1006,12 @@ impl INode for TmpFsCharDev {
         })
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
-        char_dev::open(path, flags, self.stat()?)
+        char_dev::open(path, flags, self.stat()?, self.fs.clone())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

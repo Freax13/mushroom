@@ -20,6 +20,7 @@ use crate::{
         mutex::{Mutex, MutexGuard},
     },
     user::process::{
+        limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::args::{
             EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
@@ -37,7 +38,11 @@ use crate::{
     fs::node::DirEntry,
 };
 
-use super::{node::procfs::FdINode, path::Path};
+use super::{
+    node::procfs::{FdINode, ProcFs},
+    path::Path,
+    FileSystem,
+};
 
 pub mod dir;
 pub mod epoll;
@@ -46,6 +51,7 @@ pub mod file;
 pub mod path;
 pub mod pipe;
 mod std;
+pub mod stream_buffer;
 pub mod unix_socket;
 
 #[derive(Clone)]
@@ -73,8 +79,6 @@ pub struct FileDescriptorTable {
 }
 
 impl FileDescriptorTable {
-    pub const MAX_FD: i32 = 0x10000;
-
     pub const fn empty() -> Self {
         Self {
             table: Mutex::new(BTreeMap::new()),
@@ -83,11 +87,13 @@ impl FileDescriptorTable {
 
     pub fn with_standard_io() -> Self {
         let this = Self::empty();
+        let no_file_limit = CurrentNoFileLimit::new(3);
 
         let stdin = this
             .insert(
                 std::Stdin::new(Uid::SUPER_USER, Gid::SUPER_USER),
                 FdFlags::empty(),
+                no_file_limit,
             )
             .unwrap();
         assert_eq!(stdin.get(), 0);
@@ -95,6 +101,7 @@ impl FileDescriptorTable {
             .insert(
                 std::Stdout::new(Uid::SUPER_USER, Gid::SUPER_USER),
                 FdFlags::empty(),
+                no_file_limit,
             )
             .unwrap();
         assert_eq!(stdout.get(), 1);
@@ -102,6 +109,7 @@ impl FileDescriptorTable {
             .insert(
                 std::Stderr::new(Uid::SUPER_USER, Gid::SUPER_USER),
                 FdFlags::empty(),
+                no_file_limit,
             )
             .unwrap();
         assert_eq!(stderr.get(), 2);
@@ -113,15 +121,21 @@ impl FileDescriptorTable {
         &self,
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
-        self.insert_after(0, fd, flags)
+        self.insert_after(0, fd, flags, no_file_limit)
     }
 
-    fn find_free_fd_num(table: &BTreeMap<i32, FileDescriptorTableEntry>, min: i32) -> Result<i32> {
+    fn find_free_fd_num(
+        table: &BTreeMap<i32, FileDescriptorTableEntry>,
+        min: i32,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<i32> {
+        ensure!(min < no_file_limit.get() as i32, Inval);
         let min = cmp::max(0, min);
 
         let fd_iter = table.keys().copied().skip_while(|i| *i < min);
-        let mut counter_iter = min..Self::MAX_FD;
+        let mut counter_iter = min..no_file_limit.get() as i32;
 
         fd_iter
             .zip(counter_iter.by_ref())
@@ -136,9 +150,10 @@ impl FileDescriptorTable {
         min: i32,
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
         let mut guard = self.table.lock();
-        let fd_num = Self::find_free_fd_num(&guard, min)?;
+        let fd_num = Self::find_free_fd_num(&guard, min, no_file_limit)?;
         guard.insert(
             fd_num,
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
@@ -151,8 +166,9 @@ impl FileDescriptorTable {
         fd_num: FdNum,
         fd: impl Into<FileDescriptor>,
         flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<()> {
-        ensure!(fd_num.get() < Self::MAX_FD, BadF);
+        ensure!(fd_num.get() < no_file_limit.get() as i32, BadF);
 
         let mut guard = self.table.lock();
         guard.insert(
@@ -225,10 +241,11 @@ impl FileDescriptorTable {
             .collect()
     }
 
-    pub fn get_node(&self, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
+    pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
         let guard = self.table.lock();
         let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(
+            fs,
             entry.ino,
             uid,
             gid,
@@ -302,7 +319,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = flags;
     }
 
-    fn path(&self) -> Path;
+    fn path(&self) -> Result<Path>;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let _ = buf;
@@ -407,9 +424,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn stat(&self) -> Result<Stat>;
 
-    fn ty(&self) -> Result<FileType> {
-        Ok(self.stat()?.mode.ty())
-    }
+    fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
     fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
         let _ = ctx;
@@ -449,27 +464,26 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Perm)
     }
 
+    /// Returns a future that is ready when the file descriptor can process
+    /// write of `size` bytes. Note that this doesn't necessairly mean that all
+    /// `size` bytes will be written.
+    async fn ready_for_write(&self, count: usize) -> Result<()> {
+        let _ = count;
+        self.ready(Events::WRITE).await.map(drop)
+    }
+
     fn file_lock(&self) -> Result<&FileLock>;
 
-    /// For path file descriptors, this method should return the node pointed
-    /// to by that fd, for everything else, this method should return
-    /// `Ok(None)`.
-    fn reopen(&self, flags: OpenFlags) -> Result<Option<FileDescriptor>> {
-        let _ = flags;
-        Ok(None)
+    /// For path file descriptors, this method should return the pointed to
+    /// path and INode.
+    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
+        None
     }
 
     #[cfg(not(feature = "harden"))]
     fn type_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }
-}
-
-pub fn reopen(mut fd: FileDescriptor, flags: OpenFlags) -> Result<FileDescriptor> {
-    while let Some(new_fd) = fd.reopen(flags)? {
-        fd = new_fd;
-    }
-    Ok(fd)
 }
 
 bitflags! {
@@ -487,12 +501,15 @@ pub async fn do_io<R>(
     events: Events,
     mut callback: impl FnMut() -> Result<R>,
 ) -> Result<R> {
+    let flags = fd.flags();
+    let non_blocking = flags.contains(OpenFlags::NONBLOCK);
+
     loop {
         // Try to execute the closure.
         let res = callback();
         match res {
             Ok(value) => return Ok(value),
-            Err(err) if err.kind() == ErrorKind::Again => {
+            Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
                 fd.ready(events).await?;
             }
@@ -501,28 +518,22 @@ pub async fn do_io<R>(
     }
 }
 
-pub async fn do_io_with_vm<R, F>(
+pub async fn do_write_io<R>(
     fd: &(impl OpenFileDescription + ?Sized),
-    events: Events,
-    vm: Arc<VirtualMemory>,
-    mut callback: F,
-) -> Result<R>
-where
-    R: Send + 'static,
-    F: FnMut(&VirtualMemory) -> Result<R>,
-{
+    count: usize,
+    mut callback: impl FnMut() -> Result<R>,
+) -> Result<R> {
     let flags = fd.flags();
     let non_blocking = flags.contains(OpenFlags::NONBLOCK);
 
     loop {
         // Try to execute the closure.
-        let res = callback(&vm);
-
+        let res = callback();
         match res {
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
-                fd.ready(events).await?;
+                fd.ready_for_write(count).await?;
             }
             Err(err) => return Err(err),
         }

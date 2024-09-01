@@ -1,6 +1,6 @@
 use crate::{
     char_dev::{
-        mem::{Null, Random, URandom},
+        mem::{Null, Random, URandom, Zero},
         mushroom::Output,
         CharDev,
     },
@@ -10,11 +10,15 @@ use crate::{
 
 use crate::{error::Result, fs::path::FileName, user::process::syscall::args::FileMode};
 
-use super::{directory::MountLocation, new_dev, tmpfs::TmpFsDir, DynINode, INode};
+use super::{
+    directory::MountLocation,
+    tmpfs::{TmpFs, TmpFsDir},
+    DynINode, INode,
+};
 
 pub fn new(location: MountLocation) -> Result<DynINode> {
     let tmp_fs_dir = TmpFsDir::new(
-        new_dev(),
+        TmpFs::new(),
         location,
         FileMode::from_bits_truncate(0o755),
         Uid::SUPER_USER,
@@ -48,6 +52,16 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
         null_name,
         Null::MAJOR,
         Null::MINOR,
+        FileMode::ALL_READ_WRITE,
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+    )?;
+
+    let null_name = FileName::new(b"zero").unwrap();
+    tmp_fs_dir.create_char_dev(
+        null_name,
+        Zero::MAJOR,
+        Zero::MINOR,
         FileMode::ALL_READ_WRITE,
         Uid::SUPER_USER,
         Gid::SUPER_USER,

@@ -1,57 +1,59 @@
-use alloc::{boxed::Box, format};
+use alloc::{boxed::Box, format, sync::Arc};
 use async_trait::async_trait;
 use futures::{select_biased, FutureExt};
 
-use super::super::{pipe, Events, FileLock, OpenFileDescription};
+use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::Result,
+    error::{bail, Result},
     fs::{
+        fd::stream_buffer,
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, Pipe2Flags, Pointer, SocketPairType,
-            Stat, Timespec,
+            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, SocketPairType, Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
 };
 
+const CAPACITY: usize = 262144;
+
 pub struct StreamUnixSocket {
     ino: u64,
     internal: Mutex<StreamUnixSocketInternal>,
-    write_half: pipe::WriteHalf,
-    read_half: pipe::ReadHalf,
+    write_half: stream_buffer::WriteHalf<CAPACITY, 1>,
+    read_half: stream_buffer::ReadHalf<CAPACITY, 1>,
     file_lock: FileLock,
 }
 
 struct StreamUnixSocketInternal {
+    flags: OpenFlags,
     ownership: Ownership,
 }
 
 impl StreamUnixSocket {
     pub fn new_pair(r#type: SocketPairType, uid: Uid, gid: Gid) -> (Self, Self) {
-        let mut flags = Pipe2Flags::empty();
+        let mut flags = OpenFlags::empty();
         flags.set(
-            Pipe2Flags::NON_BLOCK,
+            OpenFlags::NONBLOCK,
             r#type.contains(SocketPairType::NON_BLOCK),
         );
-        flags.set(
-            Pipe2Flags::CLOEXEC,
-            r#type.contains(SocketPairType::CLOEXEC),
-        );
+        flags.set(OpenFlags::CLOEXEC, r#type.contains(SocketPairType::CLOEXEC));
 
-        let (read_half1, write_half1) = pipe::new(flags, uid, gid);
-        let (read_half2, write_half2) = pipe::new(flags, uid, gid);
+        let (read_half1, write_half1) = stream_buffer::new();
+        let (read_half2, write_half2) = stream_buffer::new();
 
         (
             Self {
                 ino: new_ino(),
                 internal: Mutex::new(StreamUnixSocketInternal {
+                    flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
                         uid,
@@ -65,6 +67,7 @@ impl StreamUnixSocket {
             Self {
                 ino: new_ino(),
                 internal: Mutex::new(StreamUnixSocketInternal {
+                    flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
                         uid,
@@ -82,16 +85,15 @@ impl StreamUnixSocket {
 #[async_trait]
 impl OpenFileDescription for StreamUnixSocket {
     fn flags(&self) -> OpenFlags {
-        self.read_half.flags()
+        self.internal.lock().flags
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("socket:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("socket:[{}]", self.ino).into_bytes())
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        self.write_half.set_flags(flags);
-        self.read_half.set_flags(flags);
+        self.internal.lock().flags = flags;
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -133,11 +135,19 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        let write_ready = self.write_half.ready(events);
-        let read_ready = self.read_half.ready(events);
-        select_biased! {
-            res = write_ready.fuse() => res,
-            res = read_ready.fuse() => res,
+        loop {
+            let write_wait = self.write_half.wait();
+            let read_wait = self.read_half.wait();
+
+            let events = self.write_half.poll_ready(events) | self.read_half.poll_ready(events);
+            if !events.is_empty() {
+                return Ok(events);
+            }
+
+            select_biased! {
+                _ = write_wait.fuse() => {}
+                _ = read_wait.fuse() => {}
+            }
         }
     }
 
@@ -166,6 +176,10 @@ impl OpenFileDescription for StreamUnixSocket {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        bail!(BadF)
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

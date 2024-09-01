@@ -5,6 +5,7 @@ use node::tmpfs::TmpFsFile;
 
 use crate::error::Result;
 use crate::fs::fd::file::File;
+use crate::spin::lazy::Lazy;
 
 pub mod fd;
 pub mod node;
@@ -74,5 +75,46 @@ impl StaticFile {
             dst.write(i, buffer)?;
         }
         Ok(())
+    }
+}
+
+pub trait FileSystem: Send + Sync {
+    fn stat(&self) -> StatFs;
+}
+
+#[derive(Clone, Copy)]
+pub struct StatFs {
+    pub ty: i64,
+    pub bsize: i64,
+    pub blocks: i64,
+    pub bfree: i64,
+    pub bavail: i64,
+    pub files: i64,
+    pub ffree: i64,
+    pub fsid: [i32; 2],
+    pub namelen: i64,
+    pub frsize: i64,
+    pub flags: i64,
+}
+
+pub static ANON_INODE_FS: Lazy<Arc<AnonInodeFs>> = Lazy::new(|| Arc::new(AnonInodeFs));
+
+pub struct AnonInodeFs;
+
+impl FileSystem for AnonInodeFs {
+    fn stat(&self) -> StatFs {
+        StatFs {
+            ty: 0x50495045,
+            bsize: 0x1000,
+            blocks: 0,
+            bfree: 0,
+            bavail: 0,
+            files: 0,
+            ffree: 0,
+            fsid: [0, 0],
+            namelen: 255,
+            frsize: 0,
+            flags: 0,
+        }
     }
 }

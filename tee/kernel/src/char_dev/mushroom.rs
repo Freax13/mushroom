@@ -1,5 +1,6 @@
 use core::cmp;
 
+use alloc::sync::Arc;
 use kernel_macros::register;
 use usize_conversions::FromUsize;
 
@@ -9,6 +10,7 @@ use crate::{
         fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
         node::FileAccessContext,
         path::Path,
+        FileSystem,
     },
     supervisor,
     user::process::{
@@ -26,6 +28,7 @@ pub struct Output {
     path: Path,
     flags: OpenFlags,
     stat: Stat,
+    fs: Arc<dyn FileSystem>,
     file_lock: FileLock,
 }
 
@@ -34,12 +37,13 @@ impl CharDev for Output {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 0;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat) -> Result<Self> {
+    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
             path,
             flags,
             stat,
+            fs,
             file_lock: FileLock::new(RECORD.get().clone()),
         })
     }
@@ -50,8 +54,8 @@ impl OpenFileDescription for Output {
         self.flags
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -97,6 +101,10 @@ impl OpenFileDescription for Output {
         }
 
         Ok(len)
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

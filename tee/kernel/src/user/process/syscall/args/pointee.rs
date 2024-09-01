@@ -16,10 +16,11 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result},
+    error::{ensure, Error, Result},
     fs::{
         node::{DirEntry, OldDirEntry},
-        path::Path,
+        path::{Path, PATH_MAX},
+        StatFs,
     },
     user::process::{
         memory::VirtualMemory,
@@ -333,7 +334,6 @@ impl AbiAgnosticPointee for Path {}
 
 impl ReadablePointee for Path {
     fn read(addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<(usize, Self)> {
-        const PATH_MAX: usize = 0x1000;
         let pathname = vm.read_cstring(Pointer::from(addr), PATH_MAX)?;
         let len = pathname.to_bytes_with_nul().len();
         let value = Path::new(pathname.into_bytes())?;
@@ -726,12 +726,17 @@ impl From<Timespec> for Timespec64 {
     }
 }
 
-impl From<Timespec32> for Timespec {
-    fn from(value: Timespec32) -> Self {
-        Self {
+impl TryFrom<Timespec32> for Timespec {
+    type Error = Error;
+
+    fn try_from(value: Timespec32) -> Result<Self> {
+        if !matches!(value.tv_nsec, Self::UTIME_NOW | Self::UTIME_OMIT) {
+            ensure!(value.tv_nsec < 1_000_000_000, Inval);
+        }
+        Ok(Self {
             tv_sec: value.tv_sec,
             tv_nsec: value.tv_nsec,
-        }
+        })
     }
 }
 
@@ -745,6 +750,7 @@ impl TryFrom<Timespec64> for Timespec {
             // If tv_nsec is set to one of these special values ignore tv_sec.
             Ok(Self { tv_sec: 0, tv_nsec })
         } else {
+            ensure!(tv_nsec < 1_000_000_000, Inval);
             Ok(Self {
                 tv_sec: u32::try_from(value.tv_sec)?,
                 tv_nsec,
@@ -1135,6 +1141,24 @@ impl From<Timeval64> for Timeval {
         Self {
             tv_sec: value.tv_sec as u32,
             tv_usec: value.tv_usec as u32,
+        }
+    }
+}
+
+impl From<Timeval> for Timeval32 {
+    fn from(value: Timeval) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_usec: value.tv_usec,
+        }
+    }
+}
+
+impl From<Timeval> for Timeval64 {
+    fn from(value: Timeval) -> Self {
+        Self {
+            tv_sec: u64::from(value.tv_sec),
+            tv_usec: u64::from(value.tv_usec),
         }
     }
 }
@@ -1569,3 +1593,81 @@ impl PrimitivePointee for Uid {}
 
 impl Pointee for Gid {}
 impl PrimitivePointee for Gid {}
+
+impl Pointee for StatFs {}
+impl AbiDependentPointee for StatFs {
+    type I386 = StatFs32;
+    type Amd64 = StatFs64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct StatFs32 {
+    ty: u32,
+    bsize: u32,
+    blocks: u32,
+    bfree: u32,
+    bavail: u32,
+    files: u32,
+    ffree: u32,
+    fsid: [i32; 2],
+    namelen: u32,
+    frsize: u32,
+    flags: u32,
+    spare: [u32; 4],
+}
+
+impl From<StatFs> for StatFs32 {
+    fn from(value: StatFs) -> Self {
+        Self {
+            ty: value.ty as u32,
+            bsize: value.bsize as u32,
+            blocks: value.blocks as u32,
+            bfree: value.bfree as u32,
+            bavail: value.bavail as u32,
+            files: value.files as u32,
+            ffree: value.ffree as u32,
+            fsid: value.fsid,
+            namelen: value.namelen as u32,
+            frsize: value.frsize as u32,
+            flags: value.flags as u32,
+            spare: [0; 4],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct StatFs64 {
+    ty: i64,
+    bsize: i64,
+    blocks: i64,
+    bfree: i64,
+    bavail: i64,
+    files: i64,
+    ffree: i64,
+    fsid: [i32; 2],
+    namelen: i64,
+    frsize: i64,
+    flags: i64,
+    spare: [i64; 4],
+}
+
+impl From<StatFs> for StatFs64 {
+    fn from(value: StatFs) -> Self {
+        Self {
+            ty: value.ty,
+            bsize: value.bsize,
+            blocks: value.blocks,
+            bfree: value.bfree,
+            bavail: value.bavail,
+            files: value.files,
+            ffree: value.ffree,
+            fsid: value.fsid,
+            namelen: value.namelen,
+            frsize: value.frsize,
+            flags: value.flags,
+            spare: [0; 4],
+        }
+    }
+}

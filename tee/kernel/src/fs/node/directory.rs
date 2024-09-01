@@ -83,14 +83,6 @@ macro_rules! dir_impls {
             Directory::is_empty(self)
         }
 
-        fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-            Directory::list_entries(self, ctx)
-        }
-
-        fn delete(&self, file_name: FileName<'static>) -> Result<()> {
-            Directory::delete(self, file_name)
-        }
-
         fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
             Directory::delete_non_dir(self, file_name)
         }
@@ -105,8 +97,18 @@ macro_rules! dir_impls {
             check_is_dir: bool,
             new_dir: DynINode,
             newname: FileName<'static>,
+            no_replace: bool,
         ) -> Result<()> {
-            Directory::rename(self, oldname, check_is_dir, new_dir, newname)
+            Directory::rename(self, oldname, check_is_dir, new_dir, newname, no_replace)
+        }
+
+        fn exchange(
+            &self,
+            oldname: FileName<'static>,
+            new_dir: DynINode,
+            newname: FileName<'static>,
+        ) -> Result<()> {
+            Directory::exchange(self, oldname, new_dir, newname)
         }
 
         fn hard_link(
@@ -130,7 +132,7 @@ pub trait Directory: INode {
             return Path::new(b"/".to_vec());
         };
         let mut path = parent.path(ctx)?;
-        path = path.join_segment(&name);
+        path = path.join_segment(&name)?;
         Ok(path)
     }
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode>;
@@ -168,13 +170,19 @@ pub trait Directory: INode {
     ) -> Result<DynINode>;
     fn is_empty(&self) -> bool;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;
-    fn delete(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
     fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
     fn rename(
         &self,
         oldname: FileName<'static>,
         check_is_dir: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        no_replace: bool,
+    ) -> Result<()>;
+    fn exchange(
+        &self,
+        oldname: FileName<'static>,
         new_dir: DynINode,
         newname: FileName<'static>,
     ) -> Result<()>;

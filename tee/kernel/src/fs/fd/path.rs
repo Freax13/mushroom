@@ -1,8 +1,11 @@
+use alloc::sync::Arc;
+
 use crate::{
     error::{bail, Result},
     fs::{
         node::{DynINode, FileAccessContext},
         path::Path,
+        FileSystem,
     },
     user::process::{
         syscall::args::{FileMode, OpenFlags, Stat},
@@ -10,7 +13,7 @@ use crate::{
     },
 };
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription};
 
 pub struct PathFd {
     path: Path,
@@ -28,8 +31,8 @@ impl OpenFileDescription for PathFd {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        self.path.clone()
+    fn path(&self) -> Result<Path> {
+        Ok(self.path.clone())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -44,6 +47,10 @@ impl OpenFileDescription for PathFd {
         self.node.stat()
     }
 
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        self.node.fs()
+    }
+
     fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {
         Ok(self.node.clone())
     }
@@ -56,7 +63,7 @@ impl OpenFileDescription for PathFd {
         bail!(BadF)
     }
 
-    fn reopen(&self, flags: OpenFlags) -> Result<Option<FileDescriptor>> {
-        self.node.open(self.path.clone(), flags).map(Some)
+    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
+        Some((self.path.clone(), self.node.clone()))
     }
 }

@@ -1,13 +1,14 @@
-use alloc::format;
+use alloc::{format, sync::Arc};
 use log::debug;
 
-use super::{Events, FileLock, OpenFileDescription};
+use super::{pipe::PIPE_FS, Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     fs::{
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
+        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{
@@ -43,8 +44,8 @@ impl OpenFileDescription for Stdin {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -72,6 +73,10 @@ impl OpenFileDescription for Stdin {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -110,8 +115,8 @@ impl OpenFileDescription for Stdout {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -145,6 +150,10 @@ impl OpenFileDescription for Stdout {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -183,8 +192,8 @@ impl OpenFileDescription for Stderr {
         OpenFlags::empty()
     }
 
-    fn path(&self) -> Path {
-        Path::new(format!("pipe:[{}]", self.ino).into_bytes()).unwrap()
+    fn path(&self) -> Result<Path> {
+        Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -218,6 +227,10 @@ impl OpenFileDescription for Stderr {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(PIPE_FS.clone())
     }
 
     fn poll_ready(&self, events: Events) -> Events {

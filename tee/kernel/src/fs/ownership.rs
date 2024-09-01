@@ -44,7 +44,14 @@ impl Ownership {
         self.gid
     }
 
-    pub fn chown(&mut self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+    pub fn chown(&mut self, mut uid: Uid, mut gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        if uid == Uid::UNCHANGED {
+            uid = self.uid;
+        }
+        if gid == Gid::UNCHANGED {
+            gid = self.gid;
+        }
+
         // Make sure the current user matches the fsuid.
         ensure!(ctx.is_user(self.uid), Perm);
 

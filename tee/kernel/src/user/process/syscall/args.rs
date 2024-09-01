@@ -12,7 +12,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{bail, ensure, err, Result},
+    error::{bail, ensure, err, Error, Result},
     fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{
         memory::VirtualMemory,
@@ -179,7 +179,10 @@ where
     _marker: PhantomData<T>,
 }
 
-impl<T> Pointer<T> {
+impl<T> Pointer<T>
+where
+    T: ?Sized,
+{
     pub const NULL: Self = Self::new(0);
 
     pub const fn new(addr: u64) -> Self {
@@ -343,6 +346,8 @@ bitflags! {
         const CLOEXEC = 1 << 19;
         const SYNC = 1 << 20;
         const PATH = 1 << 21;
+
+        const _ALL = !0;
     }
 }
 
@@ -379,6 +384,7 @@ bitflags! {
         const OWNER_WRITE = 0o200;
         const OWNER_READ = 0o400;
         const OWNER_ALL = 0o700;
+        const STICKY = 0o1000;
         const SET_GROUP_ID = 0o2000;
         const SET_USER_ID = 0o4000;
     }
@@ -486,7 +492,11 @@ impl FdNum {
 
 impl Display for FdNum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        if *self == Self::CWD {
+            f.pad("AT_CWD")
+        } else {
+            self.0.fmt(f)
+        }
     }
 }
 
@@ -927,6 +937,15 @@ impl From<Timeval> for Timespec {
     }
 }
 
+impl From<Timespec> for Timeval {
+    fn from(value: Timespec) -> Self {
+        Self {
+            tv_sec: value.tv_sec,
+            tv_usec: value.tv_nsec / 1000,
+        }
+    }
+}
+
 enum_arg! {
     pub enum Domain {
         Unix = 1,
@@ -1135,6 +1154,17 @@ impl From<RLimit> for RLimit64 {
     }
 }
 
+impl TryFrom<RLimit64> for RLimit {
+    type Error = Error;
+
+    fn try_from(value: RLimit64) -> Result<Self> {
+        Ok(Self {
+            rlim_cur: u32::try_from(value.rlim_cur)?,
+            rlim_max: u32::try_from(value.rlim_max)?,
+        })
+    }
+}
+
 bitflags! {
     pub struct SpliceFlags {}
 }
@@ -1291,5 +1321,24 @@ bitflags! {
     pub struct FaccessatFlags {
         const SYMLINK_NOFOLLOW = 1 << 8;
         const EACCESS = 1 << 9;
+    }
+}
+
+bitflags! {
+    pub struct Renameat2Flags {
+        const NOREPLACE = 1 << 0;
+        const EXCHANGE = 1 << 1;
+    }
+}
+
+bitflags! {
+    pub struct FchownatFlags {
+        const SYMLINK_NOFOLLOW = 1 << 8;
+    }
+}
+
+bitflags! {
+    pub struct Fchmodat2Flags {
+        const SYMLINK_NOFOLLOW = 1 << 8;
     }
 }
