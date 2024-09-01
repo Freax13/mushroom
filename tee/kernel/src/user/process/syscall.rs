@@ -779,7 +779,13 @@ fn rt_sigreturn(
 }
 
 #[syscall(i386 = 54, amd64 = 16)]
-fn ioctl(fd: FdNum, cmd: u32, arg: u64) -> SyscallResult {
+fn ioctl(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    cmd: u32,
+    arg: u64,
+) -> SyscallResult {
+    fdtable.get(fd)?;
     bail!(NoTty)
 }
 

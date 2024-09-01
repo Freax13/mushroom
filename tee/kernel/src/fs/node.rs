@@ -424,7 +424,7 @@ fn find_parent<'a>(
         (start_dir, first, false),
         |(dir, segment, _trailing_slash), next_segment| -> Result<_> {
             // Don't do anything if the next segment is emtpty or a dot.
-            if let PathSegment::Empty | PathSegment::Dot = next_segment {
+            if let PathSegment::Empty = next_segment {
                 return Ok((dir, segment, true));
             }
 
@@ -537,7 +537,10 @@ pub fn create_link(
     let PathSegment::FileName(file_name) = last else {
         bail!(Exist);
     };
-    ensure!(!trailing_slash, IsDir);
+    if trailing_slash {
+        dir.get_node(&file_name, ctx)?;
+        bail!(Exist);
+    }
     dir.create_link(
         file_name.into_owned(),
         target,
@@ -620,7 +623,7 @@ pub fn hard_link(
             find_parent(target_dir, &target_path, ctx)?;
         ensure!(!trailing_slash, Perm);
         let PathSegment::FileName(old_filename) = old_filename else {
-            bail!(Exist);
+            bail!(Perm);
         };
 
         let new_path = old_parent.hard_link(
@@ -652,9 +655,8 @@ pub fn rename(
 ) -> Result<()> {
     let (old_parent, segment, _trailing_slash) = find_parent(oldd, old_path, ctx)?;
     let old_name = match segment {
-        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            bail!(IsDir)
-        }
+        PathSegment::Root | PathSegment::Empty => bail!(IsDir),
+        PathSegment::Dot | PathSegment::DotDot => bail!(Busy),
         PathSegment::FileName(filename) => filename,
     };
 
@@ -692,9 +694,8 @@ pub fn exchange(
 ) -> Result<()> {
     let (old_parent, segment, _trailing_slash) = find_parent(oldd, old_path, ctx)?;
     let old_name = match segment {
-        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
-            bail!(IsDir)
-        }
+        PathSegment::Root | PathSegment::Empty => bail!(IsDir),
+        PathSegment::Dot | PathSegment::DotDot => bail!(Busy),
         PathSegment::FileName(filename) => filename,
     };
 
