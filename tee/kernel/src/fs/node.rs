@@ -630,6 +630,8 @@ pub fn hard_link(
             new_filename.clone(),
         )?;
         if let Some(new_path) = new_path {
+            ctx.follow_symlink()?;
+
             target_dir = old_parent;
             target_path = new_path;
         } else {
