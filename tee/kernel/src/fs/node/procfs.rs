@@ -903,8 +903,14 @@ impl INode for FollowedFdINode {
         }
     }
 
-    fn update_times(&self, _: Timespec, _: Option<Timespec>, _: Option<Timespec>) {
-        // TODO: Implement this.
+    fn update_times(&self, ctime: Timespec, mtime: Option<Timespec>, atime: Option<Timespec>) {
+        if let Some((_, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the chmod call to the pointed
+            // to node, but rewrite ELOOP to EOPNOTSUPP.
+            node.update_times(ctime, mtime, atime);
+        } else {
+            self.fd.update_times(ctime, mtime, atime);
+        }
     }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
