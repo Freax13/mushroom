@@ -2058,6 +2058,7 @@ fn fchmod(
     let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
     fd.chmod(mode, &ctx)?;
+    fd.update_times(now(), None, None);
     Ok(0)
 }
 
@@ -3739,6 +3740,7 @@ fn fchmodat2(
         lookup_and_resolve_node(newdfd, &path, &mut ctx)?
     };
     node.chmod(mode, &ctx)?;
+    node.update_times(now(), None, None);
 
     Ok(0)
 }
