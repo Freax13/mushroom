@@ -34,7 +34,7 @@ use crate::{
         node::{
             self, create_directory, create_file, create_link, devtmpfs, hard_link,
             lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir, unlink_file,
-            DirEntry, FileAccessContext, OldDirEntry, Permission,
+            DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
         },
         path::Path,
         StatFs,
@@ -2911,6 +2911,25 @@ fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
     Ok(0)
 }
 
+/// Find the start directory for resolving `path`.
+fn start_dir_for_path(
+    thread: &ThreadGuard,
+    fdtable: &FileDescriptorTable,
+    dfd: FdNum,
+    path: &Path,
+    ctx: &mut FileAccessContext,
+) -> Result<DynINode> {
+    if path.is_absolute() {
+        // Completly ignore `dfd` if path is absolute.
+        Ok(ROOT_NODE.clone())
+    } else if dfd == FdNum::CWD {
+        Ok(thread.process().cwd())
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(ctx)
+    }
+}
+
 #[syscall(i386 = 295, amd64 = 257)]
 fn openat(
     thread: &mut ThreadGuard,
@@ -2924,13 +2943,7 @@ fn openat(
     mode: u64,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
-
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let node = if flags.contains(OpenFlags::NOFOLLOW) {
@@ -2987,16 +3000,11 @@ fn mkdirat(
     pathname: Pointer<Path>,
     mode: u64,
 ) -> SyscallResult {
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let mut mode = FileMode::from_bits_truncate(mode);
     mode &= !*thread.process().umask.lock();
-    let pathname = virtual_memory.read(pathname)?;
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
     Ok(0)
 }
@@ -3013,18 +3021,13 @@ fn fchownat(
     gid: Gid,
     flags: FchownatFlags,
 ) -> SyscallResult {
-    let newdfd = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let path = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
+
     let node = if flags.contains(FchownatFlags::SYMLINK_NOFOLLOW) {
-        lookup_node(newdfd, &path, &mut ctx)?
+        lookup_node(start_dir, &path, &mut ctx)?
     } else {
-        lookup_and_resolve_node(newdfd, &path, &mut ctx)?
+        lookup_and_resolve_node(start_dir, &path, &mut ctx)?
     };
 
     node.chown(uid, gid, &ctx)?;
@@ -3042,16 +3045,11 @@ fn futimesat(
     pathname: Pointer<Path>,
     times: Pointer<[Timeval; 2]>,
 ) -> SyscallResult {
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let path = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
     let now = now();
 
-    let path = virtual_memory.read(pathname)?;
     let times = if !times.is_null() {
         let [atime, mtime] = virtual_memory.read_with_abi(times, abi)?;
         [atime.into(), mtime.into()]
@@ -3099,14 +3097,8 @@ fn newfstatat(
         }
     }
 
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let node = if flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
         lookup_node(start_dir, &pathname, &mut ctx)?
@@ -3131,13 +3123,7 @@ fn unlinkat(
     flags: UnlinkOptions,
 ) -> SyscallResult {
     let pathname = virtual_memory.read(pathname)?;
-
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     if flags.contains(UnlinkOptions::REMOVEDIR) {
         unlink_dir(start_dir, &pathname, &mut ctx)?;
@@ -3186,19 +3172,8 @@ fn linkat(
 ) -> SyscallResult {
     let oldpath = virtual_memory.read(oldpath)?;
     let newpath = virtual_memory.read(newpath)?;
-
-    let olddir = if olddirfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(olddirfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-    let newdir = if newdirfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(newdirfd)?;
-        fd.as_dir(&mut ctx)?
-    };
+    let olddir = start_dir_for_path(thread, &fdtable, olddirfd, &oldpath, &mut ctx)?;
+    let newdir = start_dir_for_path(thread, &fdtable, newdirfd, &newpath, &mut ctx)?;
 
     hard_link(
         newdir,
@@ -3222,15 +3197,9 @@ fn symlinkat(
     newdfd: FdNum,
     newname: Pointer<Path>,
 ) -> SyscallResult {
-    let newdfd = if newdfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(newdfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let oldname = virtual_memory.read(oldname)?;
     let newname = virtual_memory.read(newname)?;
+    let newdfd = start_dir_for_path(thread, &fdtable, newdfd, &newname, &mut ctx)?;
 
     create_link(newdfd, &newname, oldname, &mut ctx)?;
 
@@ -3250,14 +3219,9 @@ fn readlinkat(
 ) -> SyscallResult {
     let bufsiz = usize_from(bufsiz);
 
-    let dfd = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let pathname = virtual_memory.read(pathname)?;
+    let dfd = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
+
     let target = read_link(dfd, &pathname, &mut ctx)?;
 
     let bytes = target.as_bytes();
@@ -3304,14 +3268,8 @@ fn faccessat(
     mode: AccessMode,
     flags: FaccessatFlags,
 ) -> SyscallResult {
-    let start_dir = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let node = if flags.contains(FaccessatFlags::SYMLINK_NOFOLLOW) {
         lookup_node(start_dir, &pathname, &mut ctx)?
@@ -3480,12 +3438,7 @@ fn utimensat(
     };
 
     if let Some(path) = path {
-        let start_dir = if dfd == FdNum::CWD {
-            thread.process().cwd()
-        } else {
-            let fd = fdtable.get(dfd)?;
-            fd.as_dir(&mut ctx)?
-        };
+        let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
         let node = if !flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
             lookup_and_resolve_node(start_dir, &path, &mut ctx)?
         } else {
@@ -3639,22 +3592,10 @@ fn renameat2(
     newname: Pointer<Path>,
     flags: Renameat2Flags,
 ) -> SyscallResult {
-    let oldd = if olddfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(olddfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
-    let newd = if newdfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(newdfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let oldname = virtual_memory.read(oldname)?;
     let newname = virtual_memory.read(newname)?;
+    let oldd = start_dir_for_path(thread, &fdtable, olddfd, &oldname, &mut ctx)?;
+    let newd = start_dir_for_path(thread, &fdtable, newdfd, &newname, &mut ctx)?;
 
     if flags.contains(Renameat2Flags::EXCHANGE) {
         node::exchange(oldd, &oldname, newd, &newname, &mut ctx)?;
@@ -3725,14 +3666,8 @@ fn fchmodat2(
 ) -> SyscallResult {
     let mode = FileMode::from_bits_truncate(mode);
 
-    let newdfd = if dfd == FdNum::CWD {
-        thread.process().cwd()
-    } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(&mut ctx)?
-    };
-
     let path = virtual_memory.read(filename)?;
+    let newdfd = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
     let node = if flags.contains(Fchmodat2Flags::SYMLINK_NOFOLLOW) {
         lookup_node(newdfd, &path, &mut ctx)?

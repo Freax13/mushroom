@@ -61,6 +61,10 @@ impl Path {
         &self.bytes
     }
 
+    pub fn is_absolute(&self) -> bool {
+        self.as_bytes().starts_with(b"/")
+    }
+
     pub fn has_trailing_slash(&self) -> bool {
         self.as_bytes().ends_with(b"/")
     }
