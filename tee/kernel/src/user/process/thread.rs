@@ -484,7 +484,14 @@ impl ThreadGuard<'_> {
         *self.thread.fdtable.lock() = Arc::new(fdtable);
 
         self.clear_child_tid = Pointer::NULL;
-        self.signal_handler_table = Arc::new(SignalHandlerTable::new());
+        let signal_handler_table = Arc::make_mut(&mut self.signal_handler_table);
+        // Reset the signal dispositions of signals that are not ignored.
+        signal_handler_table
+            .sigactions
+            .get_mut()
+            .iter_mut()
+            .filter(|sa| !matches!(sa.sa_handler_or_sigaction, Sigaction::SIG_IGN))
+            .for_each(|sa| *sa = Sigaction::DEFAULT);
         self.sigaltstack = Stack::default();
 
         let mut guard = self.thread.process.credentials.lock();
