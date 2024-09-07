@@ -934,7 +934,7 @@ impl INode for TmpFsSymlink {
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
             rdev: 0,
-            size: 0,
+            size: self.target.as_bytes().len() as i64,
             blksize: 0,
             blocks: 0,
             atime: guard.atime,
