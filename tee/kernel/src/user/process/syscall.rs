@@ -32,9 +32,10 @@ use crate::{
             Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
-            self, create_directory, create_fifo, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir, unlink_file,
-            DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
+            self, create_char_dev, create_directory, create_fifo, create_file, create_link,
+            devtmpfs, hard_link, lookup_and_resolve_node, lookup_node, procfs, read_link,
+            unlink_dir, unlink_file, DirEntry, DynINode, FileAccessContext, OldDirEntry,
+            Permission, ROOT_NODE,
         },
         path::Path,
         StatFs,
@@ -3061,10 +3062,31 @@ fn mknodat(
     mode &= !*thread.process().umask.lock();
 
     match ty {
-        FileType::Unknown | FileType::File => todo!(),
+        FileType::Unknown | FileType::File => {
+            create_file(
+                start_dir,
+                pathname,
+                mode,
+                OpenFlags::NOFOLLOW | OpenFlags::EXCL,
+                &mut ctx,
+            )?;
+        }
         FileType::Fifo => create_fifo(start_dir, &pathname, mode, &mut ctx)?,
-        FileType::Char => todo!(),
-        FileType::Block => todo!(),
+        FileType::Char => {
+            ensure!(ctx.is_user(Uid::SUPER_USER), Perm);
+            create_char_dev(
+                start_dir,
+                &pathname,
+                (dev >> 8) as u16,
+                dev as u8,
+                mode,
+                &mut ctx,
+            )?
+        }
+        FileType::Block => {
+            ensure!(ctx.is_user(Uid::SUPER_USER), Perm);
+            todo!()
+        }
         FileType::Socket => todo!(),
         FileType::Dir | FileType::Link => bail!(Inval),
     }

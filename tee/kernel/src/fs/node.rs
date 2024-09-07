@@ -597,6 +597,33 @@ pub fn create_fifo(
     }
 }
 
+pub fn create_char_dev(
+    start_dir: DynINode,
+    path: &Path,
+    major: u16,
+    minor: u8,
+    mode: FileMode,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(Exist)
+        }
+        PathSegment::FileName(file_name) => {
+            dir.create_char_dev(
+                file_name.into_owned(),
+                major,
+                minor,
+                mode,
+                ctx.filesystem_user_id,
+                ctx.filesystem_group_id,
+            )?;
+            Ok(())
+        }
+    }
+}
+
 pub fn mount(
     path: &Path,
     create_node: impl FnOnce(MountLocation) -> Result<DynINode>,
