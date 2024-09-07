@@ -2827,6 +2827,7 @@ fn clock_gettime(
 #[syscall(i386 = 407, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     clock_id: ClockId,
     flags: ClockNanosleepFlags,
@@ -2843,7 +2844,22 @@ async fn clock_nanosleep(
         time::now() + request
     };
 
-    sleep_until(deadline).await;
+    let res = thread
+        .interruptable(
+            async {
+                sleep_until(deadline).await;
+                Ok(())
+            },
+            false,
+        )
+        .await;
+
+    if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
+        let difference = deadline.saturating_sub(time::now());
+        virtual_memory.write_with_abi(remain, difference, abi)?;
+    }
+
+    res?;
 
     Ok(0)
 }

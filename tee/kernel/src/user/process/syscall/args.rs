@@ -906,6 +906,13 @@ impl Timespec {
         }
         Some(Self { tv_sec, tv_nsec })
     }
+
+    pub fn saturating_sub(self, rhs: Self) -> Self {
+        self.checked_sub(rhs).unwrap_or(Self {
+            tv_sec: 0,
+            tv_nsec: 0,
+        })
+    }
 }
 
 impl Add for Timespec {
