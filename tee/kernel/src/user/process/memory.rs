@@ -557,7 +557,7 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         let start_page = Page::from_start_address(addr).map_err(|_| err!(Inval))?;
-        let end_page = Page::from_start_address(addr + (len - 0x1000)).map_err(|_| err!(Inval))?;
+        let end_page = Page::containing_address(addr + (len - 1));
 
         // Flush all pages in the range.
         self.virtual_memory
