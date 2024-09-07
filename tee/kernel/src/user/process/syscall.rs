@@ -7,7 +7,7 @@ use alloc::{
     vec::Vec,
 };
 use bit_field::BitArray;
-use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
+use bytemuck::{bytes_of, bytes_of_mut, checked, Zeroable};
 use futures::{
     future::{self, Either, Fuse},
     select_biased,
@@ -32,7 +32,7 @@ use crate::{
             Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
-            self, create_directory, create_file, create_link, devtmpfs, hard_link,
+            self, create_directory, create_fifo, create_file, create_link, devtmpfs, hard_link,
             lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir, unlink_file,
             DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
         },
@@ -205,6 +205,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
+    handlers.register(SysMknod);
     handlers.register(SysFstatfs);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -222,6 +223,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExitGroup);
     handlers.register(SysEpollWait);
     handlers.register(SysEpollCtl);
+    handlers.register(SysMknodat);
     handlers.register(SysFchownat);
     handlers.register(SysFutimesat);
     handlers.register(SysNewfstatat);
@@ -2575,6 +2577,28 @@ fn sigaltstack(
     Ok(0)
 }
 
+#[syscall(i386 = 14, amd64 = 133)]
+fn mknod(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+    mode: u64,
+    dev: u32,
+) -> SyscallResult {
+    mknodat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        pathname,
+        mode,
+        dev,
+    )
+}
+
 #[syscall(i386 = 99, amd64 = 137)]
 fn statfs(
     abi: Abi,
@@ -3014,6 +3038,37 @@ fn mkdirat(
     let mut mode = FileMode::from_bits_truncate(mode);
     mode &= !*thread.process().umask.lock();
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 297, amd64 = 259)]
+fn mknodat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dirfd: FdNum,
+    pathname: Pointer<Path>,
+    mode: u64,
+    dev: u32,
+) -> SyscallResult {
+    let ty: FileType = checked::try_cast((mode >> 12) as u32)?;
+
+    let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dirfd, &pathname, &mut ctx)?;
+
+    let mut mode = FileMode::from_bits_truncate(mode);
+    mode &= !*thread.process().umask.lock();
+
+    match ty {
+        FileType::Unknown | FileType::File => todo!(),
+        FileType::Fifo => create_fifo(start_dir, &pathname, mode, &mut ctx)?,
+        FileType::Char => todo!(),
+        FileType::Block => todo!(),
+        FileType::Socket => todo!(),
+        FileType::Dir | FileType::Link => bail!(Inval),
+    }
+
     Ok(0)
 }
 

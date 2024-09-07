@@ -164,6 +164,20 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn create_fifo(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<()> {
+        let _ = file_name;
+        let _ = mode;
+        let _ = uid;
+        let _ = gid;
+        bail!(NotDir)
+    }
+
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         let _ = file_name;
         let _ = node;
@@ -561,6 +575,26 @@ pub fn create_link(
 pub fn read_link(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<Path> {
     let node = lookup_node(start_dir, path, ctx)?;
     node.read_link(ctx)
+}
+
+pub fn create_fifo(
+    start_dir: DynINode,
+    path: &Path,
+    mode: FileMode,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(Exist)
+        }
+        PathSegment::FileName(file_name) => dir.create_fifo(
+            file_name.into_owned(),
+            mode,
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+        ),
+    }
 }
 
 pub fn mount(

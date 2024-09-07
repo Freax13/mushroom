@@ -7,6 +7,7 @@ use crate::{
         fd::{
             dir::open_dir,
             file::{open_file, File},
+            pipe::named::NamedPipe,
             FileDescriptor, FileLockRecord, LazyFileLockRecord,
         },
         ownership::Ownership,
@@ -21,10 +22,12 @@ use crate::{
     },
 };
 use alloc::{
+    boxed::Box,
     collections::{btree_map::Entry, BTreeMap},
     sync::{Arc, Weak},
     vec::Vec,
 };
+use async_trait::async_trait;
 
 use super::{
     directory::{dir_impls, Directory, DirectoryLocation, Location},
@@ -316,6 +319,25 @@ impl Directory for TmpFsDir {
         }
     }
 
+    fn create_fifo(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name);
+        match entry {
+            Entry::Vacant(entry) => {
+                let char_dev = Arc::new(TmpFsFifo::new(self.fs.clone(), mode, uid, gid));
+                entry.insert(TmpFsDirEntry::Fifo(char_dev.clone()));
+                Ok(())
+            }
+            Entry::Occupied(_) => bail!(Exist),
+        }
+    }
+
     fn is_empty(&self) -> bool {
         let guard = self.internal.lock();
         guard.items.is_empty()
@@ -407,15 +429,18 @@ impl Directory for TmpFsDir {
                     (
                         TmpFsDirEntry::File(_)
                         | TmpFsDirEntry::Symlink(_)
-                        | TmpFsDirEntry::CharDev(_),
+                        | TmpFsDirEntry::CharDev(_)
+                        | TmpFsDirEntry::Fifo(_),
                         TmpFsDirEntry::File(_)
                         | TmpFsDirEntry::Symlink(_)
-                        | TmpFsDirEntry::CharDev(_),
+                        | TmpFsDirEntry::CharDev(_)
+                        | TmpFsDirEntry::Fifo(_),
                     ) => {}
                     (
                         TmpFsDirEntry::File(_)
                         | TmpFsDirEntry::Symlink(_)
-                        | TmpFsDirEntry::CharDev(_),
+                        | TmpFsDirEntry::CharDev(_)
+                        | TmpFsDirEntry::Fifo(_),
                         TmpFsDirEntry::Dir(_),
                     ) => {
                         bail!(IsDir)
@@ -424,7 +449,8 @@ impl Directory for TmpFsDir {
                         TmpFsDirEntry::Dir(_),
                         TmpFsDirEntry::File(_)
                         | TmpFsDirEntry::Symlink(_)
-                        | TmpFsDirEntry::CharDev(_),
+                        | TmpFsDirEntry::CharDev(_)
+                        | TmpFsDirEntry::Fifo(_),
                     ) => bail!(NotDir),
                     (TmpFsDirEntry::Dir(_), TmpFsDirEntry::Dir(new)) => {
                         let guard = new.internal.lock();
@@ -642,6 +668,7 @@ enum TmpFsDirEntry {
     Dir(Arc<TmpFsDir>),
     Symlink(Arc<TmpFsSymlink>),
     CharDev(Arc<TmpFsCharDev>),
+    Fifo(Arc<TmpFsFifo>),
     Mount(DynINode),
 }
 
@@ -652,6 +679,7 @@ impl TmpFsDirEntry {
             TmpFsDirEntry::Dir(dir) => dir.clone(),
             TmpFsDirEntry::Symlink(symlink) => symlink.clone(),
             TmpFsDirEntry::CharDev(char_dev) => char_dev.clone(),
+            TmpFsDirEntry::Fifo(fifo) => fifo.clone(),
             TmpFsDirEntry::Mount(node) => node.clone(),
         }
     }
@@ -667,6 +695,7 @@ impl Clone for TmpFsDirEntry {
             Self::Dir(dir) => Self::Dir(dir.clone()),
             Self::Symlink(symlink) => Self::Symlink(symlink.clone()),
             Self::CharDev(char_dev) => Self::CharDev(char_dev.clone()),
+            Self::Fifo(fifo) => Self::Fifo(fifo.clone()),
             Self::Mount(mount) => Self::Mount(mount.clone()),
         }
     }
@@ -681,6 +710,7 @@ impl Deref for TmpFsDirEntry {
             TmpFsDirEntry::Dir(dir) => &**dir,
             TmpFsDirEntry::Symlink(symlink) => &**symlink,
             TmpFsDirEntry::CharDev(char_dev) => &**char_dev,
+            TmpFsDirEntry::Fifo(fifo) => &**fifo,
             TmpFsDirEntry::Mount(mount) => &**mount,
         }
     }
@@ -1026,5 +1056,79 @@ impl INode for TmpFsCharDev {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
+    }
+}
+
+pub struct TmpFsFifo {
+    fs: Arc<TmpFs>,
+    ino: u64,
+    internal: Mutex<TmpFsFifoInternal>,
+    file_lock_record: LazyFileLockRecord,
+    named_pipe: NamedPipe,
+}
+
+struct TmpFsFifoInternal {
+    ownership: Ownership,
+}
+
+impl TmpFsFifo {
+    pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid) -> Self {
+        Self {
+            fs,
+            ino: new_ino(),
+            internal: Mutex::new(TmpFsFifoInternal {
+                ownership: Ownership::new(mode, uid, gid),
+            }),
+            file_lock_record: LazyFileLockRecord::new(),
+            named_pipe: NamedPipe::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl INode for TmpFsFifo {
+    fn stat(&self) -> Result<Stat> {
+        let guard = self.internal.lock();
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Fifo, guard.ownership.mode()),
+            uid: guard.ownership.uid(),
+            gid: guard.ownership.gid(),
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
+        bail!(Perm)
+    }
+
+    async fn async_open(self: Arc<Self>, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        self.named_pipe.open(flags, self.clone(), path).await
+    }
+
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        self.internal.lock().ownership.chmod(mode, ctx)
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        self.internal.lock().ownership.chown(uid, gid, ctx)
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
     }
 }

@@ -187,6 +187,16 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn is_empty(&self) -> bool {
         false
     }
@@ -499,6 +509,16 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn is_empty(&self) -> bool {
         false
     }
@@ -696,6 +716,16 @@ impl Directory for FdDir {
         _uid: Uid,
         _gid: Gid,
     ) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 

@@ -66,6 +66,15 @@ where
     }
 }
 
+impl<T> From<Arc<T>> for FileDescriptor
+where
+    T: OpenFileDescription,
+{
+    fn from(value: Arc<T>) -> Self {
+        FileDescriptor(value)
+    }
+}
+
 impl Deref for FileDescriptor {
     type Target = dyn OpenFileDescription;
 

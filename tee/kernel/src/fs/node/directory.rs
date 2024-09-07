@@ -79,6 +79,16 @@ macro_rules! dir_impls {
             Directory::create_char_dev(self, file_name, major, minor, mode, uid, gid)
         }
 
+        fn create_fifo(
+            &self,
+            file_name: FileName<'static>,
+            mode: FileMode,
+            uid: Uid,
+            gid: Gid,
+        ) -> Result<()> {
+            Directory::create_fifo(self, file_name, mode, uid, gid)
+        }
+
         fn is_empty_dir(&self) -> bool {
             Directory::is_empty(self)
         }
@@ -168,6 +178,13 @@ pub trait Directory: INode {
         uid: Uid,
         gid: Gid,
     ) -> Result<DynINode>;
+    fn create_fifo(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<()>;
     fn is_empty(&self) -> bool;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;
     fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
