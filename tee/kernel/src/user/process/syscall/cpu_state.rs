@@ -861,6 +861,7 @@ impl Registers {
         fs: 0,
         gs: 0,
         ss: 0x23,
+        rflags: 2,
         ..Self::ZERO
     };
 }
