@@ -114,7 +114,7 @@ impl VirtualMemory {
         num_values += 1; // argv null-terminator
         num_values += envp.len(); // envp
         num_values += 1; // envp null-terminator
-        num_values += MAX_NUM_AUX_VECTORS; // auxv
+        num_values += MAX_NUM_AUX_VECTORS * 2; // auxv
 
         let pointer_size = match E::ABI {
             Abi::I386 => 4,
