@@ -3527,7 +3527,8 @@ fn pipe2(
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
-    let (read_half, write_half) = pipe::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
+    let (read_half, write_half) =
+        pipe::anon::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
 
     // Insert the first read half.
     let read_half = fdtable.insert(read_half, flags, no_file_limit)?;
