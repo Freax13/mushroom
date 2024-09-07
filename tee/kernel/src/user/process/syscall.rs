@@ -326,9 +326,9 @@ async fn write(
     Ok(len)
 }
 
-#[syscall(i386 = 5, amd64 = 2)]
-fn open(
-    thread: &mut ThreadGuard,
+#[syscall(i386 = 5, amd64 = 2, interruptable, restartable)]
+async fn open(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -348,6 +348,7 @@ fn open(
         flags,
         mode,
     )
+    .await
 }
 
 #[syscall(i386 = 6, amd64 = 3)]
@@ -1929,9 +1930,9 @@ fn rmdir(
     Ok(0)
 }
 
-#[syscall(i386 = 8, amd64 = 85)]
-fn creat(
-    thread: &mut ThreadGuard,
+#[syscall(i386 = 8, amd64 = 85, interruptable, restartable)]
+async fn creat(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -1949,6 +1950,7 @@ fn creat(
         OpenFlags::CREAT | OpenFlags::WRONLY | OpenFlags::TRUNC,
         mode,
     )
+    .await
 }
 
 #[syscall(i386 = 9, amd64 = 86)]
@@ -2936,9 +2938,9 @@ fn start_dir_for_path(
     }
 }
 
-#[syscall(i386 = 295, amd64 = 257)]
-fn openat(
-    thread: &mut ThreadGuard,
+#[syscall(i386 = 295, amd64 = 257, interruptable, restartable)]
+async fn openat(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -2949,7 +2951,7 @@ fn openat(
     mode: u64,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
-    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &filename, &mut ctx)?;
+    let start_dir = start_dir_for_path(&thread.lock(), &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let node = if flags.contains(OpenFlags::NOFOLLOW) {
@@ -2989,7 +2991,7 @@ fn openat(
             node
         };
 
-        node.open(filename, flags)?
+        node.async_open(filename, flags).await?
     };
 
     let fd = fdtable.insert(fd, flags, no_file_limit)?;

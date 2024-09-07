@@ -12,7 +12,9 @@ use crate::{
         Process,
     },
 };
+use alloc::boxed::Box;
 use alloc::sync::Arc;
+use async_trait::async_trait;
 use tmpfs::TmpFs;
 
 use crate::{
@@ -59,6 +61,7 @@ pub fn new_dev() -> u64 {
 
 pub type DynINode = Arc<dyn INode>;
 
+#[async_trait]
 pub trait INode: Any + Send + Sync + 'static {
     fn ty(&self) -> Result<FileType> {
         self.stat().map(|stat| stat.mode.ty())
@@ -67,6 +70,10 @@ pub trait INode: Any + Send + Sync + 'static {
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor>;
+
+    async fn async_open(self: Arc<Self>, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        self.open(path, flags)
+    }
 
     fn mode(&self) -> Result<FileMode> {
         self.stat().map(|stat| stat.mode.mode())

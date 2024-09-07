@@ -1,11 +1,13 @@
 use core::cmp;
 
 use alloc::{
+    boxed::Box,
     string::ToString,
     sync::{Arc, Weak},
     vec,
     vec::Vec,
 };
+use async_trait::async_trait;
 
 use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
@@ -846,6 +848,7 @@ struct FollowedFdINode {
     file_lock_record: Arc<FileLockRecord>,
 }
 
+#[async_trait]
 impl INode for FollowedFdINode {
     fn stat(&self) -> Result<Stat> {
         if let Some((_, node)) = self.fd.path_fd_node() {
@@ -872,6 +875,16 @@ impl INode for FollowedFdINode {
             // Special case for path fds: Forward the open call to the pointed
             // to node.
             node.open(path, flags)
+        } else {
+            Ok(self.fd.clone())
+        }
+    }
+
+    async fn async_open(self: Arc<Self>, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        if let Some((path, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the open call to the pointed
+            // to node.
+            node.async_open(path, flags).await
         } else {
             Ok(self.fd.clone())
         }
