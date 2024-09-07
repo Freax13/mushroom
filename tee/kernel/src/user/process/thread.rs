@@ -283,8 +283,11 @@ impl Thread {
                 (
                     Sigaction::SIG_DFL,
                     signal @ (Signal::HUP
+                    | Signal::INT
                     | Signal::ABRT
+                    | Signal::USR1
                     | Signal::SEGV
+                    | Signal::USR2
                     | Signal::PIPE
                     | Signal::TERM),
                 )
@@ -537,7 +540,14 @@ impl ThreadGuard<'_> {
                 (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => true,
                 (
                     Sigaction::SIG_DFL,
-                    Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE | Signal::TERM,
+                    Signal::HUP
+                    | Signal::INT
+                    | Signal::ABRT
+                    | Signal::USR1
+                    | Signal::SEGV
+                    | Signal::USR2
+                    | Signal::PIPE
+                    | Signal::TERM,
                 ) => false,
                 (_, Signal::STOP) => true,
                 (_, Signal::KILL) => false,
