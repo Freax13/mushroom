@@ -1107,7 +1107,7 @@ impl INode for MapsFile {
 }
 
 impl File for MapsFile {
-    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
 

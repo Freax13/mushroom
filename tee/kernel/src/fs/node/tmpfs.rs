@@ -852,9 +852,9 @@ impl INode for TmpFsFile {
 }
 
 impl File for TmpFsFile {
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
         let mut guard = self.internal.lock();
-        guard.buffer.get_page(page_idx)
+        guard.buffer.get_page(page_idx, shared)
     }
 
     fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize> {

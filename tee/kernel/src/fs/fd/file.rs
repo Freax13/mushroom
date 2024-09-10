@@ -28,7 +28,7 @@ use crate::{
 use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
 
 pub trait File: INode {
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage>;
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;
     fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize>;
     fn read_to_user(
         &self,
@@ -231,8 +231,8 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         self.file.fs()
     }
 
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
-        self.file.get_page(page_idx)
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
+        self.file.get_page(page_idx, shared)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -343,8 +343,8 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.fs()
     }
 
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
-        self.file.get_page(page_idx)
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
+        self.file.get_page(page_idx, shared)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -418,8 +418,8 @@ impl OpenFileDescription for AppendFileFileDescription {
         self.file.fs()
     }
 
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
-        self.file.get_page(page_idx)
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
+        self.file.get_page(page_idx, shared)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -556,8 +556,8 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
         self.file.fs()
     }
 
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
-        self.file.get_page(page_idx)
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
+        self.file.get_page(page_idx, shared)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

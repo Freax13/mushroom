@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use usize_conversions::FromUsize;
 
 use crate::{
-    error::Result,
+    error::{ensure, Result},
     user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
@@ -293,16 +293,21 @@ impl Buffer {
         Ok(())
     }
 
-    pub fn get_page(&mut self, page_idx: usize) -> Result<KernelPage> {
-        if self.pages.len() <= page_idx {
-            return Ok(KernelPage::zeroed());
-        }
+    pub fn get_page(&mut self, page_idx: usize, shared: bool) -> Result<KernelPage> {
+        ensure!(page_idx < self.pages.len(), Acces);
 
         // Zero reserve until the end of the page to make sure that we don't
         // leak unitialized bytes.
         let end = (page_idx + 1) * 0x1000;
         let additional = end.saturating_sub(self.len());
         self.reserve_zeroed(additional)?;
+
+        // Always make shared pages mutable immediately. We need to do this
+        // because we need to ensure that calling `make_mut(...)` on the
+        // returned pages doesn't allocate a new page every time.
+        if shared {
+            self.pages[page_idx].make_mut(true)?;
+        }
 
         self.pages[page_idx].clone()
     }

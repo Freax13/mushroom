@@ -449,13 +449,13 @@ impl VirtualMemoryWriteGuard<'_> {
                 match start_offset {
                     0 => Ok(KernelPage::zeroed()),
                     1..=0xfff => {
-                        let mut page = self.file.get_page(usize_from(offset))?;
+                        let mut page = self.file.get_page(usize_from(offset), self.shared)?;
                         if !self.shared {
                             page.zero_range(start_offset.., false)?;
                         }
                         Ok(page)
                     }
-                    _ => self.file.get_page(usize_from(offset)),
+                    _ => self.file.get_page(usize_from(offset), self.shared),
                 }
             }
 
