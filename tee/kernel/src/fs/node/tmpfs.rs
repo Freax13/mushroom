@@ -75,7 +75,7 @@ pub struct TmpFsDir {
     fs: Arc<TmpFs>,
     ino: u64,
     this: Weak<Self>,
-    location: Location<Self>,
+    location: Mutex<Location<Self>>,
     file_lock_record: LazyFileLockRecord,
     internal: Mutex<TmpFsDirInternal>,
 }
@@ -102,7 +102,7 @@ impl TmpFsDir {
             fs,
             ino: new_ino(),
             this: this_weak.clone(),
-            location: location.into(),
+            location: Mutex::new(location.into()),
             file_lock_record: LazyFileLockRecord::new(),
             internal: Mutex::new(TmpFsDirInternal {
                 ownership: Ownership::new(mode, uid, gid),
@@ -199,7 +199,7 @@ impl INode for TmpFsDir {
 
 impl Directory for TmpFsDir {
     fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        self.location.get()
+        self.location.lock().get()
     }
 
     fn get_node(&self, path_segment: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
@@ -344,9 +344,8 @@ impl Directory for TmpFsDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let parent_ino = self
-            .location
-            .get()
+        let location = self.location.lock().get();
+        let parent_ino = location
             .ok()
             .flatten()
             .and_then(|(parent, _)| parent.stat().ok().map(|stat| stat.ino));
@@ -493,6 +492,13 @@ impl Directory for TmpFsDir {
 
                 // Do the rename.
                 let entry = guard.items.remove(&oldname).unwrap();
+
+                if let TmpFsDirEntry::Dir(ref dir) = entry {
+                    // If the entry is a directory, change it's location to the new location.
+                    let parent = DirectoryLocation::new(self.this.clone(), newname.clone());
+                    *dir.location.lock() = parent.into();
+                }
+
                 guard.items.insert(newname, entry);
 
                 Ok(())
@@ -518,7 +524,7 @@ impl Directory for TmpFsDir {
                 }
             }
 
-            let new_entry = new_guard.items.entry(newname);
+            let new_entry = new_guard.items.entry(newname.clone());
             let new = match &new_entry {
                 Entry::Vacant(_) => None,
                 Entry::Occupied(entry) => Some(entry.get()),
@@ -530,12 +536,20 @@ impl Directory for TmpFsDir {
             ensure!(!no_replace || new.is_none(), Exist);
 
             // Do the rename.
+            let node = old_entry.remove();
+
+            if let TmpFsDirEntry::Dir(ref dir) = node {
+                // If the entry is a directory, change it's location to the new location.
+                let parent = DirectoryLocation::new(new_dir.this.clone(), newname);
+                *dir.location.lock() = parent.into();
+            }
+
             match new_entry {
                 Entry::Vacant(entry) => {
-                    entry.insert(old_entry.remove());
+                    entry.insert(node);
                 }
                 Entry::Occupied(mut entry) => {
-                    entry.insert(old_entry.remove());
+                    entry.insert(node);
                 }
             }
 
@@ -565,10 +579,17 @@ impl Directory for TmpFsDir {
                     .get(&oldname)
                     .ok_or_else(|| err!(NoEnt))?
                     .clone();
-                let Entry::Occupied(mut map_entry) = guard.items.entry(newname) else {
+                let Entry::Occupied(mut map_entry) = guard.items.entry(newname.clone()) else {
                     bail!(NoEnt);
                 };
                 let entry = map_entry.insert(entry);
+
+                if let TmpFsDirEntry::Dir(ref dir) = entry {
+                    // If the entry is a directory, change it's location to the new location.
+                    let parent = DirectoryLocation::new(self.this.clone(), newname);
+                    *dir.location.lock() = parent.into();
+                }
+
                 guard.items.insert(oldname, entry);
 
                 Ok(())
@@ -578,7 +599,7 @@ impl Directory for TmpFsDir {
 
             // Do the exchange.
             let entry = old_guard.items.get(&oldname).ok_or_else(|| err!(NoEnt))?;
-            let Entry::Occupied(mut map_entry) = new_guard.items.entry(newname) else {
+            let Entry::Occupied(mut map_entry) = new_guard.items.entry(newname.clone()) else {
                 bail!(NoEnt);
             };
 
@@ -596,6 +617,13 @@ impl Directory for TmpFsDir {
             }
 
             let entry = map_entry.insert(entry.clone());
+
+            if let TmpFsDirEntry::Dir(ref dir) = entry {
+                // If the entry is a directory, change it's location to the new location.
+                let parent = DirectoryLocation::new(new_dir.this.clone(), newname);
+                *dir.location.lock() = parent.into();
+            }
+
             old_guard.items.insert(oldname, entry);
 
             Ok(())
