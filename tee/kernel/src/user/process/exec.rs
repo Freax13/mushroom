@@ -38,13 +38,13 @@ mod elf;
 impl VirtualMemory {
     pub fn start_executable(
         &self,
-        path: &Path,
+        path: Path,
         file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
-    ) -> Result<CpuState> {
+    ) -> Result<(CpuState, Path)> {
         self.modify().map_sigreturn_trampoline();
 
         let mut header = [0; 4];
@@ -55,14 +55,15 @@ impl VirtualMemory {
                 let mut header = ElfIdent::zeroed();
                 file.pread(0, bytes_of_mut(&mut header))?;
 
-                match header.verify()? {
+                let state = match header.verify()? {
                     Abi::I386 => {
-                        self.start_elf::<elf::ElfLoaderParams32>(file, argv, envp, ctx, cwd)
+                        self.start_elf::<elf::ElfLoaderParams32>(file, argv, envp, ctx, cwd)?
                     }
                     Abi::Amd64 => {
-                        self.start_elf::<elf::ElfLoaderParams64>(file, argv, envp, ctx, cwd)
+                        self.start_elf::<elf::ElfLoaderParams64>(file, argv, envp, ctx, cwd)?
                     }
-                }
+                };
+                Ok((state, path))
             }
             [b'#', b'!', ..] => self.start_shebang(path, &**file, argv, envp, ctx, cwd),
             _ => bail!(NoExec),
@@ -228,13 +229,13 @@ impl VirtualMemory {
 
     fn start_shebang(
         &self,
-        path: &Path,
+        path: Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
-    ) -> Result<CpuState> {
+    ) -> Result<(CpuState, Path)> {
         let mut bytes = [0; 128];
         let len = file.pread(0, &mut bytes)?;
         let bytes = &bytes[..len];
@@ -282,7 +283,7 @@ impl VirtualMemory {
         new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(&interpreter_path, &interpreter, &new_argv, envp, ctx, cwd)
+        self.start_executable(interpreter_path, &interpreter, &new_argv, envp, ctx, cwd)
     }
 }
 

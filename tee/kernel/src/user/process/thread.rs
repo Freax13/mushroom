@@ -501,7 +501,7 @@ impl ThreadGuard<'_> {
 
     pub fn start_executable(
         &mut self,
-        path: &Path,
+        path: Path,
         file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -510,7 +510,7 @@ impl ThreadGuard<'_> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let cpu_state =
+        let (cpu_state, _path) =
             virtual_memory.start_executable(path, file, argv, envp, ctx, self.process().cwd())?;
 
         // Success! Commit the new state to the thread.

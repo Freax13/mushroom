@@ -525,7 +525,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
 
     guard
-        .start_executable(&path, &file, &[c"/bin/init"], &[] as &[&CStr], &mut ctx)
+        .start_executable(path, &file, &[c"/bin/init"], &[] as &[&CStr], &mut ctx)
         .unwrap();
     drop(guard);
 
