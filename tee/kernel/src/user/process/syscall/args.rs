@@ -246,7 +246,7 @@ impl<T> From<VirtAddr> for Pointer<T> {
     }
 }
 
-impl<T: Default> Default for Pointer<T>
+impl<T> Default for Pointer<T>
 where
     T: ?Sized,
 {

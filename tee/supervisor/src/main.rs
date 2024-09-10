@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(
-    asm_const,
     const_mut_refs,
     core_intrinsics,
     naked_functions,
@@ -44,6 +43,8 @@ fn main() -> ! {
     services::run();
 }
 
+/// A wrapper type to make types `Sync`.
+///
 /// The supervisor runs singlethreaded, so we don't need statics to be `Sync`.
 /// This type can wrap another type and make it `Sync`.
 /// If we ever decide to run the supervisor with more than one thread, this
