@@ -261,7 +261,7 @@ impl VirtualMemory {
             let arg = &bs[..position];
             let arg = CString::new(arg.to_vec()).unwrap();
 
-            *bs = &bs[position..];
+            *bs = &bs[position + 1..];
             if delimiter == b'\n' {
                 bytes = None;
             }
