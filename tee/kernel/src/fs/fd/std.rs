@@ -1,7 +1,7 @@
 use alloc::{format, sync::Arc};
 use log::debug;
 
-use super::{pipe::PIPE_FS, Events, FileLock, OpenFileDescription};
+use super::{pipe::anon::PIPE_FS, Events, FileLock, OpenFileDescription};
 use crate::{
     error::Result,
     fs::{

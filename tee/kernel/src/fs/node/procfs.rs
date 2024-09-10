@@ -1,11 +1,13 @@
 use core::cmp;
 
 use alloc::{
+    boxed::Box,
     string::ToString,
     sync::{Arc, Weak},
     vec,
     vec::Vec,
 };
+use async_trait::async_trait;
 
 use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
@@ -182,6 +184,16 @@ impl Directory for ProcFsRoot {
         _uid: Uid,
         _gid: Gid,
     ) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -497,6 +509,16 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn is_empty(&self) -> bool {
         false
     }
@@ -697,6 +719,16 @@ impl Directory for FdDir {
         bail!(NoEnt)
     }
 
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn is_empty(&self) -> bool {
         false
     }
@@ -846,6 +878,7 @@ struct FollowedFdINode {
     file_lock_record: Arc<FileLockRecord>,
 }
 
+#[async_trait]
 impl INode for FollowedFdINode {
     fn stat(&self) -> Result<Stat> {
         if let Some((_, node)) = self.fd.path_fd_node() {
@@ -872,6 +905,16 @@ impl INode for FollowedFdINode {
             // Special case for path fds: Forward the open call to the pointed
             // to node.
             node.open(path, flags)
+        } else {
+            Ok(self.fd.clone())
+        }
+    }
+
+    async fn async_open(self: Arc<Self>, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        if let Some((path, node)) = self.fd.path_fd_node() {
+            // Special case for path fds: Forward the open call to the pointed
+            // to node.
+            node.async_open(path, flags).await
         } else {
             Ok(self.fd.clone())
         }
@@ -1064,7 +1107,7 @@ impl INode for MapsFile {
 }
 
 impl File for MapsFile {
-    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
 

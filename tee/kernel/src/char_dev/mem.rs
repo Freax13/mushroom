@@ -118,7 +118,7 @@ impl OpenFileDescription for Null {
         Ok(())
     }
 
-    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
 
@@ -224,7 +224,7 @@ impl OpenFileDescription for Zero {
         Ok(())
     }
 
-    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         Ok(KernelPage::zeroed())
     }
 
@@ -330,7 +330,7 @@ impl OpenFileDescription for Random {
         Ok(())
     }
 
-    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
 
@@ -431,7 +431,7 @@ impl OpenFileDescription for URandom {
         Ok(())
     }
 
-    fn get_page(&self, _page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
 

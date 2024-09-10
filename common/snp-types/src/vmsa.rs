@@ -291,6 +291,8 @@ bitflags! {
     }
 }
 
+/// The VMSA tweak bitmap
+///
 /// VMSA register protection will obfuscate some values in the VMSA by xor'ing
 /// it with a nonce. This bitmap contains a bit for each quardword in the VMSA
 /// describing whether register protection applies for the quadword.

@@ -246,7 +246,7 @@ impl<T> From<VirtAddr> for Pointer<T> {
     }
 }
 
-impl<T: Default> Default for Pointer<T>
+impl<T> Default for Pointer<T>
 where
     T: ?Sized,
 {
@@ -906,6 +906,13 @@ impl Timespec {
         }
         Some(Self { tv_sec, tv_nsec })
     }
+
+    pub fn saturating_sub(self, rhs: Self) -> Self {
+        self.checked_sub(rhs).unwrap_or(Self {
+            tv_sec: 0,
+            tv_nsec: 0,
+        })
+    }
 }
 
 impl Add for Timespec {
@@ -1195,12 +1202,15 @@ pub struct Signal(u8);
 
 impl Signal {
     pub const HUP: Self = Self(1);
+    pub const INT: Self = Self(2);
     pub const ABRT: Self = Self(6);
     pub const FPE: Self = Self(8);
     pub const KILL: Self = Self(9);
+    pub const USR1: Self = Self(10);
     pub const SEGV: Self = Self(11);
-    pub const ALRM: Self = Self(14);
+    pub const USR2: Self = Self(12);
     pub const PIPE: Self = Self(13);
+    pub const ALRM: Self = Self(14);
     pub const TERM: Self = Self(15);
     pub const CHLD: Self = Self(17);
     pub const CONT: Self = Self(18);

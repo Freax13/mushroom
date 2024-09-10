@@ -61,7 +61,10 @@ pub trait Syscall {
     const NO_I386: Option<usize>;
     const NO_AMD64: Option<usize>;
 
-    async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult;
+    fn execute(
+        thread: Arc<Thread>,
+        syscall_args: SyscallArgs,
+    ) -> impl Future<Output = SyscallResult> + Send + 'static;
 
     fn display(
         f: &mut dyn fmt::Write,
@@ -88,7 +91,7 @@ struct SyscallHandler {
 impl SyscallHandler {
     const fn new<T>() -> Self
     where
-        T: Syscall<execute(): Send + 'static>,
+        T: Syscall,
     {
         Self {
             create_future: |slot, thread: Arc<Thread>, args: SyscallArgs| {
@@ -122,7 +125,7 @@ impl SyscallHandlers {
 
     pub const fn register<T>(&mut self, val: T)
     where
-        T: Syscall<execute(): Send + 'static>,
+        T: Syscall,
     {
         if let Some(no) = T::NO_I386 {
             assert!(self.i386_handlers[no].is_none());

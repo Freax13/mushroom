@@ -14,7 +14,7 @@ const RELOAD_LIMIT: i64 = i64::MIN / 2;
 pub struct RwLock<T> {
     cell: UnsafeCell<T>,
     ///  0 -> Unlocked
-    /// >0 -> Read-locked
+    /// \>0 -> Read-locked
     /// <0 -> Write-locked
     state: AtomicI64,
 }

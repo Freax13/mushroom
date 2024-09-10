@@ -66,6 +66,15 @@ where
     }
 }
 
+impl<T> From<Arc<T>> for FileDescriptor
+where
+    T: OpenFileDescription,
+{
+    fn from(value: Arc<T>) -> Self {
+        FileDescriptor(value)
+    }
+}
+
 impl Deref for FileDescriptor {
     type Target = dyn OpenFileDescription;
 
@@ -436,8 +445,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotDir)
     }
 
-    fn get_page(&self, page_idx: usize) -> Result<KernelPage> {
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
         let _ = page_idx;
+        let _ = shared;
         bail!(Acces)
     }
 

@@ -7,7 +7,7 @@ use alloc::{
     vec::Vec,
 };
 use bit_field::BitArray;
-use bytemuck::{bytes_of, bytes_of_mut, Zeroable};
+use bytemuck::{bytes_of, bytes_of_mut, checked, Zeroable};
 use futures::{
     future::{self, Either, Fuse},
     select_biased,
@@ -32,9 +32,10 @@ use crate::{
             Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
-            self, create_directory, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir, unlink_file,
-            DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
+            self, create_char_dev, create_directory, create_fifo, create_file, create_link,
+            devtmpfs, hard_link, lookup_and_resolve_node, lookup_node, procfs, read_link,
+            unlink_dir, unlink_file, DirEntry, DynINode, FileAccessContext, OldDirEntry,
+            Permission, ROOT_NODE,
         },
         path::Path,
         StatFs,
@@ -205,6 +206,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
+    handlers.register(SysMknod);
     handlers.register(SysFstatfs);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -222,6 +224,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExitGroup);
     handlers.register(SysEpollWait);
     handlers.register(SysEpollCtl);
+    handlers.register(SysMknodat);
     handlers.register(SysFchownat);
     handlers.register(SysFutimesat);
     handlers.register(SysNewfstatat);
@@ -326,9 +329,9 @@ async fn write(
     Ok(len)
 }
 
-#[syscall(i386 = 5, amd64 = 2)]
-fn open(
-    thread: &mut ThreadGuard,
+#[syscall(i386 = 5, amd64 = 2, interruptable, restartable)]
+async fn open(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -348,6 +351,7 @@ fn open(
         flags,
         mode,
     )
+    .await
 }
 
 #[syscall(i386 = 6, amd64 = 3)]
@@ -1548,15 +1552,15 @@ async fn execve(
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let cpu_state =
-        virtual_memory.start_executable(&pathname, &file, &args, &envs, &mut ctx, cwd)?;
+    let (cpu_state, exe_path) =
+        virtual_memory.start_executable(pathname, &file, &args, &envs, &mut ctx, cwd)?;
 
     // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
     thread
         .process()
-        .execve(virtual_memory, cpu_state, fdtable, pathname);
+        .execve(virtual_memory, cpu_state, fdtable, exe_path);
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
@@ -1929,9 +1933,9 @@ fn rmdir(
     Ok(0)
 }
 
-#[syscall(i386 = 8, amd64 = 85)]
-fn creat(
-    thread: &mut ThreadGuard,
+#[syscall(i386 = 8, amd64 = 85, interruptable, restartable)]
+async fn creat(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -1949,6 +1953,7 @@ fn creat(
         OpenFlags::CREAT | OpenFlags::WRONLY | OpenFlags::TRUNC,
         mode,
     )
+    .await
 }
 
 #[syscall(i386 = 9, amd64 = 86)]
@@ -2573,6 +2578,28 @@ fn sigaltstack(
     Ok(0)
 }
 
+#[syscall(i386 = 14, amd64 = 133)]
+fn mknod(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+    mode: u64,
+    dev: u32,
+) -> SyscallResult {
+    mknodat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        FdNum::CWD,
+        pathname,
+        mode,
+        dev,
+    )
+}
+
 #[syscall(i386 = 99, amd64 = 137)]
 fn statfs(
     abi: Abi,
@@ -2800,6 +2827,7 @@ fn clock_gettime(
 #[syscall(i386 = 407, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     clock_id: ClockId,
     flags: ClockNanosleepFlags,
@@ -2816,7 +2844,22 @@ async fn clock_nanosleep(
         time::now() + request
     };
 
-    sleep_until(deadline).await;
+    let res = thread
+        .interruptable(
+            async {
+                sleep_until(deadline).await;
+                Ok(())
+            },
+            false,
+        )
+        .await;
+
+    if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
+        let difference = deadline.saturating_sub(time::now());
+        virtual_memory.write_with_abi(remain, difference, abi)?;
+    }
+
+    res?;
 
     Ok(0)
 }
@@ -2936,9 +2979,9 @@ fn start_dir_for_path(
     }
 }
 
-#[syscall(i386 = 295, amd64 = 257)]
-fn openat(
-    thread: &mut ThreadGuard,
+#[syscall(i386 = 295, amd64 = 257, interruptable, restartable)]
+async fn openat(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -2949,7 +2992,7 @@ fn openat(
     mode: u64,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
-    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &filename, &mut ctx)?;
+    let start_dir = start_dir_for_path(&thread.lock(), &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let node = if flags.contains(OpenFlags::NOFOLLOW) {
@@ -2989,7 +3032,7 @@ fn openat(
             node
         };
 
-        node.open(filename, flags)?
+        node.async_open(filename, flags).await?
     };
 
     let fd = fdtable.insert(fd, flags, no_file_limit)?;
@@ -3012,6 +3055,58 @@ fn mkdirat(
     let mut mode = FileMode::from_bits_truncate(mode);
     mode &= !*thread.process().umask.lock();
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 297, amd64 = 259)]
+fn mknodat(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    dirfd: FdNum,
+    pathname: Pointer<Path>,
+    mode: u64,
+    dev: u32,
+) -> SyscallResult {
+    let ty: FileType = checked::try_cast((mode >> 12) as u32)?;
+
+    let pathname = virtual_memory.read(pathname)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dirfd, &pathname, &mut ctx)?;
+
+    let mut mode = FileMode::from_bits_truncate(mode);
+    mode &= !*thread.process().umask.lock();
+
+    match ty {
+        FileType::Unknown | FileType::File => {
+            create_file(
+                start_dir,
+                pathname,
+                mode,
+                OpenFlags::NOFOLLOW | OpenFlags::EXCL,
+                &mut ctx,
+            )?;
+        }
+        FileType::Fifo => create_fifo(start_dir, &pathname, mode, &mut ctx)?,
+        FileType::Char => {
+            ensure!(ctx.is_user(Uid::SUPER_USER), Perm);
+            create_char_dev(
+                start_dir,
+                &pathname,
+                (dev >> 8) as u16,
+                dev as u8,
+                mode,
+                &mut ctx,
+            )?
+        }
+        FileType::Block => {
+            ensure!(ctx.is_user(Uid::SUPER_USER), Perm);
+            todo!()
+        }
+        FileType::Socket => todo!(),
+        FileType::Dir | FileType::Link => bail!(Inval),
+    }
+
     Ok(0)
 }
 
@@ -3527,7 +3622,8 @@ fn pipe2(
     pipefd: Pointer<[FdNum; 2]>,
     flags: Pipe2Flags,
 ) -> SyscallResult {
-    let (read_half, write_half) = pipe::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
+    let (read_half, write_half) =
+        pipe::anon::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
 
     // Insert the first read half.
     let read_half = fdtable.insert(read_half, flags, no_file_limit)?;

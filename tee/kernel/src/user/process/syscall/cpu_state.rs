@@ -223,14 +223,11 @@ impl CpuState {
                     "mov byte ptr gs:[{EXIT_OFFSET}], {EXIT_EXCP}",
                     // Save values from stack frame.
                     "mov gs:[{U_RAX_OFFSET}], rax",
-                    "pop rax", // pop RIP
-                    "mov gs:[{U_RIP_OFFSET}], rax",
+                    "pop qword ptr gs:[{U_RIP_OFFSET}]", // pop RIP
                     "pop rax", // pop CS,
                     "mov gs:[{U_CS_OFFSET}], ax",
-                    "pop rax", // pop RFLAGS
-                    "mov gs:[{U_RFLAGS_OFFSET}], rax",
-                    "pop rax", // pop RSP
-                    "mov gs:[{U_RSP_OFFSET}], rax",
+                    "pop qword ptr gs:[{U_RFLAGS_OFFSET}]", // pop RFLAGS
+                    "pop qword ptr gs:[{U_RSP_OFFSET}]", // pop RSP
                     "pop rax", // pop SS
                     "mov gs:[{U_SS_OFFSET}], ax",
                     // Jump to the common save state code.
@@ -864,6 +861,7 @@ impl Registers {
         fs: 0,
         gs: 0,
         ss: 0x23,
+        rflags: 2,
         ..Self::ZERO
     };
 }

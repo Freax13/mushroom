@@ -12,7 +12,9 @@ use crate::{
         Process,
     },
 };
+use alloc::boxed::Box;
 use alloc::sync::Arc;
+use async_trait::async_trait;
 use tmpfs::TmpFs;
 
 use crate::{
@@ -59,6 +61,7 @@ pub fn new_dev() -> u64 {
 
 pub type DynINode = Arc<dyn INode>;
 
+#[async_trait]
 pub trait INode: Any + Send + Sync + 'static {
     fn ty(&self) -> Result<FileType> {
         self.stat().map(|stat| stat.mode.ty())
@@ -67,6 +70,10 @@ pub trait INode: Any + Send + Sync + 'static {
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
     fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor>;
+
+    async fn async_open(self: Arc<Self>, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        self.open(path, flags)
+    }
 
     fn mode(&self) -> Result<FileMode> {
         self.stat().map(|stat| stat.mode.mode())
@@ -151,6 +158,20 @@ pub trait INode: Any + Send + Sync + 'static {
         let _ = file_name;
         let _ = major;
         let _ = minor;
+        let _ = mode;
+        let _ = uid;
+        let _ = gid;
+        bail!(NotDir)
+    }
+
+    fn create_fifo(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<()> {
+        let _ = file_name;
         let _ = mode;
         let _ = uid;
         let _ = gid;
@@ -554,6 +575,53 @@ pub fn create_link(
 pub fn read_link(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<Path> {
     let node = lookup_node(start_dir, path, ctx)?;
     node.read_link(ctx)
+}
+
+pub fn create_fifo(
+    start_dir: DynINode,
+    path: &Path,
+    mode: FileMode,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(Exist)
+        }
+        PathSegment::FileName(file_name) => dir.create_fifo(
+            file_name.into_owned(),
+            mode,
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+        ),
+    }
+}
+
+pub fn create_char_dev(
+    start_dir: DynINode,
+    path: &Path,
+    major: u16,
+    minor: u8,
+    mode: FileMode,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(Exist)
+        }
+        PathSegment::FileName(file_name) => {
+            dir.create_char_dev(
+                file_name.into_owned(),
+                major,
+                minor,
+                mode,
+                ctx.filesystem_user_id,
+                ctx.filesystem_group_id,
+            )?;
+            Ok(())
+        }
+    }
 }
 
 pub fn mount(

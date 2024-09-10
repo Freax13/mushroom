@@ -283,8 +283,11 @@ impl Thread {
                 (
                     Sigaction::SIG_DFL,
                     signal @ (Signal::HUP
+                    | Signal::INT
                     | Signal::ABRT
+                    | Signal::USR1
                     | Signal::SEGV
+                    | Signal::USR2
                     | Signal::PIPE
                     | Signal::TERM),
                 )
@@ -481,7 +484,14 @@ impl ThreadGuard<'_> {
         *self.thread.fdtable.lock() = Arc::new(fdtable);
 
         self.clear_child_tid = Pointer::NULL;
-        self.signal_handler_table = Arc::new(SignalHandlerTable::new());
+        let signal_handler_table = Arc::make_mut(&mut self.signal_handler_table);
+        // Reset the signal dispositions of signals that are not ignored.
+        signal_handler_table
+            .sigactions
+            .get_mut()
+            .iter_mut()
+            .filter(|sa| !matches!(sa.sa_handler_or_sigaction, Sigaction::SIG_IGN))
+            .for_each(|sa| *sa = Sigaction::DEFAULT);
         self.sigaltstack = Stack::default();
 
         let mut guard = self.thread.process.credentials.lock();
@@ -491,7 +501,7 @@ impl ThreadGuard<'_> {
 
     pub fn start_executable(
         &mut self,
-        path: &Path,
+        path: Path,
         file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -500,7 +510,7 @@ impl ThreadGuard<'_> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let cpu_state =
+        let (cpu_state, _path) =
             virtual_memory.start_executable(path, file, argv, envp, ctx, self.process().cwd())?;
 
         // Success! Commit the new state to the thread.
@@ -537,7 +547,14 @@ impl ThreadGuard<'_> {
                 (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => true,
                 (
                     Sigaction::SIG_DFL,
-                    Signal::HUP | Signal::ABRT | Signal::SEGV | Signal::PIPE | Signal::TERM,
+                    Signal::HUP
+                    | Signal::INT
+                    | Signal::ABRT
+                    | Signal::USR1
+                    | Signal::SEGV
+                    | Signal::USR2
+                    | Signal::PIPE
+                    | Signal::TERM,
                 ) => false,
                 (_, Signal::STOP) => true,
                 (_, Signal::KILL) => false,

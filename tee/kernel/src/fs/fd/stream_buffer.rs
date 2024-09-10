@@ -130,6 +130,14 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, A
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {
         self.notify.wait()
     }
+
+    pub fn make_write_half(&self) -> WriteHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
+        assert_eq!(Arc::strong_count(&self.buffer), 1);
+        WriteHalf {
+            buffer: self.buffer.clone(),
+            notify: NotifyOnDrop(self.notify.0.clone()),
+        }
+    }
 }
 
 pub struct WriteHalf<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> {
@@ -262,5 +270,13 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
 
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {
         self.notify.wait()
+    }
+
+    pub fn make_read_half(&self) -> ReadHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
+        assert_eq!(Arc::strong_count(&self.buffer), 1);
+        ReadHalf {
+            buffer: self.buffer.clone(),
+            notify: NotifyOnDrop(self.notify.0.clone()),
+        }
     }
 }

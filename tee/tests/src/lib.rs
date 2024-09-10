@@ -1,5 +1,4 @@
 #![cfg(test)]
-#![feature(asm_const)]
 
 use std::{
     alloc::{alloc, dealloc, Layout},

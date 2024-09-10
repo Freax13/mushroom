@@ -33,7 +33,7 @@ use x86_64::{
     registers::rflags::{self, RFlags},
     structures::{
         idt::PageFaultErrorCode,
-        paging::{Page, PageOffset},
+        paging::{Page, PageOffset, PageSize, Size4KiB},
     },
     VirtAddr,
 };
@@ -449,13 +449,13 @@ impl VirtualMemoryWriteGuard<'_> {
                 match start_offset {
                     0 => Ok(KernelPage::zeroed()),
                     1..=0xfff => {
-                        let mut page = self.file.get_page(usize_from(offset))?;
+                        let mut page = self.file.get_page(usize_from(offset), self.shared)?;
                         if !self.shared {
                             page.zero_range(start_offset.., false)?;
                         }
                         Ok(page)
                     }
-                    _ => self.file.get_page(usize_from(offset)),
+                    _ => self.file.get_page(usize_from(offset), self.shared),
                 }
             }
 
@@ -557,7 +557,7 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         let start_page = Page::from_start_address(addr).map_err(|_| err!(Inval))?;
-        let end_page = Page::from_start_address(addr + (len - 0x1000)).map_err(|_| err!(Inval))?;
+        let end_page = Page::containing_address(addr + (len - 1));
 
         // Flush all pages in the range.
         self.virtual_memory
@@ -766,7 +766,11 @@ impl VirtualMemoryState {
             size < (1 << 47),
             "mapping of size {size:#x} can never exist"
         );
-        let size = align_up(size, 0x1000);
+        let size = align_up(size, Size4KiB::SIZE);
+
+        // We want to add one guard page at before and after the mapping.
+        // We do this by increasing the size of the allocation by two pages.
+        let size = size + Size4KiB::SIZE * 2;
 
         let dynamic_base_address = match abi {
             Abi::I386 => 0xff00_0000,
@@ -797,7 +801,8 @@ impl VirtualMemoryState {
             last_address = page.start_address();
         }
 
-        last_address - size
+        // Add one to skip the guard page at the start.
+        last_address - size + Size4KiB::SIZE
     }
 }
 

@@ -1,3 +1,5 @@
+//! A buffer to store physical memory for the guest to use.
+//!
 //! In order to make allocations fast, the [`AllocationBuffer`] contains
 //! multiple allocations ready to be used by the kernel when it requires them.
 //! When the allocations run out, the kernel can ask the supervisor to refill
