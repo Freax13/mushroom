@@ -1,4 +1,8 @@
-use core::{arch::asm, iter::Step, ops::RangeInclusive};
+use core::{
+    arch::{asm, x86_64::__cpuid},
+    iter::Step,
+    ops::RangeInclusive,
+};
 
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -88,6 +92,20 @@ impl InvlpgbCompat {
     }
 }
 
+enum Hypercall {
+    Vmmcall,
+    Vmcall,
+}
+
+static HYPERCALL: Lazy<Hypercall> = Lazy::new(|| {
+    let svm = unsafe { __cpuid(0x8000_0001) }.ecx.get_bit(2);
+    if svm {
+        Hypercall::Vmmcall
+    } else {
+        Hypercall::Vmcall
+    }
+});
+
 fn hv_flush_all() {
     const HV_X64_MSR_GUEST_OS_ID: u32 = 0x40000000;
     unsafe {
@@ -103,14 +121,25 @@ fn hv_flush_all() {
 
     let result: u64;
 
-    unsafe {
-        asm! {
-            "vpxor xmm0, xmm0, xmm0",
-            "vmmcall",
-            in("rcx") hypercall_input,
-            in("rdx") flags.bits(),
-            inout("rax") 0x5a5a5a5a5a5a5a5au64 => result,
-        };
+    match *HYPERCALL {
+        Hypercall::Vmmcall => unsafe {
+            asm! {
+                "vpxor xmm0, xmm0, xmm0",
+                "vmmcall",
+                in("rcx") hypercall_input,
+                in("rdx") flags.bits(),
+                inout("rax") 0x5a5a5a5a5a5a5a5au64 => result,
+            };
+        },
+        Hypercall::Vmcall => unsafe {
+            asm! {
+                "vpxor xmm0, xmm0, xmm0",
+                "vmcall",
+                in("rcx") hypercall_input,
+                in("rdx") flags.bits(),
+                inout("rax") 0x5a5a5a5a5a5a5a5au64 => result,
+            };
+        },
     }
 
     assert_eq!(result.get_bits(0..=15), 0);
