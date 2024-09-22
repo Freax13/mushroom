@@ -1051,7 +1051,7 @@ impl KvmSegment {
         db: 0,
         s: 1,
         l: 1,
-        g: 0,
+        g: 1,
         avl: 0,
         unusable: 0,
         _padding: 0,

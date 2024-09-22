@@ -219,8 +219,7 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
         sregs.efer = EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
             | EferFlags::LONG_MODE_ENABLE.bits()
             | EferFlags::LONG_MODE_ACTIVE.bits()
-            | EferFlags::NO_EXECUTE_ENABLE.bits()
-            | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits();
+            | EferFlags::NO_EXECUTE_ENABLE.bits();
         sregs.cr4 = Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
             | Cr4Flags::PAGE_GLOBAL.bits()
             | Cr4Flags::OSFXSR.bits()
