@@ -43,10 +43,10 @@ struct ConfigArgs {
     #[arg(
         long,
         value_name = "PATH",
-        env = "SUPERVISOR",
+        env = "SUPERVISOR_SNP",
         required_unless_present = "insecure"
     )]
-    supervisor: Option<PathBuf>,
+    supervisor_snp: Option<PathBuf>,
     /// Path to the kernel.
     #[arg(long, value_name = "PATH", env = "KERNEL")]
     kernel: PathBuf,
@@ -132,9 +132,12 @@ fn run(run: RunCommand) -> Result<()> {
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
 
     let result = if !run.config.insecure {
-        let supervisor_path = run.config.supervisor.context("missing supervisor path")?;
-        let supervisor =
-            std::fs::read(supervisor_path).context("failed to read supervisor file")?;
+        let supervisor_snp_path = run
+            .config
+            .supervisor_snp
+            .context("missing supervisor path")?;
+        let supervisor_snp =
+            std::fs::read(supervisor_snp_path).context("failed to read supervisor file")?;
 
         let profile_folder = run
             .profile_folder
@@ -143,7 +146,7 @@ fn run(run: RunCommand) -> Result<()> {
             .context("failed to create profile folder")?;
 
         mushroom::main(
-            &supervisor,
+            &supervisor_snp,
             &kernel,
             &init,
             run.config.kasan,
@@ -212,8 +215,12 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         "Can't verify output produced in insecure mode."
     );
 
-    let supervisor = std::fs::read(run.config.supervisor.context("missing supervisor path")?)
-        .context("failed to read supervisor file")?;
+    let supervisor_snp = std::fs::read(
+        run.config
+            .supervisor_snp
+            .context("missing supervisor-snp path")?,
+    )
+    .context("failed to read supervisor-snp file")?;
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
@@ -258,7 +265,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     };
 
     let configuration = Configuration::new(
-        &supervisor,
+        &supervisor_snp,
         &kernel,
         &init,
         run.config.kasan,

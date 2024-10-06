@@ -685,7 +685,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 
 [[package]]
-name = "supervisor"
+name = "supervisor-services"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bytemuck",
+]
+
+[[package]]
+name = "supervisor-snp"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
@@ -701,14 +709,6 @@ dependencies = [
  "supervisor-services",
  "volatile 0.5.1",
  "x86_64",
-]
-
-[[package]]
-name = "supervisor-services"
-version = "0.1.0"
-dependencies = [
- "bit_field",
- "bytemuck",
 ]
 
 [[package]]

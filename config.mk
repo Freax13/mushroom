@@ -25,11 +25,11 @@ KERNEL_kasan       = $(KERNEL_development)
 KERNEL_profiling   = tee/target/x86_64-unknown-none/kernel-profiling/kernel
 export KERNEL ?= $(mkfile_dir)/$(KERNEL_$(PROFILE))
 
-SUPERVISOR_development = tee/target/supervisor/supervisor/supervisor
-SUPERVISOR_release     = tee/target/supervisor/supervisor-release/supervisor
-SUPERVISOR_kasan       = $(SUPERVISOR_development)
-SUPERVISOR_profiling   = $(SUPERVISOR_development)
-export SUPERVISOR ?= $(mkfile_dir)/$(SUPERVISOR_$(PROFILE))
+SUPERVISOR_SNP_development = tee/target/supervisor/supervisor/supervisor-snp
+SUPERVISOR_SNP_release     = tee/target/supervisor/supervisor-release/supervisor-snp
+SUPERVISOR_SNP_kasan       = $(SUPERVISOR_SNP_development)
+SUPERVISOR_SNP_profiling   = $(SUPERVISOR_SNP_development)
+export SUPERVISOR_SNP ?= $(mkfile_dir)/$(SUPERVISOR_SNP_$(PROFILE))
 
 CLI_development = host/target/debug/mushroom
 CLI_release     = host/target/release/mushroom
