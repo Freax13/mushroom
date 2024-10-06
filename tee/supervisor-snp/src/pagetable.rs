@@ -1,7 +1,11 @@
 use core::{cell::SyncUnsafeCell, ptr::NonNull};
 
 use bytemuck::AnyBitPattern;
-use constants::physical_address::{self, supervisor::*, DYNAMIC, INPUT_FILE};
+use constants::physical_address::{
+    self,
+    supervisor::{snp::*, LOG_BUFFER},
+    DYNAMIC, INPUT_FILE,
+};
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use volatile::{
     access::{ReadOnly, WriteOnly},

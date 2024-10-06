@@ -5,7 +5,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use constants::{physical_address::supervisor::VMSAS, MAX_APS_COUNT};
+use constants::{physical_address::supervisor::snp::VMSAS, MAX_APS_COUNT};
 use snp_types::{
     vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
     VmplPermissions,
