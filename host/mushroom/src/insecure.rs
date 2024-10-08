@@ -39,13 +39,12 @@ const TSC_MHZ: u64 = 100;
 
 /// Create the VM, load the kernel, init & input and run the APs.
 pub fn main(
+    kvm_handle: &KvmHandle,
     kernel: &[u8],
     init: &[u8],
     load_kasan_shadow_mappings: bool,
     input: &[u8],
 ) -> Result<MushroomResult> {
-    let kvm_handle = KvmHandle::new()?;
-
     let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
     let piafb = cpuid_entries
         .iter_mut()

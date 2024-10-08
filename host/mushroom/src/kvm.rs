@@ -4,7 +4,7 @@ use std::{
     array::from_fn,
     fs::OpenOptions,
     mem::{size_of, size_of_val},
-    num::{NonZeroU8, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU8, NonZeroUsize},
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
 };
 
@@ -136,6 +136,15 @@ impl KvmHandle {
         res.context("failed to query supported hv cpuid features")?;
 
         Ok(Box::from(buffer.entries[..buffer.nent as usize].to_vec()))
+    }
+
+    pub fn check_extension(&self, cap: KvmCap) -> Result<Option<NonZeroU32>> {
+        ioctl_write_int_bad!(kvm_check_extension, request_code_none!(KVMIO, 0x03));
+
+        let res = unsafe { kvm_check_extension(self.fd.as_raw_fd(), cap.0 as i32) };
+        let val = res.context("failed to check extension")?;
+
+        Ok(NonZeroU32::new(val as u32))
     }
 }
 
@@ -1476,6 +1485,7 @@ impl KvmCap {
     pub const X86_USER_SPACE_MSR: Self = Self(188);
     pub const EXIT_HYPERCALL: Self = Self(201);
     pub const PRIVATE_MEM: Self = Self(224);
+    pub const VM_TYPES: Self = Self(235);
     pub const UNMAPPED_PRIVATE_MEM: Self = Self(240);
 }
 

@@ -60,12 +60,13 @@ endif
 OUTPUT ?= output.bin
 ATTESTATION_REPORT ?= report.bin
 
-INSECURE ?= false
+TEE ?= auto
 
-# Make sure that the requested insecure value is supported.
-KNOWN_INSECURITY_false = 1
-KNOWN_INSECURITY_true  = 1
-KNOWN_INSECURITY = $(KNOWN_INSECURITY_$(INSECURE))
-ifneq ($(KNOWN_INSECURITY),1)
-$(error unknown value for insecure $(INSECURE))
+# Make sure that the requested TEE value is supported.
+KNOWN_TEE_snp      = 1
+KNOWN_TEE_insecure = 1
+KNOWN_TEE_auto     = 1
+KNOWN_TEE = $(KNOWN_TEE_$(TEE))
+ifneq ($(KNOWN_TEE),1)
+$(error unknown value for TEE $(TEE))
 endif

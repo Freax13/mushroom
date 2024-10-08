@@ -15,17 +15,17 @@ test: all
 	$(MAKE) -C tee/tests
 
 run: all
-ifeq ($(INSECURE),true)
-	$(CLI) run --input $(INPUT) --output $(OUTPUT) --insecure
+ifeq ($(TEE),insecure)
+	$(CLI) run --input $(INPUT) --output $(OUTPUT) --tee insecure
 else
-	$(CLI) run --input $(INPUT) --output $(OUTPUT) --attestation-report $(ATTESTATION_REPORT)
+	$(CLI) run --input $(INPUT) --output $(OUTPUT) --tee $(TEE) --attestation-report $(ATTESTATION_REPORT)
 endif
 
 verify: all
-ifeq ($(INSECURE),true)
+ifeq ($(TEE),insecure)
 	$(error can't verify attestation report in insecure mode)
 endif
-	$(CLI) verify --input $(INPUT) --output $(OUTPUT) --attestation-report $(ATTESTATION_REPORT)
+	$(CLI) verify --input $(INPUT) --output $(OUTPUT) --tee $(TEE) --attestation-report $(ATTESTATION_REPORT)
 
 run-example: all
 	$(MAKE) -C tee/example run

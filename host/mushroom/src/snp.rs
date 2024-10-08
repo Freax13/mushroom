@@ -31,7 +31,9 @@ use crate::{
     }, logging::start_log_collection, profiler::{start_profile_collection, ProfileFolder}, slot::Slot, MushroomResult
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn main(
+    kvm_handle: &KvmHandle,
     supervisor: &[u8],
     kernel: &[u8],
     init: &[u8],
@@ -40,7 +42,6 @@ pub fn main(
     policy: GuestPolicy,
     profiler_folder: Option<ProfileFolder>,
 ) -> Result<MushroomResult> {
-    let kvm_handle = KvmHandle::new()?;
     let sev_handle = SevHandle::new()?;
 
     let mut vm_context = VmContext::prepare_vm(
@@ -50,7 +51,7 @@ pub fn main(
         input,
         load_kasan_shadow_mappings,
         policy,
-        &kvm_handle,
+        kvm_handle,
         &sev_handle,
         profiler_folder,
     )?;
