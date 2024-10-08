@@ -145,7 +145,7 @@ fn run(run: RunCommand) -> Result<()> {
             .transpose()
             .context("failed to create profile folder")?;
 
-        mushroom::main(
+        mushroom::snp::main(
             &supervisor_snp,
             &kernel,
             &init,
