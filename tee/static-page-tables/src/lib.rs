@@ -60,6 +60,27 @@ where
         );
     }
 
+    /// Add one or more entries pointing to tables on the next lower level.
+    pub const fn set_table_range(
+        &mut self,
+        mut index: usize,
+        mut next: &'static [StaticPageTable<L::Next>],
+        mut flags: Flags,
+    ) where
+        L: ParentLevel,
+    {
+        flags.0 |= Flags::PRESENT.0;
+
+        while let Some((first, rest)) = next.split_first() {
+            self.set_entry(
+                index,
+                (first as *const StaticPageTable<L::Next> as *const ()).wrapping_byte_add(flags.0),
+            );
+            index += 1;
+            next = rest;
+        }
+    }
+
     /// Add a new entry pointing to a page.
     pub const fn set_page(&mut self, index: usize, addr: PhysFrame<L::Size>, mut flags: Flags)
     where

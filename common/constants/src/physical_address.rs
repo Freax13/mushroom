@@ -81,6 +81,20 @@ pub mod supervisor {
         pub const VMSAS: PhysFrame<Size2MiB> = addr(0x2c0000000);
     }
 
+    // The segments of the supervisor-tdx binary.
+    pub mod tdx {
+        use super::*;
+
+        pub const PAGETABLES: PhysFrame<Size2MiB> = addr(0xffc00000);
+        pub const RESET_VECTOR: PhysFrame<Size2MiB> = addr(0xffe00000);
+        pub const TEXT: Range<PhysFrame<Size2MiB>> = addr_range(0x40000000, 0x40ffffff);
+        pub const RODATA: Range<PhysFrame<Size2MiB>> = addr_range(0x41000000, 0x41ffffff);
+        pub const DATA: Range<PhysFrame<Size2MiB>> = addr_range(0x42000000, 0x42ffffff);
+        pub const STACK: PhysFrame<Size2MiB> = addr(0x43200000);
+        pub const SHARED: PhysFrame<Size2MiB> = addr(0x44000000);
+        pub const KERNEL_ELF_HEADER: PhysFrame<Size2MiB> = addr(0x08000000000);
+    }
+
     pub const LOG_BUFFER: PhysFrame<Size2MiB> = addr(0x90000200000);
 }
 

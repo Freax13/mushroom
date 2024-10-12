@@ -712,6 +712,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "supervisor-tdx"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bytemuck",
+ "constants",
+ "io",
+ "log",
+ "log-types",
+ "sha2",
+ "spin",
+ "static-page-tables",
+ "supervisor-services",
+ "tdx-types",
+ "volatile 0.5.1",
+ "x86_64",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -731,6 +750,16 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "tdx-types"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bitflags 2.4.2",
+ "bytemuck",
+ "x86_64",
 ]
 
 [[package]]

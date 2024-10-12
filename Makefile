@@ -1,12 +1,15 @@
 include config.mk
 
-all: kernel supervisor-snp cli
+all: kernel supervisor-snp supervisor-tdx cli
 
 kernel:
 	$(MAKE) -C tee/kernel
 
 supervisor-snp:
 	$(MAKE) -C tee/supervisor-snp
+
+supervisor-tdx:
+	$(MAKE) -C tee/supervisor-tdx
 
 cli:
 	$(MAKE) -C host/mushroom
@@ -35,4 +38,4 @@ clean:
 	$(MAKE) -C host   clean
 	$(MAKE) -C tee    clean
 
-.PHONY: all kernel supervisor-snp cli test run verify run-example clean
+.PHONY: all kernel supervisor-snp supervisor-tdx cli test run verify run-example clean

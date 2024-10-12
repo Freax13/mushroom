@@ -31,6 +31,12 @@ SUPERVISOR_SNP_kasan       = $(SUPERVISOR_SNP_development)
 SUPERVISOR_SNP_profiling   = $(SUPERVISOR_SNP_development)
 export SUPERVISOR_SNP ?= $(mkfile_dir)/$(SUPERVISOR_SNP_$(PROFILE))
 
+SUPERVISOR_TDX_development = tee/target/supervisor/supervisor/supervisor-tdx
+SUPERVISOR_TDX_release     = tee/target/supervisor/supervisor-release/supervisor-tdx
+SUPERVISOR_TDX_kasan       = $(SUPERVISOR_TDX_development)
+SUPERVISOR_TDX_profiling   = $(SUPERVISOR_TDX_development)
+export SUPERVISOR_TDX ?= $(mkfile_dir)/$(SUPERVISOR_TDX_$(PROFILE))
+
 CLI_development = host/target/debug/mushroom
 CLI_release     = host/target/release/mushroom
 CLI_kasan       = $(CLI_development)
