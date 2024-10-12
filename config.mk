@@ -70,6 +70,7 @@ TEE ?= auto
 
 # Make sure that the requested TEE value is supported.
 KNOWN_TEE_snp      = 1
+KNOWN_TEE_tdx      = 1
 KNOWN_TEE_insecure = 1
 KNOWN_TEE_auto     = 1
 KNOWN_TEE = $(KNOWN_TEE_$(TEE))

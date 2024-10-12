@@ -48,6 +48,15 @@ struct ConfigArgs {
         required_if_eq_any([("tee", "auto"), ("tee", "snp")]),
     )]
     supervisor_snp: Option<PathBuf>,
+    /// Path to the supervisor for TDX.
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "SUPERVISOR_TDX",
+        required_unless_present = "tee",
+        required_if_eq_any([("tee", "auto"), ("tee", "tdx")]),
+    )]
+    supervisor_tdx: Option<PathBuf>,
     /// Path to the kernel.
     #[arg(long, value_name = "PATH", env = "KERNEL")]
     kernel: PathBuf,
@@ -77,7 +86,7 @@ struct IoArgs {
         long,
         value_name = "PATH",
         required_unless_present = "tee",
-        required_if_eq_any([("tee", "auto"), ("tee", "snp")]),
+        required_if_eq_any([("tee", "auto"), ("tee", "snp"), ("tee", "tdx")]),
     )]
     attestation_report: Option<PathBuf>,
 }
@@ -135,6 +144,7 @@ struct RunCommand {
 #[derive(ValueEnum, Clone, Copy)]
 pub enum TeeWithAuto {
     Snp,
+    Tdx,
     Insecure,
     Auto,
 }
@@ -143,6 +153,7 @@ impl Display for TeeWithAuto {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TeeWithAuto::Snp => f.pad("snp"),
+            TeeWithAuto::Tdx => f.pad("tdx"),
             TeeWithAuto::Insecure => f.pad("insecure"),
             TeeWithAuto::Auto => f.pad("auto"),
         }
@@ -158,10 +169,13 @@ fn run(run: RunCommand) -> Result<()> {
 
     let tee = match run.config.tee {
         TeeWithAuto::Snp => Tee::Snp,
+        TeeWithAuto::Tdx => Tee::Tdx,
         TeeWithAuto::Insecure => Tee::Insecure,
         TeeWithAuto::Auto => {
             if Tee::Snp.is_supported(&kvm_handle)? {
                 Tee::Snp
+            } else if Tee::Tdx.is_supported(&kvm_handle)? {
+                Tee::Tdx
             } else {
                 warn!("Neither SNP nor TDX are supported. Falling back to insecure.");
                 Tee::Insecure
@@ -192,6 +206,32 @@ fn run(run: RunCommand) -> Result<()> {
                 run.config.kasan,
                 &input,
                 run.config.policy.policy(),
+                profile_folder,
+            )?
+        }
+        Tee::Tdx => {
+            let supervisor_tdx_path = run
+                .config
+                .supervisor_tdx
+                .context("missing supervisor path")?;
+            let supervisor_tdx =
+                std::fs::read(supervisor_tdx_path).context("failed to read supervisor file")?;
+
+            let profile_folder = run
+                .profile_folder
+                .map(|profile_folder| ProfileFolder::new(profile_folder, run.config.kernel))
+                .transpose()
+                .context("failed to create profile folder")?;
+
+            ensure!(!run.config.kasan, "KASAN is not supported on TDX");
+
+            mushroom::tdx::main(
+                &kvm_handle,
+                &supervisor_tdx,
+                &kernel,
+                &init,
+                run.config.kasan,
+                &input,
                 profile_folder,
             )?
         }

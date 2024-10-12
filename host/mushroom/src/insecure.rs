@@ -32,10 +32,8 @@ use crate::{
     kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VmHandle},
     logging::start_log_collection,
     slot::Slot,
-    MushroomResult,
+    MushroomResult, TSC_MHZ,
 };
-
-const TSC_MHZ: u64 = 100;
 
 /// Create the VM, load the kernel, init & input and run the APs.
 pub fn main(

@@ -11,6 +11,7 @@ log-types = { path = "../common/log-types" }
 profiler-types = { path = "../common/profiler-types" }
 snp-types = { path = "../common/snp-types" }
 supervisor-services = { path = "../common/supervisor-services", default-features = false }
+tdx-types = { path = "../common/tdx-types" }
 vcek-kds = { path = "vcek-kds" }
 
 [patch.crates-io]

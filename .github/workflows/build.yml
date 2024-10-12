@@ -98,7 +98,12 @@ jobs:
           - i386
         tee:
           - snp
+          - tdx
           - insecure
+        exclude:
+          # KASAN isn't (yet) supported on TDX.
+          - profile: kasan
+            tee: tdx
     name: "Test"
     runs-on: ${{ matrix.tee != 'insecure' && matrix.tee || 'self-hosted' }}
     steps:

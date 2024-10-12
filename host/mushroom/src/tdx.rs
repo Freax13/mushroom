@@ -1,37 +1,47 @@
 use std::{
+    array,
     collections::{hash_map::Entry, HashMap},
-    sync::Arc,
-    thread::JoinHandle,
-    time::{Duration, Instant},
+    os::unix::thread::JoinHandleExt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+        Arc, Mutex, Once,
+    },
+    time::Instant,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use bit_field::BitField;
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
-    FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
+    FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
-use snp_types::{guest_policy::GuestPolicy, PageType};
+use nix::sys::{
+    pthread::pthread_kill,
+    signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
+};
+use tdx_types::ghci::{MAP_GPA, VMCALL_SUCCESS};
 use tracing::{debug, info};
-use volatile::map_field;
 use x86_64::{
     structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
     PhysAddr,
 };
 
 use crate::{
-    find_slot, is_efault,
+    find_slot,
     kvm::{
-        KvmCap, KvmCpuidEntry2, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
-        KvmMemoryAttributes, Page, SevHandle, VcpuHandle, VmHandle, KVM_HC_MAP_GPA_RANGE,
+        KvmCap, KvmExit, KvmExitUnknown, KvmHandle, KvmMemoryAttributes, Page, SupportedGpaw,
+        VcpuHandle, VmHandle,
     },
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
     slot::Slot,
-    volatile_bytes_of, MushroomResult,
+    volatile_bytes_of, MushroomResult, TSC_MHZ,
 };
 
-#[allow(clippy::too_many_arguments)]
+/// The signal used to kick threads out of KVM_RUN.
+const SIG_KICK: Signal = Signal::SIGUSR1;
+
 pub fn main(
     kvm_handle: &KvmHandle,
     supervisor: &[u8],
@@ -39,30 +49,63 @@ pub fn main(
     init: &[u8],
     load_kasan_shadow_mappings: bool,
     input: &[u8],
-    policy: GuestPolicy,
     profiler_folder: Option<ProfileFolder>,
 ) -> Result<MushroomResult> {
-    let sev_handle = SevHandle::new()?;
-
-    let mut vm_context = VmContext::prepare_vm(
+    // Prepare the VM.
+    let (vm_context, vcpus) = VmContext::prepare_vm(
         supervisor,
         kernel,
         init,
         input,
         load_kasan_shadow_mappings,
-        policy,
         kvm_handle,
-        &sev_handle,
         profiler_folder,
     )?;
-    vm_context.run_supervisor()
+
+    // Spawn threads to run the vCPUs.
+    let vm_context = Arc::new(vm_context);
+    let (sender, receiver) = mpsc::channel();
+    let done = Arc::new(AtomicBool::new(false));
+    let threads = vcpus
+        .into_iter()
+        .map(|vcpu| {
+            let vm_context = vm_context.clone();
+            let done = done.clone();
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                vm_context.run_vcpu(&vcpu, done, sender).unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Collect the output and report.
+    let mut output: Vec<u8> = Vec::new();
+    let attestation_report = loop {
+        let event = receiver.recv().unwrap();
+        match event {
+            OutputEvent::Write(mut vec) => output.append(&mut vec),
+            OutputEvent::Finish(attestation_report) => break attestation_report,
+        }
+    };
+
+    // Set the done flag.
+    done.store(true, Ordering::SeqCst);
+    // Force all threads to exit out of KVM_RUN, so that they can observe
+    // `done` and exit.
+    for thread in threads {
+        pthread_kill(thread.as_pthread_t(), SIG_KICK)?;
+        thread.join().unwrap();
+    }
+
+    Ok(MushroomResult {
+        output,
+        attestation_report: Some(attestation_report),
+    })
 }
 
 struct VmContext {
     vm: Arc<VmHandle>,
-    bsp: VcpuHandle,
-    ap_threads: HashMap<u8, JoinHandle<()>>,
-    memory_slots: HashMap<u16, Slot>,
+    memory_slots: Mutex<HashMap<u16, Slot>>,
     start: Instant,
 }
 
@@ -75,11 +118,9 @@ impl VmContext {
         init: &[u8],
         input: &[u8],
         load_kasan_shadow_mappings: bool,
-        policy: GuestPolicy,
         kvm_handle: &KvmHandle,
-        sev_handle: &SevHandle,
         profiler_folder: Option<ProfileFolder>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Vec<VcpuHandle>)> {
         let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
         let piafb = cpuid_entries
             .iter_mut()
@@ -87,12 +128,31 @@ impl VmContext {
             .context("failed to find 'processor info and feature bits' entry")?;
         // Enable CPUID
         piafb.ecx.set_bit(21, true);
-        let cpuid_entries = Arc::from(cpuid_entries);
 
-        let vm = kvm_handle.create_snp_vm()?;
+        let xsave = cpuid_entries
+            .iter_mut()
+            .find(|entry| entry.function == 0xd && entry.index == 0x1)
+            .context("failed to find 'xsave state components' entry")?;
+        // Enable CET_U and CET_S.
+        xsave.ecx.set_bit(11, true);
+        xsave.ecx.set_bit(12, true);
+
+        let vm = kvm_handle.create_tdx_vm()?;
         let vm = Arc::new(vm);
 
-        vm.enable_capability(KvmCap::EXIT_HYPERCALL, 1 << KVM_HC_MAP_GPA_RANGE)?;
+        vm.enable_capability(KvmCap::MAX_VCPUS, u64::from(MAX_APS_COUNT))?;
+
+        vm.enable_capability(KvmCap::X2APIC_API, 0)?;
+
+        let tdx_capabilities = vm.tdx_capabilities()?;
+        ensure!(
+            tdx_capabilities
+                .supported_gpaw
+                .contains(SupportedGpaw::GPAW_52),
+            "52-bit GPAW is not supported"
+        );
+
+        vm.create_irqchip()?;
 
         const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
         const KVM_MSR_EXIT_REASON_FILTER: u64 = 2;
@@ -101,9 +161,7 @@ impl VmContext {
             KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
         )?;
 
-        vm.sev_snp_init()?;
-
-        vm.sev_snp_launch_start(policy, sev_handle)?;
+        vm.set_tsc_khz(TSC_MHZ * 1000)?;
 
         let (load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
@@ -114,9 +172,19 @@ impl VmContext {
         );
         let mut load_commands = load_commands.peekable();
 
+        let mrconfigid = array::from_fn(|i| host_data.get(i).copied().unwrap_or_default());
+        vm.tdx_init_vm(&cpuid_entries, mrconfigid)?;
+
+        let vcpus = (0..MAX_APS_COUNT)
+            .map(|i| {
+                let cpu = vm.create_vcpu(i32::from(i))?;
+                cpu.set_cpuid(&cpuid_entries)?;
+                cpu.tdx_init_vcpu()?;
+                Ok(cpu)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let mut num_launch_pages = 0;
-        let mut num_data_pages = 0;
-        let mut total_launch_duration = Duration::ZERO;
 
         let mut memory_slots = HashMap::new();
         let mut pages = Vec::with_capacity(0xfffff);
@@ -124,8 +192,7 @@ impl VmContext {
         let mut slot_id = 0;
         while let Some(first_load_command) = load_commands.next() {
             let gpa = first_load_command.physical_address;
-            let first_page_type = first_load_command.payload.page_type();
-            let first_vmpl1_perms = first_load_command.vmpl1_perms;
+            let is_private_mem = first_load_command.payload.page_type().is_some();
 
             pages.push(Page {
                 bytes: first_load_command.payload.bytes(),
@@ -136,8 +203,7 @@ impl VmContext {
                 let following_load_command = load_commands.next_if(|next_load_segment| {
                     next_load_segment.physical_address > gpa
                         && next_load_segment.physical_address - gpa == i
-                        && next_load_segment.payload.page_type() == first_page_type
-                        && next_load_segment.vmpl1_perms == first_vmpl1_perms
+                        && next_load_segment.payload.page_type().is_some() == is_private_mem
                 });
                 let Some(following_load_command) = following_load_command else {
                     break;
@@ -154,29 +220,18 @@ impl VmContext {
                 vm.map_encrypted_memory(slot_id, &slot)?;
             }
 
-            if let Some(first_page_type) = first_page_type {
-                let update_start = Instant::now();
-
+            if is_private_mem {
                 vm.set_memory_attributes(
                     gpa.start_address().as_u64(),
                     u64::try_from(slot.shared_mapping().len().get())?,
                     KvmMemoryAttributes::PRIVATE,
                 )?;
 
-                vm.sev_snp_launch_update(
-                    gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
-                    slot.shared_mapping().len().get() as u64,
-                    first_page_type,
-                    first_vmpl1_perms,
-                    sev_handle,
-                )?;
+                vcpus[0].memory_mapping(gpa.start_address().as_u64(), &pages)?;
+
+                vm.tdx_extend_memory(gpa.start_address().as_u64(), u64::try_from(pages.len())?)?;
 
                 num_launch_pages += pages.len();
-                total_launch_duration += update_start.elapsed();
-                if first_page_type == PageType::Normal {
-                    num_data_pages += pages.len();
-                }
             }
 
             memory_slots.insert(slot_id, slot);
@@ -185,27 +240,10 @@ impl VmContext {
             slot_id += 1;
         }
 
-        let bsp = vm.create_vcpu(0)?;
-        bsp.set_cpuid(&cpuid_entries)?;
+        vm.tdx_finalize_vm()?;
 
-        vm.sev_snp_launch_finish(sev_handle, host_data)?;
-
-        info!(
-            num_launch_pages,
-            num_data_pages,
-            ?total_launch_duration,
-            "launched"
-        );
+        info!(num_launch_pages, "launched");
         let start = Instant::now();
-
-        // Create a bunch of APs.
-        let aps = (0..MAX_APS_COUNT)
-            .map(|i| {
-                let id = FIRST_AP + i;
-                let ap_thread = Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone());
-                Ok((id, ap_thread))
-            })
-            .collect::<Result<_>>()?;
 
         start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
         start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
@@ -213,41 +251,58 @@ impl VmContext {
             start_profile_collection(profiler_folder, &memory_slots)?;
         }
 
-        Ok(Self {
-            vm,
-            bsp,
-            ap_threads: aps,
-            memory_slots,
-            start,
-        })
+        install_signal_handler();
+
+        Ok((
+            Self {
+                vm,
+                memory_slots: Mutex::new(memory_slots),
+                start,
+            },
+            vcpus,
+        ))
     }
 
-    pub fn run_supervisor(&mut self) -> Result<MushroomResult> {
-        let mut output = Vec::new();
-        let kvm_run = self.bsp.get_kvm_run_block()?;
+    pub fn run_vcpu(
+        &self,
+        bsp: &VcpuHandle,
+        done: Arc<AtomicBool>,
+        sender: Sender<OutputEvent>,
+    ) -> Result<()> {
+        let kvm_run = bsp.get_kvm_run_block()?;
 
-        loop {
+        while !done.load(Ordering::Relaxed) {
             let exit = kvm_run.read().exit();
 
             match exit {
                 KvmExit::Unknown(KvmExitUnknown {
                     hardware_exit_reason: 0,
                 }) => {}
-                KvmExit::Hypercall(
-                    mut hypercall @ KvmExitHypercall {
-                        nr: KVM_HC_MAP_GPA_RANGE,
-                        args: [address, num_pages, attrs, ..],
-                        ..
-                    },
-                ) => {
-                    let mut attributes = KvmMemoryAttributes::empty();
-                    attributes.set(KvmMemoryAttributes::PRIVATE, attrs.get_bit(4));
-                    self.vm
-                        .set_memory_attributes(address, num_pages * 0x1000, attributes)?;
+                KvmExit::Tdx(mut tdx_exit) => {
+                    assert_eq!({ tdx_exit.ty }, 1);
+
+                    match tdx_exit.in_r11 {
+                        MAP_GPA => {
+                            let mut address = tdx_exit.in_r12;
+                            let num_pages = tdx_exit.in_r13;
+                            let private = !address.get_bit(51);
+                            address.set_bit(51, false);
+
+                            let mut attributes = KvmMemoryAttributes::empty();
+                            attributes.set(KvmMemoryAttributes::PRIVATE, private);
+                            self.vm.set_memory_attributes(
+                                address,
+                                num_pages * 0x1000,
+                                attributes,
+                            )?;
+
+                            tdx_exit.out_r10 = VMCALL_SUCCESS;
+                        }
+                        sub_fn => unimplemented!("unimplemented vmcall sub_fn={sub_fn:x}"),
+                    }
 
                     kvm_run.update(|mut run| {
-                        hypercall.ret = 0;
-                        run.set_exit(KvmExit::Hypercall(hypercall));
+                        run.set_exit(KvmExit::Tdx(tdx_exit));
                         run
                     });
                 }
@@ -271,7 +326,8 @@ impl VmContext {
 
                             let base = 1 << 6;
                             let kvm_slot_id = base + slot_id;
-                            let entry = self.memory_slots.entry(kvm_slot_id);
+                            let mut guard = self.memory_slots.lock().unwrap();
+                            let entry = guard.entry(kvm_slot_id);
                             match entry {
                                 Entry::Occupied(entry) => {
                                     assert!(
@@ -308,32 +364,25 @@ impl VmContext {
                                 }
                             }
                         }
-                        KICK_AP_PORT => {
-                            let id = u8::try_from(value)?;
-                            self.ap_threads
-                                .get(&id)
-                                .context("couldn't find AP thread")?
-                                .thread()
-                                .unpark();
-                        }
                         other => unimplemented!("unimplemented io port: {other}"),
                     }
                 }
                 KvmExit::Shutdown | KvmExit::SystemEvent(_) => bail!("no output was produced"),
-                KvmExit::MemoryFault(fault) => {
-                    dbg!(fault);
-                }
                 KvmExit::WrMsr(msr) => match msr.index {
                     UPDATE_OUTPUT_MSR => {
                         let gfn =
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = ((msr.data & 0xfff) + 1) as usize;
 
-                        let slot = find_slot(gfn, &mut self.memory_slots)?;
+                        let mut guard = self.memory_slots.lock().unwrap();
+                        let slot = find_slot(gfn, &mut guard)?;
                         let output_buffer = slot.read::<[u8; 4096]>(gfn.start_address())?;
+                        drop(guard);
 
                         let output_slice = &output_buffer[..len];
-                        output.extend_from_slice(output_slice);
+                        sender
+                            .send(OutputEvent::Write(output_slice.to_vec()))
+                            .unwrap();
                     }
                     FINISH_OUTPUT_MSR => {
                         info!("finished after {:?}", self.start.elapsed());
@@ -342,89 +391,57 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = (msr.data & 0xfff) as usize;
 
-                        let slot = find_slot(gfn, &mut self.memory_slots)?;
+                        let mut guard = self.memory_slots.lock().unwrap();
+                        let slot = find_slot(gfn, &mut guard)?;
                         let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
+                        drop(guard);
 
                         let attestation_report = attestation_report[..len].to_vec();
-                        return Ok(MushroomResult {
-                            output,
-                            attestation_report: Some(attestation_report),
-                        });
+                        sender
+                            .send(OutputEvent::Finish(attestation_report.to_vec()))
+                            .unwrap();
+                        return Ok(());
                     }
                     index => unimplemented!("unsupported MSR: {index:#08x}"),
                 },
                 KvmExit::Other { exit_reason } => {
                     unimplemented!("exit with type: {exit_reason}");
                 }
-                KvmExit::Hlt => std::thread::park(),
                 KvmExit::Interrupted => {}
                 exit => {
                     panic!("unexpected exit: {exit:?}");
                 }
             }
 
-            let run_res = self.bsp.run();
-
-            run_res?;
+            bsp.run()?;
         }
+
+        Ok(())
     }
+}
 
-    fn run_kernel_vcpu(
-        id: u8,
-        vm: Arc<VmHandle>,
-        cpuid_entries: Arc<[KvmCpuidEntry2]>,
-    ) -> JoinHandle<()> {
-        let supervisor_thread = std::thread::current();
+#[derive(Debug)]
+enum OutputEvent {
+    Write(Vec<u8>),
+    Finish(Vec<u8>),
+}
 
-        std::thread::spawn(move || {
-            let ap = vm.create_vcpu(i32::from(id)).unwrap();
-            ap.set_cpuid(&cpuid_entries).unwrap();
-
-            // Allow the kernel to query it's processor id through TSC_AUX.
-            // Note that this doesn't do anything on EPYC Milan.
-            const TSC_AUX: u32 = 0xc0000103;
-            ap.set_msr(TSC_AUX, u64::from(id - FIRST_AP)).unwrap();
-
-            // Work around a bug where KVM fails to enable LBR virtualization
-            // for SEV-ES vCPUs creating using AP creation.
-            const DEBUG_CTL: u32 = 0x000001d9;
-            ap.set_msr(DEBUG_CTL, 1).unwrap();
-
-            let kvm_run = ap.get_kvm_run_block().unwrap();
-
-            std::thread::park();
-
-            loop {
-                map_field!(kvm_run.cr8).write(0);
-
-                // Run the AP.
-                let res = ap.run();
-                match res {
-                    Ok(_) => {}
-                    Err(err) if is_efault(&err) => {
-                        // The VM has been shut down.
-                        break;
-                    }
-                    Err(err) => {
-                        panic!("{err}");
-                    }
-                }
-
-                // Check the exit.
-                let kvm_run = kvm_run.read();
-                match kvm_run.exit() {
-                    KvmExit::Hlt => {
-                        let resume = kvm_run.cr8.get_bit(0);
-
-                        supervisor_thread.unpark();
-
-                        if !resume {
-                            std::thread::park();
-                        }
-                    }
-                    exit => panic!("unexpected exit {exit:?}"),
-                }
-            }
-        })
-    }
+fn install_signal_handler() {
+    static INSTALL_SIGNAL_HANDLER: Once = Once::new();
+    INSTALL_SIGNAL_HANDLER.call_once(|| {
+        extern "C" fn handler(_: i32) {
+            // Don't do anything.
+        }
+        unsafe {
+            sigaction(
+                SIG_KICK,
+                &SigAction::new(
+                    SigHandler::Handler(handler),
+                    SaFlags::empty(),
+                    SigSet::empty(),
+                ),
+            )
+            .unwrap();
+        };
+    });
 }
