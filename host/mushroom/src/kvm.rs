@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
 use std::{
-    array::from_fn,
+    array::{self, from_fn},
+    fmt,
     fs::OpenOptions,
     mem::{size_of, size_of_val},
-    num::{NonZeroU8, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU8, NonZeroUsize},
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
 };
 
@@ -26,6 +27,7 @@ use crate::{kvm::hidden::KvmCpuid2, slot::Slot};
 
 const KVMIO: u8 = 0xAE;
 pub const KVM_HC_MAP_GPA_RANGE: u64 = 12;
+const MAX_ENTRIES: usize = 256;
 
 pub struct KvmHandle {
     fd: OwnedFd,
@@ -80,8 +82,19 @@ impl KvmHandle {
         Ok(VmHandle { fd })
     }
 
+    pub fn create_tdx_vm(&self) -> Result<VmHandle> {
+        debug!("creating vm");
+
+        const KVM_X86_TDX_VM: i32 = 2;
+        ioctl_write_int_bad!(kvm_create_vm, request_code_none!(KVMIO, 0x01));
+        let res = unsafe { kvm_create_vm(self.fd.as_raw_fd(), KVM_X86_TDX_VM) };
+        let raw_fd = res.context("failed to create vm")?;
+        let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+
+        Ok(VmHandle { fd })
+    }
+
     pub fn get_supported_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
-        const MAX_ENTRIES: usize = 256;
         let mut buffer = KvmCpuid2::<MAX_ENTRIES> {
             nent: MAX_ENTRIES as u32,
             _padding: 0,
@@ -110,7 +123,6 @@ impl KvmHandle {
     }
 
     pub fn get_supported_hv_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
-        const MAX_ENTRIES: usize = 256;
         let mut buffer = KvmCpuid2::<MAX_ENTRIES> {
             nent: MAX_ENTRIES as u32,
             _padding: 0,
@@ -136,6 +148,15 @@ impl KvmHandle {
         res.context("failed to query supported hv cpuid features")?;
 
         Ok(Box::from(buffer.entries[..buffer.nent as usize].to_vec()))
+    }
+
+    pub fn check_extension(&self, cap: KvmCap) -> Result<Option<NonZeroU32>> {
+        ioctl_write_int_bad!(kvm_check_extension, request_code_none!(KVMIO, 0x03));
+
+        let res = unsafe { kvm_check_extension(self.fd.as_raw_fd(), cap.0 as i32) };
+        let val = res.context("failed to check extension")?;
+
+        Ok(NonZeroU32::new(val as u32))
     }
 }
 
@@ -562,6 +583,126 @@ impl VmHandle {
         Ok(page)
     }
 
+    unsafe fn memory_encrypt_op_tdx<'a>(
+        &self,
+        payload: KvmTdxCmdPayload<'a>,
+    ) -> Result<KvmTdxCmdPayload<'a>> {
+        debug!("executing memory encryption operation");
+
+        let mut cmd = KvmTdxCmd { payload, error: 0 };
+
+        ioctl_readwrite!(kvm_memory_encrypt_op, KVMIO, 0xba, u64);
+        let res =
+            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmTdxCmd as *mut u64);
+
+        ensure!(cmd.error == 0);
+        res.context("failed to execute memory encryption operation")?;
+
+        Ok(cmd.payload)
+    }
+
+    pub fn tdx_capabilities(&self) -> Result<KvmTdxCapabilities> {
+        let mut tdx_capabilities = KvmTdxCapabilities {
+            attrs_fixed0: 0,
+            attrs_fixed1: 0,
+            xfam_fixed0: 0,
+            xfam_fixed1: 0,
+            supported_gpaw: SupportedGpaw::empty(),
+            padding: 0,
+            reserved: [0; 251],
+            nr_cpuid_configs: MAX_ENTRIES as u32,
+            cpuid_configs: [KvmTdxCpuidConfig {
+                leaf: 0,
+                sub_leaf: 0,
+                eax: 0,
+                ebx: 0,
+                ecx: 0,
+                edx: 0,
+            }; MAX_ENTRIES],
+        };
+        unsafe {
+            self.memory_encrypt_op_tdx(KvmTdxCmdPayload::KvmTdxCapabilities(
+                KvmTdxCapabilitiesPayload {
+                    flags: 0,
+                    data: &mut tdx_capabilities,
+                },
+            ))?;
+        }
+        Ok(tdx_capabilities)
+    }
+
+    pub fn tdx_init_vm(&self, entries: &[KvmCpuidEntry2], mrconfigid: [u8; 48]) -> Result<()> {
+        ensure!(entries.len() <= MAX_ENTRIES);
+        let entries = array::from_fn(|i| {
+            entries.get(i).copied().unwrap_or(KvmCpuidEntry2 {
+                function: 0,
+                index: 0,
+                flags: 0,
+                eax: 0,
+                ebx: 0,
+                ecx: 0,
+                edx: 0,
+                padding: [0; 3],
+            })
+        });
+        let tdx_init_vm = KvmTdxInitVm {
+            attributes: 0,
+            mrconfigid,
+            mrowner: [0; 48],
+            mrownerconfig: [0; 48],
+            max_num_l2_vms: 1,
+            reserved: [0; 1003],
+            cpuid: KvmCpuid2 {
+                nent: u32::try_from(entries.len())?,
+                _padding: 0,
+                entries,
+            },
+        };
+        unsafe {
+            self.memory_encrypt_op_tdx(KvmTdxCmdPayload::KvmTdxInitVm(KvmTdxInitVmPayload {
+                flags: 0,
+                data: &tdx_init_vm,
+            }))?;
+        }
+        Ok(())
+    }
+
+    pub fn tdx_extend_memory(&self, gpa: u64, len: u64) -> Result<()> {
+        debug!(
+            gpa = format_args!("{gpa:#x}"),
+            len = format_args!("{len:#x}"),
+            "extending tdx memory"
+        );
+
+        ensure!(gpa & 0xfff == 0, "start address is not properly aligned");
+        let gfn = gpa >> 12;
+
+        let mut data = KvmMemoryMapping {
+            base_gfn: gfn,
+            nr_pages: len,
+            flags: 0,
+            source: 0,
+        };
+        while data.nr_pages != 0 {
+            let payload = KvmTdxCmdPayload::KvmTdxExtendMemory(KvmTdxExtendMemoryPayload {
+                flags: 0,
+                data: &mut data,
+            });
+            let res = unsafe { self.memory_encrypt_op_tdx(payload) };
+            res.context("failed to extend tdx memory")?;
+        }
+        Ok(())
+    }
+
+    pub fn tdx_finalize_vm(&self) -> Result<()> {
+        unsafe {
+            self.memory_encrypt_op_tdx(KvmTdxCmdPayload::KvmTdxFinalizeVm(
+                KvmTdxFinalizeVmPayload { flags: 0, data: 0 },
+            ))?;
+        }
+        Ok(())
+    }
+
     pub fn register_encrypted_region(&self, addr: u64, size: u64) -> Result<()> {
         debug!("registering encrypted region");
 
@@ -938,6 +1079,51 @@ impl VcpuHandle {
         Ok(())
     }
 
+    unsafe fn memory_encrypt_op_tdx<'a>(
+        &self,
+        payload: KvmTdxCmdPayload<'a>,
+    ) -> Result<KvmTdxCmdPayload<'a>> {
+        debug!("executing memory encryption operation");
+
+        let mut cmd = KvmTdxCmd { payload, error: 0 };
+
+        ioctl_readwrite!(kvm_memory_encrypt_op, KVMIO, 0xba, u64);
+        let res =
+            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmTdxCmd as *mut u64);
+
+        ensure!(cmd.error == 0);
+        res.context("failed to execute memory encryption operation")?;
+
+        Ok(cmd.payload)
+    }
+
+    pub fn tdx_init_vcpu(&self) -> Result<()> {
+        unsafe {
+            self.memory_encrypt_op_tdx(KvmTdxCmdPayload::KvmTdxInitVcpu(KvmTdxInitVcpuPayload {
+                flags: 0,
+                initial_rcx: 0,
+            }))?;
+        }
+        Ok(())
+    }
+
+    pub fn memory_mapping(&self, gpa: u64, source: &[Page]) -> Result<()> {
+        debug!(gpa, "memory mapping");
+
+        let mut data = KvmMemoryMapping {
+            base_gfn: gpa >> 12,
+            nr_pages: u64::try_from(source.len())?,
+            flags: 0,
+            source: source.as_ptr() as u64,
+        };
+
+        ioctl_readwrite!(kvm_memory_mapping, KVMIO, 0xd5, KvmMemoryMapping);
+
+        let res = unsafe { kvm_memory_mapping(self.fd.as_raw_fd(), &mut data) };
+        res.context("failed to create memory mapping")?;
+        Ok(())
+    }
+
     pub fn get_kvm_run_block(&self) -> Result<VolatilePtr<KvmRun>> {
         // FIXME: unmap the memory
         let res = unsafe {
@@ -1198,6 +1384,9 @@ impl KvmRun {
             38 => KvmExit::MemoryFault(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitMemoryFault>()],
             )),
+            40 => KvmExit::Tdx(pod_read_unaligned(
+                &self.exit_data[..size_of::<KvmTdxExit>()],
+            )),
             51 => KvmExit::ReflectVc,
             exit_reason => KvmExit::Other { exit_reason },
         }
@@ -1211,6 +1400,10 @@ impl KvmRun {
             }
             KvmExit::RdMsr(msr) => {
                 self.exit_reason = 29;
+                self.exit_data[..size_of_val(&msr)].copy_from_slice(bytes_of(&msr));
+            }
+            KvmExit::Tdx(msr) => {
+                self.exit_reason = 40;
                 self.exit_data[..size_of_val(&msr)].copy_from_slice(bytes_of(&msr));
             }
             _ => unimplemented!(),
@@ -1321,6 +1514,7 @@ pub enum KvmExit {
     RdMsr(KvmExitMsr),
     WrMsr(KvmExitMsr),
     MemoryFault(KvmExitMemoryFault),
+    Tdx(KvmTdxExit),
     ReflectVc,
     Other { exit_reason: u32 },
 }
@@ -1431,6 +1625,38 @@ bitflags! {
 
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
 #[repr(C, packed)]
+pub struct KvmTdxExit {
+    pub ty: u32,
+    _pad: u32,
+    pub in_rcx: u64,
+    pub in_r10: u64,
+    pub in_r11: u64,
+    pub in_r12: u64,
+    pub in_r13: u64,
+    pub in_r14: u64,
+    pub in_r15: u64,
+    pub in_rbx: u64,
+    pub in_rdi: u64,
+    pub in_rsi: u64,
+    pub in_r8: u64,
+    pub in_r9: u64,
+    pub in_rdx: u64,
+    pub out_r10: u64,
+    pub out_r11: u64,
+    pub out_r12: u64,
+    pub out_r13: u64,
+    pub out_r14: u64,
+    pub out_r15: u64,
+    pub out_rbx: u64,
+    pub out_rdi: u64,
+    pub out_rsi: u64,
+    pub out_r8: u64,
+    pub out_r9: u64,
+    pub out_rdx: u64,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable, Debug)]
+#[repr(C, packed)]
 pub struct KvmExitVmgexit {
     pub ghcb_msr: u64,
     pub error: u8,
@@ -1471,11 +1697,13 @@ pub struct KvmEnableCap {
 pub struct KvmCap(pub u32);
 
 impl KvmCap {
+    pub const MAX_VCPUS: Self = Self(66);
     pub const SPLIT_IRQCHIP: Self = Self(121);
     pub const X2APIC_API: Self = Self(129);
     pub const X86_USER_SPACE_MSR: Self = Self(188);
     pub const EXIT_HYPERCALL: Self = Self(201);
     pub const PRIVATE_MEM: Self = Self(224);
+    pub const VM_TYPES: Self = Self(235);
     pub const UNMAPPED_PRIVATE_MEM: Self = Self(240);
 }
 
@@ -1617,6 +1845,124 @@ pub struct KvmSevSnpDbgVmsa {
 pub struct KvmEncRegion {
     pub addr: u64,
     pub size: u64,
+}
+
+#[repr(C)]
+pub struct KvmTdxCmd<'a> {
+    payload: KvmTdxCmdPayload<'a>,
+    error: u64,
+}
+
+#[allow(clippy::enum_variant_names)]
+#[repr(C, u32)]
+pub enum KvmTdxCmdPayload<'a> {
+    KvmTdxCapabilities(KvmTdxCapabilitiesPayload<'a>),
+    KvmTdxInitVm(KvmTdxInitVmPayload<'a>),
+    KvmTdxInitVcpu(KvmTdxInitVcpuPayload),
+    KvmTdxExtendMemory(KvmTdxExtendMemoryPayload<'a>),
+    KvmTdxFinalizeVm(KvmTdxFinalizeVmPayload),
+}
+
+#[repr(C, packed(4))]
+pub struct KvmTdxCapabilitiesPayload<'a> {
+    flags: u32,
+    data: &'a mut KvmTdxCapabilities,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct KvmTdxCapabilities {
+    pub attrs_fixed0: u64,
+    pub attrs_fixed1: u64,
+    pub xfam_fixed0: u64,
+    pub xfam_fixed1: u64,
+    pub supported_gpaw: SupportedGpaw,
+    padding: u32,
+    reserved: [u64; 251],
+    nr_cpuid_configs: u32,
+    cpuid_configs: [KvmTdxCpuidConfig; MAX_ENTRIES],
+}
+
+impl KvmTdxCapabilities {
+    fn cpuid_configs(&self) -> &[KvmTdxCpuidConfig] {
+        &self.cpuid_configs[..self.nr_cpuid_configs as usize]
+    }
+}
+
+impl fmt::Debug for KvmTdxCapabilities {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KvmTdxCapabilities")
+            .field("attrs_fixed0", &self.attrs_fixed0)
+            .field("attrs_fixed1", &self.attrs_fixed1)
+            .field("xfam_fixed0", &self.xfam_fixed0)
+            .field("xfam_fixed1", &self.xfam_fixed1)
+            .field("supported_gpaw", &self.supported_gpaw)
+            .field("cpuid_configs", &self.cpuid_configs())
+            .finish()
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    #[repr(transparent)]
+    pub struct SupportedGpaw: u32 {
+        const GPAW_48 = 1 << 0;
+        const GPAW_52 = 1 << 1;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+struct KvmTdxCpuidConfig {
+    leaf: u32,
+    sub_leaf: u32,
+    eax: u32,
+    ebx: u32,
+    ecx: u32,
+    edx: u32,
+}
+
+#[repr(C, packed(4))]
+pub struct KvmTdxInitVmPayload<'a> {
+    flags: u32,
+    data: &'a KvmTdxInitVm,
+}
+
+#[repr(C)]
+pub struct KvmTdxInitVm {
+    attributes: u64,
+    mrconfigid: [u8; 48],
+    mrowner: [u8; 48],
+    mrownerconfig: [u8; 48],
+    max_num_l2_vms: u8,
+    reserved: [u64; 1003],
+    cpuid: KvmCpuid2<MAX_ENTRIES>,
+}
+
+#[repr(C, packed(4))]
+pub struct KvmTdxInitVcpuPayload {
+    flags: u32,
+    initial_rcx: u64,
+}
+
+#[repr(C, packed(4))]
+pub struct KvmTdxExtendMemoryPayload<'a> {
+    flags: u32,
+    data: &'a mut KvmMemoryMapping,
+}
+
+#[repr(C)]
+pub struct KvmMemoryMapping {
+    base_gfn: u64,
+    nr_pages: u64,
+    flags: u64,
+    source: u64,
+}
+
+#[repr(C, packed(4))]
+pub struct KvmTdxFinalizeVmPayload {
+    flags: u32,
+    data: u64,
 }
 
 #[repr(C)]

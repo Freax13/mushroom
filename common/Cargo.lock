@@ -279,6 +279,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdx-types"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bitflags",
+ "bytemuck",
+ "x86_64",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"

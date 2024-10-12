@@ -1,0 +1,25 @@
+cargo-features = ["per-package-target"]
+
+[package]
+name = "supervisor-tdx"
+version = "0.1.0"
+edition = "2021"
+default-target = "x86_64-unknown-none"
+
+[features]
+harden = ["log/max_level_off", "log/release_max_level_off"]
+
+[dependencies]
+bit_field = "0.10.2"
+bytemuck = "1.15.0"
+constants = { workspace = true }
+io = { workspace = true }
+log = { version = "0.4.21", default-features = false }
+log-types = { workspace = true }
+sha2 = { version = "0.10.8", features = ["force-soft"], default-features = false }
+spin = "0.9.8"
+static-page-tables = { workspace = true }
+supervisor-services = { workspace = true, features = ["supervisor"], default-features = false }
+tdx-types = { workspace = true }
+volatile = { version = "0.5.1", features = ["unstable"] }
+x86_64 = "0.15.1"

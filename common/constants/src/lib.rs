@@ -11,7 +11,7 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-pub const MAX_APS_COUNT: u8 = 128;
+pub const MAX_APS_COUNT: u8 = 32;
 
 pub const FIRST_AP: u8 = 0x80;
 

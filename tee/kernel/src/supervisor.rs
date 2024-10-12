@@ -46,10 +46,14 @@ fn kick_supervisor(resume: bool) {
     bits.set_bit(0, resume);
 
     unsafe {
-        asm!("mov cr8, rax", in("rax") bits);
+        asm!(
+            // The SNP and insecure supervisors look at CR8.
+            // The TDX supervisor looks at RAX.
+            "mov cr8, rax",
+            "hlt",
+            in("rax") bits,
+        );
     }
-
-    x86_64::instructions::hlt();
 }
 
 /// Push a command, don't notify the supervisor about it and don't wait for it

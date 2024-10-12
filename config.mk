@@ -25,11 +25,17 @@ KERNEL_kasan       = $(KERNEL_development)
 KERNEL_profiling   = tee/target/x86_64-unknown-none/kernel-profiling/kernel
 export KERNEL ?= $(mkfile_dir)/$(KERNEL_$(PROFILE))
 
-SUPERVISOR_development = tee/target/supervisor/supervisor/supervisor
-SUPERVISOR_release     = tee/target/supervisor/supervisor-release/supervisor
-SUPERVISOR_kasan       = $(SUPERVISOR_development)
-SUPERVISOR_profiling   = $(SUPERVISOR_development)
-export SUPERVISOR ?= $(mkfile_dir)/$(SUPERVISOR_$(PROFILE))
+SUPERVISOR_SNP_development = tee/target/supervisor/supervisor/supervisor-snp
+SUPERVISOR_SNP_release     = tee/target/supervisor/supervisor-release/supervisor-snp
+SUPERVISOR_SNP_kasan       = $(SUPERVISOR_SNP_development)
+SUPERVISOR_SNP_profiling   = $(SUPERVISOR_SNP_development)
+export SUPERVISOR_SNP ?= $(mkfile_dir)/$(SUPERVISOR_SNP_$(PROFILE))
+
+SUPERVISOR_TDX_development = tee/target/supervisor/supervisor/supervisor-tdx
+SUPERVISOR_TDX_release     = tee/target/supervisor/supervisor-release/supervisor-tdx
+SUPERVISOR_TDX_kasan       = $(SUPERVISOR_TDX_development)
+SUPERVISOR_TDX_profiling   = $(SUPERVISOR_TDX_development)
+export SUPERVISOR_TDX ?= $(mkfile_dir)/$(SUPERVISOR_TDX_$(PROFILE))
 
 CLI_development = host/target/debug/mushroom
 CLI_release     = host/target/release/mushroom
@@ -60,12 +66,14 @@ endif
 OUTPUT ?= output.bin
 ATTESTATION_REPORT ?= report.bin
 
-INSECURE ?= false
+TEE ?= auto
 
-# Make sure that the requested insecure value is supported.
-KNOWN_INSECURITY_false = 1
-KNOWN_INSECURITY_true  = 1
-KNOWN_INSECURITY = $(KNOWN_INSECURITY_$(INSECURE))
-ifneq ($(KNOWN_INSECURITY),1)
-$(error unknown value for insecure $(INSECURE))
+# Make sure that the requested TEE value is supported.
+KNOWN_TEE_snp      = 1
+KNOWN_TEE_tdx      = 1
+KNOWN_TEE_insecure = 1
+KNOWN_TEE_auto     = 1
+KNOWN_TEE = $(KNOWN_TEE_$(TEE))
+ifneq ($(KNOWN_TEE),1)
+$(error unknown value for TEE $(TEE))
 endif

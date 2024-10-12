@@ -125,6 +125,37 @@ static PDP_257: StaticPdp = {
     page_table
 };
 
+// Modified page tables for use with TDX. This set of page tables has the `S`
+// bit set for the log buffer.
+
+#[used]
+#[link_section = ".pagetables.tdx.pml4"]
+static TDX_PML4: StaticPml4 = {
+    let mut page_table = unsafe { PML4.clone() };
+    page_table.clear_entry(256);
+    page_table.set_table(256, &TDX_PDP_256, flags!(WRITE));
+    // Fix the recursive entry.
+    page_table.clear_entry(510);
+    page_table.set_recursive_table(510, &TDX_PML4, flags!(WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static TDX_PDP_256: StaticPdp = {
+    let mut page_table = unsafe { PDP_256.clone() };
+    page_table.clear_entry(0);
+    page_table.set_table(0, &TDX_PD_256_0, flags!(WRITE));
+    page_table
+};
+
+#[link_section = ".pagetables"]
+static TDX_PD_256_0: StaticPd = {
+    let mut page_table = unsafe { PD_256_0.clone() };
+    page_table.clear_entry(56);
+    page_table.set_page(56, LOG_BUFFER, flags!(S | WRITE | EXECUTE_DISABLE));
+    page_table
+};
+
 static INIT_KERNEL_PML4ES: Lazy<()> = Lazy::new(|| {
     let pml4 = ActivePageTable::get();
     for pml4e in pml4.entries[256..].iter() {

@@ -744,6 +744,7 @@ dependencies = [
  "rand",
  "snp-types",
  "supervisor-services",
+ "tdx-types",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1437,6 +1438,16 @@ name = "sync_wrapper"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7065abeca94b6a8a577f9bd45aa0867a2238b74e8eb67cf10d492bc39351394"
+
+[[package]]
+name = "tdx-types"
+version = "0.1.0"
+dependencies = [
+ "bit_field",
+ "bitflags",
+ "bytemuck",
+ "x86_64",
+]
 
 [[package]]
 name = "thiserror"

@@ -1,11 +1,12 @@
 use std::{
+    fmt::{self, Display},
     io::ErrorKind,
     path::{Path, PathBuf},
 };
 
 use anyhow::{ensure, Context, Result};
-use clap::{Args, Parser, Subcommand};
-use mushroom::profiler::ProfileFolder;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use mushroom::{profiler::ProfileFolder, KvmHandle, Tee};
 use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 use tracing::warn;
@@ -39,14 +40,23 @@ enum MushroomSubcommand {
 
 #[derive(Args)]
 struct ConfigArgs {
-    /// Path to the supervisor.
+    /// Path to the supervisor for SNP.
+    #[arg(long,
+        value_name = "PATH",
+        env = "SUPERVISOR_SNP",
+        required_unless_present = "tee",
+        required_if_eq_any([("tee", "auto"), ("tee", "snp")]),
+    )]
+    supervisor_snp: Option<PathBuf>,
+    /// Path to the supervisor for TDX.
     #[arg(
         long,
         value_name = "PATH",
-        env = "SUPERVISOR",
-        required_unless_present = "insecure"
+        env = "SUPERVISOR_TDX",
+        required_unless_present = "tee",
+        required_if_eq_any([("tee", "auto"), ("tee", "tdx")]),
     )]
-    supervisor: Option<PathBuf>,
+    supervisor_tdx: Option<PathBuf>,
     /// Path to the kernel.
     #[arg(long, value_name = "PATH", env = "KERNEL")]
     kernel: PathBuf,
@@ -58,9 +68,9 @@ struct ConfigArgs {
     kasan: bool,
     #[command(flatten)]
     policy: PolicyArgs,
-    /// Whether the run the workload in a non-SNP VM.
-    #[arg(long)]
-    insecure: bool,
+    /// TEE used to run the workload.
+    #[arg(long = "tee", env = "TEE", default_value_t = TeeWithAuto::Auto)]
+    tee: TeeWithAuto,
 }
 
 #[derive(Args)]
@@ -72,7 +82,12 @@ struct IoArgs {
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
     /// Path to store the attestation report.
-    #[arg(long, value_name = "PATH", required_unless_present = "insecure")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        required_unless_present = "tee",
+        required_if_eq_any([("tee", "auto"), ("tee", "snp"), ("tee", "tdx")]),
+    )]
     attestation_report: Option<PathBuf>,
 }
 
@@ -126,39 +141,109 @@ struct RunCommand {
     profile_folder: Option<PathBuf>,
 }
 
+#[derive(ValueEnum, Clone, Copy)]
+pub enum TeeWithAuto {
+    Snp,
+    Tdx,
+    Insecure,
+    Auto,
+}
+
+impl Display for TeeWithAuto {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TeeWithAuto::Snp => f.pad("snp"),
+            TeeWithAuto::Tdx => f.pad("tdx"),
+            TeeWithAuto::Insecure => f.pad("insecure"),
+            TeeWithAuto::Auto => f.pad("auto"),
+        }
+    }
+}
+
 fn run(run: RunCommand) -> Result<()> {
     let kernel = std::fs::read(&run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
 
-    let result = if !run.config.insecure {
-        let supervisor_path = run.config.supervisor.context("missing supervisor path")?;
-        let supervisor =
-            std::fs::read(supervisor_path).context("failed to read supervisor file")?;
+    let kvm_handle = KvmHandle::new()?;
 
-        let profile_folder = run
-            .profile_folder
-            .map(|profile_folder| ProfileFolder::new(profile_folder, run.config.kernel))
-            .transpose()
-            .context("failed to create profile folder")?;
+    let tee = match run.config.tee {
+        TeeWithAuto::Snp => Tee::Snp,
+        TeeWithAuto::Tdx => Tee::Tdx,
+        TeeWithAuto::Insecure => Tee::Insecure,
+        TeeWithAuto::Auto => {
+            if Tee::Snp.is_supported(&kvm_handle)? {
+                Tee::Snp
+            } else if Tee::Tdx.is_supported(&kvm_handle)? {
+                Tee::Tdx
+            } else {
+                warn!("Neither SNP nor TDX are supported. Falling back to insecure.");
+                Tee::Insecure
+            }
+        }
+    };
 
-        mushroom::main(
-            &supervisor,
-            &kernel,
-            &init,
-            run.config.kasan,
-            &input,
-            run.config.policy.policy(),
-            profile_folder,
-        )?
-    } else {
-        if run.io.attestation_report.is_some() {
-            warn!("No attestation report will be produced in insecure mode.");
+    let result = match tee {
+        Tee::Snp => {
+            let supervisor_snp_path = run
+                .config
+                .supervisor_snp
+                .context("missing supervisor path")?;
+            let supervisor_snp =
+                std::fs::read(supervisor_snp_path).context("failed to read supervisor file")?;
+
+            let profile_folder = run
+                .profile_folder
+                .map(|profile_folder| ProfileFolder::new(profile_folder, run.config.kernel))
+                .transpose()
+                .context("failed to create profile folder")?;
+
+            mushroom::snp::main(
+                &kvm_handle,
+                &supervisor_snp,
+                &kernel,
+                &init,
+                run.config.kasan,
+                &input,
+                run.config.policy.policy(),
+                profile_folder,
+            )?
         }
-        if run.profile_folder.is_some() {
-            warn!("Profiling in insecure mode is currently not supported.");
+        Tee::Tdx => {
+            let supervisor_tdx_path = run
+                .config
+                .supervisor_tdx
+                .context("missing supervisor path")?;
+            let supervisor_tdx =
+                std::fs::read(supervisor_tdx_path).context("failed to read supervisor file")?;
+
+            let profile_folder = run
+                .profile_folder
+                .map(|profile_folder| ProfileFolder::new(profile_folder, run.config.kernel))
+                .transpose()
+                .context("failed to create profile folder")?;
+
+            ensure!(!run.config.kasan, "KASAN is not supported on TDX");
+
+            mushroom::tdx::main(
+                &kvm_handle,
+                &supervisor_tdx,
+                &kernel,
+                &init,
+                run.config.kasan,
+                &input,
+                profile_folder,
+            )?
         }
-        mushroom::insecure::main(&kernel, &init, run.config.kasan, &input)?
+        Tee::Insecure => {
+            if run.io.attestation_report.is_some() {
+                warn!("No attestation report will be produced in insecure mode.");
+            }
+            if run.profile_folder.is_some() {
+                warn!("Profiling in insecure mode is currently not supported.");
+            }
+            mushroom::insecure::main(&kvm_handle, &kernel, &init, run.config.kasan, &input)?
+        }
     };
 
     std::fs::write(run.io.output, result.output).context("failed to write output")?;
@@ -186,34 +271,43 @@ struct VerifyCommand {
 
 #[derive(Args)]
 struct TcbArgs {
-    /// The smallest allowed value for the `bootloader`` field of the launch TCB.
+    /// The smallest allowed value for the `bootloader` field of the launch TCB.
     #[arg(long, default_value_t = 4)]
-    bootloader: u8,
+    bootloader_svn: u8,
     /// The smallest allowed value for the `tee` field of the launch TCB.
     #[arg(long, default_value_t = 0)]
-    tee: u8,
+    tee_svn: u8,
     /// The smallest allowed value for the `snp` field of the launch TCB.
     #[arg(long, default_value_t = 22)]
-    snp: u8,
+    snp_svn: u8,
     /// The smallest allowed value for the `microcode` field of the launch TCB.
     #[arg(long, default_value_t = 211)]
-    microcode: u8,
+    microcode_svn: u8,
 }
 
 impl TcbArgs {
     fn min_tcb(&self) -> TcbVersion {
-        TcbVersion::new(self.bootloader, self.tee, self.snp, self.microcode)
+        TcbVersion::new(
+            self.bootloader_svn,
+            self.tee_svn,
+            self.snp_svn,
+            self.microcode_svn,
+        )
     }
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
     ensure!(
-        !run.config.insecure,
+        !matches!(run.config.tee, TeeWithAuto::Insecure),
         "Can't verify output produced in insecure mode."
     );
 
-    let supervisor = std::fs::read(run.config.supervisor.context("missing supervisor path")?)
-        .context("failed to read supervisor file")?;
+    let supervisor_snp = std::fs::read(
+        run.config
+            .supervisor_snp
+            .context("missing supervisor-snp path")?,
+    )
+    .context("failed to read supervisor-snp file")?;
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
@@ -258,7 +352,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     };
 
     let configuration = Configuration::new(
-        &supervisor,
+        &supervisor_snp,
         &kernel,
         &init,
         run.config.kasan,

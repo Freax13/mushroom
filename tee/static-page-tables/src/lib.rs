@@ -1,7 +1,12 @@
 #![no_std]
 #![feature(const_mut_refs, const_unsafecell_get_mut, const_ptr_is_null)]
 
-use core::{cell::UnsafeCell, marker::PhantomData, ops::Range, ptr::null};
+use core::{
+    cell::UnsafeCell,
+    marker::PhantomData,
+    ops::Range,
+    ptr::{null, null_mut},
+};
 
 use x86_64::{
     structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB},
@@ -55,6 +60,27 @@ where
         );
     }
 
+    /// Add one or more entries pointing to tables on the next lower level.
+    pub const fn set_table_range(
+        &mut self,
+        mut index: usize,
+        mut next: &'static [StaticPageTable<L::Next>],
+        mut flags: Flags,
+    ) where
+        L: ParentLevel,
+    {
+        flags.0 |= Flags::PRESENT.0;
+
+        while let Some((first, rest)) = next.split_first() {
+            self.set_entry(
+                index,
+                (first as *const StaticPageTable<L::Next> as *const ()).wrapping_byte_add(flags.0),
+            );
+            index += 1;
+            next = rest;
+        }
+    }
+
     /// Add a new entry pointing to a page.
     pub const fn set_page(&mut self, index: usize, addr: PhysFrame<L::Size>, mut flags: Flags)
     where
@@ -88,6 +114,32 @@ where
                 addr.start.start_address().as_u64() + <L::Size>::SIZE,
             ));
         }
+    }
+
+    /// Clear an entry.
+    pub const fn clear_entry(&mut self, index: usize) {
+        self.entries[index] = UnsafeCell::new(null_mut());
+    }
+
+    /// Clone a page table.
+    ///
+    /// # Safety
+    ///
+    /// This method must only be called at compile-time.
+    pub const unsafe fn clone(&self) -> Self {
+        let mut this = Self::new();
+
+        let mut i = 0;
+        while i < 512 {
+            this.entries[i] = UnsafeCell::new(unsafe {
+                // SAFETY: We never create mutable references to the entries at
+                // compile time, so reading can't race.
+                self.entries[i].get().read()
+            });
+            i += 1;
+        }
+
+        this
     }
 }
 
@@ -177,6 +229,7 @@ impl Flags {
     pub const DIRTY: Self = Self(1 << 6);
     pub const HUGE: Self = Self(1 << 7);
     pub const C: Self = Self(1 << 51);
+    pub const S: Self = Self(1 << 51);
     pub const EXECUTE_DISABLE: Self = Self(1 << 63);
 }
 
