@@ -1,0 +1,10 @@
+[package]
+name = "tdx-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bit_field = "0.10.2"
+bitflags = { version = "2.4.2", features = ["bytemuck"] }
+bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"] }
+x86_64 = "0.15.1"
