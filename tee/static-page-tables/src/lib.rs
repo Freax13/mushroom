@@ -1,7 +1,12 @@
 #![no_std]
 #![feature(const_mut_refs, const_unsafecell_get_mut, const_ptr_is_null)]
 
-use core::{cell::UnsafeCell, marker::PhantomData, ops::Range, ptr::null};
+use core::{
+    cell::UnsafeCell,
+    marker::PhantomData,
+    ops::Range,
+    ptr::{null, null_mut},
+};
 
 use x86_64::{
     structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB},
@@ -88,6 +93,32 @@ where
                 addr.start.start_address().as_u64() + <L::Size>::SIZE,
             ));
         }
+    }
+
+    /// Clear an entry.
+    pub const fn clear_entry(&mut self, index: usize) {
+        self.entries[index] = UnsafeCell::new(null_mut());
+    }
+
+    /// Clone a page table.
+    ///
+    /// # Safety
+    ///
+    /// This method must only be called at compile-time.
+    pub const unsafe fn clone(&self) -> Self {
+        let mut this = Self::new();
+
+        let mut i = 0;
+        while i < 512 {
+            this.entries[i] = UnsafeCell::new(unsafe {
+                // SAFETY: We never create mutable references to the entries at
+                // compile time, so reading can't race.
+                self.entries[i].get().read()
+            });
+            i += 1;
+        }
+
+        this
     }
 }
 
@@ -177,6 +208,7 @@ impl Flags {
     pub const DIRTY: Self = Self(1 << 6);
     pub const HUGE: Self = Self(1 << 7);
     pub const C: Self = Self(1 << 51);
+    pub const S: Self = Self(1 << 51);
     pub const EXECUTE_DISABLE: Self = Self(1 << 63);
 }
 

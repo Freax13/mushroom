@@ -20,6 +20,8 @@ SECTIONS {
     .pagetables (0x10000000000) : 
     {
         KEEP(*(.pagetables.pml4 .pagetables.pml4.*))
+        . = 0x10000001000;
+        KEEP(*(.pagetables.tdx.pml4 .pagetables.tdx.pml4.*))
         KEEP(*(.pagetables .pagetables.*))
     } :pagetables
 
