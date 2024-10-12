@@ -189,23 +189,28 @@ struct VerifyCommand {
 
 #[derive(Args)]
 struct TcbArgs {
-    /// The smallest allowed value for the `bootloader`` field of the launch TCB.
+    /// The smallest allowed value for the `bootloader` field of the launch TCB.
     #[arg(long, default_value_t = 4)]
-    bootloader: u8,
+    bootloader_svn: u8,
     /// The smallest allowed value for the `tee` field of the launch TCB.
     #[arg(long, default_value_t = 0)]
-    tee: u8,
+    tee_svn: u8,
     /// The smallest allowed value for the `snp` field of the launch TCB.
     #[arg(long, default_value_t = 22)]
-    snp: u8,
+    snp_svn: u8,
     /// The smallest allowed value for the `microcode` field of the launch TCB.
     #[arg(long, default_value_t = 211)]
-    microcode: u8,
+    microcode_svn: u8,
 }
 
 impl TcbArgs {
     fn min_tcb(&self) -> TcbVersion {
-        TcbVersion::new(self.bootloader, self.tee, self.snp, self.microcode)
+        TcbVersion::new(
+            self.bootloader_svn,
+            self.tee_svn,
+            self.snp_svn,
+            self.microcode_svn,
+        )
     }
 }
 
