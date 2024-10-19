@@ -4,6 +4,7 @@ use io::input::Header;
 use sha2::{Digest, Sha256};
 
 pub mod snp;
+pub mod tdx;
 
 #[derive(Debug)]
 pub struct VerificationError(());

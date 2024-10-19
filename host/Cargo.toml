@@ -12,8 +12,11 @@ profiler-types = { path = "../common/profiler-types" }
 qgs-client = { path = "qgs-client" }
 snp-types = { path = "../common/snp-types" }
 supervisor-services = { path = "../common/supervisor-services", default-features = false }
-tdx-types = { path = "../common/tdx-types" }
+tdx-types = { path = "../common/tdx-types", features = ["quote"] }
 vcek-kds = { path = "vcek-kds" }
 
 [patch.crates-io]
 x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "c5bc9fc" }
+
+[profile.dev.package.sha2]
+opt-level = 3

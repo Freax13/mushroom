@@ -5,7 +5,7 @@ use rsa::{pkcs8::DecodePublicKey, pss, signature::Verifier, RsaPublicKey};
 use sha2::Sha384;
 use thiserror::Error;
 use x509_cert::{
-    der::{Decode, Encode},
+    der::{referenced::OwnedToRef, Decode, Encode},
     Certificate,
 };
 
@@ -99,11 +99,8 @@ impl Vcek {
             .verify(&cert.tbs_certificate.to_der().unwrap(), &signature)?;
 
         // Extract the public key from the VCEK.
-        let public_key = cert
-            .tbs_certificate
-            .subject_public_key_info
-            .subject_public_key;
-        let verifying_key = VerifyingKey::from_sec1_bytes(public_key.as_bytes().unwrap()).unwrap();
+        let public_key = cert.tbs_certificate.subject_public_key_info.owned_to_ref();
+        let verifying_key = VerifyingKey::try_from(public_key).unwrap();
 
         Ok(Vcek {
             raw: vcek_cert,
