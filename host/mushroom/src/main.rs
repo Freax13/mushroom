@@ -7,7 +7,10 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mushroom::{profiler::ProfileFolder, KvmHandle, Tee};
-use mushroom_verify::{Configuration, InputHash, OutputHash, VcekParameters};
+use mushroom_verify::{
+    snp::{Configuration, VcekParameters},
+    InputHash, OutputHash,
+};
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 use tracing::warn;
 use vcek_kds::{Product, Vcek};
