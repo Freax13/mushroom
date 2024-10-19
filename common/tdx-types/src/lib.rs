@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 use core::fmt;
 
@@ -6,6 +6,8 @@ use bytemuck::{CheckedBitPattern, NoUninit, Zeroable};
 
 pub mod ghci;
 pub mod report;
+#[cfg(feature = "quote")]
+pub mod td_quote;
 pub mod tdcall;
 pub mod vmexit;
 
