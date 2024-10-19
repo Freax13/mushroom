@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt, const_mut_refs, core_intrinsics, sync_unsafe_cell)]
+#![feature(abi_x86_interrupt, core_intrinsics, sync_unsafe_cell)]
 #![allow(internal_features)]
 
 use exception::setup_idt;

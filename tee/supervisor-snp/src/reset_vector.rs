@@ -1,4 +1,4 @@
-use core::arch::{asm, global_asm};
+use core::arch::{global_asm, naked_asm};
 
 use crate::main;
 
@@ -12,7 +12,7 @@ extern "sysv64" fn start() -> ! {
     static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 
     unsafe {
-        asm!(
+        naked_asm!(
             "lea rsp, [rip + {STACK} + {STACK_SIZE}]",
             "and rsp, ~15",
             "call {PREMAIN}",
@@ -20,7 +20,6 @@ extern "sysv64" fn start() -> ! {
             STACK = sym STACK,
             STACK_SIZE = const STACK_SIZE,
             PREMAIN = sym premain,
-            options(noreturn)
         );
     }
 }

@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(const_mut_refs, const_unsafecell_get_mut, const_ptr_is_null)]
+#![feature(const_ptr_is_null)]
 
 use core::{
     cell::UnsafeCell,
