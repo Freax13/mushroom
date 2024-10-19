@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use bit_field::BitField;
+use bytemuck::{bytes_of, pod_read_unaligned};
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
@@ -28,7 +29,7 @@ use crate::{
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
     slot::Slot,
-    volatile_bytes_of, MushroomResult,
+    MushroomResult,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -254,13 +255,11 @@ impl VmContext {
                 KvmExit::Io(io) => {
                     assert_eq!(io.size, 4, "accesses to the ports should have size 4");
 
-                    let data = volatile_bytes_of(kvm_run);
-                    let data = data
-                        .index(io.data_offset as usize..)
-                        .index(..usize::from(io.size));
-                    let mut buffer = [0; 4];
-                    data.copy_into_slice(&mut buffer);
-                    let value = u32::from_ne_bytes(buffer);
+                    let raw_kvm_run = kvm_run.read();
+                    let raw_kvm_run = bytes_of(&raw_kvm_run);
+                    let value = pod_read_unaligned::<u32>(
+                        &raw_kvm_run[io.data_offset as usize..][..usize::from(io.size)],
+                    );
 
                     match io.port {
                         MEMORY_PORT => {

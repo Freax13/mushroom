@@ -35,5 +35,5 @@ tokio = { version = "1.36.0", features = ["fs", "macros", "rt-multi-thread"], op
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", optional = true }
 vcek-kds = { workspace = true, optional = true }
-volatile = { version = "0.5.1", features = ["unstable"] }
+volatile = { version = "0.5.1", features = [] }
 x86_64 = { version = "0.15.1", default-features = false }
