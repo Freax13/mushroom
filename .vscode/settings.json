@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.check.overrideCommand": [
+        "cargo",
+        "hack",
+        "clippy",
+        "--message-format=json-diagnostic-rendered-ansi"
+    ],
+}
