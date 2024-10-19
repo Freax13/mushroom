@@ -4,14 +4,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
+use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mushroom::{profiler::ProfileFolder, KvmHandle, Tee};
 use mushroom_verify::{
     snp::{Configuration, VcekParameters},
-    InputHash, OutputHash,
+    tdx, InputHash, OutputHash,
 };
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
+use tdx_types::td_quote::{Quote, TeeTcbSvn};
 use tracing::warn;
 use vcek_kds::{Product, Vcek};
 
@@ -282,6 +284,7 @@ struct VerifyCommand {
 
 #[derive(Args)]
 struct TcbArgs {
+    // SNP:
     /// The smallest allowed value for the `bootloader` field of the launch TCB.
     #[arg(long, default_value_t = 4)]
     bootloader_svn: u8,
@@ -294,6 +297,16 @@ struct TcbArgs {
     /// The smallest allowed value for the `microcode` field of the launch TCB.
     #[arg(long, default_value_t = 211)]
     microcode_svn: u8,
+    // TDX:
+    /// TDX module minor SVN.
+    #[arg(long, default_value_t = 5)]
+    tdx_module_svn_minor: u8,
+    /// TDX module major SVN.
+    #[arg(long, default_value_t = 1)]
+    tdx_module_svn_major: u8,
+    /// Microcode SE_SVN at the time the TDX module was loaded.
+    #[arg(long, default_value_t = 2)]
+    seam_last_patch_svn: u8,
 }
 
 impl TcbArgs {
@@ -305,20 +318,17 @@ impl TcbArgs {
             self.microcode_svn,
         )
     }
+
+    fn tee_tcb_svn(&self) -> TeeTcbSvn {
+        let mut svns = [0; 16];
+        svns[0] = self.tdx_module_svn_minor;
+        svns[1] = self.tdx_module_svn_major;
+        svns[2] = self.seam_last_patch_svn;
+        TeeTcbSvn(svns)
+    }
 }
 
 async fn verify(run: VerifyCommand) -> Result<()> {
-    ensure!(
-        !matches!(run.config.tee, TeeWithAuto::Insecure),
-        "Can't verify output produced in insecure mode."
-    );
-
-    let supervisor_snp = std::fs::read(
-        run.config
-            .supervisor_snp
-            .context("missing supervisor-snp path")?,
-    )
-    .context("failed to read supervisor-snp file")?;
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
@@ -333,51 +343,105 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     let input_hash = InputHash::new(&input);
     let output_hash = OutputHash::new(&output);
 
-    // FIXME: use proper error type and use `?` instead of unwrap.
-    let product = Product::Milan;
-    let params = VcekParameters::for_attestaton_report(&attestation_report).unwrap();
+    let report = parse_report(run.config.tee, attestation_report)?;
+    match report {
+        Report::Snp(attestation_report) => {
+            // FIXME: use proper error type and use `?` instead of unwrap.
+            let product = Product::Milan;
+            let params = VcekParameters::for_attestaton_report(&attestation_report).unwrap();
 
-    let mut vcek_cert = None;
-    if let Some(cache) = run.vcek_cache.as_ref() {
-        vcek_cert = load_vcek_from_cache(cache, product, params).await?;
-    }
+            let mut vcek_cert = None;
+            if let Some(cache) = run.vcek_cache.as_ref() {
+                vcek_cert = load_vcek_from_cache(cache, product, params).await?;
+            }
 
-    let vcek_cert = if let Some(vcek_cert) = vcek_cert {
-        vcek_cert
-    } else {
-        let vcek_cert = vcek_kds::Vcek::download(
-            product,
-            params.chip_id.chip_id,
-            params.tcb.bootloader(),
-            params.tcb.tee(),
-            params.tcb.snp(),
-            params.tcb.microcode(),
-        )
-        .await?;
+            let vcek_cert = if let Some(vcek_cert) = vcek_cert {
+                vcek_cert
+            } else {
+                let vcek_cert = vcek_kds::Vcek::download(
+                    product,
+                    params.chip_id.chip_id,
+                    params.tcb.bootloader(),
+                    params.tcb.tee(),
+                    params.tcb.snp(),
+                    params.tcb.microcode(),
+                )
+                .await?;
 
-        if let Some(cache) = run.vcek_cache.as_ref() {
-            save_vcek_to_cache(cache, params, &vcek_cert).await?;
+                if let Some(cache) = run.vcek_cache.as_ref() {
+                    save_vcek_to_cache(cache, params, &vcek_cert).await?;
+                }
+
+                vcek_cert
+            };
+
+            let supervisor_snp = std::fs::read(
+                run.config
+                    .supervisor_snp
+                    .context("missing supervisor-snp path")?,
+            )
+            .context("failed to read supervisor-snp file")?;
+            let configuration = Configuration::new(
+                &supervisor_snp,
+                &kernel,
+                &init,
+                run.config.kasan,
+                run.config.policy.policy(),
+                run.tcb_args.min_tcb(),
+            );
+            // FIXME: use proper error type and use `?` instead of unwrap.
+            configuration
+                .verify(input_hash, output_hash, &attestation_report, &vcek_cert)
+                .unwrap();
         }
-
-        vcek_cert
-    };
-
-    let configuration = Configuration::new(
-        &supervisor_snp,
-        &kernel,
-        &init,
-        run.config.kasan,
-        run.config.policy.policy(),
-        run.tcb_args.min_tcb(),
-    );
-    // FIXME: use proper error type and use `?` instead of unwrap.
-    configuration
-        .verify(input_hash, output_hash, &attestation_report, &vcek_cert)
-        .unwrap();
+        Report::Tdx(attestation_report) => {
+            let supervisor_tdx = std::fs::read(
+                run.config
+                    .supervisor_tdx
+                    .context("missing supervisor-tdx path")?,
+            )
+            .context("failed to read supervisor-tdx file")?;
+            let configuration = tdx::Configuration::new(
+                &supervisor_tdx,
+                &kernel,
+                &init,
+                run.tcb_args.tee_tcb_svn(),
+            );
+            configuration
+                .verify(input_hash, output_hash, &attestation_report)
+                .unwrap();
+        }
+    }
 
     println!("Ok");
 
     Ok(())
+}
+
+enum Report {
+    Snp(Vec<u8>),
+    Tdx(Vec<u8>),
+}
+
+fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report> {
+    match tee {
+        TeeWithAuto::Snp => Ok(Report::Snp(attestation_report)),
+        TeeWithAuto::Tdx => Ok(Report::Tdx(attestation_report)),
+        TeeWithAuto::Insecure => bail!("Can't verify output produced in insecure mode."),
+        TeeWithAuto::Auto => {
+            if try_pod_read_unaligned::<snp_types::attestation::AttestionReport>(
+                &attestation_report,
+            )
+            .is_ok()
+            {
+                return Ok(Report::Snp(attestation_report));
+            }
+            if Quote::parse(&attestation_report).is_ok() {
+                return Ok(Report::Tdx(attestation_report));
+            }
+            bail!("Can't determine attestation report type.")
+        }
+    }
 }
 
 fn cache_file_name(params: VcekParameters) -> String {
