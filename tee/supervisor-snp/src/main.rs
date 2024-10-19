@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(
-    const_mut_refs,
     core_intrinsics,
     naked_functions,
     pointer_is_aligned_to,

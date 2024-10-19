@@ -1,7 +1,11 @@
 //! This module is responsible for handling CPU exceptions.
 
 use core::mem::offset_of;
-use core::{alloc::Layout, arch::asm, ptr::null_mut};
+use core::{
+    alloc::Layout,
+    arch::{asm, naked_asm},
+    ptr::null_mut,
+};
 
 use crate::spin::lazy::Lazy;
 use alloc::alloc::alloc;
@@ -165,7 +169,7 @@ pub fn load_idt() {
 #[naked]
 extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
     unsafe {
-        asm!(
+        naked_asm!(
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_divide_error_handler}",
@@ -180,7 +184,6 @@ extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
             kernel_divide_error_handler = sym kernel_divide_error_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
-            options(noreturn),
         );
     }
 }
@@ -195,7 +198,7 @@ extern "x86-interrupt" fn page_fault_handler(
     error_code: PageFaultErrorCode,
 ) {
     unsafe {
-        asm!(
+        naked_asm!(
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je 66f",
@@ -256,7 +259,6 @@ extern "x86-interrupt" fn page_fault_handler(
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
-            options(noreturn),
         );
     }
 }
@@ -300,7 +302,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     error_code: u64,
 ) {
     unsafe {
-        asm!(
+        naked_asm!(
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_general_protection_fault_handler}",
@@ -317,7 +319,6 @@ extern "x86-interrupt" fn general_protection_fault_handler(
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
-            options(noreturn),
         );
     }
 }
@@ -336,7 +337,7 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
 #[naked]
 extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64) {
     unsafe {
-        asm!(
+        naked_asm!(
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_vc_handler}",
@@ -353,7 +354,6 @@ extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
-            options(noreturn),
         );
     }
 }
@@ -361,7 +361,7 @@ extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64
 #[naked]
 extern "x86-interrupt" fn kernel_vc_handler(frame: InterruptStackFrame, code: u64) {
     unsafe {
-        asm!(
+        naked_asm!(
             "push r11",
             "push r10",
             "push r9",
@@ -390,7 +390,6 @@ extern "x86-interrupt" fn kernel_vc_handler(frame: InterruptStackFrame, code: u6
             "add rsp, 8", // skip error code.
             "iretq",
             kernel_vc_handler_impl = sym kernel_vc_handler_impl,
-            options(noreturn)
         );
     }
 }
@@ -464,13 +463,12 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // The code that entered userspace stored addresses where execution should
     // continue when userspace exits.
     unsafe {
-        asm!(
+        naked_asm!(
             "swapgs",
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0x80",
             "jmp gs:[{HANDLER_OFFSET}]",
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
-            options(noreturn)
         );
     }
 }

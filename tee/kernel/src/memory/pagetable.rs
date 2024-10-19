@@ -1165,7 +1165,7 @@ where
     entry: &'a ActivePageTableEntry<L>,
 }
 
-impl<'a, L> Deref for ActivePageTableEntryGuard<'a, L>
+impl<L> Deref for ActivePageTableEntryGuard<'_, L>
 where
     L: TableLevel,
     ActivePageTableEntry<L>: ParentEntry,
@@ -1178,7 +1178,7 @@ where
     }
 }
 
-impl<'a, L> Drop for ActivePageTableEntryGuard<'a, L>
+impl<L> Drop for ActivePageTableEntryGuard<'_, L>
 where
     L: TableLevel,
     ActivePageTableEntry<L>: ParentEntry,
