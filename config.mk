@@ -66,6 +66,26 @@ endif
 OUTPUT ?= output.bin
 ATTESTATION_REPORT ?= report.bin
 
+TEE_SNP      ?= true
+TEE_TDX      ?= true
+TEE_INSECURE ?= true
+
+# Make sure that the TEE flags are either true or false.
+KNOWN_BOOL_true  = 1
+KNOWN_BOOL_false = 1
+KNOWN_TEE_SNP = $(KNOWN_BOOL_$(TEE_SNP))
+KNOWN_TEE_TDX = $(KNOWN_BOOL_$(TEE_TDX))
+KNOWN_TEE_INSECURE = $(KNOWN_BOOL_$(TEE_INSECURE))
+ifneq ($(KNOWN_TEE_SNP),1)
+$(error unknown value for TEE_SNP $(TEE_SNP))
+endif
+ifneq ($(KNOWN_TEE_TDX),1)
+$(error unknown value for TEE_TDX $(TEE_TDX))
+endif
+ifneq ($(KNOWN_TEE_INSECURE),1)
+$(error unknown value for TEE_INSECURE $(TEE_INSECURE))
+endif
+
 TEE ?= auto
 
 # Make sure that the requested TEE value is supported.
