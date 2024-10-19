@@ -50,9 +50,9 @@ impl Configuration {
 
             for (i, page) in pages.drain(..).enumerate() {
                 let gpa = gpa + i as u64;
-                for (j, chunk) in page.array_chunks().enumerate() {
+                for (j, chunk) in page.chunks(256).enumerate() {
                     let gpa = gpa.start_address() + (j * chunk.len()) as u64;
-                    mr_extend(&mut hasher, gpa, chunk);
+                    mr_extend(&mut hasher, gpa, chunk.try_into().unwrap());
                 }
             }
         }

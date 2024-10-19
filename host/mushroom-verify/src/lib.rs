@@ -1,5 +1,3 @@
-#![feature(array_chunks)]
-
 use io::input::Header;
 use sha2::{Digest, Sha256};
 
