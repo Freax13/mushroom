@@ -36,4 +36,4 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", optional = true }
 vcek-kds = { workspace = true, optional = true }
 volatile = { version = "0.5.1", features = ["unstable"] }
-x86_64 = "0.15.1"
+x86_64 = { version = "0.15.1", default-features = false }
