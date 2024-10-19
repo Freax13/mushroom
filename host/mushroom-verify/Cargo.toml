@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"] }
-loader = { workspace = true }
+bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"], optional = true }
+loader = { workspace = true, optional = true }
 io = { workspace = true }
-p384 = "0.13.0"
+p384 = { version = "0.13.0", optional = true }
 sha2 = "0.10.8"
-snp-types = { workspace = true }
-vcek-kds = { workspace = true }
-tdx-types = { workspace = true, features = ["quote"] }
-x86_64 = "0.15.1"
+snp-types = { workspace = true, optional = true }
+vcek-kds = { workspace = true, optional = true }
+tdx-types = { workspace = true, features = ["quote"], optional = true }
+x86_64 = { version = "0.15.1", optional = true }
+
+[features]
+default = ["snp", "tdx"]
+snp = ["dep:bytemuck", "dep:p384", "dep:loader", "dep:snp-types", "dep:vcek-kds"]
+tdx = ["dep:loader", "dep:tdx-types", "dep:x86_64"]

@@ -3,7 +3,7 @@ members = ["mushroom", "mushroom-verify", "qgs-client", "vcek-kds"]
 resolver = "2"
 
 [workspace.dependencies]
-mushroom-verify = { path = "mushroom-verify" }
+mushroom-verify = { path = "mushroom-verify", default-features = false }
 constants = { path = "../common/constants" }
 io = { path = "../common/io" }
 loader = { path = "../common/loader" }

@@ -46,6 +46,35 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
 
+  # Build the CLI with various feature configurations.
+  build-cli:
+    strategy:
+      matrix:
+        snp:
+          - true
+          - false
+        tdx:
+          - true
+          - false
+        insecure:
+          - true
+          - false
+    name: "Build CLI"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-cli-${{ matrix.snp }}-${{ matrix.tdx }}-${{ matrix.insecure }}
+          workspaces: |
+            host
+      - name: "Build"
+        run: make cli
+        env:
+          TEE_SNP: ${{ matrix.snp }}
+          TEE_TDX: ${{ matrix.tdx }}
+          TEE_INSECURE: ${{ matrix.insecure }}
+
   clippy:
     name: "Clippy"
     runs-on: ubuntu-latest

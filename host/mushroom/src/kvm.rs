@@ -19,6 +19,7 @@ use nix::{
     request_code_none,
     sys::mman::{MapFlags, ProtFlags},
 };
+#[cfg(feature = "snp")]
 use snp_types::{guest_policy::GuestPolicy, vmsa::SevFeatures, PageType, VmplPermissions};
 use tracing::debug;
 use volatile::VolatilePtr;
@@ -59,6 +60,7 @@ impl KvmHandle {
         Ok(Self { fd })
     }
 
+    #[cfg(feature = "insecure")]
     pub fn create_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
@@ -70,6 +72,7 @@ impl KvmHandle {
         Ok(VmHandle { fd })
     }
 
+    #[cfg(feature = "snp")]
     pub fn create_snp_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
@@ -82,6 +85,7 @@ impl KvmHandle {
         Ok(VmHandle { fd })
     }
 
+    #[cfg(feature = "tdx")]
     pub fn create_tdx_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
@@ -438,6 +442,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "snp")]
     unsafe fn memory_encrypt_op<'a>(
         &self,
         payload: KvmSevCmdPayload<'a>,
@@ -460,6 +465,7 @@ impl VmHandle {
         Ok(cmd.payload)
     }
 
+    #[cfg(feature = "snp")]
     pub fn sev_snp_init(&self) -> Result<()> {
         let mut data = KvmSevInit {
             vmsa_features: SevFeatures::RESTRICTED_INJECTION | SevFeatures::VMSA_REG_PROT,
@@ -474,6 +480,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "snp")]
     pub fn sev_snp_launch_start(&self, policy: GuestPolicy, sev_handle: &SevHandle) -> Result<()> {
         debug!("starting snp launch");
         let mut data = KvmSevSnpLaunchStart {
@@ -489,6 +496,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "snp")]
     pub fn sev_snp_launch_update(
         &self,
         start_addr: u64,
@@ -528,6 +536,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "snp")]
     pub fn sev_snp_launch_finish(
         &self,
         // FIXME: figure out if we need a sev handle for this operation
@@ -553,6 +562,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "snp")]
     pub fn sev_snp_dbg_decrypt(&self, gfn: u64) -> Result<[u8; 4096]> {
         debug!("debug decrypting");
 
@@ -568,6 +578,7 @@ impl VmHandle {
         Ok(page)
     }
 
+    #[cfg(feature = "snp")]
     pub fn sev_snp_dbg_decrypt_vmsa(&self, vcpu_id: u32) -> Result<[u8; 4096]> {
         debug!("debug decrypting vmsa");
 
@@ -583,6 +594,7 @@ impl VmHandle {
         Ok(page)
     }
 
+    #[cfg(feature = "tdx")]
     unsafe fn memory_encrypt_op_tdx<'a>(
         &self,
         payload: KvmTdxCmdPayload<'a>,
@@ -601,6 +613,7 @@ impl VmHandle {
         Ok(cmd.payload)
     }
 
+    #[cfg(feature = "tdx")]
     pub fn tdx_capabilities(&self) -> Result<KvmTdxCapabilities> {
         let mut tdx_capabilities = KvmTdxCapabilities {
             attrs_fixed0: 0,
@@ -631,6 +644,7 @@ impl VmHandle {
         Ok(tdx_capabilities)
     }
 
+    #[cfg(feature = "tdx")]
     pub fn tdx_init_vm(&self, entries: &[KvmCpuidEntry2], mrconfigid: [u8; 48]) -> Result<()> {
         ensure!(entries.len() <= MAX_ENTRIES);
         let entries = array::from_fn(|i| {
@@ -667,6 +681,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "tdx")]
     pub fn tdx_extend_memory(&self, gpa: u64, len: u64) -> Result<()> {
         debug!(
             gpa = format_args!("{gpa:#x}"),
@@ -694,6 +709,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "tdx")]
     pub fn tdx_finalize_vm(&self) -> Result<()> {
         unsafe {
             self.memory_encrypt_op_tdx(KvmTdxCmdPayload::KvmTdxFinalizeVm(
@@ -703,6 +719,7 @@ impl VmHandle {
         Ok(())
     }
 
+    #[cfg(feature = "snp")]
     pub fn register_encrypted_region(&self, addr: u64, size: u64) -> Result<()> {
         debug!("registering encrypted region");
 
@@ -1079,6 +1096,7 @@ impl VcpuHandle {
         Ok(())
     }
 
+    #[cfg(feature = "tdx")]
     unsafe fn memory_encrypt_op_tdx<'a>(
         &self,
         payload: KvmTdxCmdPayload<'a>,
@@ -1097,6 +1115,7 @@ impl VcpuHandle {
         Ok(cmd.payload)
     }
 
+    #[cfg(feature = "tdx")]
     pub fn tdx_init_vcpu(&self) -> Result<()> {
         unsafe {
             self.memory_encrypt_op_tdx(KvmTdxCmdPayload::KvmTdxInitVcpu(KvmTdxInitVcpuPayload {
@@ -1107,6 +1126,7 @@ impl VcpuHandle {
         Ok(())
     }
 
+    #[cfg(feature = "tdx")]
     pub fn memory_mapping(&self, gpa: u64, source: &[Page]) -> Result<()> {
         debug!(gpa, "memory mapping");
 
@@ -1384,6 +1404,7 @@ impl KvmRun {
             38 => KvmExit::MemoryFault(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmExitMemoryFault>()],
             )),
+            #[cfg(feature = "tdx")]
             40 => KvmExit::Tdx(pod_read_unaligned(
                 &self.exit_data[..size_of::<KvmTdxExit>()],
             )),
@@ -1402,6 +1423,7 @@ impl KvmRun {
                 self.exit_reason = 29;
                 self.exit_data[..size_of_val(&msr)].copy_from_slice(bytes_of(&msr));
             }
+            #[cfg(feature = "tdx")]
             KvmExit::Tdx(msr) => {
                 self.exit_reason = 40;
                 self.exit_data[..size_of_val(&msr)].copy_from_slice(bytes_of(&msr));
@@ -1514,9 +1536,12 @@ pub enum KvmExit {
     RdMsr(KvmExitMsr),
     WrMsr(KvmExitMsr),
     MemoryFault(KvmExitMemoryFault),
+    #[cfg(feature = "tdx")]
     Tdx(KvmTdxExit),
     ReflectVc,
-    Other { exit_reason: u32 },
+    Other {
+        exit_reason: u32,
+    },
 }
 
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
@@ -1623,6 +1648,7 @@ bitflags! {
     }
 }
 
+#[cfg(feature = "tdx")]
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
 #[repr(C, packed)]
 pub struct KvmTdxExit {
@@ -1653,13 +1679,6 @@ pub struct KvmTdxExit {
     pub out_r8: u64,
     pub out_r9: u64,
     pub out_rdx: u64,
-}
-
-#[derive(Clone, Copy, Pod, Zeroable, Debug)]
-#[repr(C, packed)]
-pub struct KvmExitVmgexit {
-    pub ghcb_msr: u64,
-    pub error: u8,
 }
 
 #[repr(C)]
@@ -1737,10 +1756,12 @@ pub struct KvmUserspaceMemoryRegion2<'a> {
     _pad2: [u64; 14],
 }
 
+#[cfg(feature = "snp")]
 pub struct SevHandle {
     fd: OwnedFd,
 }
 
+#[cfg(feature = "snp")]
 impl SevHandle {
     pub fn new() -> Result<Self> {
         let file = OpenOptions::new()
@@ -1752,6 +1773,7 @@ impl SevHandle {
     }
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 struct KvmSevCmd<'a, 'b> {
     pub payload: KvmSevCmdPayload<'a>,
@@ -1759,6 +1781,7 @@ struct KvmSevCmd<'a, 'b> {
     pub sev_fd: Option<BorrowedFd<'b>>,
 }
 
+#[cfg(feature = "snp")]
 #[allow(clippy::enum_variant_names)]
 #[repr(C, u32)]
 // FIXME: Figure out which ones need `&mut T` and which ones need `&T`
@@ -1771,6 +1794,7 @@ pub enum KvmSevCmdPayload<'a> {
     KvmSevSnpDbgDecryptVmsa { data: &'a mut KvmSevSnpDbgVmsa } = 29,
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevDbg {
     src_uaddr: u64,
@@ -1778,6 +1802,7 @@ pub struct KvmSevDbg {
     len: u32,
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevInit {
     pub vmsa_features: SevFeatures,
@@ -1787,6 +1812,7 @@ pub struct KvmSevInit {
     pub _pad2: [u32; 8],
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevSnpLaunchStart {
     /// Guest policy to use.
@@ -1798,6 +1824,7 @@ pub struct KvmSevSnpLaunchStart {
     pub pad1: [u64; 4],
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevSnpLaunchUpdate {
     /// Guest page number to start from.
@@ -1816,6 +1843,7 @@ pub struct KvmSevSnpLaunchUpdate {
     pub pad2: [u64; 4],
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevSnpLaunchFinish {
     id_block_uaddr: u64,
@@ -1829,30 +1857,35 @@ pub struct KvmSevSnpLaunchFinish {
     pad1: [u64; 4],
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevSnpDbg {
     src_gfn: u64,
     dst_uaddr: u64,
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmSevSnpDbgVmsa {
     vcpu_id: u32,
     dst_uaddr: u64,
 }
 
+#[cfg(feature = "snp")]
 #[repr(C)]
 pub struct KvmEncRegion {
     pub addr: u64,
     pub size: u64,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C)]
 pub struct KvmTdxCmd<'a> {
     payload: KvmTdxCmdPayload<'a>,
     error: u64,
 }
 
+#[cfg(feature = "tdx")]
 #[allow(clippy::enum_variant_names)]
 #[repr(C, u32)]
 pub enum KvmTdxCmdPayload<'a> {
@@ -1863,12 +1896,14 @@ pub enum KvmTdxCmdPayload<'a> {
     KvmTdxFinalizeVm(KvmTdxFinalizeVmPayload),
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C, packed(4))]
 pub struct KvmTdxCapabilitiesPayload<'a> {
     flags: u32,
     data: &'a mut KvmTdxCapabilities,
 }
 
+#[cfg(feature = "tdx")]
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct KvmTdxCapabilities {
@@ -1883,12 +1918,14 @@ pub struct KvmTdxCapabilities {
     cpuid_configs: [KvmTdxCpuidConfig; MAX_ENTRIES],
 }
 
+#[cfg(feature = "tdx")]
 impl KvmTdxCapabilities {
     fn cpuid_configs(&self) -> &[KvmTdxCpuidConfig] {
         &self.cpuid_configs[..self.nr_cpuid_configs as usize]
     }
 }
 
+#[cfg(feature = "tdx")]
 impl fmt::Debug for KvmTdxCapabilities {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KvmTdxCapabilities")
@@ -1902,6 +1939,7 @@ impl fmt::Debug for KvmTdxCapabilities {
     }
 }
 
+#[cfg(feature = "tdx")]
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     #[repr(transparent)]
@@ -1911,6 +1949,7 @@ bitflags! {
     }
 }
 
+#[cfg(feature = "tdx")]
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct KvmTdxCpuidConfig {
@@ -1922,12 +1961,14 @@ struct KvmTdxCpuidConfig {
     edx: u32,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C, packed(4))]
 pub struct KvmTdxInitVmPayload<'a> {
     flags: u32,
     data: &'a KvmTdxInitVm,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C)]
 pub struct KvmTdxInitVm {
     attributes: u64,
@@ -1939,18 +1980,21 @@ pub struct KvmTdxInitVm {
     cpuid: KvmCpuid2<MAX_ENTRIES>,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C, packed(4))]
 pub struct KvmTdxInitVcpuPayload {
     flags: u32,
     initial_rcx: u64,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C, packed(4))]
 pub struct KvmTdxExtendMemoryPayload<'a> {
     flags: u32,
     data: &'a mut KvmMemoryMapping,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C)]
 pub struct KvmMemoryMapping {
     base_gfn: u64,
@@ -1959,6 +2003,7 @@ pub struct KvmMemoryMapping {
     source: u64,
 }
 
+#[cfg(feature = "tdx")]
 #[repr(C, packed(4))]
 pub struct KvmTdxFinalizeVmPayload {
     flags: u32,

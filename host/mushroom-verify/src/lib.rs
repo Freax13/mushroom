@@ -3,7 +3,9 @@
 use io::input::Header;
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "snp")]
 pub mod snp;
+#[cfg(feature = "tdx")]
 pub mod tdx;
 
 #[derive(Debug)]
