@@ -146,7 +146,7 @@ pub fn load_shadow_mapping(
             vmpl1_perms.set(VmplPermissions::WRITE, ph.is_write());
             vmpl1_perms &= vmpl1_perms_mask;
 
-            let mut iter = (start_page..=end_inclusive_page).peekable();
+            let mut iter = Page::range_inclusive(start_page, end_inclusive_page).peekable();
             from_fn(move || {
                 let page = iter.next()?;
 

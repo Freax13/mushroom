@@ -2,7 +2,7 @@
 
 use core::{mem::size_of, sync::atomic::AtomicU8};
 
-use bytemuck::NoUninit;
+use bytemuck::{NoUninit, Zeroable};
 use constants::MAX_APS_COUNT;
 
 const NOTIFY_BITS: usize = MAX_APS_COUNT as usize;
@@ -44,14 +44,14 @@ pub const PROFILER_ENTRIES: usize = {
     entries
 };
 
-#[derive(Clone, Copy, NoUninit)]
+#[derive(Clone, Copy, Zeroable, NoUninit)]
 #[repr(C, align(16))]
 pub struct Entry {
     pub time: u64,
     pub event: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Zeroable)]
 #[repr(C, align(64))]
 pub struct PerCpuEntries {
     pub entries: [Entry; PROFILER_ENTRIES],

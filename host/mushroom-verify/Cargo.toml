@@ -12,7 +12,7 @@ sha2 = "0.10.8"
 snp-types = { workspace = true, optional = true }
 vcek-kds = { workspace = true, optional = true }
 tdx-types = { workspace = true, features = ["quote"], optional = true }
-x86_64 = { version = "0.15.1", optional = true }
+x86_64 = { version = "0.15.1", default-features = false, optional = true }
 
 [features]
 default = ["snp", "tdx"]

@@ -1,16 +1,9 @@
-#![feature(new_zeroed_alloc)]
-
-use std::{collections::HashMap, num::NonZeroU32, ptr::NonNull};
+use std::{collections::HashMap, num::NonZeroU32};
 
 use anyhow::{Context, Result};
 use bit_field::BitField;
-use bytemuck::NoUninit;
 use kvm::KvmCap;
 use slot::Slot;
-use volatile::{
-    access::{ReadOnly, Readable},
-    VolatilePtr,
-};
 use x86_64::structures::paging::PhysFrame;
 
 #[cfg(feature = "insecure")]
@@ -70,26 +63,6 @@ fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot
             (slot.gpa()..slot.gpa() + num_frames).contains(&gpa)
         })
         .context("failed to find slot which contains ghcb")
-}
-
-/// The volatile equivalent of `bytemuck::bytes_of`.
-fn volatile_bytes_of<T>(ptr: VolatilePtr<T, impl Readable>) -> VolatilePtr<[u8], ReadOnly>
-where
-    T: NoUninit,
-{
-    let data = ptr.as_raw_ptr().as_ptr().cast::<u8>();
-    let ptr = core::ptr::slice_from_raw_parts_mut(data, size_of::<T>());
-    let ptr = unsafe {
-        // SAFETY: We got originially the pointer from a `NonNull` and only
-        // casted it to another type and added size metadata.
-        NonNull::new_unchecked(ptr)
-    };
-    unsafe {
-        // SAFETY: `ptr` points to a valid `T` and its `NoUninit`
-        // implementation promises us that it's safe to view the data as a
-        // slice of bytes.
-        VolatilePtr::new_read_only(ptr)
-    }
 }
 
 fn is_efault(err: &anyhow::Error) -> bool {

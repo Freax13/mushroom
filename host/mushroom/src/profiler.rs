@@ -11,7 +11,7 @@ use std::{
 use anyhow::{ensure, Context, Error, Result};
 use bit_field::BitField;
 use bitflags::bitflags;
-use bytemuck::{bytes_of, cast_slice, NoUninit};
+use bytemuck::{bytes_of, cast_slice, zeroed_box, NoUninit};
 use constants::MAX_APS_COUNT;
 use profiler_types::{AllEntries, Entry, PerCpuEntries, ProfilerControl, CALL_STACK_CAPACITY};
 use rand::random;
@@ -193,8 +193,7 @@ fn collector_thread(
     control: Arc<CollectorThreadControl>,
     dat_files: Arc<[Mutex<File>]>,
 ) {
-    let buffer = Box::<PerCpuEntries>::new_zeroed();
-    let mut buffer = unsafe { buffer.assume_init() };
+    let mut buffer = zeroed_box::<PerCpuEntries>();
 
     let mut guard = control.notify.lock().unwrap();
 

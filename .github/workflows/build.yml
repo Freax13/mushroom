@@ -75,6 +75,20 @@ jobs:
           TEE_TDX: ${{ matrix.tdx }}
           TEE_INSECURE: ${{ matrix.insecure }}
 
+  build-cli-on-stable:
+    name: "Build CLI on stable"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-cli-stable
+          workspaces: |
+            host
+      - name: "Build"
+        run: cargo +stable build --all-features
+        working-directory: host/mushroom
+
   clippy:
     name: "Clippy"
     runs-on: ubuntu-latest
