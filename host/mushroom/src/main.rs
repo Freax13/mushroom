@@ -139,6 +139,12 @@ struct RunCommand {
     ///  Profiling is currently incompatible with insecure mode.
     #[arg(long, value_name = "PATH", env = "PROFILE_FOLDER")]
     profile_folder: Option<PathBuf>,
+    /// Vsock CID used to connect to the quote generation service.
+    #[arg(long, value_name = "CID", default_value_t = 2)]
+    qgs_cid: u32,
+    /// Vsock port used to connect to the quote generation service.
+    #[arg(long, value_name = "PORT", default_value_t = 4050)]
+    qgs_port: u32,
 }
 
 #[derive(ValueEnum, Clone, Copy)]
@@ -233,6 +239,8 @@ fn run(run: RunCommand) -> Result<()> {
                 run.config.kasan,
                 &input,
                 profile_folder,
+                run.qgs_cid,
+                run.qgs_port,
             )?
         }
         Tee::Insecure => {

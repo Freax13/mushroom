@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context, Result};
 use bit_field::BitField;
+use bytemuck::checked::try_pod_read_unaligned;
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
@@ -42,6 +43,7 @@ use crate::{
 /// The signal used to kick threads out of KVM_RUN.
 const SIG_KICK: Signal = Signal::SIGUSR1;
 
+#[allow(clippy::too_many_arguments)]
 pub fn main(
     kvm_handle: &KvmHandle,
     supervisor: &[u8],
@@ -50,6 +52,8 @@ pub fn main(
     load_kasan_shadow_mappings: bool,
     input: &[u8],
     profiler_folder: Option<ProfileFolder>,
+    cid: u32,
+    port: u32,
 ) -> Result<MushroomResult> {
     // Prepare the VM.
     let (vm_context, vcpus) = VmContext::prepare_vm(
@@ -80,7 +84,7 @@ pub fn main(
 
     // Collect the output and report.
     let mut output: Vec<u8> = Vec::new();
-    let attestation_report = loop {
+    let td_report = loop {
         let event = receiver.recv().unwrap();
         match event {
             OutputEvent::Write(mut vec) => output.append(&mut vec),
@@ -97,9 +101,13 @@ pub fn main(
         thread.join().unwrap();
     }
 
+    // Convert the TD report into a TD quote.
+    let report = try_pod_read_unaligned::<tdx_types::report::TdReport>(&td_report)?;
+    let quote = qgs_client::generate_quote(cid, port, &report)?;
+
     Ok(MushroomResult {
         output,
-        attestation_report: Some(attestation_report),
+        attestation_report: Some(quote),
     })
 }
 

@@ -756,6 +756,7 @@ dependencies = [
  "mushroom-verify",
  "nix 0.28.0",
  "profiler-types",
+ "qgs-client",
  "rand",
  "snp-types",
  "supervisor-services",
