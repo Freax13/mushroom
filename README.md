@@ -2,7 +2,7 @@
 
 Run integrity protected workloads in a hardware based Trusted Execution Environment. 
 
-mushroom can be used to process inputs using unmodified Linux workloads. It can create and verify attestation reports proving that the output for a given input hasn't been tampered with. It tries to provide a very high level of security by aggressively cutting down on potential attack surfaces. mushroom's security is rooted in secure encrypted virtual machines based on AMD's SEV-SNP technology. 
+mushroom can be used to process inputs using unmodified Linux workloads. It can create and verify attestation reports proving that the output for a given input hasn't been tampered with. It tries to provide a very high level of security by aggressively cutting down on potential attack surfaces. mushroom's security is rooted in secure encrypted virtual machines based on AMD's SEV-SNP and Intel's TDX technologies. 
 
 ## Warning
 
@@ -14,15 +14,15 @@ mushroom is split up into three parts:
 1. mushroom library and executable:
 These implement a minimal VMM to launch the VM on a Linux host.
 1. workload kernel:
-This kernel runs the workloads. It runs at VMPL 1. This kernel never directly talks to the host.
+This kernel runs the workloads. On AMD SEV-SNP, it runs at VMPL 1. On Intel TDX, it runs in a L2 nested VM. This kernel never directly talks to the host.
 1. supervisor kernel: 
-This kernel runs at VMPL 0. It mediates between the communication between the workload kernel and the host and implements #VC handling. It handles necessary host communication such as for memory hot plugging and AP boot.
+This kernel runs at VMPL 0 on AMD SEV-SNP and runs as the L1 VM on Intel TDX. It mediates between the communication between the workload kernel and the host. It handles necessary host communication such as for input and output transfer, memory hot plugging, and AP boot.
 
 ### Reduce Attack Surface
 
-The code running in the VM has been split up into two parts, the workload kernel and the supervisor kernel, to reduce the amount security relevant code. It should be sufficient to audit the supervisor kernel as the the workload kernel should never come into contact with untrusted data.
+The code running in the VM has been split up into two parts, the workload kernel and the supervisor kernel, to reduce the amount security relevant code. It should be sufficient to audit the supervisor kernels as the the workload kernel should never come into contact with untrusted data.
 
-The supervisor kernel is the only component directly talking to the host. The supervisor kernel is intentionally kept small and is hardended against exploits. It is entirely single-threaded.
+The supervisor kernels are the only component directly talking to the host. The supervisor kernels are intentionally kept small and is hardended against exploits. On AMD SEV-SNP, it is entirely single-threaded.
 
 The workload kernel cannot access host shared memory and even though it's in theory not impossible for it to communicate to the host through some side-channels, it should be very unlikely that the host can influence the code running in the workload kernel.
 
@@ -54,7 +54,7 @@ mushroom could be the basis of a secure remote build system: mushroom could be u
 
 ## Usage
 
-KVM host support for SEV-SNP has no yet been upstreamed into the Linux kernel. Until then a [custom host kernel](https://github.com/Freax13/linux/tree/snp-guest-req-v1b-mushroom) is required.
+KVM host support for AMD SEV-SNP has been partially upstreamed into the Linux kernel, but [additional patches](https://github.com/Freax13/linux/tree/snp-guest-req-v1b-mushroom) are needed. KVM host support for Intel TDX has not yet been upstreamed. A [tree](https://github.com/Freax13/linux/tree/mushroom-tdx) based on Intel's partitioning patches can be used.
 
 The host folder contains cargo-make files to simplify the process of running a workload.
 
@@ -78,18 +78,18 @@ See [tee/init/README.md](./tee/init/README.md) for an example workload.
 
 ## Time
 
-Securely keeping track of time inside an AMD SEV-SNP VM is difficult.
-Even with SecureTSC enabled, the hypervisor can change the VM's perception of time e.g. by frequently pausing execution of the VM for a brief moment.
+Securely keeping track of time inside a secure VM is difficult.
+Even under Intel TDX or with AMD SEV-SNP SecureTSC enabled, the hypervisor can change the VM's perception of time e.g. by frequently pausing execution of the VM for a brief moment.
 
 The two main requirements for a time-keeping implementation are:
 1. The hypervisor should not be able to mess with the workload's perception of time.
 2. The clock should be accurate.
 
-We are not aware of any way to achieve both of these goals under AMD SEV-SNP.
+We are not aware of any way to achieve both of these goals under AMD SEV-SNP or Intel TDX.
 Instead, we implement two different "time backends" and let the user pick one of them at compile time:
 
 1. The `fake` time backend doesn't use any of the CPU's native time-keeping facilities and meerly increments a counter by a fixed amount every time the current time is requested. This clock is completly deterministic and can't be influenced by the hypervisor, but it's also very inaccurate.
-2. The `real` time backend, uses the SecureTSC SEV feature and the `rdtsc` instruction to query the current time. This clock backend is accurate *if and only if* the hypervisor doesn't mess with the guest.
+2. The `real` time backend, uses the SecureTSC SEV feature and TDX's TSC virtualization and the `rdtsc` instruction to query the current time. This clock backend is accurate *if and only if* the hypervisor doesn't mess with the guest.
 
 The different time backends can be enabled by passing either `TIME_BACKEND=fake` or `TIME_BACKEND=real` to `make`. By default, the `fake` time backend is enabled for optimal security.
 

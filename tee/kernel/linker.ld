@@ -2,6 +2,7 @@ ENTRY(reset_vector)
 
 PHDRS
 {
+    headers             PT_LOAD FILEHDR PHDRS AT(0x08000000000) FLAGS(0);
     pagetables          PT_LOAD AT(0x10000000000);
     reset_vector        PT_LOAD AT(0x10040000000);
     text                PT_LOAD AT(0x10040200000);
@@ -20,6 +21,8 @@ SECTIONS {
     .pagetables (0x10000000000) : 
     {
         KEEP(*(.pagetables.pml4 .pagetables.pml4.*))
+        . = 0x10000001000;
+        KEEP(*(.pagetables.tdx.pml4 .pagetables.tdx.pml4.*))
         KEEP(*(.pagetables .pagetables.*))
     } :pagetables
 

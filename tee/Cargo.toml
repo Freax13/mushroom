@@ -1,7 +1,7 @@
 cargo-features = ["profile-rustflags"]
 
 [workspace]
-members = ["example", "kernel", "kernel-macros", "static-page-tables", "supervisor", "tests"]
+members = ["example", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "tests"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -11,6 +11,7 @@ kernel-macros = { path = "kernel-macros" }
 log-types = { path = "../common/log-types" }
 profiler-types = { path = "../common/profiler-types" }
 snp-types = { path = "../common/snp-types" }
+tdx-types = { path = "../common/tdx-types" }
 static-page-tables = { path = "static-page-tables" }
 supervisor-services = { path = "../common/supervisor-services", default-features = false }
 

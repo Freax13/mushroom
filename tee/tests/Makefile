@@ -1,9 +1,9 @@
 include ../../config.mk
 
-ifeq ($(INSECURE),true)
-RUNNER = $(CLI) run --input /dev/null --output /dev/null --insecure --init
+ifeq ($(TEE),insecure)
+RUNNER = $(CLI) run --input /dev/null --output /dev/null --tee insecure --init
 else
-RUNNER = $(CLI) run --input /dev/null --output /dev/null --attestation-report /dev/null --init
+RUNNER = $(CLI) run --input /dev/null --output /dev/null --tee $(TEE) --attestation-report /dev/null --init
 endif
 
 ifeq ($(TEST_TARGET),amd64)

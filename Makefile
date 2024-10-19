@@ -1,12 +1,15 @@
 include config.mk
 
-all: kernel supervisor cli
+all: kernel supervisor-snp supervisor-tdx cli
 
 kernel:
 	$(MAKE) -C tee/kernel
 
-supervisor:
-	$(MAKE) -C tee/supervisor
+supervisor-snp:
+	$(MAKE) -C tee/supervisor-snp
+
+supervisor-tdx:
+	$(MAKE) -C tee/supervisor-tdx
 
 cli:
 	$(MAKE) -C host/mushroom
@@ -15,17 +18,17 @@ test: all
 	$(MAKE) -C tee/tests
 
 run: all
-ifeq ($(INSECURE),true)
-	$(CLI) run --input $(INPUT) --output $(OUTPUT) --insecure
+ifeq ($(TEE),insecure)
+	$(CLI) run --input $(INPUT) --output $(OUTPUT) --tee insecure
 else
-	$(CLI) run --input $(INPUT) --output $(OUTPUT) --attestation-report $(ATTESTATION_REPORT)
+	$(CLI) run --input $(INPUT) --output $(OUTPUT) --tee $(TEE) --attestation-report $(ATTESTATION_REPORT)
 endif
 
 verify: all
-ifeq ($(INSECURE),true)
+ifeq ($(TEE),insecure)
 	$(error can't verify attestation report in insecure mode)
 endif
-	$(CLI) verify --input $(INPUT) --output $(OUTPUT) --attestation-report $(ATTESTATION_REPORT)
+	$(CLI) verify --input $(INPUT) --output $(OUTPUT) --tee $(TEE) --attestation-report $(ATTESTATION_REPORT)
 
 run-example: all
 	$(MAKE) -C tee/example run
@@ -35,4 +38,4 @@ clean:
 	$(MAKE) -C host   clean
 	$(MAKE) -C tee    clean
 
-.PHONY: all kernel supervisor cli test run verify run-example clean
+.PHONY: all kernel supervisor-snp supervisor-tdx cli test run verify run-example clean

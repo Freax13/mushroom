@@ -96,11 +96,16 @@ jobs:
         test_target:
           - amd64
           - i386
-        insecure:
-          - false
-          - true
+        tee:
+          - snp
+          - tdx
+          - insecure
+        exclude:
+          # KASAN isn't (yet) supported on TDX.
+          - profile: kasan
+            tee: tdx
     name: "Test"
-    runs-on: [snp]
+    runs-on: ${{ matrix.tee != 'insecure' && matrix.tee || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v4
       - name: "Test"
@@ -109,13 +114,20 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           TIME_BACKEND: ${{ matrix.time_backend }}
           TEST_TARGET: ${{ matrix.test_target }}
-          INSECURE: ${{ matrix.insecure }}
+          TEE: ${{ matrix.tee }}
 
   integration-test:
+    strategy:
+      matrix:
+        tee:
+          - snp
+          - tdx
     name: "Integration Test"
-    runs-on: [snp]
+    runs-on: ${{ matrix.tee }}
     steps:
       - uses: actions/checkout@v4
       - name: "Build & Run Example Init Binary"
         run: make run-example
-  
+        env:
+          PROFILE: release
+          TEE: ${{ matrix.tee }}

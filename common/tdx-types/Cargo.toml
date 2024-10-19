@@ -1,0 +1,18 @@
+[package]
+name = "tdx-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bit_field = "0.10.2"
+bitflags = { version = "2.4.2", features = ["bytemuck"] }
+bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"] }
+p256 = { version = "0.13.2", optional = true }
+sha2 = { version = "0.10.8", optional = true }
+thiserror = { version = "1.0.64", optional = true }
+x509-cert = { version = "0.2.5", features = ["pem"], default-features = false, optional = true }
+x86_64 = "0.15.1"
+
+[features]
+std = ["bytemuck/extern_crate_std", "x509-cert?/std"]
+quote = ["std", "dep:p256", "dep:sha2", "dep:thiserror", "dep:x509-cert"]
