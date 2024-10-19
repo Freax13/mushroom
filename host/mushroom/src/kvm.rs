@@ -5,14 +5,13 @@ use std::{
     fmt,
     fs::OpenOptions,
     mem::{size_of, size_of_val},
-    num::{NonZeroU32, NonZeroU8, NonZeroUsize},
+    num::{NonZeroU32, NonZeroUsize},
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
 };
 
-use anyhow::{anyhow, ensure, Context, Result};
-use bit_field::BitField;
+use anyhow::{ensure, Context, Result};
 use bitflags::bitflags;
-use bytemuck::{bytes_of, pod_read_unaligned, Contiguous, Pod, Zeroable};
+use bytemuck::{bytes_of, pod_read_unaligned, Pod, Zeroable};
 use nix::{
     errno::Errno,
     ioctl_none, ioctl_read, ioctl_readwrite, ioctl_write_int_bad, ioctl_write_ptr,
@@ -61,7 +60,7 @@ impl KvmHandle {
     }
 
     #[cfg(feature = "insecure")]
-    pub fn create_vm(&self) -> Result<VmHandle> {
+    pub(crate) fn create_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
         ioctl_write_int_bad!(kvm_create_vm, request_code_none!(KVMIO, 0x01));
@@ -73,7 +72,7 @@ impl KvmHandle {
     }
 
     #[cfg(feature = "snp")]
-    pub fn create_snp_vm(&self) -> Result<VmHandle> {
+    pub(crate) fn create_snp_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
         const KVM_X86_SNP_VM: i32 = 4;
@@ -86,7 +85,7 @@ impl KvmHandle {
     }
 
     #[cfg(feature = "tdx")]
-    pub fn create_tdx_vm(&self) -> Result<VmHandle> {
+    pub(crate) fn create_tdx_vm(&self) -> Result<VmHandle> {
         debug!("creating vm");
 
         const KVM_X86_TDX_VM: i32 = 2;
@@ -98,7 +97,7 @@ impl KvmHandle {
         Ok(VmHandle { fd })
     }
 
-    pub fn get_supported_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
+    pub(crate) fn get_supported_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
         let mut buffer = KvmCpuid2::<MAX_ENTRIES> {
             nent: MAX_ENTRIES as u32,
             _padding: 0,
@@ -126,7 +125,7 @@ impl KvmHandle {
         Ok(Box::from(buffer.entries[..buffer.nent as usize].to_vec()))
     }
 
-    pub fn get_supported_hv_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
+    pub(crate) fn get_supported_hv_cpuid(&self) -> Result<Box<[KvmCpuidEntry2]>> {
         let mut buffer = KvmCpuid2::<MAX_ENTRIES> {
             nent: MAX_ENTRIES as u32,
             _padding: 0,
@@ -154,7 +153,7 @@ impl KvmHandle {
         Ok(Box::from(buffer.entries[..buffer.nent as usize].to_vec()))
     }
 
-    pub fn check_extension(&self, cap: KvmCap) -> Result<Option<NonZeroU32>> {
+    pub(crate) fn check_extension(&self, cap: KvmCap) -> Result<Option<NonZeroU32>> {
         ioctl_write_int_bad!(kvm_check_extension, request_code_none!(KVMIO, 0x03));
 
         let res = unsafe { kvm_check_extension(self.fd.as_raw_fd(), cap.0 as i32) };
@@ -305,143 +304,6 @@ impl VmHandle {
         Ok(())
     }
 
-    pub fn irq_line(&self, gsi: u32, level: bool) -> Result<()> {
-        debug!("setting irq line");
-
-        #[repr(C)]
-        pub struct KvmIrqLevel {
-            gsi: u32,
-            level: u32,
-        }
-
-        let data = KvmIrqLevel {
-            gsi,
-            level: u32::from(level),
-        };
-
-        ioctl_write_ptr!(kvm_irq_line, KVMIO, 0x61, KvmIrqLevel);
-        let res = unsafe { kvm_irq_line(self.fd.as_raw_fd(), &data) };
-        res.context("failed to set irq line")?;
-
-        Ok(())
-    }
-
-    pub fn irq_line_status(&self, gsi: u32) -> Result<(u32, u32)> {
-        debug!("setting irq line");
-
-        #[repr(C)]
-        pub struct KvmIrqLevel {
-            gsi_or_status: u32,
-            level: u32,
-        }
-
-        let mut data = KvmIrqLevel {
-            gsi_or_status: gsi,
-            level: 0,
-        };
-
-        ioctl_readwrite!(kvm_irq_line, KVMIO, 0x67, KvmIrqLevel);
-        let res = unsafe { kvm_irq_line(self.fd.as_raw_fd(), &mut data) };
-        res.context("failed to set irq line")?;
-
-        Ok((data.gsi_or_status, data.level))
-    }
-
-    pub fn signal_msi(&self, address: u64, data: u32) -> Result<()> {
-        debug!("signalling msi");
-
-        #[repr(C)]
-        pub struct KvmMsi {
-            address_lo: u32,
-            address_hi: u32,
-            data: u32,
-            flags: u32,
-            devid: u32,
-            pad: [u8; 12],
-        }
-
-        let data = KvmMsi {
-            address_lo: address.get_bits(..32) as u32,
-            address_hi: address.get_bits(32..) as u32,
-            data,
-            flags: 0,
-            devid: 0,
-            pad: [0; 12],
-        };
-
-        ioctl_write_ptr!(kvm_signal_msi, KVMIO, 0xa5, KvmMsi);
-        let res = unsafe { kvm_signal_msi(self.fd.as_raw_fd(), &data) };
-        res.context("failed to signal msi")?;
-
-        Ok(())
-    }
-
-    pub fn get_irqchip(&self, chip_id: u32) -> Result<[u8; 512]> {
-        debug!("getting irqchip");
-
-        let mut data = KvmIrqchip {
-            chip_id,
-            _pad: 0,
-            chip: [0; 512],
-        };
-
-        ioctl_readwrite!(kvm_get_irqchip, KVMIO, 0x62, KvmIrqchip);
-        let res = unsafe { kvm_get_irqchip(self.fd.as_raw_fd(), &mut data) };
-        res.context("failed to get irqchip")?;
-
-        Ok(data.chip)
-    }
-
-    pub fn set_irqchip(&self, chip_id: u32, chip: [u8; 512]) -> Result<()> {
-        debug!("setting irqchip");
-
-        let mut data = KvmIrqchip {
-            chip_id,
-            _pad: 0,
-            chip,
-        };
-
-        ioctl_read!(kvm_set_irqchip, KVMIO, 0x63, KvmIrqchip);
-        let res = unsafe { kvm_set_irqchip(self.fd.as_raw_fd(), &mut data) };
-        res.context("failed to set irqchip")?;
-
-        Ok(())
-    }
-
-    pub fn set_gsi_routing<const N: usize>(&self, entries: [KvmIrqRoutingEntry; N]) -> Result<()> {
-        debug!("setting gsi routing");
-
-        let data = KvmIrqRouting {
-            nr: u32::try_from(N)?,
-            flags: 0,
-            entries,
-        };
-
-        ioctl_write_ptr!(
-            kvm_set_gsi_routing,
-            KVMIO,
-            0x6a,
-            KvmIrqRouting<[KvmIrqRoutingEntry; 0]>
-        );
-        let res = unsafe {
-            kvm_set_gsi_routing(
-                self.fd.as_raw_fd(),
-                (&data as *const KvmIrqRouting<_>).cast(),
-            )
-        };
-        res.context("failed to set gsi routing")?;
-
-        Ok(())
-    }
-
-    pub fn irqfd(&self, irqfd: &KvmIrqfd) -> Result<()> {
-        debug!("registering irqfd");
-        ioctl_write_ptr!(kvm_interrupt, KVMIO, 0x76, KvmIrqfd);
-        let res = unsafe { kvm_interrupt(self.fd.as_raw_fd(), irqfd) };
-        res.context("failed to register irqfd")?;
-        Ok(())
-    }
-
     #[cfg(feature = "snp")]
     unsafe fn memory_encrypt_op<'a>(
         &self,
@@ -560,38 +422,6 @@ impl VmHandle {
         let res = unsafe { self.memory_encrypt_op(payload, Some(sev_handle)) };
         res.context("failed to finish sev snp launch")?;
         Ok(())
-    }
-
-    #[cfg(feature = "snp")]
-    pub fn sev_snp_dbg_decrypt(&self, gfn: u64) -> Result<[u8; 4096]> {
-        debug!("debug decrypting");
-
-        let mut page = [0xcc; 4096];
-
-        let mut data = KvmSevSnpDbg {
-            src_gfn: gfn,
-            dst_uaddr: &mut page as *const [u8; 4096] as u64,
-        };
-        let payload = KvmSevCmdPayload::KvmSevSnpDbgDecrypt { data: &mut data };
-        let res = unsafe { self.memory_encrypt_op(payload, None) };
-        res.context("failed to debug decrypt")?;
-        Ok(page)
-    }
-
-    #[cfg(feature = "snp")]
-    pub fn sev_snp_dbg_decrypt_vmsa(&self, vcpu_id: u32) -> Result<[u8; 4096]> {
-        debug!("debug decrypting vmsa");
-
-        let mut page = [0xcc; 4096];
-
-        let mut data = KvmSevSnpDbgVmsa {
-            vcpu_id,
-            dst_uaddr: &mut page as *const [u8; 4096] as u64,
-        };
-        let payload = KvmSevCmdPayload::KvmSevSnpDbgDecryptVmsa { data: &mut data };
-        let res = unsafe { self.memory_encrypt_op(payload, None) };
-        res.context("failed to debug decrypt vmsa")?;
-        Ok(page)
     }
 
     #[cfg(feature = "tdx")]
@@ -717,27 +547,6 @@ impl VmHandle {
             ))?;
         }
         Ok(())
-    }
-
-    #[cfg(feature = "snp")]
-    pub fn register_encrypted_region(&self, addr: u64, size: u64) -> Result<()> {
-        debug!("registering encrypted region");
-
-        let mut data = KvmEncRegion { addr, size };
-        ioctl_read!(kvm_sev_mem_enc_register_region, KVMIO, 0xbb, KvmEncRegion);
-        let res = unsafe { kvm_sev_mem_enc_register_region(self.fd.as_raw_fd(), &mut data) };
-        res.context("failed to register encrypted region")?;
-        Ok(())
-    }
-
-    pub fn get_supported_memory_attributes(&self) -> Result<KvmMemoryAttributes> {
-        debug!("getting supported memory regions");
-
-        let mut data = KvmMemoryAttributes::empty();
-        ioctl_read!(kvm_set_memory_attributes, KVMIO, 0xd2, KvmMemoryAttributes);
-        let res = unsafe { kvm_set_memory_attributes(self.fd.as_raw_fd(), &mut data) };
-        res.context("failed toget supported memory attributes")?;
-        Ok(data)
     }
 
     pub fn set_memory_attributes(
@@ -917,117 +726,6 @@ impl VcpuHandle {
         Ok(())
     }
 
-    pub fn get_fpu(&self) -> Result<KvmFpu> {
-        let mut kvm_fpu = KvmFpu::zeroed();
-        ioctl_read!(kvm_get_fpu, KVMIO, 0x8c, KvmFpu);
-        let res = unsafe { kvm_get_fpu(self.fd.as_raw_fd(), &mut kvm_fpu) };
-        res.context("failed to get fpu state")?;
-        Ok(kvm_fpu)
-    }
-
-    pub fn get_debug_regs(&self) -> Result<KvmDebugRegs> {
-        let mut regs = KvmDebugRegs {
-            db: [0; 4],
-            dr6: 0,
-            dr7: 0,
-            flags: 0,
-            reserved: [0; 9],
-        };
-        ioctl_read!(kvm_get_sregs, KVMIO, 0xa1, KvmDebugRegs);
-        let res = unsafe { kvm_get_sregs(self.fd.as_raw_fd(), &mut regs) };
-        res.context("failed to get debug registers")?;
-        Ok(regs)
-    }
-
-    pub fn set_debug_regs(&self, regs: KvmDebugRegs) -> Result<()> {
-        ioctl_write_ptr!(kvm_set_sregs, KVMIO, 0xa2, KvmDebugRegs);
-        let res = unsafe { kvm_set_sregs(self.fd.as_raw_fd(), &regs) };
-        res.context("failed to set debug registers")?;
-        Ok(())
-    }
-
-    pub fn set_guest_debug(&self, guest_debug: KvmGuestDebug) -> Result<()> {
-        ioctl_write_ptr!(kvm_set_guest_debug, KVMIO, 0x9b, KvmGuestDebug);
-        let res = unsafe { kvm_set_guest_debug(self.fd.as_raw_fd(), &guest_debug) };
-        res.context("failed to set special registers")?;
-        Ok(())
-    }
-
-    pub fn queue_nmi(&self) -> Result<()> {
-        ioctl_none!(kvm_nmi, KVMIO, 0x9a);
-        let res = unsafe { kvm_nmi(self.fd.as_raw_fd()) };
-        res.context("failed to queue interrupts")?;
-        Ok(())
-    }
-
-    pub fn queue_interrupt(&self, irq: NonZeroU8) -> Result<()> {
-        #[repr(C)]
-        pub struct KvmInterrupt {
-            irq: u32,
-        }
-
-        let data = KvmInterrupt {
-            irq: u32::from(irq.get()),
-        };
-
-        ioctl_write_ptr!(kvm_interrupt, KVMIO, 0x86, KvmInterrupt);
-        let res = unsafe { kvm_interrupt(self.fd.as_raw_fd(), &data) };
-        res.context("failed to queue interrupts")?;
-        Ok(())
-    }
-
-    pub fn get_lapic(&self) -> Result<KvmLapicState> {
-        let mut state = KvmLapicState { regs: [0; 0x400] };
-        ioctl_read!(kvm_get_vcpu_events, KVMIO, 0x8e, KvmLapicState);
-        let res = unsafe { kvm_get_vcpu_events(self.fd.as_raw_fd(), &mut state) };
-        res.context("failed to get lapic state")?;
-        Ok(state)
-    }
-
-    pub fn set_lapic(&self, state: &KvmLapicState) -> Result<()> {
-        ioctl_write_ptr!(kvm_get_vcpu_events, KVMIO, 0x8f, KvmLapicState);
-        let res = unsafe { kvm_get_vcpu_events(self.fd.as_raw_fd(), state) };
-        res.context("failed to set lapic state")?;
-        Ok(())
-    }
-
-    pub fn get_mp_state(&self) -> Result<KvmMpState> {
-        let mut value = 0u32;
-        ioctl_read!(kvm_get_vcpu_events, KVMIO, 0x98, u32);
-        let res = unsafe { kvm_get_vcpu_events(self.fd.as_raw_fd(), &mut value) };
-        res.context("failed to get mp state")?;
-
-        KvmMpState::from_integer(value).with_context(|| anyhow!("unexpected mp_state: {value}"))
-    }
-
-    pub fn set_mp_state(&self, mp_state: KvmMpState) -> Result<()> {
-        ioctl_write_ptr!(kvm_get_vcpu_events, KVMIO, 0x99, u32);
-        let res = unsafe { kvm_get_vcpu_events(self.fd.as_raw_fd(), &(mp_state as u32)) };
-        res.context("failed to set mp state")?;
-        Ok(())
-    }
-
-    pub fn get_msr(&self, index: u32) -> Result<u64> {
-        let mut msrs = KvmMsrs {
-            nmsrs: 1,
-            pad: 0,
-            entries: [KvmMsrEntry {
-                index,
-                reserved: 0,
-                data: 0,
-            }],
-        };
-        ioctl_readwrite!(kvm_get_msrs, KVMIO, 0x88, KvmMsrs<[KvmMsrEntry; 0]>);
-        let res = unsafe {
-            kvm_get_msrs(
-                self.fd.as_raw_fd(),
-                (&mut msrs) as *mut KvmMsrs<[KvmMsrEntry; 1]> as *mut KvmMsrs<[KvmMsrEntry; 0]>,
-            )
-        };
-        res.context("failed to get msr")?;
-        Ok(msrs.entries[0].data)
-    }
-
     pub fn set_msr(&self, index: u32, data: u64) -> Result<()> {
         let mut msrs = KvmMsrs {
             nmsrs: 1,
@@ -1046,21 +744,6 @@ impl VcpuHandle {
             )
         };
         res.context("failed to set msr")?;
-        Ok(())
-    }
-
-    pub fn get_vcpu_events(&self) -> Result<KvmVcpuEvents> {
-        let mut events = KvmVcpuEvents::zeroed();
-        ioctl_read!(kvm_get_vcpu_events, KVMIO, 0x9f, KvmVcpuEvents);
-        let res = unsafe { kvm_get_vcpu_events(self.fd.as_raw_fd(), &mut events) };
-        res.context("failed to get vcpu events")?;
-        Ok(events)
-    }
-
-    pub fn set_vcpu_events(&self, events: &KvmVcpuEvents) -> Result<()> {
-        ioctl_write_ptr!(kvm_set_vcpu_events, KVMIO, 0xa0, KvmVcpuEvents);
-        let res = unsafe { kvm_set_vcpu_events(self.fd.as_raw_fd(), events) };
-        res.context("failed to set vcpu events")?;
         Ok(())
     }
 
@@ -1296,15 +979,6 @@ impl std::fmt::Debug for KvmSegment {
             .field("unusable", &self.unusable)
             .finish()
     }
-}
-
-#[repr(C)]
-pub struct KvmDebugRegs {
-    pub db: [u64; 4],
-    pub dr6: u64,
-    pub dr7: u64,
-    pub flags: u64,
-    pub reserved: [u64; 9],
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1681,18 +1355,6 @@ pub struct KvmTdxExit {
     pub out_rdx: u64,
 }
 
-#[repr(C)]
-pub struct KvmGuestDebug {
-    pub control: u32,
-    pub pad: u32,
-    pub arch: KvmGuestDebugArch,
-}
-
-#[repr(C)]
-pub struct KvmGuestDebugArch {
-    pub debugreg: [u64; 8],
-}
-
 mod hidden {
     use super::KvmCpuidEntry2;
 
@@ -1717,13 +1379,10 @@ pub struct KvmCap(pub u32);
 
 impl KvmCap {
     pub const MAX_VCPUS: Self = Self(66);
-    pub const SPLIT_IRQCHIP: Self = Self(121);
     pub const X2APIC_API: Self = Self(129);
     pub const X86_USER_SPACE_MSR: Self = Self(188);
     pub const EXIT_HYPERCALL: Self = Self(201);
-    pub const PRIVATE_MEM: Self = Self(224);
     pub const VM_TYPES: Self = Self(235);
-    pub const UNMAPPED_PRIVATE_MEM: Self = Self(240);
 }
 
 #[repr(C)]
@@ -1790,16 +1449,6 @@ pub enum KvmSevCmdPayload<'a> {
     KvmSevSnpLaunchStart { data: &'a mut KvmSevSnpLaunchStart } = 100,
     KvmSevSnpLaunchUpdate { data: &'a mut KvmSevSnpLaunchUpdate } = 101,
     KvmSevSnpLaunchFinish { data: &'a mut KvmSevSnpLaunchFinish } = 102,
-    KvmSevSnpDbgDecrypt { data: &'a mut KvmSevSnpDbg } = 28,
-    KvmSevSnpDbgDecryptVmsa { data: &'a mut KvmSevSnpDbgVmsa } = 29,
-}
-
-#[cfg(feature = "snp")]
-#[repr(C)]
-pub struct KvmSevDbg {
-    src_uaddr: u64,
-    dst_uaddr: u64,
-    len: u32,
 }
 
 #[cfg(feature = "snp")]
@@ -1855,27 +1504,6 @@ pub struct KvmSevSnpLaunchFinish {
     pad0: [u8; 3],
     flags: u16,
     pad1: [u64; 4],
-}
-
-#[cfg(feature = "snp")]
-#[repr(C)]
-pub struct KvmSevSnpDbg {
-    src_gfn: u64,
-    dst_uaddr: u64,
-}
-
-#[cfg(feature = "snp")]
-#[repr(C)]
-pub struct KvmSevSnpDbgVmsa {
-    vcpu_id: u32,
-    dst_uaddr: u64,
-}
-
-#[cfg(feature = "snp")]
-#[repr(C)]
-pub struct KvmEncRegion {
-    pub addr: u64,
-    pub size: u64,
 }
 
 #[cfg(feature = "tdx")]
@@ -2032,12 +1660,6 @@ bitflags! {
     pub struct KvmGuestMemFdFlags: u64 { }
 }
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct KvmLapicState {
-    pub regs: [u8; 0x400],
-}
-
 #[repr(C)]
 pub struct KvmMsrs<T>
 where
@@ -2053,131 +1675,6 @@ pub struct KvmMsrEntry {
     index: u32,
     reserved: u32,
     data: u64,
-}
-
-#[repr(C)]
-pub struct KvmIrqchip {
-    chip_id: u32,
-    _pad: u32,
-    chip: [u8; 512],
-}
-
-#[repr(C)]
-pub struct KvmIrqRouting<T> {
-    nr: u32,
-    flags: u32,
-    entries: T,
-}
-
-#[repr(C)]
-pub struct KvmIrqRoutingEntry {
-    gsi: u32,
-    ty: u32,
-    flags: u32,
-    _pad: u32,
-    irqchip: KvmIrqRoutingIrqchip,
-}
-
-impl KvmIrqRoutingEntry {
-    pub fn to_irq_chip(gsi: u32, irqchip: u32, pin: u32) -> Self {
-        Self {
-            gsi,
-            ty: 1,
-            flags: 0,
-            _pad: 0,
-            irqchip: KvmIrqRoutingIrqchip {
-                irqchip,
-                pin,
-                _pad: [0; 6],
-            },
-        }
-    }
-}
-
-#[repr(C)]
-pub struct KvmIrqRoutingIrqchip {
-    irqchip: u32,
-    pin: u32,
-    _pad: [u32; 6],
-}
-
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct KvmIoapicState {
-    pub base_address: u64,
-    pub ioregsel: u32,
-    pub id: u32,
-    pub irr: u32,
-    pub pad: u32,
-    pub redirtbl: [KvmIoapicStateRedirTableEntry; 24],
-}
-
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C, packed)]
-pub struct KvmIoapicStateRedirTableEntry {
-    pub vector: u8,
-    pub flags: u16,
-    _reserved: [u8; 4],
-    pub dest_id: u8,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct KvmIrqfd<'a> {
-    fd: BorrowedFd<'a>,
-    gsi: u32,
-    flags: KvmIrqfdFlags,
-    resamplefd: Option<BorrowedFd<'a>>,
-    _pad: [u8; 16],
-}
-
-impl<'a> KvmIrqfd<'a> {
-    pub fn new(
-        fd: BorrowedFd<'a>,
-        gsi: u32,
-        resamplefd: Option<BorrowedFd<'a>>,
-        deassign: bool,
-    ) -> Self {
-        let mut flags = KvmIrqfdFlags::empty();
-        if deassign {
-            flags |= KvmIrqfdFlags::DEASSIGN;
-        }
-        if resamplefd.is_some() {
-            flags |= KvmIrqfdFlags::RESAMPLE;
-        }
-
-        Self {
-            fd,
-            gsi,
-            flags,
-            resamplefd,
-            _pad: [0; 16],
-        }
-    }
-}
-
-bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct KvmIrqfdFlags: u32 {
-        const DEASSIGN = 1 << 0;
-        const RESAMPLE = 1 << 1;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Contiguous)]
-#[repr(u32)]
-pub enum KvmMpState {
-    Runnable = 0,
-    Uninitialized = 1,
-    InitReceived = 2,
-    Halted = 3,
-    SipiReceived = 4,
-    Stopped = 5,
-    CheckStop = 6,
-    Operating = 7,
-    Load = 8,
-    ApResetHold = 9,
-    Suspended = 10,
 }
 
 const KVM_MAX_XCRS: usize = 16;
@@ -2197,22 +1694,6 @@ struct KvmXcrs {
     flags: u32,
     xcrs: [KvmXcr; KVM_MAX_XCRS],
     padding: [u64; 16],
-}
-
-#[derive(Clone, Copy, Zeroable)]
-#[repr(C)]
-pub struct KvmFpu {
-    pub fpr: [[u8; 8]; 16],
-    pub fcw: u16,
-    pub fsw: u16,
-    pub ftwx: u8, /* in fxsave format */
-    pub pad1: u8,
-    pub last_opcode: u16,
-    pub last_ip: u64,
-    pub last_dp: u64,
-    pub xmm: [[u8; 16]; 16],
-    pub mxcsr: u32,
-    pad2: u32,
 }
 
 #[cfg(test)]
