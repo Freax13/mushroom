@@ -19,7 +19,7 @@ CARGO_BUILD_STD_FEATURES = $(CARGO_BUILD_STD_FEATURES_$(PROFILE))
 CARGO_EXTRA_FLAGS_release = --features harden
 CARGO_EXTRA_FLAGS = $(CARGO_EXTRA_FLAGS_$(PROFILE))
 
-export RUSTFLAGS = -Z cf-protection=return
+export RUSTFLAGS = -Z cf-protection=full
 
 supervisor:
 	cargo build \

@@ -150,9 +150,7 @@ mov rax, cr0
 or rax, 1 << 1
 mov cr0, rax
 mov rax, cr4
-or rax, 1 << 9
-or rax, 1 << 10
-or rax, 1 << 18
+or rax, (1 << 9) | (1 << 10) | (1 << 18)
 mov cr4, rax
 # 7.2 Enable AVX
 xor rcx, rcx
