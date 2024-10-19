@@ -1,5 +1,3 @@
-#![feature(new_zeroed_alloc)]
-
 use std::{collections::HashMap, num::NonZeroU32, ptr::NonNull};
 
 use anyhow::{Context, Result};
