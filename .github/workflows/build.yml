@@ -117,10 +117,16 @@ jobs:
           TEE: ${{ matrix.tee }}
 
   integration-test:
+    strategy:
+      matrix:
+        tee:
+          - snp
+          - tdx
     name: "Integration Test"
-    runs-on: [snp]
+    runs-on: ${{ matrix.tee }}
     steps:
       - uses: actions/checkout@v4
       - name: "Build & Run Example Init Binary"
         run: make run-example
-  
+        env:
+          TEE: ${{ matrix.tee }}
