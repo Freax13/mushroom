@@ -96,10 +96,10 @@ add r8, SHADOW_STACK_SIZE - 8
 mov rax, cr4
 or rax, 1 << 23
 mov cr4, rax
-# 7.2 Enable Shadow Stacks in in SCET MSR
+# 7.2 Enable SH_STK_EN, ENBR_EN, and NO_TRACK_EN in in SCET MSR
 mov ecx, 0x6a2
 xor edx, edx
-mov eax, 1
+mov eax, (1 << 0) | (1 << 2) | (1 << 4)
 wrmsr
 # 7.3 Load SSP
 rstorssp [r8]
