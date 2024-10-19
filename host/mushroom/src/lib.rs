@@ -13,8 +13,11 @@ use volatile::{
 };
 use x86_64::structures::paging::PhysFrame;
 
+#[cfg(feature = "insecure")]
 pub mod insecure;
+#[cfg(feature = "snp")]
 pub mod snp;
+#[cfg(feature = "tdx")]
 pub mod tdx;
 
 mod kvm;
@@ -28,8 +31,11 @@ const TSC_MHZ: u64 = 100;
 
 #[derive(Clone, Copy)]
 pub enum Tee {
+    #[cfg(feature = "snp")]
     Snp,
+    #[cfg(feature = "tdx")]
     Tdx,
+    #[cfg(feature = "insecure")]
     Insecure,
 }
 
@@ -37,9 +43,12 @@ impl Tee {
     pub fn is_supported(self, kvm: &KvmHandle) -> Result<bool> {
         const KVM_X86_TDX_VM: usize = 2;
         const KVM_X86_SNP_VM: usize = 3;
-        let bit = match self {
+        let bit: usize = match self {
+            #[cfg(feature = "snp")]
             Tee::Snp => KVM_X86_SNP_VM,
+            #[cfg(feature = "tdx")]
             Tee::Tdx => KVM_X86_TDX_VM,
+            #[cfg(feature = "insecure")]
             Tee::Insecure => return Ok(true),
         };
         let extension = kvm.check_extension(KvmCap::VM_TYPES)?;

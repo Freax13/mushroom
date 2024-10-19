@@ -7,14 +7,18 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use mushroom::{profiler::ProfileFolder, KvmHandle, Tee};
-use mushroom_verify::{
-    snp::{Configuration, VcekParameters},
-    tdx, InputHash, OutputHash,
-};
+use mushroom::{profiler::ProfileFolder, KvmHandle, MushroomResult, Tee};
+#[cfg(feature = "snp")]
+use mushroom_verify::snp::{self, VcekParameters};
+#[cfg(feature = "tdx")]
+use mushroom_verify::tdx;
+use mushroom_verify::{InputHash, OutputHash};
+#[cfg(feature = "snp")]
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
+#[cfg(feature = "tdx")]
 use tdx_types::td_quote::{Quote, TeeTcbSvn};
 use tracing::warn;
+#[cfg(feature = "snp")]
 use vcek_kds::{Product, Vcek};
 
 #[tokio::main]
@@ -52,6 +56,7 @@ struct ConfigArgs {
         required_unless_present = "tee",
         required_if_eq_any([("tee", "auto"), ("tee", "snp")]),
     )]
+    #[cfg(feature = "snp")]
     supervisor_snp: Option<PathBuf>,
     /// Path to the supervisor for TDX.
     #[arg(
@@ -61,6 +66,7 @@ struct ConfigArgs {
         required_unless_present = "tee",
         required_if_eq_any([("tee", "auto"), ("tee", "tdx")]),
     )]
+    #[cfg(feature = "tdx")]
     supervisor_tdx: Option<PathBuf>,
     /// Path to the kernel.
     #[arg(long, value_name = "PATH", env = "KERNEL")]
@@ -71,6 +77,7 @@ struct ConfigArgs {
     /// Load KASAN shadow mappings for the kernel.
     #[arg(long, env = "KASAN")]
     kasan: bool,
+    #[cfg(feature = "snp")]
     #[command(flatten)]
     policy: PolicyArgs,
     /// TEE used to run the workload.
@@ -96,6 +103,7 @@ struct IoArgs {
     attestation_report: Option<PathBuf>,
 }
 
+#[cfg(feature = "snp")]
 #[derive(Args)]
 struct PolicyArgs {
     /// Minimum required firmware major version.
@@ -118,6 +126,7 @@ struct PolicyArgs {
     pub allow_debugging: bool,
 }
 
+#[cfg(feature = "snp")]
 impl PolicyArgs {
     fn policy(&self) -> GuestPolicy {
         GuestPolicy::new(self.abi_major, self.abi_minor)
@@ -145,17 +154,22 @@ struct RunCommand {
     #[arg(long, value_name = "PATH", env = "PROFILE_FOLDER")]
     profile_folder: Option<PathBuf>,
     /// Vsock CID used to connect to the quote generation service.
+    #[cfg(feature = "tdx")]
     #[arg(long, value_name = "CID", default_value_t = 2)]
     qgs_cid: u32,
     /// Vsock port used to connect to the quote generation service.
     #[arg(long, value_name = "PORT", default_value_t = 4050)]
+    #[cfg(feature = "tdx")]
     qgs_port: u32,
 }
 
 #[derive(ValueEnum, Clone, Copy)]
 pub enum TeeWithAuto {
+    #[cfg(feature = "snp")]
     Snp,
+    #[cfg(feature = "tdx")]
     Tdx,
+    #[cfg(feature = "insecure")]
     Insecure,
     Auto,
 }
@@ -163,8 +177,11 @@ pub enum TeeWithAuto {
 impl Display for TeeWithAuto {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "snp")]
             TeeWithAuto::Snp => f.pad("snp"),
+            #[cfg(feature = "tdx")]
             TeeWithAuto::Tdx => f.pad("tdx"),
+            #[cfg(feature = "insecure")]
             TeeWithAuto::Insecure => f.pad("insecure"),
             TeeWithAuto::Auto => f.pad("auto"),
         }
@@ -178,23 +195,30 @@ fn run(run: RunCommand) -> Result<()> {
 
     let kvm_handle = KvmHandle::new()?;
 
-    let tee = match run.config.tee {
+    let tee: Tee = match run.config.tee {
+        #[cfg(feature = "snp")]
         TeeWithAuto::Snp => Tee::Snp,
+        #[cfg(feature = "tdx")]
         TeeWithAuto::Tdx => Tee::Tdx,
+        #[cfg(feature = "insecure")]
         TeeWithAuto::Insecure => Tee::Insecure,
-        TeeWithAuto::Auto => {
-            if Tee::Snp.is_supported(&kvm_handle)? {
-                Tee::Snp
-            } else if Tee::Tdx.is_supported(&kvm_handle)? {
-                Tee::Tdx
-            } else {
-                warn!("Neither SNP nor TDX are supported. Falling back to insecure.");
+        TeeWithAuto::Auto => match () {
+            #[cfg(feature = "snp")]
+            () if Tee::Snp.is_supported(&kvm_handle)? => Tee::Snp,
+            #[cfg(feature = "tdx")]
+            () if Tee::Tdx.is_supported(&kvm_handle)? => Tee::Tdx,
+            #[cfg(feature = "insecure")]
+            _ => {
+                warn!("No TEE is supported by the host. Falling back to insecure.");
                 Tee::Insecure
             }
-        }
+            #[cfg(not(feature = "insecure"))]
+            _ => bail!("Couldn't determine TEE"),
+        },
     };
 
-    let result = match tee {
+    let result: MushroomResult = match tee {
+        #[cfg(feature = "snp")]
         Tee::Snp => {
             let supervisor_snp_path = run
                 .config
@@ -220,6 +244,7 @@ fn run(run: RunCommand) -> Result<()> {
                 profile_folder,
             )?
         }
+        #[cfg(feature = "tdx")]
         Tee::Tdx => {
             let supervisor_tdx_path = run
                 .config
@@ -248,6 +273,7 @@ fn run(run: RunCommand) -> Result<()> {
                 run.qgs_port,
             )?
         }
+        #[cfg(feature = "insecure")]
         Tee::Insecure => {
             if run.io.attestation_report.is_some() {
                 warn!("No attestation report will be produced in insecure mode.");
@@ -286,30 +312,38 @@ struct VerifyCommand {
 struct TcbArgs {
     // SNP:
     /// The smallest allowed value for the `bootloader` field of the launch TCB.
+    #[cfg(feature = "snp")]
     #[arg(long, default_value_t = 4)]
     bootloader_svn: u8,
     /// The smallest allowed value for the `tee` field of the launch TCB.
+    #[cfg(feature = "snp")]
     #[arg(long, default_value_t = 0)]
     tee_svn: u8,
     /// The smallest allowed value for the `snp` field of the launch TCB.
+    #[cfg(feature = "snp")]
     #[arg(long, default_value_t = 22)]
     snp_svn: u8,
     /// The smallest allowed value for the `microcode` field of the launch TCB.
+    #[cfg(feature = "snp")]
     #[arg(long, default_value_t = 211)]
     microcode_svn: u8,
     // TDX:
     /// TDX module minor SVN.
+    #[cfg(feature = "tdx")]
     #[arg(long, default_value_t = 5)]
     tdx_module_svn_minor: u8,
     /// TDX module major SVN.
+    #[cfg(feature = "tdx")]
     #[arg(long, default_value_t = 1)]
     tdx_module_svn_major: u8,
     /// Microcode SE_SVN at the time the TDX module was loaded.
+    #[cfg(feature = "tdx")]
     #[arg(long, default_value_t = 2)]
     seam_last_patch_svn: u8,
 }
 
 impl TcbArgs {
+    #[cfg(feature = "snp")]
     fn min_tcb(&self) -> TcbVersion {
         TcbVersion::new(
             self.bootloader_svn,
@@ -319,6 +353,7 @@ impl TcbArgs {
         )
     }
 
+    #[cfg(feature = "tdx")]
     fn tee_tcb_svn(&self) -> TeeTcbSvn {
         let mut svns = [0; 16];
         svns[0] = self.tdx_module_svn_minor;
@@ -345,6 +380,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
 
     let report = parse_report(run.config.tee, attestation_report)?;
     match report {
+        #[cfg(feature = "snp")]
         Report::Snp(attestation_report) => {
             // FIXME: use proper error type and use `?` instead of unwrap.
             let product = Product::Milan;
@@ -381,7 +417,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
                     .context("missing supervisor-snp path")?,
             )
             .context("failed to read supervisor-snp file")?;
-            let configuration = Configuration::new(
+            let configuration = snp::Configuration::new(
                 &supervisor_snp,
                 &kernel,
                 &init,
@@ -394,6 +430,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
                 .verify(input_hash, output_hash, &attestation_report, &vcek_cert)
                 .unwrap();
         }
+        #[cfg(feature = "tdx")]
         Report::Tdx(attestation_report) => {
             let supervisor_tdx = std::fs::read(
                 run.config
@@ -419,16 +456,22 @@ async fn verify(run: VerifyCommand) -> Result<()> {
 }
 
 enum Report {
+    #[cfg(feature = "snp")]
     Snp(Vec<u8>),
+    #[cfg(feature = "tdx")]
     Tdx(Vec<u8>),
 }
 
 fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report> {
     match tee {
+        #[cfg(feature = "snp")]
         TeeWithAuto::Snp => Ok(Report::Snp(attestation_report)),
+        #[cfg(feature = "tdx")]
         TeeWithAuto::Tdx => Ok(Report::Tdx(attestation_report)),
+        #[cfg(feature = "insecure")]
         TeeWithAuto::Insecure => bail!("Can't verify output produced in insecure mode."),
         TeeWithAuto::Auto => {
+            #[cfg(feature = "snp")]
             if try_pod_read_unaligned::<snp_types::attestation::AttestionReport>(
                 &attestation_report,
             )
@@ -436,6 +479,7 @@ fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report>
             {
                 return Ok(Report::Snp(attestation_report));
             }
+            #[cfg(feature = "tdx")]
             if Quote::parse(&attestation_report).is_ok() {
                 return Ok(Report::Tdx(attestation_report));
             }
@@ -444,6 +488,7 @@ fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report>
     }
 }
 
+#[cfg(feature = "snp")]
 fn cache_file_name(params: VcekParameters) -> String {
     format!(
         "{}-{}-{}-{}-{}.cert",
@@ -455,6 +500,7 @@ fn cache_file_name(params: VcekParameters) -> String {
     )
 }
 
+#[cfg(feature = "snp")]
 async fn load_vcek_from_cache(
     cache: &Path,
     product: Product,
@@ -471,6 +517,7 @@ async fn load_vcek_from_cache(
     Ok(Some(vcek))
 }
 
+#[cfg(feature = "snp")]
 async fn save_vcek_to_cache(cache: &Path, params: VcekParameters, vcek: &Vcek) -> Result<()> {
     let cache_name = cache_file_name(params);
     tokio::fs::write(cache.join(cache_name), vcek.raw())
