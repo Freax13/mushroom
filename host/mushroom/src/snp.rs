@@ -14,6 +14,7 @@ use constants::{
 };
 use snp_types::{guest_policy::GuestPolicy, PageType};
 use tracing::{debug, info};
+use vcek_kds::Vcek;
 use volatile::map_field;
 use x86_64::{
     structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
@@ -41,6 +42,7 @@ pub fn main(
     load_kasan_shadow_mappings: bool,
     input: &[u8],
     policy: GuestPolicy,
+    vcek: Vcek,
     profiler_folder: Option<ProfileFolder>,
 ) -> Result<MushroomResult> {
     let sev_handle = SevHandle::new()?;
@@ -54,6 +56,7 @@ pub fn main(
         policy,
         kvm_handle,
         &sev_handle,
+        vcek,
         profiler_folder,
     )?;
     vm_context.run_supervisor()
@@ -65,6 +68,7 @@ struct VmContext {
     ap_threads: HashMap<u8, JoinHandle<()>>,
     memory_slots: HashMap<u16, Slot>,
     start: Instant,
+    vcek: Vcek,
 }
 
 impl VmContext {
@@ -79,6 +83,7 @@ impl VmContext {
         policy: GuestPolicy,
         kvm_handle: &KvmHandle,
         sev_handle: &SevHandle,
+        vcek: Vcek,
         profiler_folder: Option<ProfileFolder>,
     ) -> Result<Self> {
         let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
@@ -220,6 +225,7 @@ impl VmContext {
             ap_threads: aps,
             memory_slots,
             start,
+            vcek,
         })
     }
 
@@ -344,7 +350,8 @@ impl VmContext {
                         let slot = find_slot(gfn, &mut self.memory_slots)?;
                         let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
-                        let attestation_report = attestation_report[..len].to_vec();
+                        let mut attestation_report = attestation_report[..len].to_vec();
+                        attestation_report.extend_from_slice(self.vcek.raw());
                         return Ok(MushroomResult {
                             output,
                             attestation_report: Some(attestation_report),

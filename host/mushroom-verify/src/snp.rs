@@ -1,8 +1,4 @@
-use std::{
-    cmp::Ordering,
-    fmt::{self, Display},
-    mem::size_of,
-};
+use std::{cmp::Ordering, mem::size_of};
 
 use bytemuck::{bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned, NoUninit};
 use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
@@ -60,10 +56,18 @@ impl Configuration {
         input_hash: InputHash,
         output_hash: OutputHash,
         attestation_report: &[u8],
-        vcek: &Vcek,
     ) -> Result<(), VerificationError> {
+        // The VCEK is appended to the attestation report. Split the two.
+        const REPORT_LEN: usize = size_of::<AttestionReport>();
+        if attestation_report.len() < REPORT_LEN {
+            return Err(VerificationError(()));
+        }
+        let (attestation_report, vcek) = attestation_report.split_at(REPORT_LEN);
+
+        // Parse the attestation report and the VCEK.
         let report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
             .map_err(|_| VerificationError(()))?;
+        let vcek = Vcek::from_bytes(vcek.to_owned()).map_err(|_| VerificationError(()))?;
 
         let AttestionReport::V2(report) = report;
 
@@ -110,45 +114,6 @@ impl Configuration {
             .verify(&attestation_report[..=0x29f], &signature)
             .map_err(|_| VerificationError(()))?;
 
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct VcekParameters {
-    pub chip_id: ChipId,
-    pub tcb: TcbVersion,
-}
-
-impl VcekParameters {
-    /// Extract the VCEK parameters from an attestation report.
-    ///
-    /// This information is necessairy to retrieve the VCEK.
-    pub fn for_attestaton_report(
-        attestation_report: &[u8],
-    ) -> Result<VcekParameters, VerificationError> {
-        let attestion_report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
-            .map_err(|_| VerificationError(()))?;
-        let AttestionReport::V2(report) = attestion_report;
-        Ok(VcekParameters {
-            chip_id: ChipId {
-                chip_id: report.chip_id,
-            },
-            tcb: report.reported_tcb,
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct ChipId {
-    pub chip_id: [u8; 64],
-}
-
-impl Display for ChipId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for b in self.chip_id.iter() {
-            write!(f, "{b:02x}")?;
-        }
         Ok(())
     }
 }

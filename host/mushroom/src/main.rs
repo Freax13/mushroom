@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Display},
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::{bail, ensure, Context, Result};
@@ -9,7 +9,7 @@ use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mushroom::{profiler::ProfileFolder, KvmHandle, MushroomResult, Tee};
 #[cfg(feature = "snp")]
-use mushroom_verify::snp::{self, VcekParameters};
+use mushroom_verify::snp;
 #[cfg(feature = "tdx")]
 use mushroom_verify::tdx;
 use mushroom_verify::{InputHash, OutputHash};
@@ -19,7 +19,7 @@ use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 use tdx_types::td_quote::{Quote, TeeTcbSvn};
 use tracing::warn;
 #[cfg(feature = "snp")]
-use vcek_kds::{Product, Vcek};
+use vcek_kds::{Vcek, VcekParameters};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
 
     let mushroom = Mushroom::parse();
     match mushroom.subcommand {
-        MushroomSubcommand::Run(args) => run(args),
+        MushroomSubcommand::Run(args) => run(args).await,
         MushroomSubcommand::Verify(args) => verify(args).await,
     }
 }
@@ -188,7 +188,7 @@ impl Display for TeeWithAuto {
     }
 }
 
-fn run(run: RunCommand) -> Result<()> {
+async fn run(run: RunCommand) -> Result<()> {
     let kernel = std::fs::read(&run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let input = std::fs::read(run.io.input).context("failed to read input file")?;
@@ -233,6 +233,15 @@ fn run(run: RunCommand) -> Result<()> {
                 .transpose()
                 .context("failed to create profile folder")?;
 
+            let parameters = VcekParameters::current_parameters()?;
+            let vcek_cert = if let Some(vcek_cert) = load_vcek_from_cache(parameters).await? {
+                vcek_cert
+            } else {
+                let vcek_cert = Vcek::download(parameters).await?;
+                save_vcek_to_cache(parameters, &vcek_cert).await?;
+                vcek_cert
+            };
+
             mushroom::snp::main(
                 &kvm_handle,
                 &supervisor_snp,
@@ -241,6 +250,7 @@ fn run(run: RunCommand) -> Result<()> {
                 run.config.kasan,
                 &input,
                 run.config.policy.policy(),
+                vcek_cert,
                 profile_folder,
             )?
         }
@@ -301,9 +311,6 @@ struct VerifyCommand {
     config: ConfigArgs,
     #[command(flatten)]
     io: IoArgs,
-    /// Path to store cached VCEKs.
-    #[arg(long, value_name = "PATH")]
-    vcek_cache: Option<PathBuf>,
     #[command(flatten)]
     tcb_args: TcbArgs,
 }
@@ -382,35 +389,6 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     match report {
         #[cfg(feature = "snp")]
         Report::Snp(attestation_report) => {
-            // FIXME: use proper error type and use `?` instead of unwrap.
-            let product = Product::Milan;
-            let params = VcekParameters::for_attestaton_report(&attestation_report).unwrap();
-
-            let mut vcek_cert = None;
-            if let Some(cache) = run.vcek_cache.as_ref() {
-                vcek_cert = load_vcek_from_cache(cache, product, params).await?;
-            }
-
-            let vcek_cert = if let Some(vcek_cert) = vcek_cert {
-                vcek_cert
-            } else {
-                let vcek_cert = vcek_kds::Vcek::download(
-                    product,
-                    params.chip_id.chip_id,
-                    params.tcb.bootloader(),
-                    params.tcb.tee(),
-                    params.tcb.snp(),
-                    params.tcb.microcode(),
-                )
-                .await?;
-
-                if let Some(cache) = run.vcek_cache.as_ref() {
-                    save_vcek_to_cache(cache, params, &vcek_cert).await?;
-                }
-
-                vcek_cert
-            };
-
             let supervisor_snp = std::fs::read(
                 run.config
                     .supervisor_snp
@@ -427,7 +405,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
             );
             // FIXME: use proper error type and use `?` instead of unwrap.
             configuration
-                .verify(input_hash, output_hash, &attestation_report, &vcek_cert)
+                .verify(input_hash, output_hash, &attestation_report)
                 .unwrap();
         }
         #[cfg(feature = "tdx")]
@@ -472,12 +450,14 @@ fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report>
         TeeWithAuto::Insecure => bail!("Can't verify output produced in insecure mode."),
         TeeWithAuto::Auto => {
             #[cfg(feature = "snp")]
-            if try_pod_read_unaligned::<snp_types::attestation::AttestionReport>(
-                &attestation_report,
-            )
-            .is_ok()
             {
-                return Ok(Report::Snp(attestation_report));
+                use snp_types::attestation::AttestionReport;
+                if attestation_report
+                    .get(..size_of::<AttestionReport>())
+                    .is_some_and(|report| try_pod_read_unaligned::<AttestionReport>(report).is_ok())
+                {
+                    return Ok(Report::Snp(attestation_report));
+                }
             }
             #[cfg(feature = "tdx")]
             if Quote::parse(&attestation_report).is_ok() {
@@ -490,37 +470,34 @@ fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report>
 
 #[cfg(feature = "snp")]
 fn cache_file_name(params: VcekParameters) -> String {
-    format!(
-        "{}-{}-{}-{}-{}.cert",
-        params.chip_id,
-        params.tcb.bootloader(),
-        params.tcb.tee(),
-        params.tcb.snp(),
-        params.tcb.microcode(),
-    )
+    format!("{params}.cert")
 }
 
 #[cfg(feature = "snp")]
-async fn load_vcek_from_cache(
-    cache: &Path,
-    product: Product,
-    params: VcekParameters,
-) -> Result<Option<Vcek>> {
-    let cache_name = cache_file_name(params);
-    let res = tokio::fs::read(cache.join(cache_name)).await;
+async fn load_vcek_from_cache(params: VcekParameters) -> Result<Option<Vcek>> {
+    use tracing::debug;
+
+    let dirs = xdg::BaseDirectories::with_prefix("mushroom")?;
+    let Some(file) = dirs.find_cache_file(cache_file_name(params)) else {
+        debug!(%params, "cache miss");
+        return Ok(None);
+    };
+    debug!(%params, "cache hit");
+    let res = tokio::fs::read(file).await;
     let bytes = match res {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).context("failed to load VCEK from cache"),
     };
-    let vcek = Vcek::from_bytes(product, bytes).context("failed to deserialize VCEK")?;
+    let vcek = Vcek::from_bytes(bytes).context("failed to deserialize VCEK")?;
     Ok(Some(vcek))
 }
 
 #[cfg(feature = "snp")]
-async fn save_vcek_to_cache(cache: &Path, params: VcekParameters, vcek: &Vcek) -> Result<()> {
-    let cache_name = cache_file_name(params);
-    tokio::fs::write(cache.join(cache_name), vcek.raw())
+async fn save_vcek_to_cache(params: VcekParameters, vcek: &Vcek) -> Result<()> {
+    let dirs = xdg::BaseDirectories::with_prefix("mushroom")?;
+    let file = dirs.place_cache_file(cache_file_name(params))?;
+    tokio::fs::write(file, vcek.raw())
         .await
         .context("failed to save VCEK")?;
     Ok(())
