@@ -14,6 +14,7 @@ use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB, SUPERVISOR_SERVICES},
     FIRST_AP, MAX_APS_COUNT,
 };
+use loader::Input;
 use snp_types::PageType;
 use supervisor_services::{
     allocation_buffer::{AllocationBuffer, SlotIndex},
@@ -41,7 +42,7 @@ pub fn main(
     kernel: &[u8],
     init: &[u8],
     load_kasan_shadow_mappings: bool,
-    input: &[u8],
+    inputs: &[Input<impl AsRef<[u8]>>],
 ) -> Result<MushroomResult> {
     let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
     let piafb = cpuid_entries
@@ -76,7 +77,7 @@ pub fn main(
     vm.set_tsc_khz(TSC_MHZ * 1000)?;
 
     let (load_commands, _host_data) =
-        loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, input);
+        loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, inputs);
     let mut load_commands = load_commands.peekable();
 
     let mut num_launch_pages = 0;

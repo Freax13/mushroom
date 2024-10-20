@@ -13,10 +13,27 @@ use crate::{
     shared, FakeSync,
 };
 
+#[derive(Default)]
+struct Hasher {
+    sha256: Sha256,
+    len: usize,
+}
+
+impl Hasher {
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.sha256.update(bytes);
+        self.len += bytes.len();
+    }
+
+    pub fn finalize(self) -> ([u8; 32], usize) {
+        (self.sha256.finalize().into(), self.len)
+    }
+}
+
 /// This hasher is used to calculate the hash of the output that's included in
 /// the attestation report.
-static HASHER: FakeSync<LazyCell<RefCell<Option<Sha256>>>> =
-    FakeSync::new(LazyCell::new(|| RefCell::new(Some(Sha256::default()))));
+static HASHER: FakeSync<LazyCell<RefCell<Option<Hasher>>>> =
+    FakeSync::new(LazyCell::new(|| RefCell::new(Some(Hasher::default()))));
 
 /// Append some bytes to the output.
 pub fn update_output(bytes: &[u8]) {
@@ -49,12 +66,12 @@ pub fn finish() -> ! {
     // Finish the running hash.
     let mut guard = HASHER.borrow_mut();
     let hasher = guard.take().expect("hasher was already finished");
-    let result = hasher.finalize();
-    let output: [u8; 32] = result.into();
+    let (hash, len) = hasher.finalize();
 
     // Create the attestation report.
     let mut report_data = [0; 64];
-    report_data[..32].copy_from_slice(&output);
+    report_data[..32].copy_from_slice(&hash);
+    report_data[32..40].copy_from_slice(&len.to_le_bytes());
     let attestation_report = ghcb::create_attestation_report(report_data);
 
     shared! {

@@ -10,6 +10,9 @@ mod input;
 mod kernel;
 mod supervisor;
 
+pub use input::Input;
+pub use io::input::HashType;
+
 #[derive(Debug)]
 pub struct LoadCommand {
     pub physical_address: PhysFrame,
@@ -69,10 +72,10 @@ pub fn generate_load_commands<'a>(
     kernel: &'a [u8],
     init: &'a [u8],
     load_kasan_shadow_mappings: bool,
-    input: &'a [u8],
+    inputs: &'a [Input<impl AsRef<[u8]>>],
 ) -> (impl Iterator<Item = LoadCommand> + 'a, [u8; 32]) {
     let base_load_commands =
         generate_base_load_commands(supervisor, kernel, init, load_kasan_shadow_mappings);
-    let (load_input, host_data) = input::load_input(input);
+    let (load_input, host_data) = input::load_input(inputs);
     (base_load_commands.chain(load_input), host_data)
 }

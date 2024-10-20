@@ -17,6 +17,7 @@ use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
+use loader::Input;
 use nix::sys::{
     pthread::pthread_kill,
     signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
@@ -50,7 +51,7 @@ pub fn main(
     kernel: &[u8],
     init: &[u8],
     load_kasan_shadow_mappings: bool,
-    input: &[u8],
+    inputs: &[Input<impl AsRef<[u8]>>],
     profiler_folder: Option<ProfileFolder>,
     cid: u32,
     port: u32,
@@ -60,7 +61,7 @@ pub fn main(
         supervisor,
         kernel,
         init,
-        input,
+        inputs,
         load_kasan_shadow_mappings,
         kvm_handle,
         profiler_folder,
@@ -124,7 +125,7 @@ impl VmContext {
         supervisor: &[u8],
         kernel: &[u8],
         init: &[u8],
-        input: &[u8],
+        inputs: &[Input<impl AsRef<[u8]>>],
         load_kasan_shadow_mappings: bool,
         kvm_handle: &KvmHandle,
         profiler_folder: Option<ProfileFolder>,
@@ -176,7 +177,7 @@ impl VmContext {
             kernel,
             init,
             load_kasan_shadow_mappings,
-            input,
+            inputs,
         );
         let mut load_commands = load_commands.peekable();
 

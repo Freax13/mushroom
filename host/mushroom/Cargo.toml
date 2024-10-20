@@ -8,10 +8,10 @@ name = "mushroom"
 required-features = ["bin"]
 
 [features]
-default = ["insecure", "snp", "tdx"]
-insecure = ["dep:loader", "dep:snp-types", "dep:supervisor-services"]
-snp = ["dep:loader", "mushroom-verify?/snp", "dep:snp-types", "dep:vcek-kds"]
-tdx = ["dep:loader", "mushroom-verify?/tdx", "dep:qgs-client", "dep:tdx-types"]
+default = ["insecure", "snp", "tdx", "bin"]
+insecure = ["dep:snp-types", "dep:supervisor-services"]
+snp = ["mushroom-verify?/snp", "dep:snp-types", "dep:vcek-kds"]
+tdx = ["mushroom-verify?/tdx", "dep:qgs-client", "dep:tdx-types"]
 bin = ["dep:clap", "dep:mushroom-verify", "dep:tokio", "dep:tracing-subscriber", "dep:xdg"]
 
 [dependencies]
@@ -21,7 +21,7 @@ bitflags = { version = "2.4.2", features = ["bytemuck"] }
 bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics", "extern_crate_std"] }
 clap = { version = "4.5.2", features = ["derive", "env"], optional = true }
 constants = { workspace = true }
-loader = { workspace = true, optional = true }
+loader = { workspace = true }
 log-types = { workspace = true, features = ["std"] }
 mushroom-verify = { workspace = true, optional = true }
 nix = { version = "0.28.0", features = ["fs", "ioctl", "mman", "pthread", "signal"] }

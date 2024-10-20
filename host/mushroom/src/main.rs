@@ -1,14 +1,15 @@
 use std::{
     fmt::{self, Display},
     io::ErrorKind,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{bail, ensure, Context, Result};
 use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use loader::{HashType, Input};
 use mushroom::{profiler::ProfileFolder, KvmHandle, MushroomResult, Tee};
-use mushroom_verify::Configuration;
+use mushroom_verify::{Configuration, HashedInput};
 use mushroom_verify::{InputHash, OutputHash};
 #[cfg(feature = "snp")]
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
@@ -84,9 +85,12 @@ struct ConfigArgs {
 
 #[derive(Args)]
 struct IoArgs {
-    /// Path to the input to process.
+    /// Paths to the inputs to process.
+    ///
+    /// By default the inputs are hashed using sha256. A different hash can be
+    /// specified by prepending `<HASH-TYPE>:` (e.g. `sha384:`) to the path.
     #[arg(long, value_name = "PATH")]
-    input: PathBuf,
+    input: Vec<PathBuf>,
     /// Path to store the output.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
@@ -98,6 +102,29 @@ struct IoArgs {
         required_if_eq_any([("tee", "auto"), ("tee", "snp"), ("tee", "tdx")]),
     )]
     attestation_report: Option<PathBuf>,
+}
+
+impl IoArgs {
+    fn inputs(&self) -> Result<Vec<Input<Vec<u8>>>> {
+        let mut inputs = Vec::with_capacity(self.input.len());
+        for input in self.input.iter() {
+            let mut input: &Path = input;
+
+            let mut hash_type = HashType::Sha256;
+            if let Ok(path) = input.strip_prefix("sha256:") {
+                hash_type = HashType::Sha256;
+                input = path;
+            } else if let Ok(path) = input.strip_prefix("sha384:") {
+                hash_type = HashType::Sha384;
+                input = path;
+            }
+
+            let bytes = std::fs::read(input)
+                .with_context(|| format!("failed to read input file {}", input.display()))?;
+            inputs.push(Input { bytes, hash_type });
+        }
+        Ok(inputs)
+    }
 }
 
 #[cfg(feature = "snp")]
@@ -188,7 +215,7 @@ impl Display for TeeWithAuto {
 async fn run(run: RunCommand) -> Result<()> {
     let kernel = std::fs::read(&run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
-    let input = std::fs::read(run.io.input).context("failed to read input file")?;
+    let inputs = run.io.inputs()?;
 
     let kvm_handle = KvmHandle::new()?;
 
@@ -245,7 +272,7 @@ async fn run(run: RunCommand) -> Result<()> {
                 &kernel,
                 &init,
                 run.config.kasan,
-                &input,
+                &inputs,
                 run.config.policy.policy(),
                 vcek_cert,
                 profile_folder,
@@ -274,7 +301,7 @@ async fn run(run: RunCommand) -> Result<()> {
                 &kernel,
                 &init,
                 run.config.kasan,
-                &input,
+                &inputs,
                 profile_folder,
                 run.qgs_cid,
                 run.qgs_port,
@@ -288,7 +315,7 @@ async fn run(run: RunCommand) -> Result<()> {
             if run.profile_folder.is_some() {
                 warn!("Profiling in insecure mode is currently not supported.");
             }
-            mushroom::insecure::main(&kvm_handle, &kernel, &init, run.config.kasan, &input)?
+            mushroom::insecure::main(&kvm_handle, &kernel, &init, run.config.kasan, &inputs)?
         }
     };
 
@@ -370,7 +397,7 @@ impl TcbArgs {
 async fn verify(run: VerifyCommand) -> Result<()> {
     let kernel = std::fs::read(run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
-    let input = std::fs::read(run.io.input).context("failed to read input file")?;
+    let inputs = run.io.inputs()?;
     let output = std::fs::read(run.io.output).context("failed to read output file")?;
     let attestation_report = std::fs::read(
         run.io
@@ -379,7 +406,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     )
     .context("failed to read attestation report")?;
 
-    let input_hash = InputHash::new(&input);
+    let input_hash = InputHash::new(inputs.into_iter().map(|input| HashedInput::new(&input)));
     let output_hash = OutputHash::new(&output);
 
     let report = determine_report_type(run.config.tee, &attestation_report)?;
