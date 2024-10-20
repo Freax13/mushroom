@@ -8,10 +8,7 @@ use anyhow::{bail, ensure, Context, Result};
 use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mushroom::{profiler::ProfileFolder, KvmHandle, MushroomResult, Tee};
-#[cfg(feature = "snp")]
-use mushroom_verify::snp;
-#[cfg(feature = "tdx")]
-use mushroom_verify::tdx;
+use mushroom_verify::Configuration;
 use mushroom_verify::{InputHash, OutputHash};
 #[cfg(feature = "snp")]
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
@@ -385,67 +382,60 @@ async fn verify(run: VerifyCommand) -> Result<()> {
     let input_hash = InputHash::new(&input);
     let output_hash = OutputHash::new(&output);
 
-    let report = parse_report(run.config.tee, attestation_report)?;
-    match report {
+    let report = determine_report_type(run.config.tee, &attestation_report)?;
+    let configuration: Configuration = match report {
         #[cfg(feature = "snp")]
-        Report::Snp(attestation_report) => {
+        ReportType::Snp => {
             let supervisor_snp = std::fs::read(
                 run.config
                     .supervisor_snp
                     .context("missing supervisor-snp path")?,
             )
             .context("failed to read supervisor-snp file")?;
-            let configuration = snp::Configuration::new(
+            Configuration::new_snp(
                 &supervisor_snp,
                 &kernel,
                 &init,
                 run.config.kasan,
                 run.config.policy.policy(),
                 run.tcb_args.min_tcb(),
-            );
-            // FIXME: use proper error type and use `?` instead of unwrap.
-            configuration
-                .verify(input_hash, output_hash, &attestation_report)
-                .unwrap();
+            )
         }
         #[cfg(feature = "tdx")]
-        Report::Tdx(attestation_report) => {
+        ReportType::Tdx => {
             let supervisor_tdx = std::fs::read(
                 run.config
                     .supervisor_tdx
                     .context("missing supervisor-tdx path")?,
             )
             .context("failed to read supervisor-tdx file")?;
-            let configuration = tdx::Configuration::new(
-                &supervisor_tdx,
-                &kernel,
-                &init,
-                run.tcb_args.tee_tcb_svn(),
-            );
-            configuration
-                .verify(input_hash, output_hash, &attestation_report)
-                .unwrap();
+            Configuration::new_tdx(&supervisor_tdx, &kernel, &init, run.tcb_args.tee_tcb_svn())
         }
-    }
+    };
+
+    // FIXME: use proper error type and use `?` instead of unwrap.
+    configuration
+        .verify(input_hash, output_hash, &attestation_report)
+        .unwrap();
 
     println!("Ok");
 
     Ok(())
 }
 
-enum Report {
+enum ReportType {
     #[cfg(feature = "snp")]
-    Snp(Vec<u8>),
+    Snp,
     #[cfg(feature = "tdx")]
-    Tdx(Vec<u8>),
+    Tdx,
 }
 
-fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report> {
+fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<ReportType> {
     match tee {
         #[cfg(feature = "snp")]
-        TeeWithAuto::Snp => Ok(Report::Snp(attestation_report)),
+        TeeWithAuto::Snp => Ok(ReportType::Snp),
         #[cfg(feature = "tdx")]
-        TeeWithAuto::Tdx => Ok(Report::Tdx(attestation_report)),
+        TeeWithAuto::Tdx => Ok(ReportType::Tdx),
         #[cfg(feature = "insecure")]
         TeeWithAuto::Insecure => bail!("Can't verify output produced in insecure mode."),
         TeeWithAuto::Auto => {
@@ -456,12 +446,12 @@ fn parse_report(tee: TeeWithAuto, attestation_report: Vec<u8>) -> Result<Report>
                     .get(..size_of::<AttestionReport>())
                     .is_some_and(|report| try_pod_read_unaligned::<AttestionReport>(report).is_ok())
                 {
-                    return Ok(Report::Snp(attestation_report));
+                    return Ok(ReportType::Snp);
                 }
             }
             #[cfg(feature = "tdx")]
-            if Quote::parse(&attestation_report).is_ok() {
-                return Ok(Report::Tdx(attestation_report));
+            if Quote::parse(attestation_report).is_ok() {
+                return Ok(ReportType::Tdx);
             }
             bail!("Can't determine attestation report type.")
         }
