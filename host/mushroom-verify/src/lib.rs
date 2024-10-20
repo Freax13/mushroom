@@ -49,20 +49,36 @@ impl Configuration {
         )))
     }
 
+    /// Verify that a input with the given hash is attested to have produced an
+    /// output with the given hash.
     pub fn verify(
         &self,
         input_hash: InputHash,
         output_hash: OutputHash,
         attestation_report: &[u8],
     ) -> Result<(), VerificationError> {
+        let hash = self.verify_and_extract(input_hash, attestation_report)?;
+        if hash != output_hash {
+            return Err(VerificationError(()));
+        }
+        Ok(())
+    }
+
+    /// Verify that a input with the given hash is attested to have produced an
+    /// output and return its hash.
+    pub fn verify_and_extract(
+        &self,
+        input_hash: InputHash,
+        attestation_report: &[u8],
+    ) -> Result<OutputHash, VerificationError> {
         match self.0 {
             #[cfg(feature = "snp")]
             ConfigurationImpl::Snp(ref configuration) => {
-                configuration.verify(input_hash, output_hash, attestation_report)
+                configuration.verify_and_extract(input_hash, attestation_report)
             }
             #[cfg(feature = "tdx")]
             ConfigurationImpl::Tdx(ref configuration) => {
-                configuration.verify(input_hash, output_hash, attestation_report)
+                configuration.verify_and_extract(input_hash, attestation_report)
             }
         }
     }
