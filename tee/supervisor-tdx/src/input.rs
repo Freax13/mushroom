@@ -1,11 +1,10 @@
 use core::mem::size_of;
 
 use bit_field::BitField;
-use bytemuck::pod_read_unaligned;
+use bytemuck::checked::pod_read_unaligned;
 use constants::physical_address::{INIT_FILE, INPUT_FILE};
-use io::input::Header;
+use io::input::{Hasher, Header};
 use log::info;
-use sha2::{Digest, Sha256};
 use tdx_types::tdcall::GpaAttr;
 use x86_64::{
     structures::paging::{Page, PhysFrame, Size4KiB},
@@ -25,44 +24,55 @@ pub fn init() {
 
 /// Verify the input and make it accessible to the L2 VM.
 fn verify_and_load() {
-    // Read the input header.
-    let header_page_bytes = convert_to_private_in_place(0);
-    let header_bytes = &header_page_bytes[..size_of::<Header>()];
-    let header = pod_read_unaligned::<Header>(header_bytes);
+    let mut page_index = 0;
 
     // Verify the input header.
     let mr_config_id = Tdcall::mr_report([0; 64]).td_info.base.mr_config_id;
     assert_eq!(mr_config_id[32..], [0; 16]);
-    let hash = <[u8; 32]>::try_from(&mr_config_id[0..32]).unwrap();
-    assert!(header.verify(hash), "header doesn't match host data");
-
-    // Hash the input.
-
-    let mut hasher = Sha256::new();
-
-    // Copy pages one at a time.
-    let mut page_index = 1;
-    let mut remaining_len = header.input_len;
-    while remaining_len >= 0x1000 {
-        let input_bytes = convert_to_private_in_place(page_index);
-        hasher.update(input_bytes);
-        remaining_len -= 0x1000;
+    let mut next_hash = <[u8; 32]>::try_from(&mr_config_id[0..32]).unwrap();
+    loop {
+        // Read the input header.
+        let header_page_bytes = convert_to_private_in_place(page_index);
+        let header_bytes = &header_page_bytes[..size_of::<Header>()];
+        let header = pod_read_unaligned::<Header>(header_bytes);
         page_index += 1;
+
+        // Verify the input header.
+        assert!(header.verify(next_hash), "header doesn't match");
+
+        if header == Header::end() {
+            break;
+        }
+
+        // Hash the input.
+
+        let mut hasher = Hasher::new(header.hash_type);
+
+        // Copy pages one at a time.
+        let mut remaining_len = usize::try_from(header.input_len).unwrap();
+        while remaining_len >= 0x1000 {
+            let input_bytes = convert_to_private_in_place(page_index);
+            page_index += 1;
+            hasher.update(&input_bytes);
+            remaining_len -= 0x1000;
+        }
+
+        // The last page may not be a full page.
+        if remaining_len > 0 {
+            let input_bytes = convert_to_private_in_place(page_index);
+            page_index += 1;
+            let (input_bytes, rest) = input_bytes.split_at(remaining_len);
+            hasher.update(input_bytes);
+
+            // The page must be zero past the end of the input.
+            assert_eq!(rest, &[0; 4096][remaining_len..]);
+        }
+
+        // Verify the input.
+        hasher.verify(header.hash);
+
+        next_hash = header.next_hash;
     }
-
-    // The last page may not be a full page.
-    if remaining_len > 0 {
-        let input_bytes = convert_to_private_in_place(page_index);
-        let (input_bytes, rest) = input_bytes.split_at(remaining_len);
-        hasher.update(input_bytes);
-
-        // The page must be zero past the end of the input.
-        assert_eq!(rest, &[0; 4096][remaining_len..]);
-    }
-
-    // Verify the input.
-    let hash: [u8; 32] = hasher.finalize().into();
-    assert_eq!(header.hash, hash, "input hash doesn't match hash in header");
 
     info!("verified input");
 }
@@ -181,9 +191,9 @@ fn load_init() {
     let header = unsafe { &*(0x3000000000 as *const Header) };
 
     let start_address = INIT_FILE.start.start_address();
-    let end_address = start_address + 0x1000 + header.input_len as u64 - 1;
+    let end_address = start_address + 0x1000 + header.input_len - 1;
     let start = PhysFrame::<Size4KiB>::containing_address(start_address);
-    let end = PhysFrame::<Size4KiB>::containing_address(end_address);
+    let end = PhysFrame::<Size4KiB>::containing_address(end_address) + 1;
     for frame in PhysFrame::range_inclusive(start, end) {
         unsafe {
             Tdcall::mem_page_attr_wr(frame, GpaAttr::READ | GpaAttr::VALID, GpaAttr::READ, true);

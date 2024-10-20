@@ -1,6 +1,8 @@
 use std::iter::once;
 
+use bytemuck::bytes_of;
 use constants::physical_address::INIT_FILE;
+use io::input::Header;
 use snp_types::VmplPermissions;
 use x86_64::structures::paging::PhysFrame;
 
@@ -9,27 +11,34 @@ use crate::{LoadCommand, LoadCommandPayload};
 pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
     let start_frame = PhysFrame::from_start_address(INIT_FILE.start.start_address()).unwrap();
     let end_frame = PhysFrame::from_start_address(INIT_FILE.end.start_address()).unwrap();
-    let mut frames = PhysFrame::range(start_frame, end_frame);
+    let frames = PhysFrame::range(start_frame, end_frame);
 
+    let start_header = Header::without_hash(init);
     let mut bytes = [0; 0x1000];
-    bytes[..8].copy_from_slice(&init.len().to_ne_bytes());
+    bytes[..size_of::<Header>()].copy_from_slice(bytes_of(&start_header));
+    let start_header_payload = LoadCommandPayload::Normal(bytes);
 
-    let physical_address = frames.next().unwrap();
-    let header_load = LoadCommand {
-        physical_address,
-        vmpl1_perms: VmplPermissions::READ,
-        payload: LoadCommandPayload::Normal(bytes),
-    };
+    let end_header = Header::end();
+    let mut bytes = [0; 0x1000];
+    bytes[..size_of::<Header>()].copy_from_slice(bytes_of(&end_header));
+    let end_header_payload = LoadCommandPayload::Normal(bytes);
 
-    once(header_load).chain(init.chunks(0x1000).map(move |chunk| {
-        let mut bytes = [0; 0x1000];
-        bytes[..chunk.len()].copy_from_slice(chunk);
+    let payloads = once((VmplPermissions::READ, start_header_payload))
+        .chain(init.chunks(0x1000).map(|chunk| {
+            let mut bytes = [0; 0x1000];
+            bytes[..chunk.len()].copy_from_slice(chunk);
+            (
+                VmplPermissions::READ | VmplPermissions::EXECUTE_USER,
+                LoadCommandPayload::Normal(bytes),
+            )
+        }))
+        .chain(once((VmplPermissions::READ, end_header_payload)));
 
-        let physical_address = frames.next().unwrap();
-        LoadCommand {
+    payloads
+        .zip(frames)
+        .map(|((vmpl1_perms, payload), physical_address)| LoadCommand {
             physical_address,
-            vmpl1_perms: VmplPermissions::READ | VmplPermissions::EXECUTE_USER,
-            payload: LoadCommandPayload::Normal(bytes),
-        }
-    }))
+            vmpl1_perms,
+            payload,
+        })
 }

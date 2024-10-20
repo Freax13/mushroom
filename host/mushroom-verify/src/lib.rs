@@ -1,4 +1,5 @@
-use io::input::Header;
+use io::input::{Header, MAX_HASH_SIZE};
+use loader::{HashType, Input};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "snp")]
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
@@ -87,20 +88,74 @@ impl Configuration {
 #[derive(Debug)]
 pub struct VerificationError(());
 
-#[derive(Clone, Copy)]
-pub struct InputHash([u8; 32]);
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct HashedInput {
+    pub input_len: u64,
+    pub hash_type: HashType,
+    pub hash: [u8; MAX_HASH_SIZE],
+}
 
-impl InputHash {
-    pub fn new(input: &[u8]) -> Self {
-        InputHash(Header::new(input).hash())
+impl HashedInput {
+    pub fn new(input: &Input<impl AsRef<[u8]>>) -> Self {
+        let bytes = input.bytes.as_ref();
+        Self {
+            input_len: bytes.len() as u64,
+            hash_type: input.hash_type,
+            hash: input.hash_type.hash(bytes),
+        }
+    }
+
+    pub fn sha256(input_len: u64, hash: [u8; 32]) -> Self {
+        let mut bytes = [0; MAX_HASH_SIZE];
+        bytes[..32].copy_from_slice(&hash);
+        Self {
+            input_len,
+            hash_type: HashType::Sha256,
+            hash: bytes,
+        }
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct OutputHash([u8; 32]);
+pub struct InputHash([u8; 32]);
+
+impl InputHash {
+    pub fn new<I>(inputs: I) -> Self
+    where
+        I: IntoIterator<Item = HashedInput>,
+        I::IntoIter: DoubleEndedIterator,
+    {
+        let mut header = Header::end();
+        for input in inputs.into_iter().rev() {
+            header = Header {
+                input_len: input.input_len,
+                hash_type: input.hash_type,
+                hash: input.hash,
+                next_hash: header.hash(),
+            };
+        }
+        InputHash(header.hash())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct OutputHash {
+    pub hash: [u8; 32],
+    pub len: u64,
+}
 
 impl OutputHash {
     pub fn new(output: &[u8]) -> Self {
-        Self(Sha256::digest(output).into())
+        Self {
+            hash: Sha256::digest(output).into(),
+            len: output.len() as u64,
+        }
+    }
+}
+
+impl From<OutputHash> for HashedInput {
+    fn from(value: OutputHash) -> Self {
+        Self::sha256(value.len, value.hash)
     }
 }
