@@ -766,6 +766,7 @@ dependencies = [
  "vcek-kds",
  "volatile 0.5.1",
  "x86_64",
+ "xdg",
 ]
 
 [[package]]
@@ -1759,10 +1760,13 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 name = "vcek-kds"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "nix 0.28.0",
  "p384",
  "reqwest",
  "rsa",
  "sha2",
+ "snp-types",
  "thiserror",
  "x509-cert",
 ]
@@ -2081,6 +2085,12 @@ dependencies = [
  "rustversion",
  "volatile 0.4.6",
 ]
+
+[[package]]
+name = "xdg"
+version = "2.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "213b7324336b53d2414b2db8537e56544d981803139155afa84f76eeebb7a546"
 
 [[package]]
 name = "zeroize"

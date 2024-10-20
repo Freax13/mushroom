@@ -10,9 +10,9 @@ required-features = ["bin"]
 [features]
 default = ["insecure", "snp", "tdx"]
 insecure = ["dep:loader", "dep:snp-types", "dep:supervisor-services"]
-snp = ["dep:loader", "mushroom-verify?/snp", "dep:snp-types"]
+snp = ["dep:loader", "mushroom-verify?/snp", "dep:snp-types", "dep:vcek-kds"]
 tdx = ["dep:loader", "mushroom-verify?/tdx", "dep:qgs-client", "dep:tdx-types"]
-bin = ["dep:clap", "dep:mushroom-verify", "dep:tokio", "dep:tracing-subscriber", "dep:vcek-kds"]
+bin = ["dep:clap", "dep:mushroom-verify", "dep:tokio", "dep:tracing-subscriber", "dep:xdg"]
 
 [dependencies]
 anyhow = "1.0.81"
@@ -37,3 +37,4 @@ tracing-subscriber = { version = "0.3.18", optional = true }
 vcek-kds = { workspace = true, optional = true }
 volatile = { version = "0.5.1", features = [] }
 x86_64 = { version = "0.15.1", default-features = false }
+xdg = { version = "2.5.2", optional = true }
