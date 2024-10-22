@@ -63,12 +63,12 @@ impl Configuration {
         }
     }
 
-    pub fn verify(
+    /// Verify that a input with the given hash is attested to have produced an output and return its hash.
+    pub fn verify_and_extract(
         &self,
         input_hash: InputHash,
-        output_hash: OutputHash,
         attestation_report: &[u8],
-    ) -> Result<(), VerificationError> {
+    ) -> Result<OutputHash, VerificationError> {
         let quote = Quote::parse(attestation_report).map_err(|_| VerificationError(()))?;
         quote
             .verify_signatures()
@@ -103,12 +103,14 @@ impl Configuration {
         verify_eq!(quote.body.mr_owner, [0; 48]);
         verify_eq!(quote.body.mr_owner_config, [0; 48]);
         verify_eq!(quote.body.rtmrs, [[0; 48]; 4]);
-        verify_eq!(quote.body.report_data[..32], output_hash.0);
-        verify_eq!(quote.body.report_data[32..], [0; 32]);
+        verify_eq!(quote.body.report_data[40..], [0; 24]);
 
         // TODO: verify cpu_svn.
 
-        Ok(())
+        Ok(OutputHash {
+            hash: quote.body.report_data[..32].try_into().unwrap(),
+            len: u64::from_le_bytes(quote.body.report_data[32..40].try_into().unwrap()),
+        })
     }
 }
 

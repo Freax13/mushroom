@@ -12,6 +12,7 @@ use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
+use loader::Input;
 use snp_types::{guest_policy::GuestPolicy, PageType};
 use tracing::{debug, info};
 use vcek_kds::Vcek;
@@ -40,7 +41,7 @@ pub fn main(
     kernel: &[u8],
     init: &[u8],
     load_kasan_shadow_mappings: bool,
-    input: &[u8],
+    inputs: &[Input<impl AsRef<[u8]>>],
     policy: GuestPolicy,
     vcek: Vcek,
     profiler_folder: Option<ProfileFolder>,
@@ -51,7 +52,7 @@ pub fn main(
         supervisor,
         kernel,
         init,
-        input,
+        inputs,
         load_kasan_shadow_mappings,
         policy,
         kvm_handle,
@@ -78,7 +79,7 @@ impl VmContext {
         supervisor: &[u8],
         kernel: &[u8],
         init: &[u8],
-        input: &[u8],
+        inputs: &[Input<impl AsRef<[u8]>>],
         load_kasan_shadow_mappings: bool,
         policy: GuestPolicy,
         kvm_handle: &KvmHandle,
@@ -116,7 +117,7 @@ impl VmContext {
             kernel,
             init,
             load_kasan_shadow_mappings,
-            input,
+            inputs,
         );
         let mut load_commands = load_commands.peekable();
 

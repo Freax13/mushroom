@@ -39,41 +39,61 @@ impl StaticFile {
         unsafe { &INPUT_FILE }
     }
 
-    fn as_ptr(&self) -> *const [u8] {
-        // The content starts at the page following the header.
-        core::ptr::slice_from_raw_parts(
-            (self as *const Self).cast::<u8>().wrapping_add(0x1000),
-            self.size,
-        )
-    }
-
-    pub fn len(&self) -> usize {
-        self.as_ptr().len()
-    }
-
-    pub fn read(&self, offset: usize, buffer: &mut [u8]) {
-        let ptr = self.as_ptr();
-        let end_index = offset + buffer.len();
-        assert!(end_index <= ptr.len());
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                ptr.cast::<u8>().add(offset),
-                buffer.as_mut_ptr(),
-                buffer.len(),
-            );
-        }
-    }
-
     pub fn copy_to(&self, dst: &Arc<TmpFsFile>) -> Result<()> {
-        dst.truncate(self.len())?;
+        let mut len = 0;
+        let mut offset = 0;
         let mut buffer = [0; 0x1000];
-        for i in (0..self.len()).step_by(0x1000) {
-            let remaining_len = self.len() - i;
-            let buffer_len = cmp::min(remaining_len, 0x1000);
-            let buffer = &mut buffer[0..buffer_len];
-            self.read(i, buffer);
-            dst.write(i, buffer)?;
+        loop {
+            /// Copy memory, but bypass KASAN checks.
+            ///
+            /// FIXME: Add mappings for KASAN.
+            unsafe fn copy_without_kasan<T>(src: *const T, dst: *mut T, len: usize) {
+                unsafe {
+                    core::arch::asm!(
+                        "rep movsb",
+                        inout("rsi") src => _,
+                        inout("rdi") dst => _,
+                        inout("rcx") size_of::<T>() * len => _,
+                    );
+                }
+            }
+
+            let mut chunk_len = 0;
+            unsafe {
+                copy_without_kasan(
+                    core::ptr::from_ref(self).byte_add(offset).cast(),
+                    &mut chunk_len,
+                    1,
+                );
+            }
+            offset += 0x1000;
+
+            if chunk_len == !0 {
+                break;
+            }
+
+            let chunk_offset = len;
+            len += chunk_len;
+            dst.truncate(len)?;
+
+            for i in (0..chunk_len).step_by(0x1000) {
+                let remaining_len = chunk_len - i;
+                let buffer_len = cmp::min(remaining_len, 0x1000);
+                let buffer = &mut buffer[0..buffer_len];
+
+                unsafe {
+                    copy_without_kasan(
+                        core::ptr::from_ref(self).byte_add(offset).cast::<u8>(),
+                        buffer.as_mut_ptr(),
+                        buffer_len,
+                    );
+                }
+                offset += 0x1000;
+
+                dst.write(chunk_offset + i, buffer)?;
+            }
         }
+
         Ok(())
     }
 }

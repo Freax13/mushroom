@@ -44,6 +44,8 @@ It should be impossible for the attacker to tamper with any of these without the
 
 There is no way for the workloads to communicate with the host, external devices or external services. The only input to the workload is the input file provided to it.
 
+More details can be found [here](docs/attestation.md).
+
 ### Non-goals
 
 The workload kernel has not been hardened against attacks from within the workload itself, only the outputs of trusted workloads and inputs should be considered trusted. 
