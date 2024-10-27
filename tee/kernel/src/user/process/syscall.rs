@@ -1787,6 +1787,15 @@ fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
+        FcntlCmd::SetLkW
+        | FcntlCmd::SetOwn
+        | FcntlCmd::GetOwn
+        | FcntlCmd::SetOwnEx
+        | FcntlCmd::GetOwnEx => {
+            // TODO: Implement this
+            warn!("{cmd} not implemented");
+            Ok(0)
+        }
     }
 }
 
@@ -1819,6 +1828,15 @@ fn fcntl64(
         FcntlCmd::SetFl => {
             let flags = OpenFlags::from_bits_truncate(arg);
             fd.set_flags(flags);
+            Ok(0)
+        }
+        FcntlCmd::SetLkW
+        | FcntlCmd::SetOwn
+        | FcntlCmd::GetOwn
+        | FcntlCmd::SetOwnEx
+        | FcntlCmd::GetOwnEx => {
+            // TODO: Implement this
+            warn!("{cmd} not implemented");
             Ok(0)
         }
     }
