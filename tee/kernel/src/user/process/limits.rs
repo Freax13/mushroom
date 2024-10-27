@@ -10,12 +10,17 @@ use super::{
 
 #[derive(Clone, Copy)]
 pub struct Limits {
+    stack: RLimit,
     no_file: RLimit,
 }
 
 impl Limits {
     pub const fn default() -> Self {
         Self {
+            stack: RLimit {
+                rlim_cur: 0x80_0000,
+                rlim_max: 0x80_0000,
+            },
             no_file: RLimit {
                 rlim_cur: 1024,
                 rlim_max: 65536,
@@ -29,6 +34,7 @@ impl Index<Resource> for Limits {
 
     fn index(&self, index: Resource) -> &Self::Output {
         match index {
+            Resource::Stack => &self.stack,
             Resource::NoFile => &self.no_file,
         }
     }
@@ -37,6 +43,7 @@ impl Index<Resource> for Limits {
 impl IndexMut<Resource> for Limits {
     fn index_mut(&mut self, index: Resource) -> &mut Self::Output {
         match index {
+            Resource::Stack => &mut self.stack,
             Resource::NoFile => &mut self.no_file,
         }
     }
@@ -68,10 +75,23 @@ impl<R: ConstResource> ExtractableThreadState for CurrentLimit<R> {
     }
 }
 
+impl<R: ConstResource> Default for CurrentLimit<R> {
+    fn default() -> Self {
+        Self::new(Limits::default()[R::RESOURCE].rlim_cur)
+    }
+}
+
+pub type CurrentStackLimit = CurrentLimit<Stack>;
 pub type CurrentNoFileLimit = CurrentLimit<NoFile>;
 
 pub trait ConstResource {
     const RESOURCE: Resource;
+}
+
+pub struct Stack;
+
+impl ConstResource for Stack {
+    const RESOURCE: Resource = Resource::Stack;
 }
 
 pub struct NoFile;

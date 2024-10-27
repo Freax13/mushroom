@@ -15,8 +15,8 @@ use alloc::{
     vec::Vec,
 };
 use futures::{select_biased, FutureExt};
-use limits::Limits;
-use syscall::args::Timespec;
+use limits::{CurrentStackLimit, Limits};
+use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
 use crate::{
@@ -57,6 +57,7 @@ pub mod limits;
 pub mod memory;
 pub mod syscall;
 pub mod thread;
+pub mod usage;
 
 pub struct Process {
     pid: u32,
@@ -80,6 +81,9 @@ pub struct Process {
     process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
     pub umask: Mutex<FileMode>,
+    /// The usage of all terminated threads.
+    pub self_usage: Mutex<Rusage>,
+    pub children_usage: Mutex<Rusage>,
 }
 
 impl Process {
@@ -116,6 +120,8 @@ impl Process {
             process_group: Mutex::new(process_group.clone()),
             limits: RwLock::new(limits),
             umask: Mutex::new(umask),
+            self_usage: Mutex::default(),
+            children_usage: Mutex::default(),
         };
         let arc = Arc::new(this);
 
@@ -153,7 +159,11 @@ impl Process {
         self.running.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn exit(&self, exit_status: WStatus) {
+    pub fn exit(&self, exit_status: WStatus, rusage: Rusage) {
+        let mut guard = self.self_usage.lock();
+        *guard = guard.merge(rusage);
+        drop(guard);
+
         let prev = self.running.fetch_sub(1, Ordering::Relaxed);
         if prev == 1 {
             self.exit_group(exit_status);
@@ -273,6 +283,12 @@ impl Process {
                     }
                 };
                 let child = guard.swap_remove(idx);
+
+                let usage = *child.self_usage.lock();
+                let mut guard = self.children_usage.lock();
+                *guard = guard.merge(usage);
+                drop(guard);
+
                 let status = *child.exit_status.try_get().unwrap();
                 Some(Ok(Some((child.pid, status))))
             })
@@ -352,7 +368,7 @@ impl Process {
     }
 
     pub fn schedule_alarm(self: &Arc<Self>, seconds: u32) -> u32 {
-        let now = now();
+        let now = now(ClockId::Monotonic);
         let (cancel_tx, cancel_rx) = oneshot::new();
         let deadline = now.saturating_add(Timespec {
             tv_sec: seconds,
@@ -387,7 +403,7 @@ impl Process {
 
     pub fn cancel_alarm(&self) -> u32 {
         let prev_state = self.alarm.lock().take();
-        AlarmState::remaining_seconds(prev_state, now())
+        AlarmState::remaining_seconds(prev_state, now(ClockId::Monotonic))
     }
 
     pub async fn wait_until_not_stopped(&self) {
@@ -525,7 +541,14 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
 
     guard
-        .start_executable(path, &file, &[c"/bin/init"], &[] as &[&CStr], &mut ctx)
+        .start_executable(
+            path,
+            &file,
+            &[c"/bin/init"],
+            &[] as &[&CStr],
+            &mut ctx,
+            CurrentStackLimit::default(),
+        )
         .unwrap();
     drop(guard);
 

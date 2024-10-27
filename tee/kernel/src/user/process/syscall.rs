@@ -15,6 +15,7 @@ use futures::{
     FutureExt, StreamExt,
 };
 use kernel_macros::syscall;
+use log::warn;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
@@ -42,31 +43,13 @@ use crate::{
     },
     rt::oneshot,
     time::{self, now, sleep_until},
-    user::process::{
-        memory::MemoryPermissions,
-        syscall::args::{
-            AccessMode, ClockNanosleepFlags, Dup3Flags, FaccessatFlags, FdSet, LongOffset,
-            PSelectSigsetArg, Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
-        },
-        ProcessGroup,
-    },
+    user::process::{memory::MemoryPermissions, syscall::args::*, ProcessGroup},
 };
 
-use self::{
-    args::{
-        Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
-        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
-        Fchmodat2Flags, FchownatFlags, FcntlCmd, FdNum, FileMode, FileType, FutexOp,
-        FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags, Offset,
-        OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags, RLimit, RLimit64, Renameat2Flags,
-        RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec,
-        UnlinkOptions, WStatus, WaitOptions, Whence,
-    },
-    traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
-};
+use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
 
 use super::{
-    limits::CurrentNoFileLimit,
+    limits::{CurrentNoFileLimit, CurrentStackLimit},
     memory::{Bias, VirtualMemory},
     thread::{
         new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
@@ -148,9 +131,14 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysConnect);
+    handlers.register(SysAccept);
     handlers.register(SysRecvFrom);
+    handlers.register(SysBind);
+    handlers.register(SysListen);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
+    handlers.register(SysSetsockopt);
     handlers.register(SysFork);
     handlers.register(SysVfork);
     handlers.register(SysExecve);
@@ -184,6 +172,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUmask);
     handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
+    handlers.register(SysGetrusage);
+    handlers.register(SysSysinfo);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
     handlers.register(SysSetuid);
@@ -208,6 +198,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysStatfs);
     handlers.register(SysMknod);
     handlers.register(SysFstatfs);
+    handlers.register(SysGetpriority);
+    handlers.register(SysSetpriority);
+    handlers.register(SysPrctl);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
@@ -216,6 +209,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
     handlers.register(SysClockNanosleep);
     handlers.register(SysTgkill);
@@ -463,7 +457,9 @@ async fn poll(
     let deadline = match timeout {
         ..=-1 => Some(None),
         0 => None,
-        1.. => Some(Some(now() + Timespec::from_ms(timeout as u64))),
+        1.. => Some(Some(
+            now(ClockId::Monotonic) + Timespec::from_ms(timeout as u64),
+        )),
     };
 
     // Read the pollfds.
@@ -1020,7 +1016,7 @@ async fn select_impl(
         .as_ref()
         .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
 
-    let deadline = timeout.map(|timeout| now() + timeout);
+    let deadline = timeout.map(|timeout| now(ClockId::Monotonic) + timeout);
     let mut futures = FuturesUnordered::new();
 
     let set = loop {
@@ -1164,7 +1160,7 @@ async fn nanosleep(
 ) -> SyscallResult {
     let rqtp = virtual_memory.read_with_abi(rqtp, abi)?;
 
-    let now = time::now();
+    let now = time::now(ClockId::Monotonic);
     let deadline = now + rqtp;
     sleep_until(deadline).await;
     Ok(0)
@@ -1258,6 +1254,28 @@ async fn sendfile64(
     Ok(len)
 }
 
+#[syscall(amd64 = 42)]
+fn connect(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    uservaddr: Pointer<c_void>,
+    addrlen: u32,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
+}
+
+#[syscall(amd64 = 43)]
+fn accept(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    upeer_sockaddr: Pointer<c_void>,
+    upeer_addrlen: Pointer<u32>,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
+}
+
 #[syscall(i386 = 371, amd64 = 45, interruptable)]
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1283,6 +1301,23 @@ async fn recv_from(
 
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(amd64 = 49)]
+fn bind(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    umyaddr: Pointer<c_void>,
+    addrlen: u32,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
+}
+
+#[syscall(amd64 = 50)]
+fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
 }
 
 #[syscall(i386 = 360, amd64 = 53)]
@@ -1338,6 +1373,19 @@ fn socketpair(
     virtual_memory.write(sv, [fd1, fd2])?;
 
     Ok(0)
+}
+
+#[syscall(amd64 = 54)]
+fn setsockopt(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    level: i32,
+    optname: i32,
+    optval: Pointer<[u8]>,
+    optlen: i32,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
 }
 
 #[syscall(i386 = 120, amd64 = 56)]
@@ -1510,6 +1558,7 @@ async fn execve(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
+    #[state] stack_limit: CurrentStackLimit,
     pathname: Pointer<Path>,
     argv: Pointer<Pointer<CString>>,
     envp: Pointer<Pointer<CString>>,
@@ -1552,8 +1601,15 @@ async fn execve(
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let (cpu_state, exe_path) =
-        virtual_memory.start_executable(pathname, &file, &args, &envs, &mut ctx, cwd)?;
+    let (cpu_state, exe_path) = virtual_memory.start_executable(
+        pathname,
+        &file,
+        &args,
+        &envs,
+        &mut ctx,
+        cwd,
+        stack_limit,
+    )?;
 
     // Everything was successful, no errors can occour after this point.
 
@@ -1735,6 +1791,15 @@ fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
+        FcntlCmd::SetLkW
+        | FcntlCmd::SetOwn
+        | FcntlCmd::GetOwn
+        | FcntlCmd::SetOwnEx
+        | FcntlCmd::GetOwnEx => {
+            // TODO: Implement this
+            warn!("{cmd} not implemented");
+            Ok(0)
+        }
     }
 }
 
@@ -1767,6 +1832,15 @@ fn fcntl64(
         FcntlCmd::SetFl => {
             let flags = OpenFlags::from_bits_truncate(arg);
             fd.set_flags(flags);
+            Ok(0)
+        }
+        FcntlCmd::SetLkW
+        | FcntlCmd::SetOwn
+        | FcntlCmd::GetOwn
+        | FcntlCmd::SetOwnEx
+        | FcntlCmd::GetOwnEx => {
+            // TODO: Implement this
+            warn!("{cmd} not implemented");
             Ok(0)
         }
     }
@@ -2069,7 +2143,7 @@ fn fchmod(
     let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
     fd.chmod(mode, &ctx)?;
-    fd.update_times(now(), None, None);
+    fd.update_times(now(ClockId::Realtime), None, None);
     Ok(0)
 }
 
@@ -2151,7 +2225,7 @@ fn gettimeofday(
     }
 
     if !tv.is_null() {
-        let time = now();
+        let time = now(ClockId::Realtime);
         let time = Timeval::from(time);
         virtual_memory.write_with_abi(tv, time, abi)?;
     }
@@ -2169,6 +2243,63 @@ fn getrlimit(
 ) -> SyscallResult {
     let value = thread.process().limits.read()[resource];
     virtual_memory.write_with_abi(rlim, value, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 77, amd64 = 98)]
+async fn getrusage(
+    abi: Abi,
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    who: GetRusageWho,
+    usage: Pointer<Rusage>,
+) -> SyscallResult {
+    let value = match who {
+        GetRusageWho::Self_ => {
+            let process = thread.process();
+            let threads = process
+                .threads
+                .lock()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>();
+            threads
+                .iter()
+                .map(|thread| thread.lock().get_rusage())
+                .fold(Rusage::default(), Rusage::merge)
+        }
+        GetRusageWho::Children => *thread.process().children_usage.lock(),
+        GetRusageWho::Thread => thread.lock().get_rusage(),
+    };
+    virtual_memory.write_with_abi(usage, value, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 116, amd64 = 99)]
+fn sysinfo(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    sys_info: Pointer<SysInfo>,
+) -> SyscallResult {
+    // TODO: Properly fill in the values.
+    virtual_memory.write_with_abi(
+        sys_info,
+        SysInfo {
+            uptime: 123,
+            loads: [123, 123, 123],
+            totalram: 0x1000000000,
+            freeram: 0xc00000000,
+            sharedram: 0,
+            bufferram: 0,
+            totalswap: 0,
+            freeswap: 0,
+            procs: Process::all().count() as u16,
+            totalhigh: 0,
+            freehigh: 0,
+            mem_unit: 1,
+        },
+        abi,
+    )?;
     Ok(0)
 }
 
@@ -2242,9 +2373,6 @@ fn setpgid(thread: &mut ThreadGuard, pid: u32, pgid: u32) -> SyscallResult {
     // TODO: Make sure that the children haven't execve'd.
 
     let mut group_guard = process.process_group.lock();
-
-    // Make sure that the process is not a process group leader.
-    ensure!(group_guard.pgid != pid, Perm);
 
     if pgid == pid {
         // Create a new process group.
@@ -2631,6 +2759,95 @@ fn fstatfs(
     Ok(0)
 }
 
+fn find_priority_targets(
+    thread: &mut ThreadGuard,
+    which: Which,
+    who: u32,
+) -> Result<Vec<Arc<Thread>>> {
+    let credentials_guard = thread.process().credentials.lock();
+    let caller_euid = credentials_guard.effective_user_id;
+    let caller_ruid = credentials_guard.real_user_id;
+    drop(credentials_guard);
+
+    let find_targets = |processes: &mut dyn Iterator<Item = Arc<Process>>| {
+        let mut threads = Vec::new();
+
+        for process in processes {
+            let target_euid = process.credentials.lock().effective_user_id;
+            ensure!(
+                caller_euid == Uid::SUPER_USER
+                    || caller_euid == target_euid
+                    || caller_ruid == target_euid,
+                Perm
+            );
+            threads.extend(process.threads.lock().iter().filter_map(Weak::upgrade));
+        }
+
+        ensure!(!threads.is_empty(), Srch);
+        Ok(threads)
+    };
+
+    match which {
+        Which::Process => {
+            let process = if who == 0 {
+                thread.process().clone()
+            } else {
+                Process::find_by_pid(who).ok_or_else(|| err!(Srch))?
+            };
+            find_targets(&mut core::iter::once(process))
+        }
+        Which::ProcessGroup => {
+            let pgid = if who == 0 {
+                thread.process().process_group.lock().pgid
+            } else {
+                who
+            };
+            find_targets(&mut Process::all().filter(|p| p.process_group.lock().pgid == pgid))
+        }
+        Which::User => {
+            let uid = if who == 0 { caller_ruid } else { Uid::new(who) };
+            find_targets(&mut (Process::all().filter(|p| p.credentials.lock().real_user_id == uid)))
+        }
+    }
+}
+
+#[syscall(i386 = 96, amd64 = 140)]
+fn getpriority(thread: &mut ThreadGuard, which: Which, who: u32) -> SyscallResult {
+    let targets = find_priority_targets(thread, which, who)?;
+    let min = targets
+        .into_iter()
+        .map(|thread| thread.nice.load())
+        .min()
+        .unwrap();
+    Ok(min.as_syscall_return_value())
+}
+
+#[syscall(i386 = 97, amd64 = 141)]
+fn setpriority(thread: &mut ThreadGuard, which: Which, who: u32, prio: Nice) -> SyscallResult {
+    let targets = find_priority_targets(thread, which, who)?;
+    for thread in targets {
+        thread.nice.store(prio);
+    }
+    Ok(0)
+}
+
+#[syscall(i386 = 172, amd64 = 157)]
+fn prctl(op: PrctlOp, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> SyscallResult {
+    match op {
+        PrctlOp::SetDumpable => {
+            let dumpable = arg2;
+            match dumpable {
+                // TODO: implement this
+                0 => {}
+                // TODO: implement this
+                1 => {}
+                _ => bail!(Inval),
+            }
+            Ok(0)
+        }
+    }
+}
+
 #[syscall(i386 = 384, amd64 = 158)]
 fn arch_prctl(
     thread: &mut ThreadGuard,
@@ -2686,7 +2903,7 @@ fn time(
     #[state] virtual_memory: Arc<VirtualMemory>,
     tloc: Pointer<Time>,
 ) -> SyscallResult {
-    let now = now();
+    let now = now(ClockId::Realtime);
     let tv_sec = now.tv_sec;
 
     if !tloc.is_null() {
@@ -2808,6 +3025,18 @@ fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallRes
     Ok(u64::from(thread.tid()))
 }
 
+#[syscall(i386 = 264, amd64 = 227)]
+fn clock_settime(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    let time = virtual_memory.read_with_abi(tp, abi)?;
+    time::set(clock_id, time)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     abi: Abi,
@@ -2815,12 +3044,8 @@ fn clock_gettime(
     clock_id: ClockId,
     tp: Pointer<Timespec>,
 ) -> SyscallResult {
-    let time = match clock_id {
-        ClockId::Realtime | ClockId::Monotonic => time::now(),
-    };
-
+    let time = time::now(clock_id);
     virtual_memory.write_with_abi(tp, time, abi)?;
-
     Ok(0)
 }
 
@@ -2841,7 +3066,7 @@ async fn clock_nanosleep(
     let deadline = if flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
         request
     } else {
-        time::now() + request
+        time::now(ClockId::Monotonic) + request
     };
 
     let res = thread
@@ -2855,7 +3080,7 @@ async fn clock_nanosleep(
         .await;
 
     if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let difference = deadline.saturating_sub(time::now());
+        let difference = deadline.saturating_sub(time::now(ClockId::Monotonic));
         virtual_memory.write_with_abi(remain, difference, abi)?;
     }
 
@@ -2897,7 +3122,7 @@ async fn epoll_wait(
     let timeout_fut = if timeout != -1 {
         let timeout = u64::try_from(timeout)?;
         let timeout = Timespec::from_ms(timeout);
-        let deadline = now() + timeout;
+        let deadline = now(ClockId::Monotonic) + timeout;
         sleep_until(deadline).fuse()
     } else {
         Fuse::terminated()
@@ -3149,7 +3374,7 @@ fn futimesat(
     let path = virtual_memory.read(pathname)?;
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
-    let now = now();
+    let now = now(ClockId::Realtime);
 
     let times = if !times.is_null() {
         let [atime, mtime] = virtual_memory.read_with_abi(times, abi)?;
@@ -3513,7 +3738,7 @@ fn utimensat(
     times: Pointer<[Timespec; 2]>,
     flags: AtFlags,
 ) -> SyscallResult {
-    let now = now();
+    let now = now(ClockId::Realtime);
 
     let path = if !pathname.is_null() {
         Some(virtual_memory.read(pathname)?)
@@ -3777,7 +4002,7 @@ fn fchmodat2(
         lookup_and_resolve_node(newdfd, &path, &mut ctx)?
     };
     node.chmod(mode, &ctx)?;
-    node.update_times(now(), None, None);
+    node.update_times(now(ClockId::Realtime), None, None);
 
     Ok(0)
 }

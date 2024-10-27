@@ -1,4 +1,5 @@
 use core::{
+    cmp,
     fmt::{self, Display},
     marker::PhantomData,
     ops::Add,
@@ -533,6 +534,11 @@ enum_arg! {
         SetFd = 2,
         GetFl = 3,
         SetFl = 4,
+        SetLkW = 7,
+        SetOwn = 8,
+        GetOwn = 9,
+        SetOwnEx = 15,
+        GetOwnEx = 16,
         DupFdCloExec = 1030,
     }
 }
@@ -929,10 +935,25 @@ impl Add for Timespec {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timeval {
     pub tv_sec: u32,
     pub tv_usec: u32,
+}
+
+impl Timeval {
+    pub fn saturating_add(self, rhs: Self) -> Self {
+        let tv_sec = self.tv_sec + rhs.tv_sec;
+        let tv_usec = self.tv_usec + rhs.tv_usec;
+        if let Some(tv_usec) = tv_usec.checked_sub(1_000_000) {
+            Self {
+                tv_sec: tv_sec + 1,
+                tv_usec,
+            }
+        } else {
+            Self { tv_sec, tv_usec }
+        }
+    }
 }
 
 impl From<Timeval> for Timespec {
@@ -1131,6 +1152,7 @@ pub struct Time(pub u32);
 
 enum_arg! {
     pub enum Resource {
+        Stack = 3,
         NoFile = 7,
     }
 }
@@ -1274,6 +1296,22 @@ pub struct FdSet {}
 impl Pointee for FdSet {}
 
 #[derive(Clone, Copy)]
+pub struct SysInfo {
+    pub uptime: i64,
+    pub loads: [u64; 3],
+    pub totalram: u64,
+    pub freeram: u64,
+    pub sharedram: u64,
+    pub bufferram: u64,
+    pub totalswap: u64,
+    pub freeswap: u64,
+    pub procs: u16,
+    pub totalhigh: u64,
+    pub freehigh: u64,
+    pub mem_unit: u32,
+}
+
+#[derive(Clone, Copy)]
 pub struct PSelectSigsetArg {
     pub ss: Pointer<Sigset>,
     #[allow(dead_code)]
@@ -1350,5 +1388,109 @@ bitflags! {
 bitflags! {
     pub struct Fchmodat2Flags {
         const SYMLINK_NOFOLLOW = 1 << 8;
+    }
+}
+
+enum_arg! {
+    pub enum Which {
+        Process = 0,
+        ProcessGroup = 1,
+        User = 2,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Nice(i8);
+
+impl Nice {
+    pub const DEFAULT: Self = Self(0);
+
+    pub fn as_syscall_return_value(self) -> u64 {
+        (self.0 + 21) as u64
+    }
+}
+
+impl SyscallArg for Nice {
+    fn parse(value: u64, _: Abi) -> Result<Self> {
+        let value = value as u32 as i32;
+        ensure!((-20..=19).contains(&value), Inval);
+        Ok(Self(value as i8))
+    }
+
+    fn display(f: &mut dyn fmt::Write, value: u64, _: Abi, _: &ThreadGuard<'_>) -> fmt::Result {
+        write!(f, "{}", value as u32 as i32)
+    }
+}
+
+enum_arg! {
+    pub enum PrctlOp {
+        SetDumpable = 4,
+    }
+}
+
+enum_arg! {
+    pub enum GetRusageWho {
+        Self_ = 0,
+        Children	= -1,
+        Thread=	1,
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Rusage {
+    /// user time used
+    pub utime: Timeval,
+    /// system time used
+    pub stime: Timeval,
+    /// maximum resident set size
+    pub maxrss: u64,
+    /// integral shared memory size
+    pub ixrss: u64,
+    /// integral unshared data size
+    pub idrss: u64,
+    /// integral unshared stack size
+    pub isrss: u64,
+    /// page reclaims
+    pub minflt: u64,
+    /// page faults
+    pub majflt: u64,
+    /// swaps
+    pub nswap: u64,
+    /// block input operations
+    pub inblock: u64,
+    /// block output operations
+    pub oublock: u64,
+    /// messages sent
+    pub msgsnd: u64,
+    /// messages received
+    pub msgrcv: u64,
+    /// signals received
+    pub nsignals: u64,
+    /// voluntary context switches
+    pub nvcsw: u64,
+    /// involuntary context switches
+    pub nivcsw: u64,
+}
+
+impl Rusage {
+    pub fn merge(self, rusage: Self) -> Self {
+        Self {
+            utime: self.utime.saturating_add(rusage.utime),
+            stime: self.stime.saturating_add(rusage.stime),
+            maxrss: cmp::max(self.maxrss, rusage.maxrss),
+            ixrss: self.ixrss + rusage.ixrss,
+            idrss: self.idrss + rusage.idrss,
+            isrss: self.isrss + rusage.isrss,
+            minflt: self.minflt + rusage.minflt,
+            majflt: self.majflt + rusage.majflt,
+            nswap: self.nswap + rusage.nswap,
+            inblock: self.inblock + rusage.inblock,
+            oublock: self.oublock + rusage.oublock,
+            msgsnd: self.msgsnd + rusage.msgsnd,
+            msgrcv: self.msgrcv + rusage.msgrcv,
+            nsignals: self.nsignals + rusage.nsignals,
+            nvcsw: self.nvcsw + rusage.nvcsw,
+            nivcsw: self.nivcsw + rusage.nivcsw,
+        }
     }
 }

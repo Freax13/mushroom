@@ -33,8 +33,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Stat, Time,
-    Timespec, Timeval, WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Rusage,
+    Stat, SysInfo, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1549,6 +1549,92 @@ impl From<RLimit> for RLimit64 {
 impl Pointee for super::RLimit64 {}
 
 impl PrimitivePointee for super::RLimit64 {}
+
+impl Pointee for SysInfo {}
+
+impl AbiDependentPointee for SysInfo {
+    type I386 = SysInfo32;
+    type Amd64 = SysInfo64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct SysInfo32 {
+    uptime: i32,
+    loads: [u32; 3],
+    totalram: u32,
+    freeram: u32,
+    sharedram: u32,
+    bufferram: u32,
+    totalswap: u32,
+    freeswap: u32,
+    procs: u16,
+    _padding: u16,
+    totalhigh: u32,
+    freehigh: u32,
+    mem_unit: u32,
+}
+
+impl From<SysInfo> for SysInfo32 {
+    fn from(value: SysInfo) -> Self {
+        Self {
+            uptime: value.uptime as _,
+            loads: value.loads.map(|load| load as _),
+            totalram: value.totalram as _,
+            freeram: value.freeram as _,
+            sharedram: value.sharedram as _,
+            bufferram: value.bufferram as _,
+            totalswap: value.totalswap as _,
+            freeswap: value.freeswap as _,
+            procs: value.procs as _,
+            _padding: 0,
+            totalhigh: value.totalhigh as _,
+            freehigh: value.freehigh as _,
+            mem_unit: value.mem_unit as _,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct SysInfo64 {
+    uptime: i64,
+    loads: [u64; 3],
+    totalram: u64,
+    freeram: u64,
+    sharedram: u64,
+    bufferram: u64,
+    totalswap: u64,
+    freeswap: u64,
+    procs: u16,
+    _padding1: [u16; 3],
+    totalhigh: u64,
+    freehigh: u64,
+    mem_unit: u32,
+    _padding2: u32,
+}
+
+impl From<SysInfo> for SysInfo64 {
+    fn from(value: SysInfo) -> Self {
+        Self {
+            uptime: value.uptime,
+            loads: value.loads,
+            totalram: value.totalram,
+            freeram: value.freeram,
+            sharedram: value.sharedram,
+            bufferram: value.bufferram,
+            totalswap: value.totalswap,
+            freeswap: value.freeswap,
+            procs: value.procs,
+            _padding1: [0; 3],
+            totalhigh: value.totalhigh,
+            freehigh: value.freehigh,
+            mem_unit: value.mem_unit,
+            _padding2: 0,
+        }
+    }
+}
+
 impl Pointee for PSelectSigsetArg {}
 
 impl AbiDependentPointee for PSelectSigsetArg {
@@ -1668,6 +1754,100 @@ impl From<StatFs> for StatFs64 {
             frsize: value.frsize,
             flags: value.flags,
             spare: [0; 4],
+        }
+    }
+}
+
+impl Pointee for Rusage {}
+impl AbiDependentPointee for Rusage {
+    type I386 = Rusage32;
+    type Amd64 = Rusage64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Rusage32 {
+    utime: Timeval32,
+    stime: Timeval32,
+    maxrss: u32,
+    ixrss: u32,
+    idrss: u32,
+    isrss: u32,
+    minflt: u32,
+    majflt: u32,
+    nswap: u32,
+    inblock: u32,
+    oublock: u32,
+    msgsnd: u32,
+    msgrcv: u32,
+    nsignals: u32,
+    nvcsw: u32,
+    nivcsw: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Rusage64 {
+    utime: Timeval64,
+    stime: Timeval64,
+    maxrss: u64,
+    ixrss: u64,
+    idrss: u64,
+    isrss: u64,
+    minflt: u64,
+    majflt: u64,
+    nswap: u64,
+    inblock: u64,
+    oublock: u64,
+    msgsnd: u64,
+    msgrcv: u64,
+    nsignals: u64,
+    nvcsw: u64,
+    nivcsw: u64,
+}
+
+impl From<Rusage> for Rusage32 {
+    fn from(value: Rusage) -> Self {
+        Self {
+            utime: value.utime.into(),
+            stime: value.stime.into(),
+            maxrss: value.maxrss as u32,
+            ixrss: value.ixrss as u32,
+            idrss: value.idrss as u32,
+            isrss: value.isrss as u32,
+            minflt: value.minflt as u32,
+            majflt: value.majflt as u32,
+            nswap: value.nswap as u32,
+            inblock: value.inblock as u32,
+            oublock: value.oublock as u32,
+            msgsnd: value.msgsnd as u32,
+            msgrcv: value.msgrcv as u32,
+            nsignals: value.nsignals as u32,
+            nvcsw: value.nvcsw as u32,
+            nivcsw: value.nivcsw as u32,
+        }
+    }
+}
+
+impl From<Rusage> for Rusage64 {
+    fn from(value: Rusage) -> Self {
+        Self {
+            utime: value.utime.into(),
+            stime: value.stime.into(),
+            maxrss: value.maxrss,
+            ixrss: value.ixrss,
+            idrss: value.idrss,
+            isrss: value.isrss,
+            minflt: value.minflt,
+            majflt: value.majflt,
+            nswap: value.nswap,
+            inblock: value.inblock,
+            oublock: value.oublock,
+            msgsnd: value.msgsnd,
+            msgrcv: value.msgrcv,
+            nsignals: value.nsignals,
+            nvcsw: value.nvcsw,
+            nivcsw: value.nivcsw,
         }
     }
 }

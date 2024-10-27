@@ -1,6 +1,10 @@
 use core::cmp;
 
-use crate::spin::{lazy::Lazy, mutex::Mutex};
+use crate::{
+    error::{bail, err, Result},
+    spin::{lazy::Lazy, mutex::Mutex},
+    user::process::syscall::args::ClockId,
+};
 use alloc::collections::BinaryHeap;
 use log::debug;
 
@@ -36,6 +40,7 @@ pub struct NoTimeoutScheduledError;
 struct State {
     backend_offset: u64,
     skip_offset: u64,
+    realtime_offset: Timespec,
     timeouts: BinaryHeap<Timeout>,
 }
 
@@ -45,6 +50,7 @@ impl State {
             // Start at 1 second.
             backend_offset: 0,
             skip_offset: 1_000_000_000,
+            realtime_offset: Timespec::ZERO,
             timeouts: BinaryHeap::new(),
         }
     }
@@ -93,10 +99,31 @@ impl State {
     fn combine(&self) -> u64 {
         self.backend_offset + self.skip_offset
     }
+
+    fn read_clock(&mut self, clock: ClockId) -> Timespec {
+        let monotonic = self.refresh();
+        match clock {
+            ClockId::Realtime => self.realtime_offset + monotonic,
+            ClockId::Monotonic => monotonic,
+        }
+    }
+
+    fn set_real_time(&mut self, time: Timespec) -> Result<()> {
+        let now = self.read_clock(ClockId::Monotonic);
+        self.realtime_offset = time.checked_sub(now).ok_or(err!(Inval))?;
+        Ok(())
+    }
 }
 
-pub fn now() -> Timespec {
-    STATE.lock().refresh()
+pub fn now(clock: ClockId) -> Timespec {
+    STATE.lock().read_clock(clock)
+}
+
+pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
+    match clock {
+        ClockId::Realtime => STATE.lock().set_real_time(time),
+        ClockId::Monotonic => bail!(OpNotSupp),
+    }
 }
 
 struct Timeout {
@@ -166,4 +193,8 @@ pub async fn sleep_until(deadline: Timespec) {
     drop(guard);
 
     receiver.recv().await.unwrap();
+}
+
+pub fn refresh_backend_offset() -> u64 {
+    backend::current_offset()
 }

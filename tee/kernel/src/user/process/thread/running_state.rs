@@ -59,7 +59,7 @@ impl ThreadGuard<'_> {
 
                 self.do_exit();
 
-                self.process().exit(status);
+                self.process().exit(status, self.get_rusage());
             }
             State::Paused => {}
             State::Terminated => {}
@@ -76,7 +76,7 @@ impl Thread {
         match *guard {
             State::Running => {
                 *guard = State::Terminated;
-                self.process.exit(exit_status);
+                self.process.exit(exit_status, self.lock().get_rusage());
                 running_state.notify.notify();
                 drop(guard);
 

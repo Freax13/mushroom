@@ -27,6 +27,7 @@ kernel-macros.workspace = true
 linkme = "0.3.25"
 log = { version = "0.4.21", default-features = false }
 log-types = { workspace = true }
+pin-project = "1.1.7"
 profiler-types = { workspace = true, optional = true }
 snp-types = { workspace = true }
 static-page-tables = { workspace = true }

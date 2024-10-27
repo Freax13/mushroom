@@ -201,6 +201,7 @@ impl OpenFileDescription for ReadHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         *self.flags.lock() = flags;
+        self.read_half.notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -278,6 +279,7 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         *self.flags.lock() = flags;
+        self.write_half.notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -360,6 +362,8 @@ impl OpenFileDescription for FullReadWrite {
 
     fn set_flags(&self, flags: OpenFlags) {
         *self.flags.lock() = flags;
+        self.read_half.notify();
+        self.write_half.notify();
     }
 
     fn path(&self) -> Result<Path> {

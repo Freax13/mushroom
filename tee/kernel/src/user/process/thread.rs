@@ -5,7 +5,9 @@ use core::{
     fmt::Debug,
     future::Future,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
+    pin::Pin,
     sync::atomic::{AtomicU32, Ordering},
+    task::{Context, Poll},
 };
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
     },
     rt::notify::Notify,
     spin::mutex::{Mutex, MutexGuard},
+    time,
     user::process::{
         memory::PageFaultError,
         thread::running_state::{ExitAction, ThreadRunningState},
@@ -29,7 +32,9 @@ use alloc::{
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
+use crossbeam_utils::atomic::AtomicCell;
 use futures::{select_biased, FutureExt};
+use pin_project::pin_project;
 use snp_types::intercept::VMEXIT_CPUID;
 use x86_64::VirtAddr;
 
@@ -40,12 +45,13 @@ use crate::{
 };
 
 use super::{
-    limits::Limits,
+    limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, Pointer, Signal, UserDesc, WStatus},
+        args::{FileMode, Nice, Pointer, Rusage, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
+    usage::{self, ThreadUsage},
     Process, ProcessGroup, Session,
 };
 
@@ -64,6 +70,7 @@ pub struct Thread {
     process: Arc<Process>,
     signal_notify: Notify,
     running_state: ThreadRunningState,
+    usage: ThreadUsage,
 
     // Mutable state.
     state: Mutex<ThreadState>,
@@ -71,6 +78,7 @@ pub struct Thread {
     pub cpu_state: Mutex<CpuState>,
     // Rarely mutable state.
     pub fdtable: Mutex<Arc<FileDescriptorTable>>,
+    pub nice: AtomicCell<Nice>,
 }
 
 pub struct ThreadState {
@@ -98,12 +106,14 @@ impl Thread {
         fdtable: Arc<FileDescriptorTable>,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
+        nice: Nice,
     ) -> Self {
         Self {
             tid,
             process,
             signal_notify: Notify::new(),
             running_state: ThreadRunningState::new(),
+            usage: ThreadUsage::default(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
                 signal_handler_table,
@@ -116,11 +126,37 @@ impl Thread {
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
+            nice: AtomicCell::new(nice),
         }
     }
 
     pub fn spawn(self: Arc<Self>) {
-        spawn(self.run());
+        #[pin_project]
+        struct RecordingFuture<F> {
+            thread: Arc<Thread>,
+            #[pin]
+            future: F,
+        }
+
+        impl<F> Future for RecordingFuture<F>
+        where
+            F: Future<Output = ()>,
+        {
+            type Output = ();
+
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = self.project();
+                this.thread.usage.start();
+                let res = this.future.poll(cx);
+                this.thread.usage.stop();
+                res
+            }
+        }
+
+        spawn(RecordingFuture {
+            thread: self.clone(),
+            future: self.run(),
+        });
     }
 
     pub fn empty(tid: u32) -> Self {
@@ -143,7 +179,16 @@ impl Thread {
             Arc::new(FileDescriptorTable::with_standard_io()),
             None,
             CpuState::new(0, 0, 0),
+            Nice::DEFAULT,
         )
+    }
+
+    pub fn try_lock(&self) -> Option<ThreadGuard> {
+        let state = self.state.try_lock()?;
+        Some(ThreadGuard {
+            thread: self,
+            state,
+        })
     }
 
     pub fn lock(&self) -> ThreadGuard {
@@ -234,7 +279,17 @@ impl Thread {
     fn run_userspace(&self) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
         let mut guard = self.cpu_state.lock();
-        guard.run_user(&virtual_memory)
+        let start = time::refresh_backend_offset();
+        let exit = guard.run_user(&virtual_memory)?;
+        let end = time::refresh_backend_offset();
+        drop(guard);
+
+        self.usage.record_user_execution_time(end - start);
+        if matches!(exit, Exit::Syscall(_)) {
+            self.usage.record_voluntary_context_switch();
+        }
+
+        Ok(exit)
     }
 
     fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
@@ -373,17 +428,30 @@ impl Thread {
 
         writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
         let indent = indent + 2;
-        let exit = self.cpu_state.lock().last_exit();
-        if let Some(exit) = exit {
-            match exit {
-                Exit::Syscall(args) => dump_syscall_exit(&self.lock(), args, indent, &mut write)?,
-                Exit::DivideError
-                | Exit::GeneralProtectionFault
-                | Exit::Vc(_)
-                | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+        if let Some(exit) = self.cpu_state.try_lock().map(|guard| guard.last_exit()) {
+            if let Some(exit) = exit {
+                match exit {
+                    Exit::Syscall(args) => {
+                        if let Some(thread) = self.try_lock() {
+                            dump_syscall_exit(&thread, args, indent, &mut write)?;
+                        } else {
+                            writeln!(
+                                write,
+                                "{:indent$}thread is locked. raw syscall args: {args:?}",
+                                ""
+                            )?;
+                        }
+                    }
+                    Exit::DivideError
+                    | Exit::GeneralProtectionFault
+                    | Exit::Vc(_)
+                    | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+                }
+            } else {
+                writeln!(write, "{:indent$}thread has never exited", "")?;
             }
         } else {
-            writeln!(write, "{:indent$}thread has never exited", "")?;
+            writeln!(write, "{:indent$}cpu state is locked", "")?;
         }
         self.fdtable.lock().dump(indent, write)?;
         Ok(())
@@ -424,6 +492,7 @@ impl ThreadGuard<'_> {
             fdtable,
             vfork_done,
             cpu_state,
+            self.thread.nice.load(),
         );
 
         let mut guard = thread.lock();
@@ -506,12 +575,20 @@ impl ThreadGuard<'_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
+        stack_limit: CurrentStackLimit,
     ) -> Result<()> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let (cpu_state, _path) =
-            virtual_memory.start_executable(path, file, argv, envp, ctx, self.process().cwd())?;
+        let (cpu_state, _path) = virtual_memory.start_executable(
+            path,
+            file,
+            argv,
+            envp,
+            ctx,
+            self.process().cwd(),
+            stack_limit,
+        )?;
 
         // Success! Commit the new state to the thread.
 
@@ -583,6 +660,10 @@ impl ThreadGuard<'_> {
     fn pop_signal(&mut self) -> Option<SigInfo> {
         self.get_pending_signal()?;
         self.pending_signal_info.take()
+    }
+
+    pub fn get_rusage(&self) -> Rusage {
+        usage::collect(self.virtual_memory.usage(), &self.thread.usage)
     }
 }
 

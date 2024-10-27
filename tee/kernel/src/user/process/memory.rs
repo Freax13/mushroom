@@ -43,12 +43,15 @@ use crate::{
     memory::pagetable::PageTableFlags,
 };
 
-use super::syscall::{
-    args::{
-        pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
-        Pointer, ProtFlags,
+use super::{
+    syscall::{
+        args::{
+            pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
+            Pointer, ProtFlags,
+        },
+        traits::Abi,
     },
-    traits::Abi,
+    usage::MemoryUsage,
 };
 
 const SIGRETURN_TRAMPOLINE_PAGE: u64 = 0x7fff_f000;
@@ -58,6 +61,7 @@ pub const SIGRETURN_TRAMPOLINE_AMD64: u64 = SIGRETURN_TRAMPOLINE_PAGE + 0x10;
 pub struct VirtualMemory {
     state: RwLock<VirtualMemoryState>,
     pagetables: Pagetables,
+    usage: MemoryUsage,
 }
 
 impl VirtualMemory {
@@ -100,6 +104,8 @@ impl VirtualMemory {
         let mut guard = self.state.write();
         new_state.brk_end = guard.brk_end;
 
+        this.usage = self.usage.fork();
+
         // Prevent userspace from writing to memory.
         self.pagetables.freeze_userspace();
 
@@ -130,6 +136,8 @@ impl VirtualMemory {
         page: Page,
         required_flags: PageTableFlags,
     ) -> Result<(), PageFaultError> {
+        self.usage.record_minor_page_fault();
+
         let state = self.state.read();
         let (&mapping_page, mapping) = state
             .mappings
@@ -139,7 +147,7 @@ impl VirtualMemory {
 
         let mut guard = mapping.lock();
         let offset = page - mapping_page;
-        let user_page = guard.get_page(offset)?;
+        let user_page = guard.get_page(offset, &self.usage)?;
 
         // Check whether the page should be mapped at all.
         if !user_page
@@ -324,6 +332,10 @@ impl VirtualMemory {
         }
         maps
     }
+
+    pub fn usage(&self) -> &MemoryUsage {
+        &self.usage
+    }
 }
 
 impl Default for VirtualMemory {
@@ -331,6 +343,7 @@ impl Default for VirtualMemory {
         Self {
             state: RwLock::new(VirtualMemoryState::new()),
             pagetables: Pagetables::new().unwrap(),
+            usage: MemoryUsage::default(),
         }
     }
 }
@@ -419,6 +432,7 @@ impl VirtualMemoryWriteGuard<'_> {
             offset,
             permissions,
             shared,
+            false,
         )
     }
 
@@ -432,6 +446,7 @@ impl VirtualMemoryWriteGuard<'_> {
         offset: u64,
         permissions: MemoryPermissions,
         shared: bool,
+        zero_pad: bool,
     ) -> Result<VirtAddr> {
         ensure!(offset % 0x1000 == u64::from(bias.page_offset()), Inval);
         let page_offset = offset / 0x1000;
@@ -441,13 +456,17 @@ impl VirtualMemoryWriteGuard<'_> {
             zero_offset: u64,
             stat: Stat,
             shared: bool,
+            zero_pad: bool,
         }
 
         impl Backing for FileBacking {
             fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
                 let start_offset = usize_from(self.zero_offset.saturating_sub(offset * 0x1000));
                 match start_offset {
-                    0 => Ok(KernelPage::zeroed()),
+                    0 => {
+                        ensure!(self.zero_pad, Acces);
+                        Ok(KernelPage::zeroed())
+                    }
                     1..=0xfff => {
                         let mut page = self.file.get_page(usize_from(offset), self.shared)?;
                         if !self.shared {
@@ -483,6 +502,7 @@ impl VirtualMemoryWriteGuard<'_> {
                 zero_offset: offset + file_sz,
                 stat,
                 shared,
+                zero_pad,
             },
             page_offset,
             shared,
@@ -646,13 +666,21 @@ impl VirtualMemoryWriteGuard<'_> {
                 }
 
                 if end_page >= mapping_end {
-                    cursor.remove_prev();
+                    if let Some((_, mapping)) = cursor.remove_prev() {
+                        mapping
+                            .into_inner()
+                            .record_unmapping(&self.virtual_memory.usage)
+                    }
                     continue;
                 }
 
                 let offset = (end_page - page) + 1;
                 let new_mapping = mapping.split_off(offset);
-                cursor.remove_prev();
+                if let Some((_, mapping)) = cursor.remove_prev() {
+                    mapping
+                        .into_inner()
+                        .record_unmapping(&self.virtual_memory.usage)
+                }
                 cursor
                     .insert_before(end_page + 1, Mutex::new(new_mapping))
                     .unwrap();
@@ -686,7 +714,7 @@ impl VirtualMemoryWriteGuard<'_> {
             let end_offset = cmp::min(end_page - page, u64::from_usize(mapping.pages.len()));
 
             for offset in start_offset..end_offset {
-                mapping.discard_page(offset)?;
+                mapping.discard_page(offset, &self.virtual_memory.usage)?;
             }
 
             start_page = page + end_offset;
@@ -908,7 +936,11 @@ pub struct Mapping {
 }
 
 impl Mapping {
-    pub fn get_page(&mut self, page_offset: u64) -> Result<&mut UserPage, PageFaultError> {
+    pub fn get_page(
+        &mut self,
+        page_offset: u64,
+        usage: &MemoryUsage,
+    ) -> Result<&mut UserPage, PageFaultError> {
         let page = self
             .pages
             .get_mut(usize_from(page_offset))
@@ -923,6 +955,9 @@ impl Mapping {
                 self.shared,
             );
             *page = Some(user_page);
+
+            usage.record_major_page_fault();
+            usage.increase_rss();
         }
 
         Ok(page.as_mut().unwrap())
@@ -963,13 +998,21 @@ impl Mapping {
         }
     }
 
-    pub fn discard_page(&mut self, page_offset: u64) -> Result<()> {
+    pub fn discard_page(&mut self, page_offset: u64, usage: &MemoryUsage) -> Result<()> {
         let page = self
             .pages
             .get_mut(usize_from(page_offset))
             .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
+        if page.is_some() {
+            usage.decrease_rss(1);
+        }
         page.take();
         Ok(())
+    }
+
+    pub fn record_unmapping(mut self, usage: &MemoryUsage) {
+        let delta = self.pages.iter_mut().filter(|page| page.is_some()).count();
+        usage.decrease_rss(delta);
     }
 }
 
