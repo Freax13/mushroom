@@ -24,7 +24,7 @@ constants = { workspace = true }
 loader = { workspace = true }
 log-types = { workspace = true, features = ["std"] }
 mushroom-verify = { workspace = true, optional = true }
-nix = { version = "0.28.0", features = ["fs", "ioctl", "mman", "pthread", "signal"] }
+nix = { version = "0.29.0", features = ["fs", "ioctl", "mman", "pthread", "signal"] }
 profiler-types = { workspace = true }
 qgs-client = { workspace = true, optional = true }
 rand = "0.8.5"
@@ -35,6 +35,6 @@ tokio = { version = "1.36.0", features = ["fs", "macros", "rt-multi-thread"], op
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", optional = true }
 vcek-kds = { workspace = true, optional = true }
-volatile = { version = "0.5.1", features = [] }
+volatile = { version = "0.6.1", features = [] }
 x86_64 = { version = "0.15.1", default-features = false }
 xdg = { version = "2.5.2", optional = true }
