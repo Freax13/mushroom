@@ -21,6 +21,7 @@ use x86_64::{
 use self::elf::{ElfIdent, ElfLoaderParams};
 
 use super::{
+    limits::CurrentStackLimit,
     memory::{Bias, VirtualMemory},
     syscall::{
         args::{FileMode, OpenFlags},
@@ -36,6 +37,7 @@ use crate::{
 mod elf;
 
 impl VirtualMemory {
+    #[allow(clippy::too_many_arguments)]
     pub fn start_executable(
         &self,
         path: Path,
@@ -44,6 +46,7 @@ impl VirtualMemory {
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
+        stack_limit: CurrentStackLimit,
     ) -> Result<(CpuState, Path)> {
         self.modify().map_sigreturn_trampoline();
 
@@ -56,16 +59,28 @@ impl VirtualMemory {
                 file.pread(0, bytes_of_mut(&mut header))?;
 
                 let state = match header.verify()? {
-                    Abi::I386 => {
-                        self.start_elf::<elf::ElfLoaderParams32>(file, argv, envp, ctx, cwd)?
-                    }
-                    Abi::Amd64 => {
-                        self.start_elf::<elf::ElfLoaderParams64>(file, argv, envp, ctx, cwd)?
-                    }
+                    Abi::I386 => self.start_elf::<elf::ElfLoaderParams32>(
+                        file,
+                        argv,
+                        envp,
+                        ctx,
+                        cwd,
+                        stack_limit,
+                    )?,
+                    Abi::Amd64 => self.start_elf::<elf::ElfLoaderParams64>(
+                        file,
+                        argv,
+                        envp,
+                        ctx,
+                        cwd,
+                        stack_limit,
+                    )?,
                 };
                 Ok((state, path))
             }
-            [b'#', b'!', ..] => self.start_shebang(path, &**file, argv, envp, ctx, cwd),
+            [b'#', b'!', ..] => {
+                self.start_shebang(path, &**file, argv, envp, ctx, cwd, stack_limit)
+            }
             _ => bail!(NoExec),
         }
     }
@@ -77,6 +92,7 @@ impl VirtualMemory {
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
+        stack_limit: CurrentStackLimit,
     ) -> Result<CpuState>
     where
         E: ElfLoaderParams,
@@ -104,7 +120,7 @@ impl VirtualMemory {
         self.modify().init_brk(brk_start);
 
         // Create stack.
-        let len = 0x80_0000;
+        let len = u64::from(stack_limit.get());
         let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len) + len;
 
         // Sum up the number of pointer-sized values that need to be placed in
@@ -227,6 +243,7 @@ impl VirtualMemory {
         Ok(cpu_state)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_shebang(
         &self,
         path: Path,
@@ -235,6 +252,7 @@ impl VirtualMemory {
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: DynINode,
+        stack_limit: CurrentStackLimit,
     ) -> Result<(CpuState, Path)> {
         let mut bytes = [0; 128];
         let len = file.pread(0, &mut bytes)?;
@@ -283,7 +301,15 @@ impl VirtualMemory {
         new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
-        self.start_executable(interpreter_path, &interpreter, &new_argv, envp, ctx, cwd)
+        self.start_executable(
+            interpreter_path,
+            &interpreter,
+            &new_argv,
+            envp,
+            ctx,
+            cwd,
+            stack_limit,
+        )
     }
 }
 

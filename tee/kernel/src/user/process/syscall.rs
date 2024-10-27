@@ -48,7 +48,7 @@ use crate::{
 use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
 
 use super::{
-    limits::CurrentNoFileLimit,
+    limits::{CurrentNoFileLimit, CurrentStackLimit},
     memory::{Bias, VirtualMemory},
     thread::{
         new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
@@ -1493,6 +1493,7 @@ async fn execve(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
+    #[state] stack_limit: CurrentStackLimit,
     pathname: Pointer<Path>,
     argv: Pointer<Pointer<CString>>,
     envp: Pointer<Pointer<CString>>,
@@ -1535,8 +1536,15 @@ async fn execve(
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let (cpu_state, exe_path) =
-        virtual_memory.start_executable(pathname, &file, &args, &envs, &mut ctx, cwd)?;
+    let (cpu_state, exe_path) = virtual_memory.start_executable(
+        pathname,
+        &file,
+        &args,
+        &envs,
+        &mut ctx,
+        cwd,
+        stack_limit,
+    )?;
 
     // Everything was successful, no errors can occour after this point.
 

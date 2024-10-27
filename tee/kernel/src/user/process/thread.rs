@@ -44,7 +44,7 @@ use crate::{
 };
 
 use super::{
-    limits::Limits,
+    limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
     syscall::{
         args::{FileMode, Pointer, Rusage, Signal, UserDesc, WStatus},
@@ -548,12 +548,20 @@ impl ThreadGuard<'_> {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
+        stack_limit: CurrentStackLimit,
     ) -> Result<()> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let (cpu_state, _path) =
-            virtual_memory.start_executable(path, file, argv, envp, ctx, self.process().cwd())?;
+        let (cpu_state, _path) = virtual_memory.start_executable(
+            path,
+            file,
+            argv,
+            envp,
+            ctx,
+            self.process().cwd(),
+            stack_limit,
+        )?;
 
         // Success! Commit the new state to the thread.
 

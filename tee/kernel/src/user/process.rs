@@ -15,7 +15,7 @@ use alloc::{
     vec::Vec,
 };
 use futures::{select_biased, FutureExt};
-use limits::Limits;
+use limits::{CurrentStackLimit, Limits};
 use syscall::args::{Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
@@ -541,7 +541,14 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
 
     guard
-        .start_executable(path, &file, &[c"/bin/init"], &[] as &[&CStr], &mut ctx)
+        .start_executable(
+            path,
+            &file,
+            &[c"/bin/init"],
+            &[] as &[&CStr],
+            &mut ctx,
+            CurrentStackLimit::default(),
+        )
         .unwrap();
     drop(guard);
 
