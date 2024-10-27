@@ -130,9 +130,14 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysConnect);
+    handlers.register(SysAccept);
     handlers.register(SysRecvFrom);
+    handlers.register(SysBind);
+    handlers.register(SysListen);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
+    handlers.register(SysSetsockopt);
     handlers.register(SysFork);
     handlers.register(SysVfork);
     handlers.register(SysExecve);
@@ -1244,6 +1249,28 @@ async fn sendfile64(
     Ok(len)
 }
 
+#[syscall(amd64 = 42)]
+fn connect(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    uservaddr: Pointer<c_void>,
+    addrlen: u32,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
+}
+
+#[syscall(amd64 = 43)]
+fn accept(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    upeer_sockaddr: Pointer<c_void>,
+    upeer_addrlen: Pointer<u32>,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
+}
+
 #[syscall(i386 = 371, amd64 = 45, interruptable)]
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1269,6 +1296,23 @@ async fn recv_from(
 
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(amd64 = 49)]
+fn bind(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    umyaddr: Pointer<c_void>,
+    addrlen: u32,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
+}
+
+#[syscall(amd64 = 50)]
+fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
 }
 
 #[syscall(i386 = 360, amd64 = 53)]
@@ -1324,6 +1368,19 @@ fn socketpair(
     virtual_memory.write(sv, [fd1, fd2])?;
 
     Ok(0)
+}
+
+#[syscall(amd64 = 54)]
+fn setsockopt(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    level: i32,
+    optname: i32,
+    optval: Pointer<[u8]>,
+    optlen: i32,
+) -> SyscallResult {
+    fdtable.get(fd)?;
+    todo!()
 }
 
 #[syscall(i386 = 120, amd64 = 56)]
