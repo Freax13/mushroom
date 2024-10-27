@@ -183,6 +183,14 @@ impl Thread {
         )
     }
 
+    pub fn try_lock(&self) -> Option<ThreadGuard> {
+        let state = self.state.try_lock()?;
+        Some(ThreadGuard {
+            thread: self,
+            state,
+        })
+    }
+
     pub fn lock(&self) -> ThreadGuard {
         ThreadGuard {
             thread: self,
@@ -420,17 +428,30 @@ impl Thread {
 
         writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
         let indent = indent + 2;
-        let exit = self.cpu_state.lock().last_exit();
-        if let Some(exit) = exit {
-            match exit {
-                Exit::Syscall(args) => dump_syscall_exit(&self.lock(), args, indent, &mut write)?,
-                Exit::DivideError
-                | Exit::GeneralProtectionFault
-                | Exit::Vc(_)
-                | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+        if let Some(exit) = self.cpu_state.try_lock().map(|guard| guard.last_exit()) {
+            if let Some(exit) = exit {
+                match exit {
+                    Exit::Syscall(args) => {
+                        if let Some(thread) = self.try_lock() {
+                            dump_syscall_exit(&thread, args, indent, &mut write)?;
+                        } else {
+                            writeln!(
+                                write,
+                                "{:indent$}thread is locked. raw syscall args: {args:?}",
+                                ""
+                            )?;
+                        }
+                    }
+                    Exit::DivideError
+                    | Exit::GeneralProtectionFault
+                    | Exit::Vc(_)
+                    | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+                }
+            } else {
+                writeln!(write, "{:indent$}thread has never exited", "")?;
             }
         } else {
-            writeln!(write, "{:indent$}thread has never exited", "")?;
+            writeln!(write, "{:indent$}cpu state is locked", "")?;
         }
         self.fdtable.lock().dump(indent, write)?;
         Ok(())
