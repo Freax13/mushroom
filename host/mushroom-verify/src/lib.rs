@@ -6,13 +6,25 @@ use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 #[cfg(feature = "tdx")]
 use tdx_types::td_quote::TeeTcbSvn;
 
+#[cfg(feature = "serde")]
+mod hex;
 #[cfg(feature = "snp")]
 mod snp;
 #[cfg(feature = "tdx")]
 mod tdx;
 
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
 pub struct Configuration(ConfigurationImpl);
 
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(tag = "tee", rename_all = "lowercase")
+)]
 enum ConfigurationImpl {
     #[cfg(feature = "snp")]
     Snp(snp::Configuration),

@@ -13,7 +13,9 @@ use vcek_kds::Vcek;
 
 use crate::{InputHash, OutputHash, VerificationError};
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {
+    #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
     launch_digest: [u8; 48],
     policy: GuestPolicy,
     min_tcb: TcbVersion,

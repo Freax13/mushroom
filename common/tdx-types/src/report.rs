@@ -52,11 +52,13 @@ pub struct TeeTcbInfo {
 }
 
 #[derive(Clone, Copy, NoUninit, CheckedBitPattern, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
 pub struct TeeTcbSvn {
     pub tdx_module_svn_minor: u8,
     pub tdx_module_svn_major: u8,
     pub seam_last_patch_svn: u8,
+    #[cfg_attr(feature = "serde", serde(skip))]
     _reserved: Reserved<13>,
 }
 

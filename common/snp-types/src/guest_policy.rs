@@ -2,6 +2,11 @@ use bit_field::BitField;
 use bytemuck::CheckedBitPattern;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(into = "StructuredGuestPolicy", from = "StructuredGuestPolicy")
+)]
 #[repr(transparent)]
 pub struct GuestPolicy {
     policy: u64,
@@ -86,5 +91,42 @@ impl core::fmt::Debug for GuestPolicy {
             )
             .field("allow_debugging", &self.allow_debugging())
             .finish()
+    }
+}
+
+#[cfg(feature = "serde")]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredGuestPolicy {
+    abi_major: u8,
+    abi_minor: u8,
+    allow_smt: bool,
+    single_socket_only: bool,
+    allow_migration_agent_association: bool,
+    allow_debugging: bool,
+}
+
+#[cfg(feature = "serde")]
+impl From<GuestPolicy> for StructuredGuestPolicy {
+    fn from(value: GuestPolicy) -> Self {
+        Self {
+            abi_major: value.abi_major(),
+            abi_minor: value.abi_minor(),
+            allow_smt: value.allow_smt(),
+            single_socket_only: value.single_socket_only(),
+            allow_migration_agent_association: value.allow_migration_agent_association(),
+            allow_debugging: value.allow_debugging(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<StructuredGuestPolicy> for GuestPolicy {
+    fn from(value: StructuredGuestPolicy) -> Self {
+        Self::new(value.abi_major, value.abi_minor)
+            .with_allow_smt(value.allow_smt)
+            .with_single_socket_only(value.single_socket_only)
+            .with_allow_migration_agent_association(value.allow_migration_agent_association)
+            .with_allow_debugging(value.allow_debugging)
     }
 }
