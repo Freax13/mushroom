@@ -534,6 +534,11 @@ enum_arg! {
         SetFd = 2,
         GetFl = 3,
         SetFl = 4,
+        SetLkW = 7,
+        SetOwn = 8,
+        GetOwn = 9,
+        SetOwnEx = 15,
+        GetOwnEx = 16,
         DupFdCloExec = 1030,
     }
 }
