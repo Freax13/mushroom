@@ -68,6 +68,12 @@ impl<R: ConstResource> ExtractableThreadState for CurrentLimit<R> {
     }
 }
 
+impl<R: ConstResource> Default for CurrentLimit<R> {
+    fn default() -> Self {
+        Self::new(Limits::default()[R::RESOURCE].rlim_cur)
+    }
+}
+
 pub type CurrentNoFileLimit = CurrentLimit<NoFile>;
 
 pub trait ConstResource {
