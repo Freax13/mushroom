@@ -95,6 +95,10 @@ impl<T> Mutex<T> {
             },
         }
     }
+
+    pub fn into_inner(self) -> T {
+        self.cell.into_inner()
+    }
 }
 
 unsafe impl<T> Send for Mutex<T> where T: Send {}
