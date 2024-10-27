@@ -42,28 +42,10 @@ use crate::{
     },
     rt::oneshot,
     time::{self, now, sleep_until},
-    user::process::{
-        memory::MemoryPermissions,
-        syscall::args::{
-            AccessMode, ClockNanosleepFlags, Dup3Flags, FaccessatFlags, FdSet, LongOffset,
-            PSelectSigsetArg, Pollfd, Resource, SpliceFlags, Timeval, UserDesc,
-        },
-        ProcessGroup,
-    },
+    user::process::{memory::MemoryPermissions, syscall::args::*, ProcessGroup},
 };
 
-use self::{
-    args::{
-        Advice, ArchPrctlCode, AtFlags, ClockId, CloneFlags, CopyFileRangeFlags, Domain,
-        EpollCreate1Flags, EpollCtlOp, EpollEvent, EventFdFlags, ExtractableThreadState, FLockOp,
-        Fchmodat2Flags, FchownatFlags, FcntlCmd, FdNum, FileMode, FileType, FutexOp,
-        FutexOpWithFlags, GetRandomFlags, Iovec, LinkOptions, MmapFlags, MountFlags, Offset,
-        OpenFlags, Pipe2Flags, Pointer, PollEvents, ProtFlags, RLimit, RLimit64, Renameat2Flags,
-        RtSigprocmaskHow, Signal, SocketPairType, Stat, Stat64, SyscallArg, Time, Timespec,
-        UnlinkOptions, WStatus, WaitOptions, Whence,
-    },
-    traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
-};
+use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
 
 use super::{
     limits::CurrentNoFileLimit,
@@ -184,6 +166,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUmask);
     handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
+    handlers.register(SysGetrusage);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
     handlers.register(SysSetuid);
@@ -2169,6 +2152,35 @@ fn getrlimit(
 ) -> SyscallResult {
     let value = thread.process().limits.read()[resource];
     virtual_memory.write_with_abi(rlim, value, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 77, amd64 = 98)]
+async fn getrusage(
+    abi: Abi,
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    who: GetRusageWho,
+    usage: Pointer<Rusage>,
+) -> SyscallResult {
+    let value = match who {
+        GetRusageWho::Self_ => {
+            let process = thread.process();
+            let threads = process
+                .threads
+                .lock()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>();
+            threads
+                .iter()
+                .map(|thread| thread.lock().get_rusage())
+                .fold(Rusage::default(), Rusage::merge)
+        }
+        GetRusageWho::Children => *thread.process().children_usage.lock(),
+        GetRusageWho::Thread => thread.lock().get_rusage(),
+    };
+    virtual_memory.write_with_abi(usage, value, abi)?;
     Ok(0)
 }
 

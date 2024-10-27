@@ -5,7 +5,9 @@ use core::{
     fmt::Debug,
     future::Future,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
+    pin::Pin,
     sync::atomic::{AtomicU32, Ordering},
+    task::{Context, Poll},
 };
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
     },
     rt::notify::Notify,
     spin::mutex::{Mutex, MutexGuard},
+    time,
     user::process::{
         memory::PageFaultError,
         thread::running_state::{ExitAction, ThreadRunningState},
@@ -30,6 +33,7 @@ use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use futures::{select_biased, FutureExt};
+use pin_project::pin_project;
 use snp_types::intercept::VMEXIT_CPUID;
 use x86_64::VirtAddr;
 
@@ -43,9 +47,10 @@ use super::{
     limits::Limits,
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, Pointer, Signal, UserDesc, WStatus},
+        args::{FileMode, Pointer, Rusage, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
+    usage::{self, ThreadUsage},
     Process, ProcessGroup, Session,
 };
 
@@ -64,6 +69,7 @@ pub struct Thread {
     process: Arc<Process>,
     signal_notify: Notify,
     running_state: ThreadRunningState,
+    usage: ThreadUsage,
 
     // Mutable state.
     state: Mutex<ThreadState>,
@@ -104,6 +110,7 @@ impl Thread {
             process,
             signal_notify: Notify::new(),
             running_state: ThreadRunningState::new(),
+            usage: ThreadUsage::default(),
             state: Mutex::new(ThreadState {
                 virtual_memory,
                 signal_handler_table,
@@ -120,7 +127,32 @@ impl Thread {
     }
 
     pub fn spawn(self: Arc<Self>) {
-        spawn(self.run());
+        #[pin_project]
+        struct RecordingFuture<F> {
+            thread: Arc<Thread>,
+            #[pin]
+            future: F,
+        }
+
+        impl<F> Future for RecordingFuture<F>
+        where
+            F: Future<Output = ()>,
+        {
+            type Output = ();
+
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let this = self.project();
+                this.thread.usage.start();
+                let res = this.future.poll(cx);
+                this.thread.usage.stop();
+                res
+            }
+        }
+
+        spawn(RecordingFuture {
+            thread: self.clone(),
+            future: self.run(),
+        });
     }
 
     pub fn empty(tid: u32) -> Self {
@@ -234,7 +266,17 @@ impl Thread {
     fn run_userspace(&self) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
         let mut guard = self.cpu_state.lock();
-        guard.run_user(&virtual_memory)
+        let start = time::refresh_backend_offset();
+        let exit = guard.run_user(&virtual_memory)?;
+        let end = time::refresh_backend_offset();
+        drop(guard);
+
+        self.usage.record_user_execution_time(end - start);
+        if matches!(exit, Exit::Syscall(_)) {
+            self.usage.record_voluntary_context_switch();
+        }
+
+        Ok(exit)
     }
 
     fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
@@ -583,6 +625,10 @@ impl ThreadGuard<'_> {
     fn pop_signal(&mut self) -> Option<SigInfo> {
         self.get_pending_signal()?;
         self.pending_signal_info.take()
+    }
+
+    pub fn get_rusage(&self) -> Rusage {
+        usage::collect(self.virtual_memory.usage(), &self.thread.usage)
     }
 }
 

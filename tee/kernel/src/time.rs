@@ -167,3 +167,7 @@ pub async fn sleep_until(deadline: Timespec) {
 
     receiver.recv().await.unwrap();
 }
+
+pub fn refresh_backend_offset() -> u64 {
+    backend::current_offset()
+}

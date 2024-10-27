@@ -1,4 +1,5 @@
 use core::{
+    cmp,
     fmt::{self, Display},
     marker::PhantomData,
     ops::Add,
@@ -929,10 +930,25 @@ impl Add for Timespec {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timeval {
     pub tv_sec: u32,
     pub tv_usec: u32,
+}
+
+impl Timeval {
+    pub fn saturating_add(self, rhs: Self) -> Self {
+        let tv_sec = self.tv_sec + rhs.tv_sec;
+        let tv_usec = self.tv_usec + rhs.tv_usec;
+        if let Some(tv_usec) = tv_usec.checked_sub(1_000_000) {
+            Self {
+                tv_sec: tv_sec + 1,
+                tv_usec,
+            }
+        } else {
+            Self { tv_sec, tv_usec }
+        }
+    }
 }
 
 impl From<Timeval> for Timespec {
@@ -1350,5 +1366,72 @@ bitflags! {
 bitflags! {
     pub struct Fchmodat2Flags {
         const SYMLINK_NOFOLLOW = 1 << 8;
+    }
+}
+
+enum_arg! {
+    pub enum GetRusageWho {
+        Self_ = 0,
+        Children	= -1,
+        Thread=	1,
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Rusage {
+    /// user time used
+    pub utime: Timeval,
+    /// system time used
+    pub stime: Timeval,
+    /// maximum resident set size
+    pub maxrss: u64,
+    /// integral shared memory size
+    pub ixrss: u64,
+    /// integral unshared data size
+    pub idrss: u64,
+    /// integral unshared stack size
+    pub isrss: u64,
+    /// page reclaims
+    pub minflt: u64,
+    /// page faults
+    pub majflt: u64,
+    /// swaps
+    pub nswap: u64,
+    /// block input operations
+    pub inblock: u64,
+    /// block output operations
+    pub oublock: u64,
+    /// messages sent
+    pub msgsnd: u64,
+    /// messages received
+    pub msgrcv: u64,
+    /// signals received
+    pub nsignals: u64,
+    /// voluntary context switches
+    pub nvcsw: u64,
+    /// involuntary context switches
+    pub nivcsw: u64,
+}
+
+impl Rusage {
+    pub fn merge(self, rusage: Self) -> Self {
+        Self {
+            utime: self.utime.saturating_add(rusage.utime),
+            stime: self.stime.saturating_add(rusage.stime),
+            maxrss: cmp::max(self.maxrss, rusage.maxrss),
+            ixrss: self.ixrss + rusage.ixrss,
+            idrss: self.idrss + rusage.idrss,
+            isrss: self.isrss + rusage.isrss,
+            minflt: self.minflt + rusage.minflt,
+            majflt: self.majflt + rusage.majflt,
+            nswap: self.nswap + rusage.nswap,
+            inblock: self.inblock + rusage.inblock,
+            oublock: self.oublock + rusage.oublock,
+            msgsnd: self.msgsnd + rusage.msgsnd,
+            msgrcv: self.msgrcv + rusage.msgrcv,
+            nsignals: self.nsignals + rusage.nsignals,
+            nvcsw: self.nvcsw + rusage.nvcsw,
+            nivcsw: self.nivcsw + rusage.nivcsw,
+        }
     }
 }

@@ -33,8 +33,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Stat, Time,
-    Timespec, Timeval, WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Rusage,
+    Stat, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1668,6 +1668,100 @@ impl From<StatFs> for StatFs64 {
             frsize: value.frsize,
             flags: value.flags,
             spare: [0; 4],
+        }
+    }
+}
+
+impl Pointee for Rusage {}
+impl AbiDependentPointee for Rusage {
+    type I386 = Rusage32;
+    type Amd64 = Rusage64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Rusage32 {
+    utime: Timeval32,
+    stime: Timeval32,
+    maxrss: u32,
+    ixrss: u32,
+    idrss: u32,
+    isrss: u32,
+    minflt: u32,
+    majflt: u32,
+    nswap: u32,
+    inblock: u32,
+    oublock: u32,
+    msgsnd: u32,
+    msgrcv: u32,
+    nsignals: u32,
+    nvcsw: u32,
+    nivcsw: u32,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Rusage64 {
+    utime: Timeval64,
+    stime: Timeval64,
+    maxrss: u64,
+    ixrss: u64,
+    idrss: u64,
+    isrss: u64,
+    minflt: u64,
+    majflt: u64,
+    nswap: u64,
+    inblock: u64,
+    oublock: u64,
+    msgsnd: u64,
+    msgrcv: u64,
+    nsignals: u64,
+    nvcsw: u64,
+    nivcsw: u64,
+}
+
+impl From<Rusage> for Rusage32 {
+    fn from(value: Rusage) -> Self {
+        Self {
+            utime: value.utime.into(),
+            stime: value.stime.into(),
+            maxrss: value.maxrss as u32,
+            ixrss: value.ixrss as u32,
+            idrss: value.idrss as u32,
+            isrss: value.isrss as u32,
+            minflt: value.minflt as u32,
+            majflt: value.majflt as u32,
+            nswap: value.nswap as u32,
+            inblock: value.inblock as u32,
+            oublock: value.oublock as u32,
+            msgsnd: value.msgsnd as u32,
+            msgrcv: value.msgrcv as u32,
+            nsignals: value.nsignals as u32,
+            nvcsw: value.nvcsw as u32,
+            nivcsw: value.nivcsw as u32,
+        }
+    }
+}
+
+impl From<Rusage> for Rusage64 {
+    fn from(value: Rusage) -> Self {
+        Self {
+            utime: value.utime.into(),
+            stime: value.stime.into(),
+            maxrss: value.maxrss,
+            ixrss: value.ixrss,
+            idrss: value.idrss,
+            isrss: value.isrss,
+            minflt: value.minflt,
+            majflt: value.majflt,
+            nswap: value.nswap,
+            inblock: value.inblock,
+            oublock: value.oublock,
+            msgsnd: value.msgsnd,
+            msgrcv: value.msgrcv,
+            nsignals: value.nsignals,
+            nvcsw: value.nvcsw,
+            nivcsw: value.nivcsw,
         }
     }
 }

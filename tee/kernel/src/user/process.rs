@@ -16,7 +16,7 @@ use alloc::{
 };
 use futures::{select_biased, FutureExt};
 use limits::Limits;
-use syscall::args::Timespec;
+use syscall::args::{Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
 use crate::{
@@ -57,6 +57,7 @@ pub mod limits;
 pub mod memory;
 pub mod syscall;
 pub mod thread;
+pub mod usage;
 
 pub struct Process {
     pid: u32,
@@ -80,6 +81,9 @@ pub struct Process {
     process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
     pub umask: Mutex<FileMode>,
+    /// The usage of all terminated threads.
+    pub self_usage: Mutex<Rusage>,
+    pub children_usage: Mutex<Rusage>,
 }
 
 impl Process {
@@ -116,6 +120,8 @@ impl Process {
             process_group: Mutex::new(process_group.clone()),
             limits: RwLock::new(limits),
             umask: Mutex::new(umask),
+            self_usage: Mutex::default(),
+            children_usage: Mutex::default(),
         };
         let arc = Arc::new(this);
 
@@ -153,7 +159,11 @@ impl Process {
         self.running.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn exit(&self, exit_status: WStatus) {
+    pub fn exit(&self, exit_status: WStatus, rusage: Rusage) {
+        let mut guard = self.self_usage.lock();
+        *guard = guard.merge(rusage);
+        drop(guard);
+
         let prev = self.running.fetch_sub(1, Ordering::Relaxed);
         if prev == 1 {
             self.exit_group(exit_status);
@@ -273,6 +283,12 @@ impl Process {
                     }
                 };
                 let child = guard.swap_remove(idx);
+
+                let usage = *child.self_usage.lock();
+                let mut guard = self.children_usage.lock();
+                *guard = guard.merge(usage);
+                drop(guard);
+
                 let status = *child.exit_status.try_get().unwrap();
                 Some(Ok(Some((child.pid, status))))
             })
