@@ -19,6 +19,7 @@ pub mod profiler;
 mod slot;
 
 pub use kvm::KvmHandle;
+pub use loader::{HashType, Input};
 
 const TSC_MHZ: u64 = 100;
 

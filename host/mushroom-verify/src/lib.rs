@@ -1,10 +1,11 @@
 use io::input::{Header, MAX_HASH_SIZE};
-use loader::{HashType, Input};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "snp")]
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 #[cfg(feature = "tdx")]
 use tdx_types::td_quote::TeeTcbSvn;
+
+pub use loader::{HashType, Input};
 
 #[cfg(feature = "serde")]
 mod hex;
