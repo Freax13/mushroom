@@ -70,6 +70,7 @@ impl OpenFileDescription for ReadHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
+        self.stream_buffer.notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -162,6 +163,7 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
+        self.stream_buffer.notify();
     }
 
     fn path(&self) -> Result<Path> {

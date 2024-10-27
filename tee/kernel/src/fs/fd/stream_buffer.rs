@@ -131,6 +131,10 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, A
         self.notify.wait()
     }
 
+    pub fn notify(&self) {
+        self.notify.notify();
+    }
+
     pub fn make_write_half(&self) -> WriteHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
         assert_eq!(Arc::strong_count(&self.buffer), 1);
         WriteHalf {
@@ -270,6 +274,10 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
 
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {
         self.notify.wait()
+    }
+
+    pub fn notify(&self) {
+        self.notify.notify();
     }
 
     pub fn make_read_half(&self) -> ReadHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
