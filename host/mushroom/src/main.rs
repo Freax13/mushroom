@@ -386,11 +386,11 @@ impl TcbArgs {
 
     #[cfg(feature = "tdx")]
     fn tee_tcb_svn(&self) -> TeeTcbSvn {
-        let mut svns = [0; 16];
-        svns[0] = self.tdx_module_svn_minor;
-        svns[1] = self.tdx_module_svn_major;
-        svns[2] = self.seam_last_patch_svn;
-        TeeTcbSvn(svns)
+        TeeTcbSvn::new(
+            self.tdx_module_svn_minor,
+            self.tdx_module_svn_major,
+            self.seam_last_patch_svn,
+        )
     }
 }
 

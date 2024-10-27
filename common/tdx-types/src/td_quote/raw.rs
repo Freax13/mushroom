@@ -1,8 +1,6 @@
-use core::cmp::Ordering;
-
 use bytemuck::{CheckedBitPattern, NoUninit};
 
-use crate::Reserved;
+use crate::{report::TeeTcbSvn, Reserved};
 
 const _: () = assert!(u32::to_le(1) == 1, "big endian targets are not supported");
 
@@ -66,34 +64,6 @@ pub struct Body {
     pub report_data: [u8; 64],
 }
 
-#[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct TeeTcbSvn(pub [u8; 16]);
-
-impl PartialOrd for TeeTcbSvn {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self.0 == other.0 {
-            Some(Ordering::Equal)
-        } else if self
-            .0
-            .into_iter()
-            .zip(other.0)
-            .all(|(this, other)| this >= other)
-        {
-            Some(Ordering::Greater)
-        } else if self
-            .0
-            .into_iter()
-            .zip(other.0)
-            .all(|(this, other)| this <= other)
-        {
-            Some(Ordering::Less)
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern)]
 #[repr(transparent)]
 pub struct Attributes(pub [u8; 8]);
@@ -101,7 +71,7 @@ pub struct Attributes(pub [u8; 8]);
 #[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern)]
 #[repr(C)]
 pub struct EnclaveReportBody {
-    pub cpu_svn: TeeTcbSvn,
+    pub cpu_svn: [u8; 16],
     pub misc_select: u32,
     _reserved1: Reserved<28>,
     pub attributes: [u8; 16],
