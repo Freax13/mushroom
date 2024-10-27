@@ -109,6 +109,15 @@ where
     }
 }
 
+impl<T> Default for Mutex<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 pub struct MutexGuard<'a, T> {
     mutex: &'a Mutex<T>,
 }
