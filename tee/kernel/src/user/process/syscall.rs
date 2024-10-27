@@ -193,6 +193,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFstatfs);
     handlers.register(SysGetpriority);
     handlers.register(SysSetpriority);
+    handlers.register(SysPrctl);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
@@ -2723,6 +2724,23 @@ fn setpriority(thread: &mut ThreadGuard, which: Which, who: u32, prio: Nice) -> 
         thread.nice.store(prio);
     }
     Ok(0)
+}
+
+#[syscall(i386 = 172, amd64 = 157)]
+fn prctl(op: PrctlOp, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> SyscallResult {
+    match op {
+        PrctlOp::SetDumpable => {
+            let dumpable = arg2;
+            match dumpable {
+                // TODO: implement this
+                0 => {}
+                // TODO: implement this
+                1 => {}
+                _ => bail!(Inval),
+            }
+            Ok(0)
+        }
+    }
 }
 
 #[syscall(i386 = 384, amd64 = 158)]

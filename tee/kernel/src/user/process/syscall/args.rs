@@ -1402,6 +1402,12 @@ impl SyscallArg for Nice {
 }
 
 enum_arg! {
+    pub enum PrctlOp {
+        SetDumpable = 4,
+    }
+}
+
+enum_arg! {
     pub enum GetRusageWho {
         Self_ = 0,
         Children	= -1,
