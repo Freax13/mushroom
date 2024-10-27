@@ -32,6 +32,7 @@ use alloc::{
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
+use crossbeam_utils::atomic::AtomicCell;
 use futures::{select_biased, FutureExt};
 use pin_project::pin_project;
 use snp_types::intercept::VMEXIT_CPUID;
@@ -47,7 +48,7 @@ use super::{
     limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
     syscall::{
-        args::{FileMode, Pointer, Rusage, Signal, UserDesc, WStatus},
+        args::{FileMode, Nice, Pointer, Rusage, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     usage::{self, ThreadUsage},
@@ -77,6 +78,7 @@ pub struct Thread {
     pub cpu_state: Mutex<CpuState>,
     // Rarely mutable state.
     pub fdtable: Mutex<Arc<FileDescriptorTable>>,
+    pub nice: AtomicCell<Nice>,
 }
 
 pub struct ThreadState {
@@ -104,6 +106,7 @@ impl Thread {
         fdtable: Arc<FileDescriptorTable>,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
+        nice: Nice,
     ) -> Self {
         Self {
             tid,
@@ -123,6 +126,7 @@ impl Thread {
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
+            nice: AtomicCell::new(nice),
         }
     }
 
@@ -175,6 +179,7 @@ impl Thread {
             Arc::new(FileDescriptorTable::with_standard_io()),
             None,
             CpuState::new(0, 0, 0),
+            Nice::DEFAULT,
         )
     }
 
@@ -466,6 +471,7 @@ impl ThreadGuard<'_> {
             fdtable,
             vfork_done,
             cpu_state,
+            self.thread.nice.load(),
         );
 
         let mut guard = thread.lock();

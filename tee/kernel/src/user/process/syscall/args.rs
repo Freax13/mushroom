@@ -1371,6 +1371,37 @@ bitflags! {
 }
 
 enum_arg! {
+    pub enum Which {
+        Process = 0,
+        ProcessGroup = 1,
+        User = 2,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Nice(i8);
+
+impl Nice {
+    pub const DEFAULT: Self = Self(0);
+
+    pub fn as_syscall_return_value(self) -> u64 {
+        (self.0 + 21) as u64
+    }
+}
+
+impl SyscallArg for Nice {
+    fn parse(value: u64, _: Abi) -> Result<Self> {
+        let value = value as u32 as i32;
+        ensure!((-20..=19).contains(&value), Inval);
+        Ok(Self(value as i8))
+    }
+
+    fn display(f: &mut dyn fmt::Write, value: u64, _: Abi, _: &ThreadGuard<'_>) -> fmt::Result {
+        write!(f, "{}", value as u32 as i32)
+    }
+}
+
+enum_arg! {
     pub enum GetRusageWho {
         Self_ = 0,
         Children	= -1,

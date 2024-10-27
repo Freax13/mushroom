@@ -191,6 +191,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysStatfs);
     handlers.register(SysMknod);
     handlers.register(SysFstatfs);
+    handlers.register(SysGetpriority);
+    handlers.register(SysSetpriority);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
@@ -2648,6 +2650,78 @@ fn fstatfs(
     let fd = fdtable.get(fd)?;
     let statfs = fd.fs()?.stat();
     virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
+fn find_priority_targets(
+    thread: &mut ThreadGuard,
+    which: Which,
+    who: u32,
+) -> Result<Vec<Arc<Thread>>> {
+    let credentials_guard = thread.process().credentials.lock();
+    let caller_euid = credentials_guard.effective_user_id;
+    let caller_ruid = credentials_guard.real_user_id;
+    drop(credentials_guard);
+
+    let find_targets = |processes: &mut dyn Iterator<Item = Arc<Process>>| {
+        let mut threads = Vec::new();
+
+        for process in processes {
+            let target_euid = process.credentials.lock().effective_user_id;
+            ensure!(
+                caller_euid == Uid::SUPER_USER
+                    || caller_euid == target_euid
+                    || caller_ruid == target_euid,
+                Perm
+            );
+            threads.extend(process.threads.lock().iter().filter_map(Weak::upgrade));
+        }
+
+        ensure!(!threads.is_empty(), Srch);
+        Ok(threads)
+    };
+
+    match which {
+        Which::Process => {
+            let process = if who == 0 {
+                thread.process().clone()
+            } else {
+                Process::find_by_pid(who).ok_or_else(|| err!(Srch))?
+            };
+            find_targets(&mut core::iter::once(process))
+        }
+        Which::ProcessGroup => {
+            let pgid = if who == 0 {
+                thread.process().process_group.lock().pgid
+            } else {
+                who
+            };
+            find_targets(&mut Process::all().filter(|p| p.process_group.lock().pgid == pgid))
+        }
+        Which::User => {
+            let uid = if who == 0 { caller_ruid } else { Uid::new(who) };
+            find_targets(&mut (Process::all().filter(|p| p.credentials.lock().real_user_id == uid)))
+        }
+    }
+}
+
+#[syscall(i386 = 96, amd64 = 140)]
+fn getpriority(thread: &mut ThreadGuard, which: Which, who: u32) -> SyscallResult {
+    let targets = find_priority_targets(thread, which, who)?;
+    let min = targets
+        .into_iter()
+        .map(|thread| thread.nice.load())
+        .min()
+        .unwrap();
+    Ok(min.as_syscall_return_value())
+}
+
+#[syscall(i386 = 97, amd64 = 141)]
+fn setpriority(thread: &mut ThreadGuard, which: Which, who: u32, prio: Nice) -> SyscallResult {
+    let targets = find_priority_targets(thread, which, who)?;
+    for thread in targets {
+        thread.nice.store(prio);
+    }
     Ok(0)
 }
 
