@@ -209,6 +209,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
     handlers.register(SysClockNanosleep);
     handlers.register(SysTgkill);
@@ -456,7 +457,9 @@ async fn poll(
     let deadline = match timeout {
         ..=-1 => Some(None),
         0 => None,
-        1.. => Some(Some(now() + Timespec::from_ms(timeout as u64))),
+        1.. => Some(Some(
+            now(ClockId::Monotonic) + Timespec::from_ms(timeout as u64),
+        )),
     };
 
     // Read the pollfds.
@@ -1013,7 +1016,7 @@ async fn select_impl(
         .as_ref()
         .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
 
-    let deadline = timeout.map(|timeout| now() + timeout);
+    let deadline = timeout.map(|timeout| now(ClockId::Monotonic) + timeout);
     let mut futures = FuturesUnordered::new();
 
     let set = loop {
@@ -1157,7 +1160,7 @@ async fn nanosleep(
 ) -> SyscallResult {
     let rqtp = virtual_memory.read_with_abi(rqtp, abi)?;
 
-    let now = time::now();
+    let now = time::now(ClockId::Monotonic);
     let deadline = now + rqtp;
     sleep_until(deadline).await;
     Ok(0)
@@ -2140,7 +2143,7 @@ fn fchmod(
     let mode = FileMode::from_bits_truncate(mode);
     let fd = fdtable.get(fd)?;
     fd.chmod(mode, &ctx)?;
-    fd.update_times(now(), None, None);
+    fd.update_times(now(ClockId::Realtime), None, None);
     Ok(0)
 }
 
@@ -2222,7 +2225,7 @@ fn gettimeofday(
     }
 
     if !tv.is_null() {
-        let time = now();
+        let time = now(ClockId::Realtime);
         let time = Timeval::from(time);
         virtual_memory.write_with_abi(tv, time, abi)?;
     }
@@ -2900,7 +2903,7 @@ fn time(
     #[state] virtual_memory: Arc<VirtualMemory>,
     tloc: Pointer<Time>,
 ) -> SyscallResult {
-    let now = now();
+    let now = now(ClockId::Realtime);
     let tv_sec = now.tv_sec;
 
     if !tloc.is_null() {
@@ -3022,6 +3025,18 @@ fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallRes
     Ok(u64::from(thread.tid()))
 }
 
+#[syscall(i386 = 264, amd64 = 227)]
+fn clock_settime(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    let time = virtual_memory.read_with_abi(tp, abi)?;
+    time::set(clock_id, time)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     abi: Abi,
@@ -3029,12 +3044,8 @@ fn clock_gettime(
     clock_id: ClockId,
     tp: Pointer<Timespec>,
 ) -> SyscallResult {
-    let time = match clock_id {
-        ClockId::Realtime | ClockId::Monotonic => time::now(),
-    };
-
+    let time = time::now(clock_id);
     virtual_memory.write_with_abi(tp, time, abi)?;
-
     Ok(0)
 }
 
@@ -3055,7 +3066,7 @@ async fn clock_nanosleep(
     let deadline = if flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
         request
     } else {
-        time::now() + request
+        time::now(ClockId::Monotonic) + request
     };
 
     let res = thread
@@ -3069,7 +3080,7 @@ async fn clock_nanosleep(
         .await;
 
     if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let difference = deadline.saturating_sub(time::now());
+        let difference = deadline.saturating_sub(time::now(ClockId::Monotonic));
         virtual_memory.write_with_abi(remain, difference, abi)?;
     }
 
@@ -3111,7 +3122,7 @@ async fn epoll_wait(
     let timeout_fut = if timeout != -1 {
         let timeout = u64::try_from(timeout)?;
         let timeout = Timespec::from_ms(timeout);
-        let deadline = now() + timeout;
+        let deadline = now(ClockId::Monotonic) + timeout;
         sleep_until(deadline).fuse()
     } else {
         Fuse::terminated()
@@ -3363,7 +3374,7 @@ fn futimesat(
     let path = virtual_memory.read(pathname)?;
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
-    let now = now();
+    let now = now(ClockId::Realtime);
 
     let times = if !times.is_null() {
         let [atime, mtime] = virtual_memory.read_with_abi(times, abi)?;
@@ -3727,7 +3738,7 @@ fn utimensat(
     times: Pointer<[Timespec; 2]>,
     flags: AtFlags,
 ) -> SyscallResult {
-    let now = now();
+    let now = now(ClockId::Realtime);
 
     let path = if !pathname.is_null() {
         Some(virtual_memory.read(pathname)?)
@@ -3991,7 +4002,7 @@ fn fchmodat2(
         lookup_and_resolve_node(newdfd, &path, &mut ctx)?
     };
     node.chmod(mode, &ctx)?;
-    node.update_times(now(), None, None);
+    node.update_times(now(ClockId::Realtime), None, None);
 
     Ok(0)
 }

@@ -17,7 +17,7 @@ use crate::{
     spin::{mutex::Mutex, rwlock::RwLock},
     time::now,
     user::process::{
-        syscall::args::OpenFlags,
+        syscall::args::{ClockId, OpenFlags},
         thread::{Gid, Uid},
     },
 };
@@ -96,7 +96,7 @@ impl TmpFsDir {
         uid: Uid,
         gid: Gid,
     ) -> Arc<Self> {
-        let now = now();
+        let now = now(ClockId::Realtime);
 
         Arc::new_cyclic(|this_weak| Self {
             fs,
@@ -254,7 +254,7 @@ impl Directory for TmpFsDir {
         let entry = guard.items.entry(file_name);
         match entry {
             Entry::Vacant(entry) => {
-                let now = now();
+                let now = now(ClockId::Realtime);
                 let link = Arc::new(TmpFsSymlink {
                     fs: self.fs.clone(),
                     ino: new_ino(),
@@ -272,7 +272,7 @@ impl Directory for TmpFsDir {
             }
             Entry::Occupied(mut entry) => {
                 ensure!(!create_new, Exist);
-                let now = now();
+                let now = now(ClockId::Realtime);
                 let link = Arc::new(TmpFsSymlink {
                     fs: self.fs.clone(),
                     ino: new_ino(),
@@ -659,7 +659,7 @@ impl Directory for TmpFsDir {
             match guard.items.entry(newname) {
                 Entry::Vacant(e) => {
                     let node = e.insert(entry);
-                    node.update_times(now(), None, None);
+                    node.update_times(now(ClockId::Realtime), None, None);
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
@@ -681,7 +681,7 @@ impl Directory for TmpFsDir {
             match new_guard.items.entry(newname) {
                 Entry::Vacant(e) => {
                     let node = e.insert(entry);
-                    node.update_times(now(), None, None);
+                    node.update_times(now(ClockId::Realtime), None, None);
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
@@ -771,7 +771,7 @@ struct TmpFsFileInternal {
 
 impl TmpFsFile {
     pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid) -> Arc<Self> {
-        let now = now();
+        let now = now(ClockId::Realtime);
 
         Arc::new_cyclic(|this| Self {
             fs,
@@ -860,7 +860,7 @@ impl File for TmpFsFile {
     fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize> {
         let mut guard = self.internal.write();
         if !no_atime {
-            guard.atime = now();
+            guard.atime = now(ClockId::Realtime);
         }
         guard.buffer.read(offset, buf)
     }
@@ -875,14 +875,14 @@ impl File for TmpFsFile {
     ) -> Result<usize> {
         let mut guard = self.internal.write();
         if !no_atime {
-            guard.atime = now();
+            guard.atime = now(ClockId::Realtime);
         }
         guard.buffer.read_to_user(offset, vm, pointer, len)
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.write();
-        let now = now();
+        let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         guard.buffer.write(offset, buf)
@@ -896,7 +896,7 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let mut guard = self.internal.write();
-        let now = now();
+        let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         guard.buffer.write_from_user(offset, vm, pointer, len)
@@ -904,7 +904,7 @@ impl File for TmpFsFile {
 
     fn append(&self, buf: &[u8]) -> Result<usize> {
         let mut guard = self.internal.write();
-        let now = now();
+        let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
@@ -918,7 +918,7 @@ impl File for TmpFsFile {
         len: usize,
     ) -> Result<usize> {
         let mut guard = self.internal.write();
-        let now = now();
+        let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
@@ -927,7 +927,7 @@ impl File for TmpFsFile {
 
     fn truncate(&self, len: usize) -> Result<()> {
         let mut guard = self.internal.write();
-        let now = now();
+        let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         guard.buffer.truncate(len)

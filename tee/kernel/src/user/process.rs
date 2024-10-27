@@ -16,7 +16,7 @@ use alloc::{
 };
 use futures::{select_biased, FutureExt};
 use limits::{CurrentStackLimit, Limits};
-use syscall::args::{Rusage, Timespec};
+use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
 use crate::{
@@ -368,7 +368,7 @@ impl Process {
     }
 
     pub fn schedule_alarm(self: &Arc<Self>, seconds: u32) -> u32 {
-        let now = now();
+        let now = now(ClockId::Monotonic);
         let (cancel_tx, cancel_rx) = oneshot::new();
         let deadline = now.saturating_add(Timespec {
             tv_sec: seconds,
@@ -403,7 +403,7 @@ impl Process {
 
     pub fn cancel_alarm(&self) -> u32 {
         let prev_state = self.alarm.lock().take();
-        AlarmState::remaining_seconds(prev_state, now())
+        AlarmState::remaining_seconds(prev_state, now(ClockId::Monotonic))
     }
 
     pub async fn wait_until_not_stopped(&self) {
