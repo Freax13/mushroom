@@ -2371,9 +2371,6 @@ fn setpgid(thread: &mut ThreadGuard, pid: u32, pgid: u32) -> SyscallResult {
 
     let mut group_guard = process.process_group.lock();
 
-    // Make sure that the process is not a process group leader.
-    ensure!(group_guard.pgid != pid, Perm);
-
     if pgid == pid {
         // Create a new process group.
         let session = group_guard.session.lock().clone();
