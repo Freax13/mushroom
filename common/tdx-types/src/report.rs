@@ -1,4 +1,6 @@
-use bytemuck::{CheckedBitPattern, NoUninit};
+use core::{cmp::Ordering, fmt};
+
+use bytemuck::{bytes_of, CheckedBitPattern, NoUninit};
 
 use crate::Reserved;
 
@@ -49,13 +51,64 @@ pub struct TeeTcbInfo {
     _reserved: Reserved<95>,
 }
 
-#[derive(Clone, Copy, NoUninit, CheckedBitPattern)]
+#[derive(Clone, Copy, NoUninit, CheckedBitPattern, PartialEq, Eq)]
 #[repr(C)]
 pub struct TeeTcbSvn {
     pub tdx_module_svn_minor: u8,
     pub tdx_module_svn_major: u8,
     pub seam_last_patch_svn: u8,
     _reserved: Reserved<13>,
+}
+
+impl TeeTcbSvn {
+    pub fn new(
+        tdx_module_svn_minor: u8,
+        tdx_module_svn_major: u8,
+        seam_last_patch_svn: u8,
+    ) -> Self {
+        Self {
+            tdx_module_svn_minor,
+            tdx_module_svn_major,
+            seam_last_patch_svn,
+            _reserved: Reserved::default(),
+        }
+    }
+}
+
+impl PartialOrd for TeeTcbSvn {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let this_bytes = bytes_of(self);
+        let other_bytes = bytes_of(other);
+        if self == other {
+            Some(Ordering::Equal)
+        } else if this_bytes
+            .iter()
+            .copied()
+            .zip(other_bytes.iter().copied())
+            .all(|(this, other)| this >= other)
+        {
+            Some(Ordering::Greater)
+        } else if this_bytes
+            .iter()
+            .copied()
+            .zip(other_bytes.iter().copied())
+            .all(|(this, other)| this <= other)
+        {
+            Some(Ordering::Less)
+        } else {
+            None
+        }
+    }
+}
+
+impl fmt::Debug for TeeTcbSvn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TeeTcbSvn")
+            .field("tdx_module_svn_minor", &self.tdx_module_svn_minor)
+            .field("tdx_module_svn_major", &self.tdx_module_svn_major)
+            .field("seam_last_patch_svn", &self.seam_last_patch_svn)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Copy, NoUninit, CheckedBitPattern)]

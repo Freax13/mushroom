@@ -13,8 +13,7 @@ use p256::ecdsa::{
 };
 use p256::EncodedPoint;
 pub use raw::{
-    AttestationType, Attributes, Body, EnclaveReportBody, Header, QeVendorId, TeeTcbSvn, TeeType,
-    Version,
+    AttestationType, Attributes, Body, EnclaveReportBody, Header, QeVendorId, TeeType, Version,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -22,6 +21,8 @@ use x509_cert::{
     der::{referenced::OwnedToRef, DecodePem, Encode},
     Certificate,
 };
+
+pub use crate::report::TeeTcbSvn;
 
 #[derive(Debug)]
 pub struct Quote {
