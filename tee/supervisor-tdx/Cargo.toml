@@ -21,5 +21,5 @@ spin = "0.9.8"
 static-page-tables = { workspace = true }
 supervisor-services = { workspace = true, features = ["supervisor"], default-features = false }
 tdx-types = { workspace = true }
-volatile = { version = "0.5.1", features = ["unstable"] }
+volatile = { version = "0.6.1", features = ["unstable"] }
 x86_64 = "0.15.1"
