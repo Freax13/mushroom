@@ -6,7 +6,7 @@ use core::{
     future::Future,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     pin::Pin,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
     task::{Context, Poll},
 };
 
@@ -16,7 +16,7 @@ use crate::{
         fd::{FileDescriptor, FileDescriptorTable},
         node::FileAccessContext,
     },
-    rt::notify::Notify,
+    rt::{notify::Notify, r#yield},
     spin::mutex::{Mutex, MutexGuard},
     time,
     user::process::{
@@ -79,6 +79,7 @@ pub struct Thread {
     // Rarely mutable state.
     pub fdtable: Mutex<Arc<FileDescriptorTable>>,
     pub nice: AtomicCell<Nice>,
+    pub should_debug: AtomicBool,
 }
 
 pub struct ThreadState {
@@ -107,6 +108,7 @@ impl Thread {
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
         nice: Nice,
+        should_debug: bool,
     ) -> Self {
         Self {
             tid,
@@ -127,6 +129,7 @@ impl Thread {
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
             nice: AtomicCell::new(nice),
+            should_debug: AtomicBool::new(should_debug),
         }
     }
 
@@ -180,6 +183,7 @@ impl Thread {
             None,
             CpuState::new(0, 0, 0),
             Nice::DEFAULT,
+            false,
         )
     }
 
@@ -219,41 +223,10 @@ impl Thread {
                 let run_future = async {
                     loop {
                         self.try_deliver_signal().await.unwrap();
+                        let exit = self.run_userspace().unwrap();
+                        self.handle_exit(exit).await;
 
-                        let clone = self.clone();
-                        let exit = clone.run_userspace().unwrap();
-
-                        match exit {
-                            Exit::DivideError => {
-                                let sig_info = SigInfo {
-                                    signal: Signal::FPE,
-                                    code: SigInfoCode::FPE_INTDIV,
-                                    fields: SigFields::SigFault(SigFault {
-                                        addr: self.cpu_state.lock().faulting_instruction(),
-                                    }),
-                                };
-                                assert!(self.queue_signal(sig_info));
-                            }
-                            Exit::Syscall(args) => self.clone().execute_syscall(args).await,
-                            Exit::GeneralProtectionFault => {
-                                let sig_info = SigInfo {
-                                    signal: Signal::SEGV,
-                                    code: SigInfoCode::KERNEL,
-                                    fields: SigFields::SigFault(SigFault {
-                                        addr: self.cpu_state.lock().faulting_instruction(),
-                                    }),
-                                };
-                                assert!(self.queue_signal(sig_info));
-                            }
-                            Exit::Vc(vc) => match vc {
-                                VMEXIT_CPUID => {
-                                    let mut guard = self.cpu_state.lock();
-                                    guard.emulate_cpuid();
-                                }
-                                code => todo!("unimplemented VC error code: {code:#x}"),
-                            },
-                            Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
-                        }
+                        r#yield().await;
                     }
                 };
 
@@ -272,6 +245,42 @@ impl Thread {
                     guard.execve(params.virtual_memory, params.cpu_state, params.fdtable);
                     continue;
                 }
+            }
+        }
+    }
+
+    async fn handle_exit(self: &Arc<Self>, exit: Exit) {
+        match exit {
+            Exit::DivideError => {
+                let sig_info = SigInfo {
+                    signal: Signal::FPE,
+                    code: SigInfoCode::FPE_INTDIV,
+                    fields: SigFields::SigFault(SigFault {
+                        addr: self.cpu_state.lock().faulting_instruction(),
+                    }),
+                };
+                assert!(self.queue_signal(sig_info));
+            }
+            Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+            Exit::GeneralProtectionFault => {
+                let sig_info = SigInfo {
+                    signal: Signal::SEGV,
+                    code: SigInfoCode::KERNEL,
+                    fields: SigFields::SigFault(SigFault {
+                        addr: self.cpu_state.lock().faulting_instruction(),
+                    }),
+                };
+                assert!(self.queue_signal(sig_info));
+            }
+            Exit::Vc(vc) => match vc {
+                VMEXIT_CPUID => {
+                    let mut guard = self.cpu_state.lock();
+                    guard.emulate_cpuid();
+                }
+                code => todo!("unimplemented VC error code: {code:#x}"),
+            },
+            Exit::PageFault(page_fault) => {
+                self.handle_page_fault(page_fault);
             }
         }
     }
@@ -493,6 +502,7 @@ impl ThreadGuard<'_> {
             vfork_done,
             cpu_state,
             self.thread.nice.load(),
+            self.thread.should_debug.load(Ordering::SeqCst),
         );
 
         let mut guard = thread.lock();

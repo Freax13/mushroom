@@ -37,3 +37,24 @@ impl<const SIZE: usize, const MBZ: bool> fmt::Debug for Reserved<SIZE, MBZ> {
         f.debug_struct("Reserved").finish_non_exhaustive()
     }
 }
+
+impl<const SIZE: usize, const MBZ: bool> PartialEq for Reserved<SIZE, MBZ> {
+    fn eq(&self, other: &Self) -> bool {
+        // If we're enforcing that all bytes are `0`, then all instances are
+        // always equal.
+        if MBZ {
+            return true;
+        }
+
+        // Otherwise compare the bytes.
+        self.0 == other.0
+    }
+}
+
+impl<const SIZE: usize, const MBZ: bool> Eq for Reserved<SIZE, MBZ> {}
+
+impl<const SIZE: usize, const MBZ: bool> Default for Reserved<SIZE, MBZ> {
+    fn default() -> Self {
+        Self([0; SIZE])
+    }
+}

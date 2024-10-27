@@ -7,7 +7,9 @@ use x86_64::{structures::paging::PhysFrame, PhysAddr};
 
 use crate::{InputHash, OutputHash, VerificationError};
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {
+    #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
     mr_td: [u8; 48],
     tee_tcb_svn: TeeTcbSvn,
 }

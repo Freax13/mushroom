@@ -42,4 +42,5 @@ debug-assertions = true
 overflow-checks = true
 
 [patch.crates-io]
+bit_field = { git = "https://github.com/phil-opp/rust-bit-field.git", rev = "1680157" }
 x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "c5bc9fc" }

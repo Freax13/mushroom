@@ -1,7 +1,12 @@
-use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
+use core::{
+    cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin,
+    sync::atomic::Ordering,
+};
 
 use alloc::{
+    borrow::ToOwned,
     ffi::CString,
+    string::String,
     sync::{Arc, Weak},
     vec,
     vec::Vec,
@@ -15,6 +20,7 @@ use futures::{
     FutureExt, StreamExt,
 };
 use kernel_macros::syscall;
+use log::warn;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::VirtAddr;
 
@@ -246,6 +252,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 
 #[syscall(i386 = 3, amd64 = 0, interruptable, restartable)]
 async fn read(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -260,6 +267,16 @@ async fn read(
         fd.read_to_user(&virtual_memory, buf, count)
     })
     .await?;
+
+    if thread.should_debug.load(Ordering::Relaxed) {
+        let mut bytes = alloc::vec![0; len];
+        virtual_memory.read_bytes(buf.get(), &mut bytes)?;
+        if let Ok(str) = core::str::from_utf8(&bytes) {
+            for line in str.lines() {
+                // log::debug!("{line}");
+            }
+        }
+    }
 
     let len = u64::from_usize(len);
     Ok(len)
@@ -277,6 +294,16 @@ async fn write(
     let fd = fdtable.get(fd)?;
 
     let count = usize_from(count);
+
+    if thread.should_debug.load(Ordering::Relaxed) {
+        let mut bytes = alloc::vec![0; count];
+        virtual_memory.read_bytes(buf.get(), &mut bytes)?;
+        if let Ok(str) = core::str::from_utf8(&bytes) {
+            for line in str.lines().filter(|line| !line.contains('\0')) {
+                log::debug!("{line}");
+            }
+        }
+    }
 
     // Start writing to the file descriptor. This first write can be
     // interrupted and restarted. Any errors that occur are report to
@@ -683,27 +710,27 @@ fn rt_sigaction(
     thread: &mut ThreadGuard,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    signum: u64,
+    signum: Signal,
     act: Pointer<Sigaction>,
     oldact: Pointer<Sigaction>,
     sigsetsize: u64,
 ) -> SyscallResult {
-    let signum = u8::try_from(signum)?;
-    let signum = Signal::new(signum)?;
-
     // FIXME: SIGKILL and SIGSTOP are special
     // FIXME: sigsetsize
+
+    assert_eq!(sigsetsize, 8);
 
     let signal_handler_table = &thread.signal_handler_table;
 
     let mut old_sigaction = None;
     if !act.is_null() {
         let sigaction_in = virtual_memory.read_with_abi(act, abi)?;
+        // log::debug!("{sigaction_in:?}");
         old_sigaction = Some(signal_handler_table.set(signum, sigaction_in));
     }
 
     if !oldact.is_null() {
-        let sigaction = old_sigaction.unwrap_or_else(|| thread.signal_handler_table.get(signum));
+        let sigaction = old_sigaction.unwrap_or_else(|| signal_handler_table.get(signum));
         virtual_memory.write_with_abi(oldact, sigaction, abi)?;
     }
     Ok(0)
@@ -720,9 +747,13 @@ impl Syscall for SysRtSigprocmask {
         let set = <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[1], syscall_args.abi)?;
         let oldset =
             <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[2], syscall_args.abi)?;
+        let sigsetsize = <u64 as SyscallArg>::parse(syscall_args.args[3], syscall_args.abi)?;
+        assert_eq!(sigsetsize, 8);
 
         let mut thread = thread.lock();
         let virtual_memory = thread.virtual_memory();
+
+        assert_ne!(oldset, set);
 
         if !oldset.is_null() {
             virtual_memory.write_bytes(oldset.get(), bytes_of(&thread.sigmask))?;
@@ -808,8 +839,10 @@ fn pread64(
     let len = cmp::min(max_chunk_len, count);
     let chunk = &mut chunk[..len];
 
+    let chunk = &mut vec![0; count];
+
     let len = fd.pread(pos, chunk)?;
-    let chunk = &mut chunk[..len];
+    let chunk = &chunk[..len];
 
     virtual_memory.write_bytes(buf, chunk)?;
 
@@ -848,6 +881,7 @@ fn pwrite64(
 #[syscall(i386 = 145, amd64 = 19)]
 async fn readv(
     abi: Abi,
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -859,24 +893,40 @@ async fn readv(
     }
     let vlen = usize_from(vlen);
 
-    let mut iovec = Iovec { base: 0, len: 0 };
+    let mut iovecs = Vec::new();
+
     let mut vec = vec;
     for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
+        let (len, iovec) = virtual_memory.read_sized_with_abi(vec, abi)?;
         vec = vec.bytes_offset(len);
-        if iovec_value.len != 0 {
-            iovec = iovec_value;
+        iovecs.push(iovec);
+    }
+
+    let mut sum = 0;
+    for iovec in iovecs {
+        let addr = Pointer::parse(iovec.base, abi)?;
+        // FIXME: This is wrong because it doesn't guarantee that `iovec.len` bytes have been read.
+        let asdf = read(
+            thread.clone(),
+            virtual_memory.clone(),
+            fdtable.clone(),
+            fd,
+            addr,
+            iovec.len,
+        )
+        .await?;
+
+        sum += asdf;
+
+        if asdf != iovec.len {
             break;
         }
     }
-
-    let addr = Pointer::parse(iovec.base, abi)?;
-    read(virtual_memory, fdtable, fd, addr, iovec.len).await
+    Ok(sum)
 }
 
 #[syscall(i386 = 146, amd64 = 20)]
 async fn writev(
-    thread: Arc<Thread>,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -888,20 +938,29 @@ async fn writev(
         return SyscallResult::Ok(0);
     }
     let vlen = usize_from(vlen);
-
-    let mut iovec = Iovec { base: 0, len: 0 };
+    let mut all_bytes = Vec::new();
     let mut vec = vec;
     for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
+        let (len, iovec) = virtual_memory.read_sized_with_abi(vec, abi)?;
         vec = vec.bytes_offset(len);
-        if iovec_value.len != 0 {
-            iovec = iovec_value;
-            break;
+        if iovec.len != 0 {
+            let start_idx = all_bytes.len();
+            all_bytes.resize(start_idx + usize_from(iovec.len), 0);
+            virtual_memory.read_bytes(VirtAddr::new(iovec.base), &mut all_bytes[start_idx..])?;
         }
     }
 
-    let addr = Pointer::parse(iovec.base, abi)?;
-    write(thread, virtual_memory, fdtable, fd, addr, iovec.len).await
+    if fd.get() == 2 {
+        if all_bytes.len() < 1000 {
+            let str = String::from_utf8_lossy(&all_bytes);
+            log::debug!("{str}");
+        }
+    }
+
+    let fd = fdtable.get(fd)?;
+    fd.write_all(&all_bytes).await?;
+
+    Ok(u64::from_usize(all_bytes.len()))
 }
 
 #[syscall(i386 = 33, amd64 = 21)]
@@ -1579,6 +1638,29 @@ async fn execve(
     }
 
     let mut envs = Vec::new();
+
+    if args
+        .get(1)
+        .is_some_and(|b| **b == *c"tests/misc/tee.sh" || **b == *c"./tests/misc/tee.sh")
+    {
+        args.insert(1, c"-x".to_owned());
+
+        thread
+            .should_debug
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+    if args
+        .get(1)
+        .is_some_and(|b| **b == *c"/nix/store/rxr1cpgpaix3x2y8j5qa2qrzc0c058hd-openssl-3.0.14-doc")
+    {
+        thread
+            .should_debug
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    if thread.should_debug.load(Ordering::Relaxed) {
+        envs.push(c"VERBOSE=yes".to_owned());
+    }
     loop {
         let (len, envp2) = virtual_memory.read_sized_with_abi(envp, abi)?;
         envp = envp.bytes_offset(len);
@@ -1588,8 +1670,22 @@ async fn execve(
         }
         envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
     }
+    if thread.should_debug.load(Ordering::Relaxed) {
+        envs.push(c"VERBOSE=yes".to_owned());
+    }
 
-    log::info!("execve({pathname:?}, {args:?}, {envs:?})");
+    if thread.should_debug.load(Ordering::Relaxed) {
+        log::info!("tid={} execve({pathname:?}, {args:?}, [...])", thread.tid());
+        // log::info!(
+        // "tid={} execve({pathname:?}, {args:?}, {envs:?})",
+        // thread.tid()
+        // );
+    }
+    // log::info!("tid={} execve({pathname:?}, {args:?}, [...])", thread.tid());
+    // log::info!(
+    // "tid={} execve({pathname:?}, {args:?}, {envs:?})",
+    // thread.tid()
+    // );
 
     // Open the executable.
     let cwd = thread.process().cwd();

@@ -100,6 +100,11 @@ pub struct EcdsaP384Sha384Signature {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(into = "StructuredTcbVersion", from = "StructuredTcbVersion")
+)]
 #[repr(transparent)]
 pub struct TcbVersion([u8; 8]);
 
@@ -196,5 +201,33 @@ unsafe impl CheckedBitPattern for TcbVersion {
     fn is_valid_bit_pattern(bits: &Self::Bits) -> bool {
         // Make sure that the reserved bytes are zero.
         bits[2..6] == [0; 4]
+    }
+}
+
+#[cfg(feature = "serde")]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct StructuredTcbVersion {
+    bootloader: u8,
+    tee: u8,
+    snp: u8,
+    microcode: u8,
+}
+
+#[cfg(feature = "serde")]
+impl From<TcbVersion> for StructuredTcbVersion {
+    fn from(value: TcbVersion) -> Self {
+        Self {
+            bootloader: value.bootloader(),
+            tee: value.tee(),
+            snp: value.snp(),
+            microcode: value.microcode(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<StructuredTcbVersion> for TcbVersion {
+    fn from(value: StructuredTcbVersion) -> Self {
+        Self::new(value.bootloader, value.tee, value.snp, value.microcode)
     }
 }

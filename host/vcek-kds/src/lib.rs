@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Display, Write},
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
 };
 
 use p384::ecdsa::VerifyingKey;
@@ -67,8 +67,9 @@ impl Ask {
     }
 }
 
+#[derive(Clone)]
 pub struct Vcek {
-    raw: Vec<u8>,
+    raw: Arc<[u8]>,
     verifying_key: VerifyingKey,
 }
 
@@ -118,7 +119,7 @@ impl Vcek {
         let verifying_key = VerifyingKey::try_from(public_key).unwrap();
 
         Ok(Vcek {
-            raw: vcek_cert,
+            raw: vcek_cert.into(),
             verifying_key,
         })
     }

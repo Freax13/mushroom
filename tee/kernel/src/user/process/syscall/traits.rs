@@ -17,7 +17,9 @@ use log::{trace, warn};
 use crate::{
     error::{err, Result},
     per_cpu::PerCpu,
+    time,
     user::process::thread::{Thread, ThreadGuard},
+    SAW_LOG,
 };
 
 use super::{args::SyscallArg, SYSCALL_HANDLERS};
@@ -171,17 +173,28 @@ impl SyscallHandlers {
         };
 
         let handler = handlers.get(syscall_no).copied().flatten().ok_or_else(|| {
-            warn!("unsupported syscall: no={syscall_no}, abi={:?}", args.abi);
+            let enable_log = thread
+                .should_debug
+                .load(core::sync::atomic::Ordering::Relaxed)
+                || SAW_LOG.load(core::sync::atomic::Ordering::Relaxed);
+            if enable_log {
+                warn!(
+                    "unsupported syscall: no={syscall_no}, abi={:?} tid={}",
+                    args.abi,
+                    thread.tid()
+                );
+            }
             err!(NoSys)
         })?;
 
         // Whether the syscall should occur in the debug logs.
-        let enable_log = !matches!(syscall_no, 0 | 1 | 202 | 228) && thread.tid() != 1;
-
-        let mut slot = SyscallHandlerSlot::new();
-        let slot = pin!(slot);
-        let placed = (handler.create_future)(slot, thread.clone(), args);
-        let res = placed.await;
+        let enable_log = thread
+            .should_debug
+            .load(core::sync::atomic::Ordering::Relaxed)
+            || SAW_LOG.load(core::sync::atomic::Ordering::Relaxed);
+        // let enable_log = enable_log || syscall_no == SysExecve::NO_AMD64.unwrap();
+        // let enable_log = SAW_LOG.load(core::sync::atomic::Ordering::Relaxed);
+        // let enable_log = false;
 
         if enable_log {
             let guard = thread.lock();
@@ -191,8 +204,35 @@ impl SyscallHandlers {
                 thread: &guard,
             };
 
+            let time = time::refresh_backend_offset() / 1_000_000_000;
+
             trace!(
-                "core={} tid={} abi={:?} @ {formatted_syscall} = ({res:?})",
+                "time={time} core={} tid={} abi={:?} @ {formatted_syscall} = ...",
+                PerCpu::get().idx,
+                guard.tid(),
+                args.abi,
+            );
+        }
+
+        let mut slot = SyscallHandlerSlot::new();
+        let slot = pin!(slot);
+        let placed = (handler.create_future)(slot, thread.clone(), args);
+        let res = placed.await;
+
+        // let enable_log = enable_log || res.is_err_and(|err| matches!(err.kind(), ErrorKind::Inval));
+
+        if enable_log {
+            let guard = thread.lock();
+            let formatted_syscall = FormattedSyscall {
+                handler,
+                args,
+                thread: &guard,
+            };
+
+            let time = time::refresh_backend_offset() / 1_000_000_000;
+
+            trace!(
+                "time={time} core={} tid={} abi={:?} @ {formatted_syscall} = ({res:?})",
                 PerCpu::get().idx,
                 guard.tid(),
                 args.abi,

@@ -844,7 +844,7 @@ impl VcpuHandle {
         Ok(ptr)
     }
 
-    /// Returns `true` if the cpu ran interrupted or returns `false` if the
+    /// Returns `true` if the cpu ran uninterrupted or returns `false` if the
     /// thread was interrupted by a signal.
     pub fn run(&self) -> Result<bool> {
         debug!("running vcpu");

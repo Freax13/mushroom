@@ -1,6 +1,10 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    sync::Arc,
+    os::unix::thread::JoinHandleExt,
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -13,6 +17,7 @@ use constants::{
     FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use loader::Input;
+use nix::sys::pthread::pthread_kill;
 use snp_types::{guest_policy::GuestPolicy, PageType};
 use tracing::{debug, info};
 use vcek_kds::Vcek;
@@ -23,7 +28,7 @@ use x86_64::{
 };
 
 use crate::{
-    find_slot, is_efault,
+    find_slot, install_signal_handler, is_efault,
     kvm::{
         KvmCap, KvmCpuidEntry2, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
         KvmMemoryAttributes, Page, SevHandle, VcpuHandle, VmHandle, KVM_HC_MAP_GPA_RANGE,
@@ -31,7 +36,7 @@ use crate::{
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
     slot::Slot,
-    MushroomResult,
+    MushroomResult, SIG_KICK,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -70,6 +75,7 @@ struct VmContext {
     memory_slots: HashMap<u16, Slot>,
     start: Instant,
     vcek: Vcek,
+    done: Arc<AtomicBool>,
 }
 
 impl VmContext {
@@ -206,10 +212,12 @@ impl VmContext {
         let start = Instant::now();
 
         // Create a bunch of APs.
+        let done = Arc::new(AtomicBool::new(false));
         let aps = (0..MAX_APS_COUNT)
             .map(|i| {
                 let id = FIRST_AP + i;
-                let ap_thread = Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone());
+                let ap_thread =
+                    Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone(), done.clone());
                 Ok((id, ap_thread))
             })
             .collect::<Result<_>>()?;
@@ -220,6 +228,8 @@ impl VmContext {
             start_profile_collection(profiler_folder, &memory_slots)?;
         }
 
+        install_signal_handler();
+
         Ok(Self {
             vm,
             bsp,
@@ -227,6 +237,7 @@ impl VmContext {
             memory_slots,
             start,
             vcek,
+            done,
         })
     }
 
@@ -353,6 +364,17 @@ impl VmContext {
 
                         let mut attestation_report = attestation_report[..len].to_vec();
                         attestation_report.extend_from_slice(self.vcek.raw());
+
+                        // Shutdown all APs.
+                        self.done.store(true, atomic::Ordering::Relaxed);
+
+                        // Kick all threads out of KVM_RUN, so that they can
+                        // see that the done flag was set.
+                        for handle in self.ap_threads.values() {
+                            handle.thread().unpark();
+                            let _ = pthread_kill(handle.as_pthread_t(), SIG_KICK);
+                        }
+
                         return Ok(MushroomResult {
                             output,
                             attestation_report: Some(attestation_report),
@@ -380,58 +402,63 @@ impl VmContext {
         id: u8,
         vm: Arc<VmHandle>,
         cpuid_entries: Arc<[KvmCpuidEntry2]>,
+        done: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         let supervisor_thread = std::thread::current();
 
-        std::thread::spawn(move || {
-            let ap = vm.create_vcpu(i32::from(id)).unwrap();
-            ap.set_cpuid(&cpuid_entries).unwrap();
+        std::thread::Builder::new()
+            .name(format!("ap-{:08x}-{id}", Arc::as_ptr(&vm) as u32))
+            .spawn(move || {
+                let ap = vm.create_vcpu(i32::from(id)).unwrap();
+                ap.set_cpuid(&cpuid_entries).unwrap();
 
-            // Allow the kernel to query it's processor id through TSC_AUX.
-            // Note that this doesn't do anything on EPYC Milan.
-            const TSC_AUX: u32 = 0xc0000103;
-            ap.set_msr(TSC_AUX, u64::from(id - FIRST_AP)).unwrap();
+                // Allow the kernel to query it's processor id through TSC_AUX.
+                // Note that this doesn't do anything on EPYC Milan.
+                const TSC_AUX: u32 = 0xc0000103;
+                ap.set_msr(TSC_AUX, u64::from(id - FIRST_AP)).unwrap();
 
-            // Work around a bug where KVM fails to enable LBR virtualization
-            // for SEV-ES vCPUs creating using AP creation.
-            const DEBUG_CTL: u32 = 0x000001d9;
-            ap.set_msr(DEBUG_CTL, 1).unwrap();
+                // Work around a bug where KVM fails to enable LBR virtualization
+                // for SEV-ES vCPUs creating using AP creation.
+                const DEBUG_CTL: u32 = 0x000001d9;
+                ap.set_msr(DEBUG_CTL, 1).unwrap();
 
-            let kvm_run = ap.get_kvm_run_block().unwrap();
+                let kvm_run = ap.get_kvm_run_block().unwrap();
 
-            std::thread::park();
+                std::thread::park();
 
-            loop {
-                map_field!(kvm_run.cr8).write(0);
+                while !done.load(atomic::Ordering::Relaxed) {
+                    map_field!(kvm_run.cr8).write(0);
 
-                // Run the AP.
-                let res = ap.run();
-                match res {
-                    Ok(_) => {}
-                    Err(err) if is_efault(&err) => {
-                        // The VM has been shut down.
-                        break;
-                    }
-                    Err(err) => {
-                        panic!("{err}");
-                    }
-                }
-
-                // Check the exit.
-                let kvm_run = kvm_run.read();
-                match kvm_run.exit() {
-                    KvmExit::Hlt => {
-                        let resume = kvm_run.cr8.get_bit(0);
-
-                        supervisor_thread.unpark();
-
-                        if !resume {
-                            std::thread::park();
+                    // Run the AP.
+                    let res = ap.run();
+                    match res {
+                        Ok(_) => {}
+                        Err(err) if is_efault(&err) => {
+                            // The VM has been shut down.
+                            break;
+                        }
+                        Err(err) => {
+                            panic!("{err}");
                         }
                     }
-                    exit => panic!("unexpected exit {exit:?}"),
+
+                    // Check the exit.
+                    let kvm_run = kvm_run.read();
+                    match kvm_run.exit() {
+                        KvmExit::Hlt => {
+                            let resume = kvm_run.cr8.get_bit(0);
+
+                            supervisor_thread.unpark();
+
+                            if !resume {
+                                std::thread::park();
+                            }
+                        }
+                        KvmExit::Interrupted => {}
+                        exit => panic!("unexpected exit {exit:?}"),
+                    }
                 }
-            }
-        })
+            })
+            .unwrap()
     }
 }

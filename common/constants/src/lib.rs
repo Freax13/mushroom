@@ -160,6 +160,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_bad_range() {
+        #[allow(clippy::reversed_empty_ranges)]
         check_ranges(&[PageRange::<Page>::new(0x1000..=0xfff)])
     }
 

@@ -142,3 +142,24 @@ enum TaskState {
     /// The task has finished.
     Done,
 }
+
+pub async fn r#yield() {
+    struct Yield {
+        first: bool,
+    }
+
+    impl core::future::Future for Yield {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> core::task::Poll<Self::Output> {
+            if core::mem::take(&mut self.first) {
+                cx.waker().wake_by_ref();
+                core::task::Poll::Pending
+            } else {
+                core::task::Poll::Ready(())
+            }
+        }
+    }
+
+    Yield { first: true }.await
+}

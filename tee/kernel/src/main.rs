@@ -33,6 +33,8 @@ compiler_error!("Hardened kernels can't be profiled.");
 
 extern crate alloc;
 
+use core::sync::atomic::AtomicBool;
+
 use exception::switch_stack;
 use supervisor::SCHEDULER;
 
@@ -81,6 +83,8 @@ unsafe fn main() -> ! {
 
     switch_stack(init)
 }
+
+static SAW_LOG: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn init() -> ! {
     unsafe {

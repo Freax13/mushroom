@@ -15,6 +15,9 @@ supervisor-services = { path = "../common/supervisor-services", default-features
 tdx-types = { path = "../common/tdx-types", features = ["quote"] }
 vcek-kds = { path = "vcek-kds" }
 
+[profile.dev]
+opt-level = 3
+
 [patch.crates-io]
 x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "c5bc9fc" }
 

@@ -32,7 +32,7 @@ pub fn start_log_collection(
         loop {
             line.clear();
             reader.read_line(&mut line);
-            eprintln!("{line}");
+            println!("{line}");
         }
     });
 

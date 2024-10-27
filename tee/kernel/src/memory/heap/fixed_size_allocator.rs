@@ -1,6 +1,7 @@
 use core::{
     alloc::{AllocError, Allocator, Layout},
     mem::size_of,
+    ops::Deref,
     ptr::NonNull,
 };
 
@@ -11,49 +12,54 @@ use x86_64::{
     structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB},
 };
 
-use crate::{spin::mutex::Mutex, supervisor};
+use crate::{
+    per_cpu::PerCpu,
+    spin::{mutex::Mutex, rwlock::RwLock},
+    supervisor,
+};
 
 use super::fallback_allocator::LimitedAllocator;
+
+const SHARDS: usize = 8;
 
 pub struct FixedSizeAllocator<A, const N: usize>
 where
     A: Allocator,
 {
-    state: Mutex<FixedSizeAllocatorState<A, N>>,
-}
-
-/// The mutable state of a `FixedSizeAllocator`.
-struct FixedSizeAllocatorState<A, const N: usize>
-where
-    A: Allocator,
-{
-    /// A sorted list of chunks.
-    chunks: Vec<NonNull<ChunkHeader<N>>, A>,
-    /// This field contains a hint for a chunk that may have more allocation
-    /// slots available.
-    last_idx: usize,
-    /// This field contains a hint for a chunk that may have more allocation
-    /// slots available. The hint is not none, the chunk has to be valid.
-    good_chunk: Option<NonNull<ChunkHeader<N>>>,
+    shards: [Shard<A, N>; SHARDS],
 }
 
 impl<A, const N: usize> FixedSizeAllocator<A, N>
 where
-    A: Allocator,
+    A: Allocator + Copy,
 {
     pub const fn new(allocator: A) -> Self {
         Self {
-            state: Mutex::new(FixedSizeAllocatorState {
-                chunks: Vec::new_in(allocator),
-                last_idx: 0,
-                good_chunk: None,
-            }),
+            shards: [
+                Shard::new(allocator),
+                Shard::new(allocator),
+                Shard::new(allocator),
+                Shard::new(allocator),
+                Shard::new(allocator),
+                Shard::new(allocator),
+                Shard::new(allocator),
+                Shard::new(allocator),
+            ],
         }
     }
 }
 
-unsafe impl<A: Send, const N: usize> Send for FixedSizeAllocator<A, N> where A: Allocator {}
-unsafe impl<A: Sync, const N: usize> Sync for FixedSizeAllocator<A, N> where A: Allocator {}
+impl<A, const N: usize> Deref for FixedSizeAllocator<A, N>
+where
+    A: Allocator,
+{
+    type Target = Shard<A, N>;
+
+    fn deref(&self) -> &Self::Target {
+        let shard_idx = PerCpu::get().idx % SHARDS;
+        &self.shards[shard_idx]
+    }
+}
 
 unsafe impl<A, const N: usize> LimitedAllocator for FixedSizeAllocator<A, N>
 where
@@ -69,7 +75,96 @@ where
     A: Allocator,
 {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let mut guard = self.state.lock();
+        (**self).allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { (**self).deallocate(ptr, layout) }
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        unsafe { (**self).grow(ptr, old_layout, new_layout) }
+    }
+
+    unsafe fn grow_zeroed(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        unsafe { (**self).grow_zeroed(ptr, old_layout, new_layout) }
+    }
+
+    unsafe fn shrink(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, AllocError> {
+        unsafe { (**self).shrink(ptr, old_layout, new_layout) }
+    }
+}
+
+pub struct Shard<A, const N: usize>
+where
+    A: Allocator,
+{
+    state: RwLock<ShardState<A, N>>,
+}
+
+/// The mutable state of a `Shard`.
+struct ShardState<A, const N: usize>
+where
+    A: Allocator,
+{
+    /// A sorted list of chunks.
+    chunks: Vec<NonNull<ChunkHeader<N>>, A>,
+    /// This field contains a hint for a chunk that may have more allocation
+    /// slots available.
+    last_idx: usize,
+    /// This field contains a hint for a chunk that may have more allocation
+    /// slots available. The hint is not none, the chunk has to be valid.
+    good_chunk: Option<NonNull<ChunkHeader<N>>>,
+}
+
+impl<A, const N: usize> Shard<A, N>
+where
+    A: Allocator,
+{
+    pub const fn new(allocator: A) -> Self {
+        Self {
+            state: RwLock::new(ShardState {
+                chunks: Vec::new_in(allocator),
+                last_idx: 0,
+                good_chunk: None,
+            }),
+        }
+    }
+}
+
+unsafe impl<A: Send, const N: usize> Send for Shard<A, N> where A: Allocator {}
+unsafe impl<A: Sync, const N: usize> Sync for Shard<A, N> where A: Allocator {}
+
+unsafe impl<A, const N: usize> LimitedAllocator for Shard<A, N>
+where
+    A: Allocator,
+{
+    fn can_allocate(&self, layout: Layout) -> bool {
+        layout.size() <= N && layout.align() <= N
+    }
+}
+
+unsafe impl<A, const N: usize> Allocator for Shard<A, N>
+where
+    A: Allocator,
+{
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let guard = self.state.read();
 
         // Try to allocate from a chunk we suspect may be able to serve the
         // allocation.
@@ -78,7 +173,7 @@ where
             if let Ok(ptr) = chunk.allocate(layout) {
                 return Ok(ptr);
             } else {
-                guard.good_chunk = None;
+                // guard.good_chunk = None;
             }
         }
 
@@ -91,16 +186,19 @@ where
             .enumerate()
             .cycle()
             .skip(guard.last_idx)
+            .skip(PerCpu::get().idx)
             .take(guard.chunks.len());
         // Try to allocate from existing chunks.
         for (i, chunk) in chunks {
             let Ok(ptr) = chunk.allocate(layout) else {
                 continue;
             };
-            guard.good_chunk = Some(NonNull::from(chunk));
-            guard.last_idx = i;
+            // guard.good_chunk = Some(NonNull::from(chunk));
+            // guard.last_idx = i;
             return Ok(ptr);
         }
+
+        drop(guard);
 
         // We'll have to create a new chunk.
 
@@ -108,12 +206,14 @@ where
         let chunk = ChunkHeader::<N>::new()?;
 
         // Store the chunk in the correct position.
+        let mut guard = self.state.write();
         let idx = guard.chunks.binary_search(&chunk).unwrap_err();
         guard.chunks.insert(idx, chunk);
+        drop(guard);
 
         // Update hints.
-        guard.last_idx = idx;
-        guard.good_chunk = Some(chunk);
+        // guard.last_idx = idx;
+        // guard.good_chunk = Some(chunk);
 
         // Allocate from the chunk.
         let chunk_ref = unsafe { chunk.as_ref() };
@@ -122,7 +222,7 @@ where
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        // Do some pointer match to get a pointer to the chunk that was used to
+        // Do some pointer math to get a pointer to the chunk that was used to
         // allocate `ptr`.
         let chunk_header = align_down(ptr.as_ptr() as u64, Size2MiB::SIZE);
         let chunk_header = unsafe { &*(chunk_header as *const ChunkHeader<N>) };
@@ -135,8 +235,11 @@ where
             let ptr = NonNull::from(chunk_header);
 
             // Take an allocator-wide lock to prevent racing try_free.
-            let mut guard = self.state.lock();
-            let idx = guard.chunks.binary_search(&ptr).unwrap();
+            let mut guard = self.state.write();
+            let Ok(idx) = guard.chunks.binary_search(&ptr) else {
+                // The chunk was already deallocated by another thread.
+                return;
+            };
 
             let res = unsafe { ChunkHeader::try_free(ptr.as_ptr()) };
             if res.is_ok() {
@@ -206,7 +309,7 @@ where
     }
 }
 
-impl<A, const N: usize> Drop for FixedSizeAllocator<A, N>
+impl<A, const N: usize> Drop for Shard<A, N>
 where
     A: Allocator,
 {
