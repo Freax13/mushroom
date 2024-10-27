@@ -163,6 +163,7 @@ where
                     p_offset,
                     permissions,
                     false,
+                    true,
                 )?;
 
                 if (p_offset..p_offset + p_filesz).contains(&e_phoff) {

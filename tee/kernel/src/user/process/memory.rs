@@ -432,6 +432,7 @@ impl VirtualMemoryWriteGuard<'_> {
             offset,
             permissions,
             shared,
+            false,
         )
     }
 
@@ -445,6 +446,7 @@ impl VirtualMemoryWriteGuard<'_> {
         offset: u64,
         permissions: MemoryPermissions,
         shared: bool,
+        zero_pad: bool,
     ) -> Result<VirtAddr> {
         ensure!(offset % 0x1000 == u64::from(bias.page_offset()), Inval);
         let page_offset = offset / 0x1000;
@@ -454,13 +456,17 @@ impl VirtualMemoryWriteGuard<'_> {
             zero_offset: u64,
             stat: Stat,
             shared: bool,
+            zero_pad: bool,
         }
 
         impl Backing for FileBacking {
             fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
                 let start_offset = usize_from(self.zero_offset.saturating_sub(offset * 0x1000));
                 match start_offset {
-                    0 => Ok(KernelPage::zeroed()),
+                    0 => {
+                        ensure!(self.zero_pad, Acces);
+                        Ok(KernelPage::zeroed())
+                    }
                     1..=0xfff => {
                         let mut page = self.file.get_page(usize_from(offset), self.shared)?;
                         if !self.shared {
@@ -496,6 +502,7 @@ impl VirtualMemoryWriteGuard<'_> {
                 zero_offset: offset + file_sz,
                 stat,
                 shared,
+                zero_pad,
             },
             page_offset,
             shared,
