@@ -34,7 +34,7 @@ use crate::{
 
 use super::{
     FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Rusage,
-    Stat, Time, Timespec, Timeval, WStatus,
+    Stat, SysInfo, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1549,6 +1549,92 @@ impl From<RLimit> for RLimit64 {
 impl Pointee for super::RLimit64 {}
 
 impl PrimitivePointee for super::RLimit64 {}
+
+impl Pointee for SysInfo {}
+
+impl AbiDependentPointee for SysInfo {
+    type I386 = SysInfo32;
+    type Amd64 = SysInfo64;
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct SysInfo32 {
+    uptime: i32,
+    loads: [u32; 3],
+    totalram: u32,
+    freeram: u32,
+    sharedram: u32,
+    bufferram: u32,
+    totalswap: u32,
+    freeswap: u32,
+    procs: u16,
+    _padding: u16,
+    totalhigh: u32,
+    freehigh: u32,
+    mem_unit: u32,
+}
+
+impl From<SysInfo> for SysInfo32 {
+    fn from(value: SysInfo) -> Self {
+        Self {
+            uptime: value.uptime as _,
+            loads: value.loads.map(|load| load as _),
+            totalram: value.totalram as _,
+            freeram: value.freeram as _,
+            sharedram: value.sharedram as _,
+            bufferram: value.bufferram as _,
+            totalswap: value.totalswap as _,
+            freeswap: value.freeswap as _,
+            procs: value.procs as _,
+            _padding: 0,
+            totalhigh: value.totalhigh as _,
+            freehigh: value.freehigh as _,
+            mem_unit: value.mem_unit as _,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct SysInfo64 {
+    uptime: i64,
+    loads: [u64; 3],
+    totalram: u64,
+    freeram: u64,
+    sharedram: u64,
+    bufferram: u64,
+    totalswap: u64,
+    freeswap: u64,
+    procs: u16,
+    _padding1: [u16; 3],
+    totalhigh: u64,
+    freehigh: u64,
+    mem_unit: u32,
+    _padding2: u32,
+}
+
+impl From<SysInfo> for SysInfo64 {
+    fn from(value: SysInfo) -> Self {
+        Self {
+            uptime: value.uptime,
+            loads: value.loads,
+            totalram: value.totalram,
+            freeram: value.freeram,
+            sharedram: value.sharedram,
+            bufferram: value.bufferram,
+            totalswap: value.totalswap,
+            freeswap: value.freeswap,
+            procs: value.procs,
+            _padding1: [0; 3],
+            totalhigh: value.totalhigh,
+            freehigh: value.freehigh,
+            mem_unit: value.mem_unit,
+            _padding2: 0,
+        }
+    }
+}
+
 impl Pointee for PSelectSigsetArg {}
 
 impl AbiDependentPointee for PSelectSigsetArg {

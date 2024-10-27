@@ -172,6 +172,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
     handlers.register(SysGetrusage);
+    handlers.register(SysSysinfo);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
     handlers.register(SysSetuid);
@@ -2249,6 +2250,34 @@ async fn getrusage(
         GetRusageWho::Thread => thread.lock().get_rusage(),
     };
     virtual_memory.write_with_abi(usage, value, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 116, amd64 = 99)]
+fn sysinfo(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    sys_info: Pointer<SysInfo>,
+) -> SyscallResult {
+    // TODO: Properly fill in the values.
+    virtual_memory.write_with_abi(
+        sys_info,
+        SysInfo {
+            uptime: 123,
+            loads: [123, 123, 123],
+            totalram: 0x1000000000,
+            freeram: 0xc00000000,
+            sharedram: 0,
+            bufferram: 0,
+            totalswap: 0,
+            freeswap: 0,
+            procs: Process::all().count() as u16,
+            totalhigh: 0,
+            freehigh: 0,
+            mem_unit: 1,
+        },
+        abi,
+    )?;
     Ok(0)
 }
 
