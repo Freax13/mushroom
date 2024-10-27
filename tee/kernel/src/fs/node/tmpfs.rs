@@ -14,7 +14,7 @@ use crate::{
         FileSystem, StatFs,
     },
     memory::page::{Buffer, KernelPage},
-    spin::mutex::Mutex,
+    spin::{mutex::Mutex, rwlock::RwLock},
     time::now,
     user::process::{
         syscall::args::OpenFlags,
@@ -756,7 +756,7 @@ pub struct TmpFsFile {
     fs: Arc<TmpFs>,
     ino: u64,
     this: Weak<Self>,
-    internal: Mutex<TmpFsFileInternal>,
+    internal: RwLock<TmpFsFileInternal>,
     file_lock_record: LazyFileLockRecord,
 }
 
@@ -777,7 +777,7 @@ impl TmpFsFile {
             fs,
             ino: new_ino(),
             this: this.clone(),
-            internal: Mutex::new(TmpFsFileInternal {
+            internal: RwLock::new(TmpFsFileInternal {
                 buffer: Buffer::new(),
                 ownership: Ownership::new(mode, uid, gid),
                 atime: now,
@@ -790,17 +790,17 @@ impl TmpFsFile {
     }
 
     fn increase_link_count(&self) {
-        self.internal.lock().links += 1;
+        self.internal.write().links += 1;
     }
 
     fn decrease_link_count(&self) {
-        self.internal.lock().links -= 1;
+        self.internal.write().links -= 1;
     }
 }
 
 impl INode for TmpFsFile {
     fn stat(&self) -> Result<Stat> {
-        let guard = self.internal.lock();
+        let guard = self.internal.read();
         // FIXME: Fill in more values.
         Ok(Stat {
             dev: self.fs.dev,
@@ -828,15 +828,15 @@ impl INode for TmpFsFile {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+        self.internal.write().ownership.chmod(mode, ctx)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chown(uid, gid, ctx)
+        self.internal.write().ownership.chown(uid, gid, ctx)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         guard.ctime = ctime;
         if let Some(atime) = atime {
             guard.atime = atime;
@@ -853,12 +853,12 @@ impl INode for TmpFsFile {
 
 impl File for TmpFsFile {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         guard.buffer.get_page(page_idx, shared)
     }
 
     fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         if !no_atime {
             guard.atime = now();
         }
@@ -873,7 +873,7 @@ impl File for TmpFsFile {
         len: usize,
         no_atime: bool,
     ) -> Result<usize> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         if !no_atime {
             guard.atime = now();
         }
@@ -881,7 +881,7 @@ impl File for TmpFsFile {
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         let now = now();
         guard.ctime = now;
         guard.mtime = now;
@@ -895,7 +895,7 @@ impl File for TmpFsFile {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         let now = now();
         guard.ctime = now;
         guard.mtime = now;
@@ -903,7 +903,7 @@ impl File for TmpFsFile {
     }
 
     fn append(&self, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         let now = now();
         guard.ctime = now;
         guard.mtime = now;
@@ -917,7 +917,7 @@ impl File for TmpFsFile {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         let now = now();
         guard.ctime = now;
         guard.mtime = now;
@@ -926,7 +926,7 @@ impl File for TmpFsFile {
     }
 
     fn truncate(&self, len: usize) -> Result<()> {
-        let mut guard = self.internal.lock();
+        let mut guard = self.internal.write();
         let now = now();
         guard.ctime = now;
         guard.mtime = now;
