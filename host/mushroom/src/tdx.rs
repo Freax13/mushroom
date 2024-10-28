@@ -5,7 +5,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
-        Arc, Mutex, Once,
+        Arc, Mutex,
     },
     time::Instant,
 };
@@ -18,10 +18,7 @@ use constants::{
     FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use loader::Input;
-use nix::sys::{
-    pthread::pthread_kill,
-    signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
-};
+use nix::sys::pthread::pthread_kill;
 use tdx_types::ghci::{MAP_GPA, VMCALL_SUCCESS};
 use tracing::{debug, info};
 use x86_64::{
@@ -30,7 +27,7 @@ use x86_64::{
 };
 
 use crate::{
-    find_slot,
+    find_slot, install_signal_handler,
     kvm::{
         KvmCap, KvmExit, KvmExitUnknown, KvmHandle, KvmMemoryAttributes, Page, SupportedGpaw,
         VcpuHandle, VmHandle,
@@ -38,11 +35,8 @@ use crate::{
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
     slot::Slot,
-    MushroomResult, TSC_MHZ,
+    MushroomResult, SIG_KICK, TSC_MHZ,
 };
-
-/// The signal used to kick threads out of KVM_RUN.
-const SIG_KICK: Signal = Signal::SIGUSR1;
 
 #[allow(clippy::too_many_arguments)]
 pub fn main(
@@ -431,24 +425,4 @@ impl VmContext {
 enum OutputEvent {
     Write(Vec<u8>),
     Finish(Vec<u8>),
-}
-
-fn install_signal_handler() {
-    static INSTALL_SIGNAL_HANDLER: Once = Once::new();
-    INSTALL_SIGNAL_HANDLER.call_once(|| {
-        extern "C" fn handler(_: i32) {
-            // Don't do anything.
-        }
-        unsafe {
-            sigaction(
-                SIG_KICK,
-                &SigAction::new(
-                    SigHandler::Handler(handler),
-                    SaFlags::empty(),
-                    SigSet::empty(),
-                ),
-            )
-            .unwrap();
-        };
-    });
 }

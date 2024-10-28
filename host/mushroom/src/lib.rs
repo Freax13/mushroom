@@ -1,8 +1,9 @@
-use std::{collections::HashMap, num::NonZeroU32};
+use std::{collections::HashMap, num::NonZeroU32, sync::Once};
 
 use anyhow::{Context, Result};
 use bit_field::BitField;
 use kvm::KvmCap;
+use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use slot::Slot;
 use x86_64::structures::paging::PhysFrame;
 
@@ -22,6 +23,9 @@ pub use kvm::KvmHandle;
 pub use loader::{HashType, Input};
 
 const TSC_MHZ: u64 = 100;
+
+/// The signal used to kick threads out of KVM_RUN.
+const SIG_KICK: Signal = Signal::SIGUSR1;
 
 #[derive(Clone, Copy)]
 pub enum Tee {
@@ -69,4 +73,24 @@ fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot
 fn is_efault(err: &anyhow::Error) -> bool {
     err.downcast_ref::<nix::Error>()
         .is_some_and(|&err| err == nix::Error::EFAULT)
+}
+
+fn install_signal_handler() {
+    static INSTALL_SIGNAL_HANDLER: Once = Once::new();
+    INSTALL_SIGNAL_HANDLER.call_once(|| {
+        extern "C" fn handler(_: i32) {
+            // Don't do anything.
+        }
+        unsafe {
+            sigaction(
+                SIG_KICK,
+                &SigAction::new(
+                    SigHandler::Handler(handler),
+                    SaFlags::empty(),
+                    SigSet::empty(),
+                ),
+            )
+            .unwrap();
+        };
+    });
 }

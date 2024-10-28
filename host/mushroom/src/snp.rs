@@ -1,6 +1,10 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    sync::Arc,
+    os::unix::thread::JoinHandleExt,
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -13,6 +17,7 @@ use constants::{
     FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use loader::Input;
+use nix::sys::pthread::pthread_kill;
 use snp_types::{guest_policy::GuestPolicy, PageType};
 use tracing::{debug, info};
 use vcek_kds::Vcek;
@@ -23,7 +28,7 @@ use x86_64::{
 };
 
 use crate::{
-    find_slot, is_efault,
+    find_slot, install_signal_handler, is_efault,
     kvm::{
         KvmCap, KvmCpuidEntry2, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
         KvmMemoryAttributes, Page, SevHandle, VcpuHandle, VmHandle, KVM_HC_MAP_GPA_RANGE,
@@ -31,7 +36,7 @@ use crate::{
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
     slot::Slot,
-    MushroomResult,
+    MushroomResult, SIG_KICK,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -70,6 +75,7 @@ struct VmContext {
     memory_slots: HashMap<u16, Slot>,
     start: Instant,
     vcek: Vcek,
+    done: Arc<AtomicBool>,
 }
 
 impl VmContext {
@@ -206,10 +212,12 @@ impl VmContext {
         let start = Instant::now();
 
         // Create a bunch of APs.
+        let done = Arc::new(AtomicBool::new(false));
         let aps = (0..MAX_APS_COUNT)
             .map(|i| {
                 let id = FIRST_AP + i;
-                let ap_thread = Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone());
+                let ap_thread =
+                    Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone(), done.clone());
                 Ok((id, ap_thread))
             })
             .collect::<Result<_>>()?;
@@ -220,6 +228,8 @@ impl VmContext {
             start_profile_collection(profiler_folder, &memory_slots)?;
         }
 
+        install_signal_handler();
+
         Ok(Self {
             vm,
             bsp,
@@ -227,6 +237,7 @@ impl VmContext {
             memory_slots,
             start,
             vcek,
+            done,
         })
     }
 
@@ -380,6 +391,7 @@ impl VmContext {
         id: u8,
         vm: Arc<VmHandle>,
         cpuid_entries: Arc<[KvmCpuidEntry2]>,
+        done: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         let supervisor_thread = std::thread::current();
 
@@ -401,7 +413,7 @@ impl VmContext {
 
             std::thread::park();
 
-            loop {
+            while !done.load(atomic::Ordering::Relaxed) {
                 map_field!(kvm_run.cr8).write(0);
 
                 // Run the AP.
@@ -429,9 +441,25 @@ impl VmContext {
                             std::thread::park();
                         }
                     }
+                    KvmExit::Interrupted => {}
                     exit => panic!("unexpected exit {exit:?}"),
                 }
             }
         })
+    }
+}
+
+impl Drop for VmContext {
+    fn drop(&mut self) {
+        // Set the done flag.
+        self.done.store(true, atomic::Ordering::Relaxed);
+
+        // Force all threads to exit out of KVM_RUN, so that they can observe
+        // `done` and exit.
+        for (_, handle) in self.ap_threads.drain() {
+            handle.thread().unpark();
+            let _ = pthread_kill(handle.as_pthread_t(), SIG_KICK);
+            handle.join().unwrap();
+        }
     }
 }

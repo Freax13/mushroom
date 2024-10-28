@@ -3,8 +3,12 @@
 
 use std::{
     collections::{hash_map::Entry, HashMap, VecDeque},
-    sync::Arc,
-    thread::Thread,
+    os::unix::thread::JoinHandleExt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::{JoinHandle, Thread},
     time::{Duration, Instant},
 };
 
@@ -15,6 +19,7 @@ use constants::{
     FIRST_AP, MAX_APS_COUNT,
 };
 use loader::Input;
+use nix::sys::pthread::pthread_kill;
 use snp_types::PageType;
 use supervisor_services::{
     allocation_buffer::{AllocationBuffer, SlotIndex},
@@ -29,11 +34,11 @@ use x86_64::registers::{
 };
 
 use crate::{
-    is_efault,
+    install_signal_handler, is_efault,
     kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VmHandle},
     logging::start_log_collection,
     slot::Slot,
-    MushroomResult, TSC_MHZ,
+    MushroomResult, SIG_KICK, TSC_MHZ,
 };
 
 /// Create the VM, load the kernel, init & input and run the APs.
@@ -143,15 +148,18 @@ pub fn main(
         "launched"
     );
 
+    install_signal_handler();
+
     // Create a bunch of APs.
     let cpuid_entries = Arc::<[KvmCpuidEntry2]>::from(cpuid_entries);
+    let done = Arc::new(AtomicBool::new(false));
     let ap_threads = (0..MAX_APS_COUNT)
         .map(|i| {
             let id = FIRST_AP + i;
-            run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone())
+            run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone(), done.clone())
         })
         .collect::<Vec<_>>();
-    ap_threads[0].unpark();
+    ap_threads[0].thread().unpark();
     start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
     start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
 
@@ -175,7 +183,11 @@ pub fn main(
     let mut handler = InsecureCommandHandler {
         allocation_buffer: &supervisor_services.allocation_buffer,
         dynamic_memory: DynamicMemory::new(vm),
-        pending_aps: ap_threads.iter().skip(1).cloned().collect(),
+        pending_aps: ap_threads
+            .iter()
+            .skip(1)
+            .map(|handle| handle.thread().clone())
+            .collect(),
         output: Vec::new(),
         finish_status: None,
     };
@@ -183,7 +195,7 @@ pub fn main(
         while command_buffer_reader.handle(&mut handler) {}
 
         for i in supervisor_services.notification_buffer.reset() {
-            ap_threads[i].unpark();
+            ap_threads[i].thread().unpark();
         }
 
         if let Some(finish_status) = handler.finish_status {
@@ -192,6 +204,17 @@ pub fn main(
 
         std::thread::park();
     };
+
+    // Set the done flag.
+    done.store(true, Ordering::SeqCst);
+    // Force all threads to exit out of KVM_RUN, so that they can observe
+    // `done` and exit.
+    for handle in ap_threads {
+        handle.thread().unpark();
+        pthread_kill(handle.as_pthread_t(), SIG_KICK)?;
+        handle.join().unwrap();
+    }
+
     ensure!(finish_status, "workload failed");
 
     Ok(MushroomResult {
@@ -200,7 +223,12 @@ pub fn main(
     })
 }
 
-fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2]>) -> Thread {
+fn run_kernel_vcpu(
+    id: u8,
+    vm: Arc<VmHandle>,
+    cpuid_entries: Arc<[KvmCpuidEntry2]>,
+    done: Arc<AtomicBool>,
+) -> JoinHandle<()> {
     let supervisor_thread = std::thread::current();
 
     std::thread::spawn(move || {
@@ -246,7 +274,7 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
 
         std::thread::park();
 
-        loop {
+        while !done.load(Ordering::Relaxed) {
             // Run the AP.
             let res = ap.run();
             match res {
@@ -286,6 +314,7 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
                         k
                     });
                 }
+                KvmExit::Interrupted => {}
                 exit => {
                     let regs = ap.get_regs().unwrap();
                     println!("{:x}", regs.rip);
@@ -295,8 +324,6 @@ fn run_kernel_vcpu(id: u8, vm: Arc<VmHandle>, cpuid_entries: Arc<[KvmCpuidEntry2
             }
         }
     })
-    .thread()
-    .clone()
 }
 
 const SLOTS: usize = 1 << 15;
