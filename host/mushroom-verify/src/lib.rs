@@ -1,3 +1,5 @@
+use std::fmt::{self, Display};
+
 use io::input::{Header, MAX_HASH_SIZE};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "snp")]
@@ -6,6 +8,7 @@ use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 use tdx_types::td_quote::TeeTcbSvn;
 
 pub use loader::{HashType, Input};
+use thiserror::Error;
 
 #[cfg(feature = "serde")]
 mod hex;
@@ -70,11 +73,31 @@ impl Configuration {
         input_hash: InputHash,
         output_hash: OutputHash,
         attestation_report: &[u8],
-    ) -> Result<(), VerificationError> {
+    ) -> Result<(), Error> {
         let hash = self.verify_and_extract(input_hash, attestation_report)?;
-        if hash != output_hash {
-            return Err(VerificationError(()));
+
+        let OutputHash {
+            hash: expected_hash,
+            len: expected_len,
+        } = output_hash;
+        let OutputHash {
+            hash: got_hash,
+            len: got_len,
+        } = hash;
+
+        if expected_len != got_len {
+            return Err(Error(ErrorImpl::OutputLength {
+                expected: expected_len,
+                got: got_len,
+            }));
         }
+        if expected_hash != got_hash {
+            return Err(Error(ErrorImpl::OutputHash {
+                expected: expected_hash,
+                got: got_hash,
+            }));
+        }
+
         Ok(())
     }
 
@@ -84,22 +107,38 @@ impl Configuration {
         &self,
         input_hash: InputHash,
         attestation_report: &[u8],
-    ) -> Result<OutputHash, VerificationError> {
-        match self.0 {
+    ) -> Result<OutputHash, Error> {
+        let res: Result<_, ErrorImpl> = match self.0 {
             #[cfg(feature = "snp")]
-            ConfigurationImpl::Snp(ref configuration) => {
-                configuration.verify_and_extract(input_hash, attestation_report)
-            }
+            ConfigurationImpl::Snp(ref configuration) => configuration
+                .verify_and_extract(input_hash, attestation_report)
+                .map_err(Into::into),
             #[cfg(feature = "tdx")]
-            ConfigurationImpl::Tdx(ref configuration) => {
-                configuration.verify_and_extract(input_hash, attestation_report)
-            }
-        }
+            ConfigurationImpl::Tdx(ref configuration) => configuration
+                .verify_and_extract(input_hash, attestation_report)
+                .map_err(Into::into),
+        };
+        res.map_err(Error)
     }
 }
 
-#[derive(Debug)]
-pub struct VerificationError(());
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(ErrorImpl);
+
+#[derive(Debug, Error)]
+enum ErrorImpl {
+    #[cfg(feature = "snp")]
+    #[error("failed to verify SEV-SNP attestation report")]
+    Snp(#[from] snp::Error),
+    #[cfg(feature = "tdx")]
+    #[error("failed to verify TD quote")]
+    Tdx(#[from] tdx::Error),
+    #[error("expected output length to be {expected}, got {got}")]
+    OutputLength { expected: u64, got: u64 },
+    #[error("expected output hash to be {}, got {}", hex(.expected), hex(.got))]
+    OutputHash { expected: [u8; 32], got: [u8; 32] },
+}
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -171,4 +210,19 @@ impl From<OutputHash> for HashedInput {
     fn from(value: OutputHash) -> Self {
         Self::sha256(value.len, value.hash)
     }
+}
+
+fn hex(data: &[u8]) -> impl Display + '_ {
+    struct Hex<'a>(&'a [u8]);
+
+    impl Display for Hex<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0
+                .iter()
+                .copied()
+                .try_for_each(|b| write!(f, "{b:02x}"))
+        }
+    }
+
+    Hex(data)
 }

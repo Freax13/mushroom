@@ -356,7 +356,7 @@ struct TcbArgs {
     snp_svn: u8,
     /// The smallest allowed value for the `microcode` field of the launch TCB.
     #[cfg(feature = "snp")]
-    #[arg(long, default_value_t = 211)]
+    #[arg(long, default_value_t = 213)]
     microcode_svn: u8,
     // TDX:
     /// TDX module minor SVN.
@@ -440,10 +440,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         }
     };
 
-    // FIXME: use proper error type and use `?` instead of unwrap.
-    configuration
-        .verify(input_hash, output_hash, &attestation_report)
-        .unwrap();
+    configuration.verify(input_hash, output_hash, &attestation_report)?;
 
     println!("Ok");
 

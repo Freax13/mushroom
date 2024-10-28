@@ -1,4 +1,5 @@
 use bytemuck::{CheckedBitPattern, NoUninit};
+use uuid::{uuid, Uuid};
 
 use crate::{report::TeeTcbSvn, Reserved};
 
@@ -38,13 +39,10 @@ pub enum TeeType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoUninit, CheckedBitPattern)]
 #[repr(transparent)]
-pub struct QeVendorId(pub [u8; 16]);
+pub struct QeVendorId(pub Uuid);
 
 impl QeVendorId {
-    pub const INTEL_SGX: Self = Self([
-        0x93, 0x9A, 0x72, 0x33, 0xF7, 0x9C, 0x4C, 0xA9, 0x94, 0x0A, 0x0D, 0xB3, 0x95, 0x7F, 0x06,
-        0x07,
-    ]);
+    pub const INTEL_SGX: Self = Self(uuid!("939a7233-f79c-4ca9-940a-0db3957f0607"));
 }
 
 #[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern)]

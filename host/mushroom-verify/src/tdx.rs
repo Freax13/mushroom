@@ -3,9 +3,10 @@ use std::cmp::Ordering;
 use loader::generate_base_load_commands;
 use sha2::{Digest, Sha384};
 use tdx_types::td_quote::{QeVendorId, Quote, TeeTcbSvn, TeeType, Version};
+use thiserror::Error;
 use x86_64::{structures::paging::PhysFrame, PhysAddr};
 
-use crate::{InputHash, OutputHash, VerificationError};
+use crate::{hex, InputHash, OutputHash};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {
@@ -70,22 +71,24 @@ impl Configuration {
         &self,
         input_hash: InputHash,
         attestation_report: &[u8],
-    ) -> Result<OutputHash, VerificationError> {
-        let quote = Quote::parse(attestation_report).map_err(|_| VerificationError(()))?;
-        quote
-            .verify_signatures()
-            .map_err(|_| VerificationError(()))?;
+    ) -> Result<OutputHash, Error> {
+        let quote = Quote::parse(attestation_report)?;
+        quote.verify_signatures()?;
 
-        macro_rules! verify_eq {
-            ($lhs:expr, $rhs:expr) => {
-                if $lhs != $rhs {
-                    return Err(VerificationError(()));
-                }
-            };
+        let Version::Four = quote.header.version;
+
+        if quote.header.tee_type != TeeType::Tdx {
+            return Err(Error::Tee {
+                expected: TeeType::Tdx,
+                got: quote.header.tee_type,
+            });
         }
-        verify_eq!(quote.header.version, Version::Four);
-        verify_eq!(quote.header.tee_type, TeeType::Tdx);
-        verify_eq!(quote.header.qe_vendor_id, QeVendorId::INTEL_SGX);
+        if quote.header.qe_vendor_id != QeVendorId::INTEL_SGX {
+            return Err(Error::QeVendorId {
+                expected: QeVendorId::INTEL_SGX,
+                got: quote.header.qe_vendor_id,
+            });
+        }
 
         if !quote
             .body
@@ -93,19 +96,73 @@ impl Configuration {
             .partial_cmp(&self.tee_tcb_svn)
             .is_some_and(Ordering::is_ge)
         {
-            return Err(VerificationError(()));
+            return Err(Error::TeeTcbSvn {
+                expected: self.tee_tcb_svn,
+                got: quote.body.tee_tcb_svn,
+            });
         }
-        verify_eq!(quote.body.mr_signer_seam, [0; 48]);
-        verify_eq!(quote.body.seam_attributes, [0; 8]);
-        verify_eq!(quote.body.td_attributes.0, [0; 8]);
-        verify_eq!(quote.body.xfam, [0xe7, 0x1a, 0, 0, 0, 0, 0, 0]);
-        verify_eq!(quote.body.mr_td, self.mr_td);
-        verify_eq!(quote.body.mr_config_id[..32], input_hash.0);
-        verify_eq!(quote.body.mr_config_id[32..], [0; 16]);
-        verify_eq!(quote.body.mr_owner, [0; 48]);
-        verify_eq!(quote.body.mr_owner_config, [0; 48]);
-        verify_eq!(quote.body.rtmrs, [[0; 48]; 4]);
-        verify_eq!(quote.body.report_data[40..], [0; 24]);
+
+        if quote.body.mr_signer_seam != [0; 48] {
+            return Err(Error::MrSignerSeam {
+                got: quote.body.mr_signer_seam,
+            });
+        }
+        if quote.body.seam_attributes != [0; 8] {
+            return Err(Error::SeamAttributes {
+                got: quote.body.seam_attributes,
+            });
+        }
+        if quote.body.td_attributes.0 != [0; 8] {
+            return Err(Error::TdAttributes {
+                got: quote.body.td_attributes.0,
+            });
+        }
+        if quote.body.xfam != [0xe7, 0x1a, 0, 0, 0, 0, 0, 0] {
+            return Err(Error::Xfam {
+                expected: [0xe7, 0x1a, 0, 0, 0, 0, 0, 0],
+                got: quote.body.xfam,
+            });
+        }
+        if quote.body.mr_td != self.mr_td {
+            return Err(Error::MrTd {
+                expected: self.mr_td,
+                got: quote.body.mr_td,
+            });
+        }
+        if quote.body.mr_config_id[..32] != input_hash.0 {
+            return Err(Error::InputHash {
+                expected: input_hash.0,
+                got: quote.body.mr_config_id[..32].try_into().unwrap(),
+            });
+        }
+        if quote.body.mr_config_id[32..] != [0; 16] {
+            return Err(Error::MrConfigIdPad {
+                got: quote.body.mr_config_id[32..].try_into().unwrap(),
+            });
+        }
+        if quote.body.mr_owner != [0; 48] {
+            return Err(Error::MrOwner {
+                got: quote.body.mr_owner,
+            });
+        }
+        if quote.body.mr_owner_config != [0; 48] {
+            return Err(Error::MrOwnerConfig {
+                got: quote.body.mr_owner_config,
+            });
+        }
+        for (i, rtmr) in quote.body.rtmrs.iter().copied().enumerate() {
+            if rtmr != [0; 48] {
+                return Err(Error::Rtmr {
+                    index: i,
+                    got: quote.body.mr_owner_config,
+                });
+            }
+        }
+        if quote.body.report_data[40..] != [0; 24] {
+            return Err(Error::ReportData {
+                got: quote.body.report_data[40..].try_into().unwrap(),
+            });
+        }
 
         // TODO: verify cpu_svn.
 
@@ -129,4 +186,43 @@ fn mr_extend(hasher: &mut Sha384, gpa: PhysAddr, chunk: &[u8; 256]) {
     hasher.update(gpa.as_u64().to_le_bytes());
     hasher.update([0; 104]);
     hasher.update(chunk);
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("failed to parse TD quote")]
+    Parse(#[from] tdx_types::td_quote::Error),
+    #[error("failed to verify signatures in TD quote")]
+    Verify(#[from] tdx_types::td_quote::VerifyError),
+    #[error("expected TEE type to be {expected:?}, got {got:?}")]
+    Tee { expected: TeeType, got: TeeType },
+    #[error("expected QE vendor ID to be {}, got {}", expected.0, got.0)]
+    QeVendorId {
+        expected: QeVendorId,
+        got: QeVendorId,
+    },
+    #[error("expected TEE TCB SVN to be {expected:?} or newer, got {got:?}")]
+    TeeTcbSvn { expected: TeeTcbSvn, got: TeeTcbSvn },
+    #[error("expected MRSIGNERSEAM to be all zeros, got {}", hex(.got))]
+    MrSignerSeam { got: [u8; 48] },
+    #[error("expected SEAMATTRIBUTES to be all zeros, got {}", hex(.got))]
+    SeamAttributes { got: [u8; 8] },
+    #[error("expected TDATTRIBUTES to be all zeros, got {}", hex(.got))]
+    TdAttributes { got: [u8; 8] },
+    #[error("expected XFAM to be {}, got {}", hex(.expected), hex(.got))]
+    Xfam { expected: [u8; 8], got: [u8; 8] },
+    #[error("expected MRTD to be {}, got {}", hex(.expected), hex(.got))]
+    MrTd { expected: [u8; 48], got: [u8; 48] },
+    #[error("expected MRCONFIGID[0:32] to be {}, got {}", hex(.expected), hex(.got))]
+    InputHash { expected: [u8; 32], got: [u8; 32] },
+    #[error("expected MRCONFIGID[32:48] to be all zeros, got {}", hex(.got))]
+    MrConfigIdPad { got: [u8; 16] },
+    #[error("expected MROWNER to be all zeros, got {}", hex(.got))]
+    MrOwner { got: [u8; 48] },
+    #[error("expected MROWNERCONFIG to be all zeros, got {}", hex(.got))]
+    MrOwnerConfig { got: [u8; 48] },
+    #[error("expected RTMR[{index}] to be all zeros, got {}", hex(.got))]
+    Rtmr { index: usize, got: [u8; 48] },
+    #[error("expected REPORTDATA to be padded with zeros, got {}", hex(.got))]
+    ReportData { got: [u8; 24] },
 }

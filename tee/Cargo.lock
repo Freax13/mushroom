@@ -785,6 +785,7 @@ dependencies = [
  "bit_field",
  "bitflags",
  "bytemuck",
+ "uuid",
  "x86_64",
 ]
 
@@ -822,6 +823,15 @@ name = "usize_conversions"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f70329e2cbe45d6c97a5112daad40c34cd9a4e18edb5a2a18fefeb584d8d25e5"
+
+[[package]]
+name = "uuid"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "version_check"
