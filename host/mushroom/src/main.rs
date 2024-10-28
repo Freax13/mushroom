@@ -440,10 +440,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
         }
     };
 
-    // FIXME: use proper error type and use `?` instead of unwrap.
-    configuration
-        .verify(input_hash, output_hash, &attestation_report)
-        .unwrap();
+    configuration.verify(input_hash, output_hash, &attestation_report)?;
 
     println!("Ok");
 

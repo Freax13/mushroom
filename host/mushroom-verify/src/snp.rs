@@ -2,16 +2,17 @@ use std::{cmp::Ordering, mem::size_of};
 
 use bytemuck::{bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned, NoUninit};
 use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
-use p384::ecdsa::{signature::Verifier, Signature};
+use p384::ecdsa::{self, signature::Verifier, Signature};
 use sha2::{Digest, Sha384};
 use snp_types::{
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
     guest_policy::GuestPolicy,
     PageType, VmplPermissions,
 };
+use thiserror::Error;
 use vcek_kds::Vcek;
 
-use crate::{InputHash, OutputHash, VerificationError};
+use crate::{hex, InputHash, OutputHash};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {
@@ -57,43 +58,64 @@ impl Configuration {
         &self,
         input_hash: InputHash,
         attestation_report: &[u8],
-    ) -> Result<OutputHash, VerificationError> {
+    ) -> Result<OutputHash, Error> {
         // The VCEK is appended to the attestation report. Split the two.
         const REPORT_LEN: usize = size_of::<AttestionReport>();
         if attestation_report.len() < REPORT_LEN {
-            return Err(VerificationError(()));
+            return Err(Error::Length {
+                got: attestation_report.len(),
+            });
         }
         let (attestation_report, vcek) = attestation_report.split_at(REPORT_LEN);
 
         // Parse the attestation report and the VCEK.
-        let report = try_pod_read_unaligned::<AttestionReport>(attestation_report)
-            .map_err(|_| VerificationError(()))?;
-        let vcek = Vcek::from_bytes(vcek.to_owned()).map_err(|_| VerificationError(()))?;
+        let report = try_pod_read_unaligned::<AttestionReport>(attestation_report)?;
+        let vcek = Vcek::from_bytes(vcek.to_owned())?;
 
         let AttestionReport::V2(report) = report;
 
-        macro_rules! verify_eq {
-            ($lhs:expr, $rhs:expr) => {
-                if $lhs != $rhs {
-                    return Err(VerificationError(()));
-                }
-            };
+        if report.vmpl != 0 {
+            return Err(Error::Vmpl(report.vmpl));
         }
-
-        verify_eq!(report.vmpl, 0);
-        verify_eq!(report.report_data[40..], [0; 24]);
-        verify_eq!(report.measurement, self.launch_digest);
-        verify_eq!(report.host_data, input_hash.0);
-        verify_eq!({ report.policy }, self.policy);
-
-        verify_eq!(report.signature_algo, 1);
+        if report.report_data[40..] != [0; 24] {
+            return Err(Error::ReportDataPadding(
+                report.report_data[40..].try_into().unwrap(),
+            ));
+        }
+        if report.measurement != self.launch_digest {
+            return Err(Error::Measurement {
+                expected: self.launch_digest,
+                got: report.measurement,
+            });
+        }
+        if report.host_data != input_hash.0 {
+            return Err(Error::HostData {
+                expected: input_hash.0,
+                got: report.host_data,
+            });
+        }
+        if { report.policy } != self.policy {
+            return Err(Error::Policy {
+                expected: self.policy,
+                got: report.policy,
+            });
+        }
+        if report.signature_algo != 1 {
+            return Err(Error::SignatureAlgo {
+                expected: 1,
+                got: report.signature_algo,
+            });
+        }
 
         let is_valid_tcb = report
             .launch_tcb
             .partial_cmp(&self.min_tcb)
             .is_some_and(Ordering::is_ge);
         if !is_valid_tcb {
-            return Err(VerificationError(()));
+            return Err(Error::Tcb {
+                expected: self.min_tcb,
+                got: report.launch_tcb,
+            });
         }
 
         // Construct signature.
@@ -106,13 +128,11 @@ impl Configuration {
         let mut s = s;
         r.reverse();
         s.reverse();
-        let signature = Signature::from_scalars(r, s).map_err(|_| VerificationError(()))?;
+        let signature = Signature::from_scalars(r, s)?;
 
         // Verify signature.
         let public_key = vcek.verifying_key();
-        public_key
-            .verify(&attestation_report[..=0x29f], &signature)
-            .map_err(|_| VerificationError(()))?;
+        public_key.verify(&attestation_report[..=0x29f], &signature)?;
 
         Ok(OutputHash {
             hash: report.report_data[..32].try_into().unwrap(),
@@ -191,4 +211,36 @@ impl PageInfo {
             gpa: 0xffff_ffff_f000,
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("report is too short: expected at least {} bytes, got {got}", size_of::<AttestionReport>())]
+    Length { got: usize },
+    #[error("failed to parse report")]
+    Bytemuck(#[from] bytemuck::checked::CheckedCastError),
+    #[error("failed to parse VCEK")]
+    Vcek(#[from] vcek_kds::Error),
+    #[error("expected VMPL to be 0, got {0}")]
+    Vmpl(u32),
+    #[error("expected report data to be padded with zeros, got {}", hex(.0))]
+    ReportDataPadding([u8; 24]),
+    #[error("expected measurement to be {}, got {}", hex(.expected), hex(.got))]
+    Measurement { expected: [u8; 48], got: [u8; 48] },
+    #[error("expected host data to be {}, got {}", hex(.expected), hex(.got))]
+    HostData { expected: [u8; 32], got: [u8; 32] },
+    #[error("expected policy to be {expected:?}, got {got:?}")]
+    Policy {
+        expected: GuestPolicy,
+        got: GuestPolicy,
+    },
+    #[error("expected signature algorithm to be {expected:?}, got {got:?}")]
+    SignatureAlgo { expected: u32, got: u32 },
+    #[error("expected TCB version to be {expected:?} or newer, got {got:?}")]
+    Tcb {
+        expected: TcbVersion,
+        got: TcbVersion,
+    },
+    #[error("failed to verify report signature")]
+    Ecdsa(#[from] ecdsa::Error),
 }
