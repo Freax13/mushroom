@@ -131,6 +131,7 @@ pub unsafe fn init_vcpu(apic: &mut Apic) {
 
     Tdcall::vp_wr(MdFieldId::STAR_WRITE, 0, MdFieldId::STAR_WRITE_MASK);
     Tdcall::vp_wr(MdFieldId::LSTAR_WRITE, 0, MdFieldId::LSTAR_WRITE_MASK);
+    Tdcall::vp_wr(MdFieldId::SFMASK_WRITE, 0, MdFieldId::SFMASK_WRITE_MASK);
 }
 
 pub fn run_vcpu() -> ! {

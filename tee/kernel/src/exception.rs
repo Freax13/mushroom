@@ -8,6 +8,7 @@ use core::{
 };
 
 use crate::spin::lazy::Lazy;
+use crate::user::process::syscall::cpu_state::exception_entry;
 use alloc::alloc::alloc;
 use log::{debug, error, trace};
 use snp_types::intercept::VMEXIT_CPUID;
@@ -170,6 +171,7 @@ pub fn load_idt() {
 extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_divide_error_handler}",
@@ -179,11 +181,11 @@ extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
             // Store the error code.
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0x0",
             // Jump to the userspace exit point.
-            "jmp gs:[{HANDLER_OFFSET}]",
+            "jmp {exception_entry}",
 
             kernel_divide_error_handler = sym kernel_divide_error_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            exception_entry = sym exception_entry,
         );
     }
 }
@@ -199,6 +201,7 @@ extern "x86-interrupt" fn page_fault_handler(
 ) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je 66f",
@@ -209,7 +212,7 @@ extern "x86-interrupt" fn page_fault_handler(
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0xe",
             "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
             // Jump to the userspace exit point.
-            "jmp gs:[{HANDLER_OFFSET}]",
+            "jmp {exception_entry}",
 
             // Kernel code path:
             "66:",
@@ -258,7 +261,7 @@ extern "x86-interrupt" fn page_fault_handler(
             kernel_page_fault_handler = sym kernel_page_fault_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
-            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            exception_entry = sym exception_entry,
         );
     }
 }
@@ -303,6 +306,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(
 ) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_general_protection_fault_handler}",
@@ -313,12 +317,12 @@ extern "x86-interrupt" fn general_protection_fault_handler(
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0xd",
             "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
             // Jump to the userspace exit point.
-            "jmp gs:[{HANDLER_OFFSET}]",
+            "jmp {exception_entry}",
 
             kernel_general_protection_fault_handler = sym kernel_general_protection_fault_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
-            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            exception_entry = sym exception_entry,
         );
     }
 }
@@ -338,6 +342,7 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
 extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_vc_handler}",
@@ -348,12 +353,12 @@ extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0x1d",
             "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
             // Jump to the userspace exit point.
-            "jmp gs:[{HANDLER_OFFSET}]",
+            "jmp {exception_entry}",
 
             kernel_vc_handler = sym kernel_vc_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
-            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            exception_entry = sym exception_entry,
         );
     }
 }
@@ -362,6 +367,7 @@ extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64
 extern "x86-interrupt" fn kernel_vc_handler(frame: InterruptStackFrame, code: u64) {
     unsafe {
         naked_asm!(
+            "cld",
             "push r11",
             "push r10",
             "push r9",
@@ -464,11 +470,12 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // continue when userspace exits.
     unsafe {
         naked_asm!(
+            "cld",
             "swapgs",
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0x80",
-            "jmp gs:[{HANDLER_OFFSET}]",
+            "jmp {exception_entry}",
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            HANDLER_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
+            exception_entry = sym exception_entry,
         );
     }
 }

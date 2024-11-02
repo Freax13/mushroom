@@ -244,6 +244,33 @@ impl Tdcall {
 
         (tdcall.rax, (tdcall.r11 >> 32) as u32)
     }
+
+    pub fn vp_veinfo_get() -> VeInfo {
+        let mut tdcall = Self::new(3);
+        unsafe {
+            tdcall.execute();
+        }
+
+        assert_eq!(tdcall.rax, 0);
+        VeInfo {
+            exit_reason: tdcall.rcx as u32,
+            exit_qualification: tdcall.rdx,
+            guest_linear_address: tdcall.r8,
+            guest_physical_address: tdcall.r9,
+            instruction_length: tdcall.r10 as u32,
+            instruction_information: (tdcall.r10 >> 32) as u32,
+        }
+    }
+}
+
+#[expect(dead_code)]
+pub struct VeInfo {
+    pub exit_reason: u32,
+    pub exit_qualification: u64,
+    pub guest_linear_address: u64,
+    pub guest_physical_address: u64,
+    pub instruction_length: u32,
+    pub instruction_information: u32,
 }
 
 pub struct Vmcall {

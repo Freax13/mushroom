@@ -1,11 +1,17 @@
+use core::arch::naked_asm;
+
 use bit_field::BitField;
 use spin::Lazy;
+use tdx_types::vmexit::VMEXIT_REASON_CPUID_INSTRUCTION;
 use x86_64::{
     registers::model_specific::Msr,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
 };
 
-use crate::{tdcall::Vmcall, tlb::flush_handler};
+use crate::{
+    tdcall::{Tdcall, Vmcall},
+    tlb::flush_handler,
+};
 
 pub const WAKEUP_VECTOR: u8 = 0x60;
 pub const FLUSH_VECTOR: u8 = 0x61;
@@ -18,10 +24,80 @@ pub fn setup_idt() {
 
 static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     let mut idt = InterruptDescriptorTable::new();
+    idt.virtualization.set_handler_fn(virtualization_handler);
     idt[WAKEUP_VECTOR].set_handler_fn(wakeup_handler);
     idt[FLUSH_VECTOR].set_handler_fn(flush_handler);
     idt
 });
+
+/// The set of caller-saved registers + rbx.
+#[repr(C)]
+struct VeStackFrame {
+    rax: u64,
+    rbx: u64,
+    rcx: u64,
+    rdx: u64,
+    rsi: u64,
+    rdi: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    error_code: u64,
+    rip: u64,
+}
+
+#[naked]
+extern "x86-interrupt" fn virtualization_handler(_frame: InterruptStackFrame) {
+    unsafe {
+        naked_asm!(
+            "endbr64",
+            "cld",
+            "push r11",
+            "push r10",
+            "push r9",
+            "push r8",
+            "push rdi",
+            "push rsi",
+            "push rdx",
+            "push rcx",
+            "push rbx",
+            "push rax",
+            "mov rdi, rsp",
+            "sub rsp, 8",
+            // TODO: make sure alignment is correct.
+            "call {virtualization_handler_impl}",
+            "add rsp, 8",
+            "pop rax",
+            "pop rbx",
+            "pop rcx",
+            "pop rdx",
+            "pop rsi",
+            "pop rdi",
+            "pop r8",
+            "pop r9",
+            "pop r10",
+            "pop r11",
+            "iretq",
+            virtualization_handler_impl = sym virtualization_handler_impl,
+        );
+    }
+}
+
+extern "C" fn virtualization_handler_impl(frame: &mut VeStackFrame) {
+    let ve_info = Tdcall::vp_veinfo_get();
+    match ve_info.exit_reason {
+        VMEXIT_REASON_CPUID_INSTRUCTION => {
+            // The TDX-module injects a #VE exception for unsupported CPUID
+            // leaves. Default to all-zeroes.
+            frame.rax = 0;
+            frame.rbx = 0;
+            frame.rcx = 0;
+            frame.rdx = 0;
+        }
+        reason => unimplemented!("unimplemented #VE reason: {reason}"),
+    }
+}
 
 extern "x86-interrupt" fn wakeup_handler(_frame: InterruptStackFrame) {
     // Don't do anything.
