@@ -889,12 +889,6 @@ where
                 // Write the entry back.
                 atomic_store(&self.entry, new_entry);
 
-                // Flush the entry for the page table. There's a short window
-                // where another thread has removed the entry, but hasn't yet
-                // flushed the entry on this thread yet, which would lead to
-                // this thread using a stale entry.
-                self.flush(true);
-
                 // Zero out the page table.
                 let table_ptr = self.as_table_ptr().cast_mut();
                 unsafe {
@@ -996,8 +990,18 @@ where
                 // The reference count hit zero. Zero out the entry and free
                 // the frame.
 
+                // We remove the page table in three steps:
+                // 1. Zero out the entry, but set `INITIALIZING_BIT`. This
+                //    prevents other threads from changing anything until step
+                //    2 is complete.
+                // 2. Flush the page table from all APs.
+                // 3. Write zero to the entry.
+
+                let new_entry = 1 << INITIALIZING_BIT;
+
+                // Step 1:
                 // First try to commit the zeroing.
-                let res = atomic_compare_exchange(&self.entry, current_entry, 0);
+                let res = atomic_compare_exchange(&self.entry, current_entry, new_entry);
                 match res {
                     Ok(_) => {
                         // Success!
@@ -1009,7 +1013,11 @@ where
                     }
                 }
 
+                // Step 2:
                 self.flush(true);
+
+                // Step 3:
+                atomic_store(&self.entry, 0);
 
                 // Extract the freed frame and return it.
                 let phys_addr = PhysAddr::new_truncate(current_entry);
