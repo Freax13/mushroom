@@ -3,7 +3,10 @@ use std::{collections::HashMap, num::NonZeroU32, sync::Once};
 use anyhow::{Context, Result};
 use bit_field::BitField;
 use kvm::KvmCap;
-use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use nix::sys::{
+    resource::{getrlimit, setrlimit, Resource},
+    signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
+};
 use slot::Slot;
 use x86_64::structures::paging::PhysFrame;
 
@@ -92,5 +95,15 @@ fn install_signal_handler() {
             )
             .unwrap();
         };
+    });
+}
+
+fn raise_file_no_limit() {
+    static RAISE_NO_LIMIT: Once = Once::new();
+    RAISE_NO_LIMIT.call_once(|| {
+        // Set the soft limit to the hard limit. We need this because we
+        // allocate a lot of memfds.
+        let (_soft, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+        setrlimit(Resource::RLIMIT_NOFILE, hard, hard).unwrap();
     });
 }
