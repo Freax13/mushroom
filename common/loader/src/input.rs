@@ -8,6 +8,7 @@ use x86_64::structures::paging::PhysFrame;
 
 use crate::{LoadCommand, LoadCommandPayload};
 
+#[derive(Clone)]
 pub struct Input<T> {
     pub bytes: T,
     pub hash_type: HashType,
