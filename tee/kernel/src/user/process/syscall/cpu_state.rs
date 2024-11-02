@@ -762,6 +762,7 @@ pub fn init() {
 
 unsafe extern "sysv64" {
     fn enter_userspace();
+    pub fn exception_entry();
     fn syscall_entry();
 }
 
@@ -793,11 +794,6 @@ global_asm!(
     "pushfq",
     "pop rax",
     "mov gs:[{K_RFLAGS_OFFSET}], rax",
-
-    // Prepare exit points.
-    // Set exception/interrupt handler exit point.
-    "lea rax, [rip+66f]",
-    "mov gs:[{EXCEPTION_HANDLER_EXIT_POINT_OFFSET}], rax",
 
     // Restore user state.
     // Restore segment registers.
@@ -870,7 +866,8 @@ global_asm!(
 
     // Exit point for an exception/interrupt.
     // Note that `swapgs` was already executed by the exception/interrupt handler.
-    "66:",
+    ".global exception_entry",
+    "exception_entry:",
     // Record the exit reason.
     "mov byte ptr gs:[{EXIT_OFFSET}], {EXIT_EXCP}",
     // Save values from stack frame.
@@ -945,7 +942,6 @@ global_asm!(
     "ret",
 
     EXIT_WITH_SYSRET_OFFSET = const offset_of!(PerCpu, exit_with_sysret),
-    EXCEPTION_HANDLER_EXIT_POINT_OFFSET = const offset_of!(PerCpu, userspace_exception_exit_point),
     EXIT_OFFSET = const offset_of!(PerCpu, exit),
     EXIT_SYSCALL = const RawExit::Syscall as u8,
     EXIT_EXCP = const RawExit::Exception as u8,
