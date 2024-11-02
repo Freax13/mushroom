@@ -2,13 +2,13 @@ use std::fmt::{self, Display};
 
 use io::input::{Header, MAX_HASH_SIZE};
 use sha2::{Digest, Sha256};
-#[cfg(feature = "snp")]
-use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
-#[cfg(feature = "tdx")]
-use tdx_types::td_quote::TeeTcbSvn;
+use thiserror::Error;
 
 pub use loader::{HashType, Input};
-use thiserror::Error;
+#[cfg(feature = "snp")]
+pub use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
+#[cfg(feature = "tdx")]
+pub use tdx_types::td_quote::TeeTcbSvn;
 
 #[cfg(feature = "serde")]
 mod hex;

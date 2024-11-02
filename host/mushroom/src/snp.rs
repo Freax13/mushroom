@@ -18,9 +18,8 @@ use constants::{
 };
 use loader::Input;
 use nix::sys::pthread::pthread_kill;
-use snp_types::{guest_policy::GuestPolicy, PageType};
+use snp_types::PageType;
 use tracing::{debug, info};
-use vcek_kds::Vcek;
 use volatile::map_field;
 use x86_64::{
     structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
@@ -38,6 +37,9 @@ use crate::{
     slot::Slot,
     MushroomResult, SIG_KICK,
 };
+
+pub use snp_types::guest_policy::GuestPolicy;
+pub use vcek_kds::Vcek;
 
 #[allow(clippy::too_many_arguments)]
 pub fn main(
