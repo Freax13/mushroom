@@ -1027,6 +1027,22 @@ where
         }
     }
 
+    /// Only decrease the reference count, but don't do any resource
+    /// management.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the entry is that `release` is only called
+    /// after the `acquire` is no longer needed. Additionally, the caller must
+    /// ensure that the reference count doesn't hit zero.
+    unsafe fn release_reference_count_fast(&self) {
+        if self.is_static_entry() {
+            return;
+        }
+
+        fetch_sub(&self.entry, 1 << REFERENCE_COUNT_BITS.start);
+    }
+
     fn as_table_ptr(&self) -> *const ActivePageTable<<L as TableLevel>::Next> {
         let addr = VirtAddr::from_ptr(self);
         let p4_index = addr.p3_index();
@@ -1112,9 +1128,9 @@ impl ActivePageTableEntry<Level1> {
         let old_entry = PresentPageTableEntry::try_from(old_entry).unwrap();
         self.flush(old_entry.global());
 
-        // FIXME: Free up the frame.
-        let _maybe_frame = unsafe { self.parent_table_entry().release_reference_count() };
-        assert_eq!(_maybe_frame, None);
+        unsafe {
+            self.parent_table_entry().release_reference_count_fast();
+        }
 
         old_entry
     }
@@ -1123,8 +1139,9 @@ impl ActivePageTableEntry<Level1> {
     pub unsafe fn try_unmap(&self) {
         let old_entry = atomic_swap(&self.entry, 0);
         if PresentPageTableEntry::try_from(old_entry).is_ok() {
-            let frame = unsafe { self.parent_table_entry().release_reference_count() };
-            assert_eq!(frame, None);
+            unsafe {
+                self.parent_table_entry().release_reference_count_fast();
+            }
         }
     }
 
@@ -1151,8 +1168,9 @@ where
     L: HasParentLevel + TableLevel,
 {
     unsafe fn release_parent(&self) {
-        let frame = unsafe { self.parent_table_entry().release_reference_count() };
-        assert_eq!(frame, None);
+        unsafe {
+            self.parent_table_entry().release_reference_count_fast();
+        }
     }
 }
 
@@ -1483,6 +1501,30 @@ fn atomic_fetch_and(entry: &AtomicU64, val: u64) -> u64 {
     } else {
         entry.fetch_and(val, Ordering::SeqCst)
     }
+}
+
+/// Wrapper around `AtomicU64::fetch_add` without address sanitizer checks.
+#[inline(always)]
+fn fetch_add(entry: &AtomicU64, val: u64) -> u64 {
+    if cfg!(sanitize = "address") {
+        let out;
+        unsafe {
+            asm! {
+                "lock xadd [{ptr}], {out}",
+                out = inout(reg) val => out,
+                ptr = in(reg) entry.as_ptr(),
+            }
+        }
+        out
+    } else {
+        entry.fetch_add(val, Ordering::SeqCst)
+    }
+}
+
+/// Wrapper around `AtomicU64::fetch_sub` without address sanitizer checks.
+#[inline(always)]
+fn fetch_sub(entry: &AtomicU64, val: u64) -> u64 {
+    fetch_add(entry, (-(val as i64)) as u64)
 }
 
 /// Wrapper around `core::ptr::read` without address sanitizer checks.
