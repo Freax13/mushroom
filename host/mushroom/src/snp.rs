@@ -35,6 +35,7 @@ use crate::{
     },
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
+    raise_file_no_limit,
     slot::Slot,
     MushroomResult, SIG_KICK,
 };
@@ -229,6 +230,7 @@ impl VmContext {
         }
 
         install_signal_handler();
+        raise_file_no_limit();
 
         Ok(Self {
             vm,
