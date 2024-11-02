@@ -2,10 +2,7 @@ use bit_field::BitField;
 use constants::{physical_address::DYNAMIC_2MIB, MEMORY_PORT};
 use supervisor_services::allocation_buffer::SlotIndex;
 use tdx_types::tdcall::GpaAttr;
-use x86_64::{
-    structures::paging::{Page, PageSize, PhysFrame, Size2MiB, Size4KiB},
-    VirtAddr,
-};
+use x86_64::structures::paging::{PhysFrame, Size4KiB};
 
 use crate::tdcall::{Tdcall, Vmcall};
 
@@ -75,17 +72,6 @@ impl HostAllocator {
         let gpa = DYNAMIC_2MIB.start + u64::from(slot_idx.get());
         unsafe {
             Tdcall::mem_page_accept(gpa);
-        }
-
-        // Zero out the memory.
-        let base = Page::<Size2MiB>::from_start_address(VirtAddr::new(0x200000000000)).unwrap();
-        let page = base + u64::from(slot_idx.get());
-        unsafe {
-            core::ptr::write_bytes(
-                page.start_address().as_mut_ptr::<u8>(),
-                0,
-                Size2MiB::SIZE as usize,
-            );
         }
 
         // Make the frame accessible to the L2 VM.
