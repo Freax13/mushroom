@@ -4,7 +4,7 @@ use constants::{
     physical_address::{
         self,
         supervisor::{tdx::*, LOG_BUFFER},
-        DYNAMIC, INIT_FILE, INPUT_FILE,
+        INIT_FILE, INPUT_FILE,
     },
     MAX_APS_COUNT,
 };
@@ -22,7 +22,6 @@ use crate::reset_vector::STACK_SIZE;
 static PML4: StaticPml4 = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PDP_0, flags!(WRITE));
-    page_table.set_table(64, &PDP_64, flags!(WRITE | EXECUTE_DISABLE));
     page_table
 };
 
@@ -98,13 +97,6 @@ static PT_0_1_34: StaticPt = {
 static PD_0_3: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(511, RESET_VECTOR, flags!());
-    page_table
-};
-
-#[link_section = ".pagetables"]
-static PDP_64: StaticPdp = {
-    let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(0, DYNAMIC, flags!(WRITE | EXECUTE_DISABLE));
     page_table
 };
 
