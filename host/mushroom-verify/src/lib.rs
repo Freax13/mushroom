@@ -204,6 +204,11 @@ impl OutputHash {
             len: output.len() as u64,
         }
     }
+
+    /// Verify that the hash matches the byte slice.
+    pub fn verify(&self, output: &[u8]) -> bool {
+        *self == Self::new(output)
+    }
 }
 
 impl From<OutputHash> for HashedInput {
