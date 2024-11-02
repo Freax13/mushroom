@@ -14,7 +14,7 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
     instructions::tables::{lgdt, sgdt},
-    registers::{control::Cr2, xcontrol::XCr0Flags},
+    registers::{control::Cr2, model_specific::LStar, xcontrol::XCr0Flags},
     structures::{gdt::Entry, idt::PageFaultErrorCode, DescriptorTablePointer},
     VirtAddr,
 };
@@ -756,8 +756,13 @@ struct FpxSwBytes {
     padding: [u32; 7],
 }
 
+pub fn init() {
+    LStar::write(VirtAddr::new(syscall_entry as usize as u64));
+}
+
 unsafe extern "sysv64" {
     fn enter_userspace();
+    fn syscall_entry();
 }
 
 macro_rules! kernel_reg_offset {
@@ -793,12 +798,6 @@ global_asm!(
     // Set exception/interrupt handler exit point.
     "lea rax, [rip+66f]",
     "mov gs:[{EXCEPTION_HANDLER_EXIT_POINT_OFFSET}], rax",
-    // Set syscall instruction exit point.
-    "lea rax, [rip+67f]",
-    "mov rdx, rax",
-    "shr rdx, 32",
-    "mov ecx, 0xC0000082",
-    "wrmsr",
 
     // Restore user state.
     // Restore segment registers.
@@ -887,7 +886,8 @@ global_asm!(
     "jmp 68f",
 
     // Exit point for the `syscall` instruction
-    "67:",
+    ".global syscall_entry",
+    "syscall_entry:",
     // Swap in kernel GS.
     "swapgs",
     // Record the exit reason.

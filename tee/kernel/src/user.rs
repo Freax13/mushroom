@@ -1,8 +1,12 @@
+use process::syscall;
+
 use crate::{memory::frame, rt::poll, supervisor::halt, time::advance_time};
 
 pub mod process;
 
 pub fn run() -> ! {
+    syscall::init();
+
     loop {
         while poll() {}
 

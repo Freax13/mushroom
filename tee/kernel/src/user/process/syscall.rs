@@ -62,6 +62,8 @@ pub mod args;
 pub mod cpu_state;
 pub mod traits;
 
+pub use cpu_state::init;
+
 impl Thread {
     /// Returns true if the thread should continue to run.
     pub async fn execute_syscall(self: Arc<Self>, args: SyscallArgs) {
