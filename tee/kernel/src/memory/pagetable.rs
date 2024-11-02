@@ -249,8 +249,6 @@ fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
         );
     }
 
-    // assert_eq!(failed, 0);
-
     if failed == 0 {
         Ok(())
     } else {
