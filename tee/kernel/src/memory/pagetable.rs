@@ -920,11 +920,11 @@ where
 
         let mut current_entry = atomic_load(&self.entry);
         loop {
-            // If the entry is being initialized right now, spin.
+            // If the entry is being initialized right now, this means that
+            // there's no page table yet and the caller likely isn't interested
+            // in a page table that only exists in a short while.
             if current_entry.get_bit(INITIALIZING_BIT) {
-                core::hint::spin_loop();
-                current_entry = atomic_load(&self.entry);
-                continue;
+                return Err(());
             }
 
             // Verify that the entry was already initialized.
