@@ -171,6 +171,7 @@ pub fn load_idt() {
 extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_divide_error_handler}",
@@ -200,6 +201,7 @@ extern "x86-interrupt" fn page_fault_handler(
 ) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je 66f",
@@ -304,6 +306,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(
 ) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_general_protection_fault_handler}",
@@ -339,6 +342,7 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
 extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64) {
     unsafe {
         naked_asm!(
+            "cld",
             // Check whether the exception happened in userspace.
             "test word ptr [rsp+16], 3",
             "je {kernel_vc_handler}",
@@ -363,6 +367,7 @@ extern "x86-interrupt" fn vc_handler(frame: InterruptStackFrame, error_code: u64
 extern "x86-interrupt" fn kernel_vc_handler(frame: InterruptStackFrame, code: u64) {
     unsafe {
         naked_asm!(
+            "cld",
             "push r11",
             "push r10",
             "push r9",
@@ -465,6 +470,7 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // continue when userspace exits.
     unsafe {
         naked_asm!(
+            "cld",
             "swapgs",
             "mov byte ptr gs:[{VECTOR_OFFSET}], 0x80",
             "jmp {exception_entry}",
