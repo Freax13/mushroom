@@ -616,12 +616,6 @@ impl Pagetables {
             return Ok(());
         }
 
-        // Make sure that even the end is still in the lower half.
-        let end_inclusive = Step::forward_checked(dest, src.len() - 1).ok_or(())?;
-        if end_inclusive.as_u64().get_bit(63) {
-            return Err(());
-        }
-
         check_user_address(dest, src.len()).map_err(|_| ())?;
 
         let _guard = self.activate();
