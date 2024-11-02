@@ -615,41 +615,25 @@ impl Registers {
     };
 }
 
+/// The set of kernel registers saved when entering userspace. These correspond
+/// to the callee-saved registers of the System V AMD64 ABI.
 #[derive(Clone, Copy)]
 pub struct KernelRegisters {
-    pub rax: u64,
-    pub rbx: u64,
-    pub rcx: u64,
-    pub rdx: u64,
-    pub rsi: u64,
-    pub rdi: u64,
-    pub rsp: u64,
-    pub rbp: u64,
-    pub r8: u64,
-    pub r9: u64,
-    pub r10: u64,
-    pub r11: u64,
-    pub r12: u64,
-    pub r13: u64,
-    pub r14: u64,
-    pub r15: u64,
-    pub rflags: u64,
+    rbx: u64,
+    rsp: u64,
+    rbp: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    rflags: u64,
 }
 
 impl KernelRegisters {
     pub const ZERO: Self = Self {
-        rax: 0,
         rbx: 0,
-        rcx: 0,
-        rdx: 0,
-        rsi: 0,
-        rdi: 0,
         rsp: 0,
         rbp: 0,
-        r8: 0,
-        r9: 0,
-        r10: 0,
-        r11: 0,
         r12: 0,
         r13: 0,
         r14: 0,
@@ -772,7 +756,7 @@ struct FpxSwBytes {
     padding: [u32; 7],
 }
 
-unsafe extern "C" {
+unsafe extern "sysv64" {
     fn enter_userspace();
 }
 
@@ -793,18 +777,9 @@ global_asm!(
 
     // Save kernel state.
     // Save the kernel registers.
-    "mov gs:[{K_RAX_OFFSET}], rax",
     "mov gs:[{K_RBX_OFFSET}], rbx",
-    "mov gs:[{K_RCX_OFFSET}], rcx",
-    "mov gs:[{K_RDX_OFFSET}], rdx",
-    "mov gs:[{K_RSI_OFFSET}], rsi",
-    "mov gs:[{K_RDI_OFFSET}], rdi",
     "mov gs:[{K_RSP_OFFSET}], rsp",
     "mov gs:[{K_RBP_OFFSET}], rbp",
-    "mov gs:[{K_R8_OFFSET}], r8",
-    "mov gs:[{K_R9_OFFSET}], r9",
-    "mov gs:[{K_R10_OFFSET}], r10",
-    "mov gs:[{K_R11_OFFSET}], r11",
     "mov gs:[{K_R12_OFFSET}], r12",
     "mov gs:[{K_R13_OFFSET}], r13",
     "mov gs:[{K_R14_OFFSET}], r14",
@@ -957,16 +932,8 @@ global_asm!(
     // Restore kernel state.
     // Restore the kernel registers.
     "mov rbx, gs:[{K_RBX_OFFSET}]",
-    "mov rcx, gs:[{K_RCX_OFFSET}]",
-    "mov rdx, gs:[{K_RDX_OFFSET}]",
-    "mov rsi, gs:[{K_RSI_OFFSET}]",
-    "mov rdi, gs:[{K_RDI_OFFSET}]",
     "mov rsp, gs:[{K_RSP_OFFSET}]",
     "mov rbp, gs:[{K_RBP_OFFSET}]",
-    "mov r8, gs:[{K_R8_OFFSET}]",
-    "mov r9, gs:[{K_R9_OFFSET}]",
-    "mov r10, gs:[{K_R10_OFFSET}]",
-    "mov r11, gs:[{K_R11_OFFSET}]",
     "mov r12, gs:[{K_R12_OFFSET}]",
     "mov r13, gs:[{K_R13_OFFSET}]",
     "mov r14, gs:[{K_R14_OFFSET}]",
@@ -975,8 +942,6 @@ global_asm!(
     "mov rax, gs:[{K_RFLAGS_OFFSET}]",
     "push rax",
     "popfq",
-    // Restore rax
-    "mov rax, gs:[{K_RAX_OFFSET}]",
     "ret",
 
     EXIT_WITH_SYSRET_OFFSET = const offset_of!(PerCpu, exit_with_sysret),
@@ -984,18 +949,9 @@ global_asm!(
     EXIT_OFFSET = const offset_of!(PerCpu, exit),
     EXIT_SYSCALL = const RawExit::Syscall as u8,
     EXIT_EXCP = const RawExit::Exception as u8,
-    K_RAX_OFFSET = const kernel_reg_offset!(rax),
     K_RBX_OFFSET = const kernel_reg_offset!(rbx),
-    K_RCX_OFFSET = const kernel_reg_offset!(rcx),
-    K_RDX_OFFSET = const kernel_reg_offset!(rdx),
-    K_RSI_OFFSET = const kernel_reg_offset!(rsi),
-    K_RDI_OFFSET = const kernel_reg_offset!(rdi),
     K_RSP_OFFSET = const kernel_reg_offset!(rsp),
     K_RBP_OFFSET = const kernel_reg_offset!(rbp),
-    K_R8_OFFSET = const kernel_reg_offset!(r8),
-    K_R9_OFFSET = const kernel_reg_offset!(r9),
-    K_R10_OFFSET = const kernel_reg_offset!(r10),
-    K_R11_OFFSET = const kernel_reg_offset!(r11),
     K_R12_OFFSET = const kernel_reg_offset!(r12),
     K_R13_OFFSET = const kernel_reg_offset!(r13),
     K_R14_OFFSET = const kernel_reg_offset!(r14),
