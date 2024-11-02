@@ -14,7 +14,12 @@ use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
     instructions::tables::{lgdt, sgdt},
-    registers::{control::Cr2, model_specific::LStar, xcontrol::XCr0Flags},
+    registers::{
+        control::Cr2,
+        model_specific::{LStar, SFMask},
+        rflags::RFlags,
+        xcontrol::XCr0Flags,
+    },
     structures::{gdt::Entry, idt::PageFaultErrorCode, DescriptorTablePointer},
     VirtAddr,
 };
@@ -758,6 +763,7 @@ struct FpxSwBytes {
 
 pub fn init() {
     LStar::write(VirtAddr::new(syscall_entry as usize as u64));
+    SFMask::write(RFlags::DIRECTION_FLAG);
 }
 
 unsafe extern "sysv64" {

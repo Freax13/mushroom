@@ -52,6 +52,9 @@ impl MdFieldId {
     pub const LSTAR_WRITE: Self = Self::msr_bitmaps1(0xC000_0082, true);
     pub const LSTAR_WRITE_MASK: u64 = Self::msr_bitmaps_mask(0xC000_0082);
 
+    pub const SFMASK_WRITE: Self = Self::msr_bitmaps1(0xC000_0084, true);
+    pub const SFMASK_WRITE_MASK: u64 = Self::msr_bitmaps_mask(0xC000_0084);
+
     pub const TDVPS_L2_CTLS1: Self = Self::new(
         81,
         ElementSizeCode::SixtyFour,
