@@ -100,34 +100,30 @@ pub unsafe fn init_vcpu(apic: &mut Apic) {
         !0,
     );
 
-    Tdcall::vp_wr(
-        MdFieldId::VMX_GUEST_CR4,
-        Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
-            | Cr4Flags::MACHINE_CHECK_EXCEPTION.bits()
-            | Cr4Flags::PAGE_GLOBAL.bits()
-            | Cr4Flags::OSFXSR.bits()
-            | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
-            | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits()
-            | Cr4Flags::FSGSBASE.bits()
-            | Cr4Flags::PCID.bits()
-            | Cr4Flags::OSXSAVE.bits()
-            | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
-            | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
-        !0,
-    );
+    let cr4_flags = Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
+        | Cr4Flags::MACHINE_CHECK_EXCEPTION.bits()
+        | Cr4Flags::PAGE_GLOBAL.bits()
+        | Cr4Flags::OSFXSR.bits()
+        | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
+        | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits()
+        | Cr4Flags::FSGSBASE.bits()
+        | Cr4Flags::PCID.bits()
+        | Cr4Flags::OSXSAVE.bits()
+        | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
+        | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits();
+    Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR4, cr4_flags, !0);
+    Tdcall::vp_wr(MdFieldId::VMX_CR4_READ_SHADOW, cr4_flags, !0);
 
     Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR3, 0x100_0000_1000, !0);
 
-    Tdcall::vp_wr(
-        MdFieldId::VMX_GUEST_CR0,
-        Cr0Flags::PROTECTED_MODE_ENABLE.bits()
-            | Cr0Flags::MONITOR_COPROCESSOR.bits()
-            | Cr0Flags::EXTENSION_TYPE.bits()
-            | Cr0Flags::NUMERIC_ERROR.bits()
-            | Cr0Flags::WRITE_PROTECT.bits()
-            | Cr0Flags::PAGING.bits(),
-        !0,
-    );
+    let cr0_flags = Cr0Flags::PROTECTED_MODE_ENABLE.bits()
+        | Cr0Flags::MONITOR_COPROCESSOR.bits()
+        | Cr0Flags::EXTENSION_TYPE.bits()
+        | Cr0Flags::NUMERIC_ERROR.bits()
+        | Cr0Flags::WRITE_PROTECT.bits()
+        | Cr0Flags::PAGING.bits();
+    Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR0, cr0_flags, !0);
+    Tdcall::vp_wr(MdFieldId::VMX_CR0_READ_SHADOW, cr0_flags, !0);
 
     Tdcall::vp_wr(MdFieldId::STAR_WRITE, 0, MdFieldId::STAR_WRITE_MASK);
     Tdcall::vp_wr(MdFieldId::LSTAR_WRITE, 0, MdFieldId::LSTAR_WRITE_MASK);

@@ -42,6 +42,8 @@ impl MdFieldId {
     pub const VMX_VM_ENTRY_CONTROL: Self = Self::vmcs1(0x4012);
     pub const VMX_VM_EXECUTION_CONTROL_SECONDARY_PROC_BASED: Self = Self::vmcs1(0x401E);
     pub const VMX_GUEST_CS_ARBYTE: Self = Self::vmcs1(0x4816);
+    pub const VMX_CR0_READ_SHADOW: Self = Self::vmcs1(0x6004);
+    pub const VMX_CR4_READ_SHADOW: Self = Self::vmcs1(0x6006);
     pub const VMX_GUEST_CR0: Self = Self::vmcs1(0x6800);
     pub const VMX_GUEST_CR3: Self = Self::vmcs1(0x6802);
     pub const VMX_GUEST_CR4: Self = Self::vmcs1(0x6804);
