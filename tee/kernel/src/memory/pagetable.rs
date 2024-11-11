@@ -39,6 +39,8 @@ use super::{
     temporary::copy_into_frame,
 };
 
+pub mod flush;
+
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 
 #[used]

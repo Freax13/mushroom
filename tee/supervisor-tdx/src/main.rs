@@ -7,7 +7,6 @@ use exception::setup_idt;
 use log::{debug, LevelFilter};
 use per_cpu::PerCpu;
 use spin::Once;
-use tdx_types::tdcall::Apic;
 use vcpu::{init_vcpu, run_vcpu, wait_for_vcpu_start};
 
 use crate::logging::SerialLogger;
@@ -42,8 +41,7 @@ fn main() -> ! {
         input::init();
     }
 
-    let mut apic = Apic::default();
-    unsafe { init_vcpu(&mut apic) };
+    init_vcpu();
     wait_for_vcpu_start();
     run_vcpu()
 }

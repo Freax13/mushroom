@@ -76,7 +76,7 @@ where
     }
 }
 
-/// Push a command, immediatly tell the supervisor about it, but don't wait for
+/// Push a command, immediately tell the supervisor about it, but don't wait for
 /// it to complete.
 fn push_async_command<C>(command: C)
 where
