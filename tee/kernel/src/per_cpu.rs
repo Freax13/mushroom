@@ -10,7 +10,7 @@ use alloc::sync::Arc;
 use constants::{ApIndex, MAX_APS_COUNT};
 use x86_64::{
     registers::segmentation::{Segment64, GS},
-    structures::{gdt::GlobalDescriptorTable, paging::Page, tss::TaskStateSegment},
+    structures::{gdt::GlobalDescriptorTable, tss::TaskStateSegment},
     VirtAddr,
 };
 
@@ -28,10 +28,8 @@ pub struct PerCpu {
     pub idx: ApIndex,
     pub kernel_registers: Cell<KernelRegisters>,
     pub new_userspace_registers: Cell<Registers>,
-    pub temporary_mapping: OnceCell<RefCell<Page>>,
     pub tss: OnceCell<TaskStateSegment>,
     pub gdt: OnceCell<GlobalDescriptorTable>,
-    pub int0x80_handler: Cell<u64>,
     pub exit_with_sysret: Cell<bool>,
     pub exit: Cell<RawExit>,
     pub vector: Cell<u8>,
@@ -47,10 +45,8 @@ impl PerCpu {
             idx: ApIndex::new(0),
             kernel_registers: Cell::new(KernelRegisters::ZERO),
             new_userspace_registers: Cell::new(Registers::ZERO),
-            temporary_mapping: OnceCell::new(),
             tss: OnceCell::new(),
             gdt: OnceCell::new(),
-            int0x80_handler: Cell::new(0),
             exit_with_sysret: Cell::new(false),
             exit: Cell::new(RawExit::Syscall),
             vector: Cell::new(0),
