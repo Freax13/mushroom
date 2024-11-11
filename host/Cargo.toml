@@ -16,7 +16,7 @@ tdx-types = { path = "../common/tdx-types", features = ["quote"] }
 vcek-kds = { path = "vcek-kds" }
 
 [patch.crates-io]
-x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "c5bc9fc" }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "3fc9106" }
 
 [profile.dev.package.sha2]
 opt-level = 3

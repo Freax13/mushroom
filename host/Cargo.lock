@@ -2011,7 +2011,7 @@ dependencies = [
 [[package]]
 name = "x86_64"
 version = "0.15.1"
-source = "git+https://github.com/rust-osdev/x86_64.git?rev=c5bc9fc#c5bc9fcefdeb99286fd00793a0c840b142114349"
+source = "git+https://github.com/rust-osdev/x86_64.git?rev=3fc9106#3fc91064a3d0952b78c97eebba4e2e5c440217f2"
 dependencies = [
  "bit_field",
  "bitflags",
