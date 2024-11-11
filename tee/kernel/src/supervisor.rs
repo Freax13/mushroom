@@ -3,7 +3,7 @@ use core::arch::asm;
 use crate::spin::mutex::Mutex;
 use arrayvec::ArrayVec;
 use bit_field::BitField;
-use constants::{physical_address::DYNAMIC_2MIB, MAX_APS_COUNT};
+use constants::{physical_address::DYNAMIC_2MIB, ApBitmap, ApIndex};
 use supervisor_services::{
     allocation_buffer::SlotIndex,
     command_buffer::{
@@ -197,7 +197,7 @@ pub struct Scheduler(Mutex<SchedulerState>);
 
 struct SchedulerState {
     /// One bit for every vCPU.
-    bits: u128,
+    bits: ApBitmap,
     /// The number of vCPUs that have finished being launched.
     launched: u8,
     /// Whether a vCPU is being launched right now.
@@ -206,8 +206,11 @@ struct SchedulerState {
 
 impl Scheduler {
     pub const fn new() -> Self {
+        let mut bits = ApBitmap::empty();
+        bits.set(ApIndex::new(0), true);
+
         Self(Mutex::new(SchedulerState {
-            bits: 1,
+            bits,
             launched: 0,
             is_launching: true,
         }))
@@ -215,18 +218,18 @@ impl Scheduler {
 
     fn pick_any(&self) -> Option<ScheduledCpu> {
         let mut state = self.0.lock();
-        let idx = state.bits.trailing_ones() as u8;
-        if idx < state.launched {
-            state.bits.set_bit(usize::from(idx), true);
+        let idx = state.bits.first_unset()?;
+        if idx.as_u8() < state.launched {
+            state.bits.set(idx, true);
 
             Some(ScheduledCpu::Existing(idx))
         } else {
-            if state.is_launching || idx >= MAX_APS_COUNT {
+            if state.is_launching {
                 return None;
             }
 
             state.is_launching = true;
-            state.bits.set_bit(usize::from(idx), true);
+            state.bits.set(idx, true);
 
             Some(ScheduledCpu::New)
         }
@@ -235,9 +238,9 @@ impl Scheduler {
     fn halt(&self) -> Result<(), LastRunningVcpuError> {
         let mut state = self.0.lock();
         let mut new_bits = state.bits;
-        new_bits.set_bit(PerCpu::get().idx, false);
+        new_bits.set(PerCpu::get().idx, false);
         // Ensure that this vCPU isn't the last one running.
-        if new_bits == 0 {
+        if new_bits.is_empty() {
             return Err(LastRunningVcpuError);
         }
         state.bits = new_bits;
@@ -246,7 +249,7 @@ impl Scheduler {
 
     fn resume(&self) {
         let mut state = self.0.lock();
-        state.bits.set_bit(PerCpu::get().idx, true);
+        state.bits.set(PerCpu::get().idx, true);
     }
 
     pub fn finish_launch(&self) {
@@ -258,7 +261,7 @@ impl Scheduler {
 }
 
 enum ScheduledCpu {
-    Existing(u8),
+    Existing(ApIndex),
     New,
 }
 
@@ -270,9 +273,7 @@ pub fn schedule_vcpu() {
 
     match cpu {
         ScheduledCpu::Existing(cpu) => {
-            SUPERVISOR_SERVICES
-                .notification_buffer
-                .arm(usize::from(cpu));
+            SUPERVISOR_SERVICES.notification_buffer.arm(cpu);
             kick_supervisor(true);
         }
         ScheduledCpu::New => start_next_ap(),

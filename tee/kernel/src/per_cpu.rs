@@ -6,7 +6,7 @@ use core::{
 };
 
 use alloc::sync::Arc;
-use constants::MAX_APS_COUNT;
+use constants::{ApIndex, MAX_APS_COUNT};
 use x86_64::{
     registers::segmentation::{Segment64, GS},
     structures::{gdt::GlobalDescriptorTable, paging::Page, tss::TaskStateSegment},
@@ -25,7 +25,7 @@ static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
 #[repr(C)]
 pub struct PerCpu {
     this: *mut PerCpu,
-    pub idx: usize,
+    pub idx: ApIndex,
     pub kernel_registers: Cell<KernelRegisters>,
     pub new_userspace_registers: Cell<Registers>,
     pub temporary_mapping: OnceCell<RefCell<Page>>,
@@ -44,7 +44,7 @@ impl PerCpu {
     pub const fn new() -> Self {
         Self {
             this: null_mut(),
-            idx: 0,
+            idx: ApIndex::new(0),
             kernel_registers: Cell::new(KernelRegisters::ZERO),
             new_userspace_registers: Cell::new(Registers::ZERO),
             temporary_mapping: OnceCell::new(),
@@ -78,7 +78,7 @@ impl PerCpu {
         let idx = COUNT.fetch_add(1, Ordering::SeqCst);
         let ptr = unsafe { &mut STORAGE[idx] };
         ptr.this = ptr;
-        ptr.idx = idx;
+        ptr.idx = ApIndex::new(u8::try_from(idx).unwrap());
 
         let addr = VirtAddr::from_ptr(ptr);
         unsafe {

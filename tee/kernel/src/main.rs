@@ -70,7 +70,7 @@ unsafe fn main() -> ! {
     PerCpu::init();
 
     #[cfg(feature = "profiling")]
-    if PerCpu::get().idx == 0 {
+    if PerCpu::get().idx.is_first() {
         unsafe {
             crate::profiler::init();
         }
@@ -90,7 +90,7 @@ extern "C" fn init() -> ! {
     }
 
     // The first AP does some extra initialization work.
-    if PerCpu::get().idx == 0 {
+    if PerCpu::get().idx.is_first() {
         user::process::start_init_process();
     }
 

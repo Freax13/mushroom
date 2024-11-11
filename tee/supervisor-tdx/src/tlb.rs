@@ -1,7 +1,4 @@
-use core::sync::atomic::{AtomicU64, Ordering};
-
-use bit_field::BitField;
-use constants::MAX_APS_COUNT;
+use constants::AtomicApBitmap;
 use spin::mutex::SpinMutex;
 use x86_64::structures::idt::InterruptStackFrame;
 
@@ -11,28 +8,26 @@ use crate::{
 };
 
 static GUARD: SpinMutex<()> = SpinMutex::new(());
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-static RAN: AtomicU64 = AtomicU64::new(0);
+static COUNTER: AtomicApBitmap = AtomicApBitmap::empty();
+static RAN: AtomicApBitmap = AtomicApBitmap::empty();
 
 /// This function must be called before entering the vCPU.
 pub fn pre_enter() {
-    RAN.fetch_or(1 << PerCpu::current_vcpu_index(), Ordering::SeqCst);
+    RAN.set(PerCpu::current_vcpu_index());
 }
 
 /// Flush the entire TLB on all vCPUs.
 pub fn flush() {
     let _guard = GUARD.lock();
-    let mask = RAN.swap(0, Ordering::Relaxed);
-    COUNTER.fetch_or(mask, Ordering::Relaxed);
+    let mask = RAN.take_all();
+    COUNTER.set_all(mask);
     drop(_guard);
 
-    for i in 0..MAX_APS_COUNT {
-        if mask.get_bit(usize::from(i)) {
-            send_ipi(u32::from(i), FLUSH_VECTOR);
-        }
+    for idx in mask {
+        send_ipi(u32::from(idx.as_u8()), FLUSH_VECTOR);
     }
 
-    while COUNTER.load(Ordering::SeqCst) != 0 {}
+    while !COUNTER.get_all().is_empty() {}
 }
 
 pub extern "x86-interrupt" fn flush_handler(_frame: InterruptStackFrame) {
@@ -40,7 +35,7 @@ pub extern "x86-interrupt" fn flush_handler(_frame: InterruptStackFrame) {
         per_cpu.pending_flushes.set(true);
         per_cpu.vcpu_index
     });
-    COUNTER.fetch_and(!(1 << vcpu_index), core::sync::atomic::Ordering::Relaxed);
+    COUNTER.take(vcpu_index);
 
     eoi();
 }

@@ -195,7 +195,7 @@ pub fn main(
         while command_buffer_reader.handle(&mut handler) {}
 
         for i in supervisor_services.notification_buffer.reset() {
-            ap_threads[i].thread().unpark();
+            ap_threads[usize::from(i.as_u8())].thread().unpark();
         }
 
         if let Some(finish_status) = handler.finish_status {

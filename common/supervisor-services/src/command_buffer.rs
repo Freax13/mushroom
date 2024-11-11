@@ -4,7 +4,9 @@
 
 #[cfg(feature = "kernel")]
 use core::iter::once;
-use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
+#[cfg(any(feature = "kernel", feature = "supervisor"))]
+use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU16, AtomicU8};
 
 #[cfg(feature = "kernel")]
 use bytemuck::bytes_of;

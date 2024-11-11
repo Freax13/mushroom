@@ -1,16 +1,17 @@
 use core::{arch::asm, cell::Cell};
 
+use constants::ApIndex;
 use x86_64::instructions::interrupts;
 
 #[repr(C)]
 pub struct PerCpu {
     this: *mut Self,
-    pub vcpu_index: usize,
+    pub vcpu_index: ApIndex,
     pub pending_flushes: Cell<bool>,
 }
 
 impl PerCpu {
-    pub fn new(this: *mut Self, vcpu_index: usize) -> Self {
+    pub fn new(this: *mut Self, vcpu_index: ApIndex) -> Self {
         Self {
             this,
             vcpu_index,
@@ -29,7 +30,7 @@ impl PerCpu {
         })
     }
 
-    pub fn current_vcpu_index() -> usize {
+    pub fn current_vcpu_index() -> ApIndex {
         Self::with(|per_cpu| per_cpu.vcpu_index)
     }
 }

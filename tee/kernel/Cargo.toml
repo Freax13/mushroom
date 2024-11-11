@@ -19,7 +19,7 @@ async-trait = "0.1.77"
 bit_field = "0.10.2"
 bitflags = { version = "2.4.2", features = ["bytemuck"] }
 bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"] }
-constants = { workspace = true }
+constants = { workspace = true, features = ["nightly"] }
 crossbeam-queue = { version = "0.3.11", default-features = false, features = ["alloc"] }
 crossbeam-utils = { version = "0.8.19", default-features = false }
 futures = { version = "0.3.30", default-features = false, features = ["async-await", "alloc"] }

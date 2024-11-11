@@ -29,6 +29,8 @@ static HANDLER: Lazy<Mutex<Handler>> = Lazy::new(|| Mutex::new(Handler::new()));
 pub fn handle(resume: bool) {
     interrupts::disable();
 
+    let idx = PerCpu::current_vcpu_index();
+
     if let Some(mut handler) = HANDLER.try_lock() {
         let mut command_buffer_reader =
             CommandBufferReader::new(&supervisor_services().command_buffer);
@@ -37,10 +39,10 @@ pub fn handle(resume: bool) {
 
         let mut saw_self = false;
         for id in supervisor_services().notification_buffer.reset() {
-            if id == PerCpu::current_vcpu_index() {
+            if id == idx {
                 saw_self = true;
             } else {
-                send_ipi(id as u32, WAKEUP_VECTOR);
+                send_ipi(u32::from(id.as_u8()), WAKEUP_VECTOR);
             }
         }
         if saw_self {

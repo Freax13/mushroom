@@ -5,14 +5,13 @@ use std::{
     mem::size_of,
     path::Path,
     process::{Command, Stdio},
-    sync::{atomic::Ordering, Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
 };
 
 use anyhow::{ensure, Context, Error, Result};
-use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{bytes_of, cast_slice, zeroed_box, NoUninit};
-use constants::MAX_APS_COUNT;
+use constants::{ApIndex, MAX_APS_COUNT};
 use profiler_types::{AllEntries, Entry, PerCpuEntries, ProfilerControl, CALL_STACK_CAPACITY};
 use rand::random;
 use tracing::warn;
@@ -108,11 +107,7 @@ fn notification_poll_thread(
                 continue;
             }
 
-            let byte_idx = i / 8;
-            let bit_idx = i % 8;
-            let bits = notify_flags_ptr[byte_idx].load(Ordering::SeqCst);
-            let bit = bits.get_bit(bit_idx);
-            if bit {
+            if notify_flags_ptr.get(ApIndex::new(i as u8)) {
                 *state = State::Notified;
             }
         }
@@ -140,9 +135,7 @@ fn notification_poll_thread(
             *state = State::Idle;
 
             // Unset the notify bit.
-            let byte_idx = i / 8;
-            let bit_idx = i % 8;
-            notify_flags_ptr[byte_idx].fetch_and(!(1 << bit_idx), Ordering::SeqCst);
+            notify_flags_ptr.take(ApIndex::new(i as u8));
 
             // Re-add the idx to the list of available collector threads.
             available_collector_thread_controls.push(idx);

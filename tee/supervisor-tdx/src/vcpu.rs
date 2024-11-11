@@ -51,7 +51,7 @@ pub fn wait_for_vcpu_start() {
         interrupts::disable();
 
         let ready = READY.load(Ordering::Relaxed);
-        if ready == PerCpu::current_vcpu_index() {
+        if ready == usize::from(PerCpu::current_vcpu_index().as_u8()) {
             break;
         }
 

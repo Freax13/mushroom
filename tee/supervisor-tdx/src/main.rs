@@ -38,7 +38,7 @@ fn main() -> ! {
 
     setup_idt();
 
-    if PerCpu::current_vcpu_index() == 0 {
+    if PerCpu::current_vcpu_index().is_first() {
         input::init();
     }
 

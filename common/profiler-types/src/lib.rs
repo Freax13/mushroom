@@ -1,12 +1,9 @@
 #![no_std]
 
-use core::{mem::size_of, sync::atomic::AtomicU8};
+use core::mem::size_of;
 
 use bytemuck::{NoUninit, Zeroable};
-use constants::MAX_APS_COUNT;
-
-const NOTIFY_BITS: usize = MAX_APS_COUNT as usize;
-pub const NOTIFY_BYTES: usize = NOTIFY_BITS.div_ceil(8);
+use constants::{AtomicApBitmap, MAX_APS_COUNT};
 
 #[repr(C)]
 pub struct ProfilerControl {
@@ -14,7 +11,7 @@ pub struct ProfilerControl {
     /// kernel after it writes to a header. Set to `false` by the host after
     /// reading and processing the header. This mechanism aims to reduce
     /// contention.
-    pub notify_flags: [AtomicU8; NOTIFY_BYTES],
+    pub notify_flags: AtomicApBitmap,
     pub headers: [PerCpuHeader; MAX_APS_COUNT as usize],
     /// The effective frequency in MHz of the guest view of TSC.
     pub tsc_mhz: u64,

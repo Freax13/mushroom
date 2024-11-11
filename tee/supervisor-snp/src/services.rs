@@ -32,7 +32,7 @@ pub fn run() -> ! {
         // command.
 
         for id in supervisor_services().notification_buffer.reset() {
-            kick(id as u8);
+            kick(id);
         }
 
         wait_for_command();

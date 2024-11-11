@@ -6,7 +6,9 @@
 //! the buffer by issuing the [`AllocateMemory`](crate::command_buffer::AllocateMemory)
 //! command.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::AtomicU16;
+#[cfg(any(feature = "kernel", feature = "supervisor"))]
+use core::sync::atomic::Ordering;
 
 use bytemuck::{Pod, Zeroable};
 
