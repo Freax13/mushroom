@@ -31,16 +31,6 @@ use x86_64::{
 
 use crate::{memory::pagetable::entry_for_page, per_cpu::PerCpu};
 
-/// Initialize exception handling.
-///
-/// # Safety
-///
-/// This function must only be called once by main.
-pub unsafe fn init() {
-    load_gdt();
-    load_idt();
-}
-
 pub fn switch_stack(f: extern "C" fn() -> !) -> ! {
     let stack = allocate_stack();
 

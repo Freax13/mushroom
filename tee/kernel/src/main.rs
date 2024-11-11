@@ -83,11 +83,7 @@ unsafe fn main() -> ! {
 }
 
 extern "C" fn init() -> ! {
-    unsafe {
-        // SAFETY: We're the only ones calling these functions and we're only
-        // called once.
-        exception::init();
-    }
+    exception::load_gdt();
 
     // The first AP does some extra initialization work.
     if PerCpu::get().idx.is_first() {
