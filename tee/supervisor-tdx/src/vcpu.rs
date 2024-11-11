@@ -13,7 +13,6 @@ use tdx_types::{
     },
     vmexit::{
         VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_HLT_INSTRUCTION, VMEXIT_REASON_MSR_WRITE,
-        VMEXIT_REASON_VMCALL_INSTRUCTION,
     },
 };
 use x86_64::{
@@ -29,7 +28,6 @@ use crate::{
     per_cpu::PerCpu,
     services::handle,
     tdcall::{Tdcall, Vmcall},
-    tlb,
 };
 
 static READY: AtomicUsize = AtomicUsize::new(0);
@@ -194,13 +192,8 @@ pub fn run_vcpu() -> ! {
             .guest_interrupt_status
             .set_bits(0..8, u16::from(rvi));
 
-        tlb::pre_enter();
-        let flush = if PerCpu::with(|per_cpu| per_cpu.pending_flushes.take()) {
-            InvdTranslations::All
-        } else {
-            InvdTranslations::None
-        };
-        let vm_exit = Tdcall::vp_enter(VmIndex::One, flush, &mut guest_state, true);
+        let vm_exit =
+            Tdcall::vp_enter(VmIndex::One, InvdTranslations::None, &mut guest_state, true);
 
         match vm_exit.class {
             TDX_SUCCESS => {}
@@ -229,9 +222,6 @@ pub fn run_vcpu() -> ! {
             VMEXIT_REASON_MSR_WRITE => {
                 let value = guest_state.rax.get_bits(..32) | (guest_state.rdx << 32);
                 match guest_state.rcx {
-                    0x40000000 => {
-                        // Ignore writes to HV_X64_MSR_GUEST_OS_ID.
-                    }
                     // IA32_X2APIC_ICR
                     0x830 => {
                         // We don't support all options. Check that we support the fields.
@@ -254,25 +244,6 @@ pub fn run_vcpu() -> ! {
                     }
                     rcx => unimplemented!("MSR write: {rcx:#x}"),
                 }
-                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
-            }
-            VMEXIT_REASON_VMCALL_INSTRUCTION => {
-                // The kernel currently only executes vmcalls to flush the TLB.
-                // Double-check this.
-                assert_eq!(
-                    guest_state.rcx, 0x10002,
-                    "unsupported request: {:#x}",
-                    guest_state.rcx
-                );
-                assert_eq!(
-                    guest_state.rdx, 3,
-                    "unsupported flags: {:#x}",
-                    guest_state.rdx
-                );
-
-                tlb::flush();
-
-                guest_state.rax = 0;
                 guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             unknown => panic!("{unknown:#x} {guest_state:x?} {vm_exit:x?}"),

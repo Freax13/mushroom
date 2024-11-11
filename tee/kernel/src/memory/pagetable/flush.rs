@@ -1,7 +1,10 @@
-use core::{arch::asm, ops::RangeInclusive};
+use core::{
+    arch::{asm, x86_64::__cpuid},
+    ops::RangeInclusive,
+};
 
-use bit_field::BitField;
-use constants::{ApBitmap, ApIndex, AtomicApBitmap};
+use bit_field::{BitArray, BitField};
+use constants::{ApBitmap, ApIndex, AtomicApBitmap, MAX_APS_COUNT};
 use x86_64::{
     instructions::tlb::{self, InvPicdCommand, Invlpgb},
     registers::{
@@ -140,6 +143,14 @@ impl ActivePageTableGuard {
             return;
         }
 
+        // If the hypervisor supports Hyper-V hypercalls, use them.
+        if let Some(hyper_v) = *HYPER_V {
+            hyper_v.flush_all(state.needs_flush);
+            self.flush_all_local();
+            state.needs_flush = ApBitmap::empty();
+            return;
+        }
+
         // We've run out of optimizations :(
         // Flush on the current processor and send IPIs to the other relevant
         // APs.
@@ -210,6 +221,15 @@ impl ActivePageTableGuard {
             return;
         }
 
+        // If the hypervisor supports Hyper-V hypercalls, use them.
+        if let Some(hyper_v) = *HYPER_V {
+            drop(guard);
+
+            hyper_v.flush_address_list(pages.clone(), other_active_aps);
+            self.flush_pages_local(pages);
+            return;
+        }
+
         // We've run out of optimizations :(
         // Flush on the current processor and send IPIs to the other relevant
         // APs.
@@ -250,6 +270,7 @@ pub(super) struct GlobalFlushGuard;
 
 impl FlushGuard for GlobalFlushGuard {
     fn flush_page(&self, page: Page) {
+        // If invlpgb is supported, use it.
         if let Some(invlpgb) = &*INVLPGB {
             invlpgb
                 .build()
@@ -260,10 +281,18 @@ impl FlushGuard for GlobalFlushGuard {
             return;
         }
 
-        // Tell all other APs to flush their entire TLBs.
         let mut all_other_aps = ApBitmap::all();
         all_other_aps.set(PerCpu::get().idx, false);
         PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(all_other_aps);
+
+        // If the hypervisor supports Hyper-V hypercalls, use them.
+        if let Some(hyper_v) = *HYPER_V {
+            hyper_v.flush_address_list(page..=page, all_other_aps);
+
+            // Flush the local TLB entry.
+            tlb::flush(page.start_address());
+            return;
+        }
 
         // Send IPIs to all other currently active APs.
         let other_active_aps = ACTIVE_APS.get_all() & all_other_aps;
@@ -276,6 +305,216 @@ impl FlushGuard for GlobalFlushGuard {
         let mut remaining_aps = other_active_aps;
         while !remaining_aps.is_empty() {
             remaining_aps &= PENDING_GLOBAL_TLB_SHOOTDOWN.get_all();
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Hypercall {
+    Vmmcall,
+    Vmcall,
+}
+
+impl Hypercall {
+    fn get() -> Self {
+        let svm = unsafe { __cpuid(0x8000_0001) }.ecx.get_bit(2);
+        if svm {
+            Hypercall::Vmmcall
+        } else {
+            Hypercall::Vmcall
+        }
+    }
+}
+
+static HYPER_V: Lazy<Option<HyperV>> = Lazy::new(HyperV::new);
+
+#[derive(Clone, Copy)]
+struct HyperV(Hypercall);
+
+impl HyperV {
+    pub fn new() -> Option<Self> {
+        // Make sure the hypervisor supports the HyperV hypercall ABI.
+        let cpuid_result = unsafe {
+            // SAFETY: If `cpuid` isn't available, we have bigger problems.
+            __cpuid(0x40000001)
+        };
+        // Check the interface id.
+        if cpuid_result.eax != 0x31237648 {
+            return None;
+        }
+
+        // Enable HyperV hypercalls.
+        const HV_X64_MSR_GUEST_OS_ID: u32 = 0x40000000;
+        unsafe {
+            Msr::new(HV_X64_MSR_GUEST_OS_ID).write(1);
+        }
+
+        Some(Self(Hypercall::get()))
+    }
+
+    const HV_FLUSH_ALL_VIRTUAL_ADDRESS_SPACES: u64 = 1 << 1;
+
+    pub fn flush_address_list(&self, range: RangeInclusive<Page>, aps: ApBitmap) {
+        let count = range.clone().count();
+        let gva_range = match count {
+            0 => {
+                //  There's nothing to flush.
+                return;
+            }
+            1..1024 => range.start().start_address().as_u64() + (count as u64 - 1),
+            _ => {
+                // We can't encode the range. Fall back to flushing the entire TLB.
+                return self.flush_all(aps);
+            }
+        };
+
+        let mut input_value = 0;
+        input_value.set_bits(0..16, 0x0014); // Call Code: 0x0014
+        input_value.set_bit(16, true); // Fast: true
+        input_value.set_bits(17..27, NUM_BANKS); // Variable header size: NUM_BANKS
+        input_value.set_bit(31, false); // Is Nested: false
+        input_value.set_bits(32..44, 1); // Rep Count: 1
+        input_value.set_bits(48..60, 0); // Rep Start Index: 0
+
+        #[repr(C, align(16))]
+        struct HvFlushVirtualAddressListEx {
+            // header
+            address_space: u64,
+            flags: u64,
+            processor_set: HvVpSet,
+            // list
+            gva_range: u64,
+        }
+
+        let input = HvFlushVirtualAddressListEx {
+            address_space: 0,
+            flags: Self::HV_FLUSH_ALL_VIRTUAL_ADDRESS_SPACES,
+            processor_set: HvVpSet::from_iter(aps),
+            gva_range,
+        };
+
+        // Assert that we can fit `HvFlushVirtualAddressListEx` into two GPRs
+        // and 2 XMM registers.
+        const {
+            assert!(size_of::<HvFlushVirtualAddressListEx>().div_ceil(16) - 1 == 2);
+        }
+
+        let output: u64;
+        unsafe {
+            asm!(
+                "mov rdx, qword ptr [{input} + 0]",
+                "mov r8,  qword ptr [{input} + 8]",
+                "movdqa xmm0, xmmword ptr [{input} + 16]",
+                "movdqa xmm1, xmmword ptr [{input} + 32]",
+                "test {variant}, {VMCALL}",
+                "jnz 65f",
+                "vmmcall",
+                "jmp 66f",
+                "65:",
+                "vmcall",
+                "66:",
+                inout("rcx") input_value => _,
+                input = in(reg) &input,
+                variant = in(reg) self.0 as u64,
+                VMCALL = const Hypercall::Vmcall as u8,
+                out("rax") output,
+                out("rdx") _,
+                out("r8") _,
+                out("xmm0") _,
+                out("xmm1") _,
+                options(nostack),
+            );
+        }
+
+        assert_eq!(output.get_bits(0..16), 0); // Check result
+        assert_eq!(output.get_bits(32..44), 1); // Check resps completed
+    }
+
+    pub fn flush_all(&self, aps: ApBitmap) {
+        let mut input_value = 0;
+        input_value.set_bits(0..16, 0x0013); // Call Code: 0x0013
+        input_value.set_bit(16, true); // Fast: true
+        input_value.set_bits(17..27, NUM_BANKS); // Variable header size: NUM_BANKS
+        input_value.set_bit(31, false); // Is Nested: false
+        input_value.set_bits(32..44, 0); // Rep Count: 1
+        input_value.set_bits(48..60, 0); // Rep Start Index: 0
+
+        #[repr(C, align(16))]
+        struct HvCallFlushVirtualAddressSpaceEx {
+            // header
+            address_space: u64,
+            flags: u64,
+            processor_set: HvVpSet,
+        }
+
+        let input = HvCallFlushVirtualAddressSpaceEx {
+            address_space: 0,
+            flags: Self::HV_FLUSH_ALL_VIRTUAL_ADDRESS_SPACES,
+            processor_set: HvVpSet::from_iter(aps),
+        };
+
+        // Assert that we can fit `HvCallFlushVirtualAddressSpaceEx` into two GPRs
+        // and 2 XMM registers.
+        const {
+            assert!(size_of::<HvCallFlushVirtualAddressSpaceEx>().div_ceil(16) - 1 == 2);
+        }
+
+        let output: u64;
+        unsafe {
+            asm!(
+                "mov rdx, qword ptr [{input} + 0]",
+                "mov r8,  qword ptr [{input} + 8]",
+                "movdqa xmm0, xmmword ptr [{input} + 16]",
+                "movdqa xmm1, xmmword ptr [{input} + 32]",
+                "test {variant}, {VMCALL}",
+                "jnz 65f",
+                "vmmcall",
+                "jmp 66f",
+                "65:",
+                "vmcall",
+                "66:",
+                inout("rcx") input_value => _,
+                input = in(reg) &input,
+                variant = in(reg) self.0 as u64,
+                VMCALL = const Hypercall::Vmcall as u8,
+                out("rax") output,
+                out("rdx") _,
+                out("r8") _,
+                out("xmm0") _,
+                out("xmm1") _,
+                options(nostack),
+            );
+        }
+
+        assert_eq!(output.get_bits(0..16), 0); // Check result
+    }
+}
+
+const NUM_BANKS: usize = (MAX_APS_COUNT as usize).div_ceil(64);
+
+#[repr(C)]
+struct HvVpSet {
+    format: u64,
+    valid_banks_mask: u64,
+    bank_contents: [u64; NUM_BANKS],
+}
+
+impl FromIterator<ApIndex> for HvVpSet {
+    fn from_iter<T: IntoIterator<Item = ApIndex>>(iter: T) -> Self {
+        let mut this = Self::default();
+        for ap in iter {
+            this.bank_contents.set_bit(usize::from(ap.as_u8()), true);
+        }
+        this
+    }
+}
+
+impl Default for HvVpSet {
+    fn default() -> Self {
+        Self {
+            format: 0,
+            valid_banks_mask: (1 << NUM_BANKS) - 1,
+            bank_contents: [0; NUM_BANKS],
         }
     }
 }

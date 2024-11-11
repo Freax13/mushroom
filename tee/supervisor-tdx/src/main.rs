@@ -23,7 +23,6 @@ mod per_cpu;
 mod reset_vector;
 mod services;
 mod tdcall;
-mod tlb;
 mod vcpu;
 
 fn main() -> ! {
