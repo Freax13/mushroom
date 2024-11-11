@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::spin::mutex::Mutex;
+use crate::{memory::pagetable::flush, spin::mutex::Mutex};
 use arrayvec::ArrayVec;
 use bit_field::BitField;
 use constants::{physical_address::DYNAMIC_2MIB, ApBitmap, ApIndex};
@@ -180,7 +180,11 @@ pub fn halt() -> Result<(), LastRunningVcpuError> {
     #[cfg(feature = "profiling")]
     crate::profiler::flush();
 
+    flush::pre_halt();
+
     kick_supervisor(false);
+
+    flush::post_halt();
 
     SCHEDULER.resume();
 

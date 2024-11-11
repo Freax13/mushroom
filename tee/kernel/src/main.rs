@@ -34,7 +34,9 @@ compiler_error!("Hardened kernels can't be profiled.");
 extern crate alloc;
 
 use exception::switch_stack;
+use memory::pagetable::flush;
 use supervisor::SCHEDULER;
+use x86_64::instructions::interrupts;
 
 use crate::per_cpu::PerCpu;
 
@@ -68,6 +70,7 @@ unsafe fn main() -> ! {
     }
 
     PerCpu::init();
+    flush::init();
 
     #[cfg(feature = "profiling")]
     if PerCpu::get().idx.is_first() {
@@ -78,6 +81,7 @@ unsafe fn main() -> ! {
 
     exception::load_early_gdt();
     exception::load_idt();
+    interrupts::enable();
 
     switch_stack(init)
 }

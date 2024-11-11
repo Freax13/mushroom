@@ -23,7 +23,11 @@ use crate::spin::lazy::Lazy;
 use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
-use constants::physical_address::{kernel::*, *};
+use constants::{
+    physical_address::{kernel::*, *},
+    ApBitmap,
+};
+use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use x86_64::{
@@ -35,7 +39,6 @@ use x86_64::{
 
 use super::{
     frame::{allocate_frame, deallocate_frame},
-    invlpgb::INVLPGB,
     temporary::copy_into_frame,
 };
 
@@ -171,15 +174,15 @@ pub unsafe fn map_page(page: Page, entry: PresentPageTableEntry) -> Result<()> {
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire(entry.flags())?;
+    let level3_guard = level4_entry.acquire(entry.flags(), &GlobalFlushGuard)?;
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire(entry.flags())?;
+    let level2_guard = level3_entry.acquire(entry.flags(), &GlobalFlushGuard)?;
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire(entry.flags())?;
+    let level1_guard = level2_entry.acquire(entry.flags(), &GlobalFlushGuard)?;
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -201,15 +204,15 @@ pub unsafe fn unmap_page_no_flush(page: Page) -> PresentPageTableEntry {
     let level4 = ActivePageTable::get();
     let level4_entry = &level4[page.p4_index()];
 
-    let level3_guard = level4_entry.acquire_existing().unwrap();
+    let level3_guard = level4_entry.acquire_existing(&GlobalFlushGuard).unwrap();
     let level3 = &*level3_guard;
     let level3_entry = &level3[page.p3_index()];
 
-    let level2_guard = level3_entry.acquire_existing().unwrap();
+    let level2_guard = level3_entry.acquire_existing(&GlobalFlushGuard).unwrap();
     let level2 = &*level2_guard;
     let level2_entry = &level2[page.p2_index()];
 
-    let level1_guard = level2_entry.acquire_existing().unwrap();
+    let level1_guard = level2_entry.acquire_existing(&GlobalFlushGuard).unwrap();
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
@@ -231,11 +234,11 @@ pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
 pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
     let pml4 = ActivePageTable::get();
     let pml4e = &pml4[page.p4_index()];
-    let pdp = pml4e.acquire_existing()?;
+    let pdp = pml4e.acquire_existing(&GlobalFlushGuard)?;
     let pdpe = &pdp[page.p3_index()];
-    let pd = pdpe.acquire_existing()?;
+    let pd = pdpe.acquire_existing(&GlobalFlushGuard)?;
     let pde = &pd[page.p2_index()];
-    let pt = pde.acquire_existing()?;
+    let pt = pde.acquire_existing(&GlobalFlushGuard)?;
     let pte = &pt[page.p1_index()];
     pte.entry()
 }
@@ -325,14 +328,38 @@ pub fn check_user_address(addr: VirtAddr, len: usize) -> Result<()> {
     check_user_page(page)
 }
 
+struct FlushState {
+    /// A bitmap containing all APs currently using the page table.
+    active: ApBitmap,
+    /// A bitmap containing all APs that activated the page tables in the past
+    /// or now and have not yet flushed.
+    used: ApBitmap,
+    /// A bitmap containing all APs that need to flush the PCID the next time
+    /// they activate the page tables.
+    needs_flush: ApBitmap,
+}
+
+impl FlushState {
+    pub fn new() -> Self {
+        Self {
+            active: ApBitmap::empty(),
+            used: ApBitmap::empty(),
+            needs_flush: ApBitmap::all(),
+        }
+    }
+}
+
 pub struct PagetablesAllocations {
     pml4: PhysFrame,
+    flush_state: Mutex<FlushState>,
     /// None if PCID is not supported.
     pcid_allocation: Option<PcidAllocation>,
 }
 
 impl Drop for PagetablesAllocations {
     fn drop(&mut self) {
+        assert!(self.flush_state.get_mut().active.is_empty());
+
         unsafe {
             deallocate_frame(self.pml4);
         }
@@ -380,6 +407,7 @@ impl Pagetables {
             .then(|| ALLOCATIONS.lock().allocate());
         let allocations = PagetablesAllocations {
             pml4: frame,
+            flush_state: Mutex::new(FlushState::new()),
             pcid_allocation,
         };
         let allocations = Arc::new(allocations);
@@ -406,10 +434,26 @@ impl Pagetables {
             .as_ref()
             .is_some_and(|existing| Arc::ptr_eq(existing, allocations));
 
-        if update_required {
+        let mut flush_state_guard = allocations.flush_state.lock();
+        let ap_index = PerCpu::get().idx;
+        flush_state_guard.active.set(ap_index, true);
+        flush_state_guard.used.set(ap_index, true);
+        let needs_flush = flush_state_guard.needs_flush.get(ap_index);
+        if needs_flush {
+            flush_state_guard.needs_flush.set(ap_index, false);
+        }
+        drop(flush_state_guard);
+
+        if update_required || needs_flush {
             if let Some(pcid_allocation) = allocations.pcid_allocation.as_ref() {
-                unsafe {
-                    Cr3::write_pcid_no_flush(allocations.pml4, pcid_allocation.pcid);
+                if needs_flush {
+                    unsafe {
+                        Cr3::write_pcid(allocations.pml4, pcid_allocation.pcid);
+                    }
+                } else {
+                    unsafe {
+                        Cr3::write_pcid_no_flush(allocations.pml4, pcid_allocation.pcid);
+                    }
                 }
             } else {
                 unsafe {
@@ -417,12 +461,17 @@ impl Pagetables {
                 }
             }
 
-            *guard = Some(allocations.clone());
+            if update_required {
+                *guard = Some(allocations.clone());
+            }
         }
 
+        let guard = RefMut::map(guard, |a| a.as_mut().unwrap());
+
         ActivePageTableGuard {
-            _guard: guard,
+            guard,
             pml4: ActivePageTable::get(),
+            _marker: PhantomData,
         }
     }
 
@@ -435,15 +484,15 @@ impl Pagetables {
         let level4 = self.activate();
         let level4_entry = &level4[page.p4_index()];
 
-        let level3_guard = level4_entry.acquire(entry.flags())?;
+        let level3_guard = level4_entry.acquire(entry.flags(), &level4)?;
         let level3 = &*level3_guard;
         let level3_entry = &level3[page.p3_index()];
 
-        let level2_guard = level3_entry.acquire(entry.flags())?;
+        let level2_guard = level3_entry.acquire(entry.flags(), &level4)?;
         let level2 = &*level2_guard;
         let level2_entry = &level2[page.p2_index()];
 
-        let level1_guard = level2_entry.acquire(entry.flags())?;
+        let level1_guard = level2_entry.acquire(entry.flags(), &level4)?;
         let level1 = &*level1_guard;
         let level1_entry = &level1[page.p1_index()];
 
@@ -465,7 +514,7 @@ impl Pagetables {
             }
         }
 
-        flush_current_pcid();
+        level4.flush_all();
     }
 
     /// Unmap a page if it's mapped.
@@ -507,7 +556,7 @@ impl Pagetables {
         let pml4 = self.activate();
         for p4_index in start.p4_index()..=end.p4_index() {
             let pml4e = &pml4[p4_index];
-            let Some(pdp) = pml4e.acquire_existing() else {
+            let Some(pdp) = pml4e.acquire_existing(&pml4) else {
                 continue;
             };
 
@@ -532,7 +581,7 @@ impl Pagetables {
 
             for p3_index in start.p3_index()..=end.p3_index() {
                 let pdpe = &pdp[p3_index];
-                let Some(pd) = pdpe.acquire_existing() else {
+                let Some(pd) = pdpe.acquire_existing(&pml4) else {
                     continue;
                 };
 
@@ -557,7 +606,7 @@ impl Pagetables {
 
                 for p2_index in start.p2_index()..=end.p2_index() {
                     let pde = &pd[p2_index];
-                    let Some(pt) = pde.acquire_existing() else {
+                    let Some(pt) = pde.acquire_existing(&pml4) else {
                         continue;
                     };
 
@@ -590,10 +639,7 @@ impl Pagetables {
             }
         }
 
-        let (_, pcid) = Cr3::read_pcid();
-        unsafe {
-            INVLPGB.flush_user_pages(pcid, start..=end);
-        }
+        pml4.flush_pages(start..=end);
     }
 
     /// Try to copy user memory from `src` into `dest`.
@@ -637,8 +683,10 @@ impl Pagetables {
 }
 
 struct ActivePageTableGuard {
-    _guard: RefMut<'static, Option<Arc<PagetablesAllocations>>>,
+    guard: RefMut<'static, Arc<PagetablesAllocations>>,
     pml4: &'static ActivePageTable<Level4>,
+    // Make sure the type is neither `Send` nor `Sync`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Deref for ActivePageTableGuard {
@@ -649,13 +697,10 @@ impl Deref for ActivePageTableGuard {
     }
 }
 
-fn flush_current_pcid() {
-    let cr4 = Cr4::read();
-    if cr4.contains(Cr4Flags::PCID) {
-        let (_, pcid) = Cr3::read_pcid();
-        INVLPGB.flush_pcid(pcid);
-    } else {
-        INVLPGB.flush_all();
+impl Drop for ActivePageTableGuard {
+    fn drop(&mut self) {
+        let mut guard = self.guard.flush_state.lock();
+        guard.active.set(PerCpu::get().idx, false);
     }
 }
 
@@ -787,14 +832,27 @@ where
 }
 
 impl ActivePageTableEntry<Level4> {
-    pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, Level4>> {
+    pub fn acquire<'a, F>(
+        &'a self,
+        flags: PageTableFlags,
+        guard: &'a F,
+    ) -> Result<ActivePageTableEntryGuard<'a, Level4, F>>
+    where
+        F: FlushGuard,
+    {
         self.acquire_reference_count(flags).unwrap();
-        Ok(ActivePageTableEntryGuard { entry: self })
+        Ok(ActivePageTableEntryGuard { entry: self, guard })
     }
 
-    pub fn acquire_existing(&self) -> Option<ActivePageTableEntryGuard<'_, Level4>> {
+    pub fn acquire_existing<'a, F>(
+        &'a self,
+        guard: &'a F,
+    ) -> Option<ActivePageTableEntryGuard<'a, Level4, F>>
+    where
+        F: FlushGuard,
+    {
         self.increase_reference_count().ok()?;
-        Some(ActivePageTableEntryGuard { entry: self })
+        Some(ActivePageTableEntryGuard { entry: self, guard })
     }
 }
 
@@ -802,7 +860,14 @@ impl<L> ActivePageTableEntry<L>
 where
     L: HasParentLevel + TableLevel,
 {
-    pub fn acquire(&self, flags: PageTableFlags) -> Result<ActivePageTableEntryGuard<'_, L>> {
+    pub fn acquire<'a, F>(
+        &'a self,
+        flags: PageTableFlags,
+        guard: &'a F,
+    ) -> Result<ActivePageTableEntryGuard<'a, L, F>>
+    where
+        F: FlushGuard,
+    {
         let initialized = self.acquire_reference_count(flags).unwrap();
 
         if initialized {
@@ -810,12 +875,18 @@ where
             parent_entry.increase_reference_count().unwrap();
         }
 
-        Ok(ActivePageTableEntryGuard { entry: self })
+        Ok(ActivePageTableEntryGuard { entry: self, guard })
     }
 
-    pub fn acquire_existing(&self) -> Option<ActivePageTableEntryGuard<'_, L>> {
+    pub fn acquire_existing<'a, F>(
+        &'a self,
+        guard: &'a F,
+    ) -> Option<ActivePageTableEntryGuard<'a, L, F>>
+    where
+        F: FlushGuard,
+    {
         self.increase_reference_count().ok()?;
-        Some(ActivePageTableEntryGuard { entry: self })
+        Some(ActivePageTableEntryGuard { entry: self, guard })
     }
 }
 
@@ -968,7 +1039,7 @@ where
     ///
     /// The caller must ensure that the entry is that `release` is only called
     /// after the `acquire` is no longer needed.
-    unsafe fn release_reference_count(&self) -> Option<PhysFrame> {
+    unsafe fn release_reference_count(&self, guard: &impl FlushGuard) -> Option<PhysFrame> {
         if self.is_static_entry() {
             return None;
         }
@@ -1028,7 +1099,7 @@ where
                 }
 
                 // Step 2:
-                self.flush(true);
+                self.flush(guard);
 
                 // Step 3:
                 atomic_store(&self.entry, 0);
@@ -1070,8 +1141,8 @@ where
 }
 
 impl<L> ActivePageTableEntry<L> {
-    fn flush(&self, global: bool) {
-        INVLPGB.flush_page(self.page(), global);
+    fn flush(&self, guard: &impl FlushGuard) {
+        guard.flush_page(self.page());
     }
 
     pub fn page(&self) -> Page<Size4KiB> {
@@ -1184,18 +1255,21 @@ where
 }
 
 #[must_use]
-struct ActivePageTableEntryGuard<'a, L>
+struct ActivePageTableEntryGuard<'a, L, F>
 where
     L: TableLevel,
     ActivePageTableEntry<L>: ParentEntry,
+    F: FlushGuard,
 {
     entry: &'a ActivePageTableEntry<L>,
+    guard: &'a F,
 }
 
-impl<L> Deref for ActivePageTableEntryGuard<'_, L>
+impl<L, F> Deref for ActivePageTableEntryGuard<'_, L, F>
 where
     L: TableLevel,
     ActivePageTableEntry<L>: ParentEntry,
+    F: FlushGuard,
 {
     type Target = ActivePageTable<L::Next>;
 
@@ -1205,17 +1279,18 @@ where
     }
 }
 
-impl<L> Drop for ActivePageTableEntryGuard<'_, L>
+impl<L, F> Drop for ActivePageTableEntryGuard<'_, L, F>
 where
     L: TableLevel,
     ActivePageTableEntry<L>: ParentEntry,
+    F: FlushGuard,
 {
     fn drop(&mut self) {
         // Release reference count.
         let frame = unsafe {
             // SAFETY: We're releasing the reference count acquired in
             // ActivePageTableEntry::acquire`.
-            self.entry.release_reference_count()
+            self.entry.release_reference_count(self.guard)
         };
 
         // Check if the entry was freed.
@@ -1593,8 +1668,6 @@ impl PcidAllocations {
     }
 
     unsafe fn deallocate(&mut self, pcid: Pcid) {
-        INVLPGB.flush_pcid(pcid);
-
         self.in_use[usize::from(pcid.value())] = false;
     }
 }

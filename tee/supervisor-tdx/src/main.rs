@@ -8,6 +8,7 @@ use log::{debug, LevelFilter};
 use per_cpu::PerCpu;
 use spin::Once;
 use vcpu::{init_vcpu, run_vcpu, wait_for_vcpu_start};
+use x86_64::registers::model_specific::Msr;
 
 use crate::logging::SerialLogger;
 
@@ -33,6 +34,11 @@ fn main() -> ! {
             log::set_max_level(LevelFilter::Trace);
             debug!("initialized logger");
         });
+    }
+
+    const IA32_TSC_AUX: u32 = 0xC000_0103;
+    unsafe {
+        Msr::new(IA32_TSC_AUX).write(PerCpu::current_vcpu_index().as_u8() as u64);
     }
 
     setup_idt();
