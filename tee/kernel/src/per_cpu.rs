@@ -1,6 +1,7 @@
 use core::{
     arch::asm,
     cell::{Cell, OnceCell, RefCell},
+    mem::offset_of,
     ptr::null_mut,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -22,7 +23,6 @@ static COUNT: AtomicUsize = AtomicUsize::new(0);
 static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
     [const { PerCpu::new() }; MAX_APS_COUNT as usize];
 
-#[repr(C)]
 pub struct PerCpu {
     this: *mut PerCpu,
     pub idx: ApIndex,
@@ -65,7 +65,12 @@ impl PerCpu {
         unsafe {
             // SAFETY: If the GS segment wasn't programmed yet, this will cause
             // a page fault, which is a safe thing to do.
-            asm!("mov {}, gs:[0]", out(reg) addr, options(pure, nomem, preserves_flags, nostack));
+            asm!(
+                "mov {}, gs:[{THIS_OFFSET}]",
+                out(reg) addr,
+                THIS_OFFSET = const offset_of!(Self, this),
+                options(pure, nomem, preserves_flags, nostack),
+            );
         }
         let ptr = addr as *const Self;
         unsafe { &*ptr }
