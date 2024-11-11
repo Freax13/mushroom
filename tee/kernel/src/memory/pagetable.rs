@@ -188,12 +188,12 @@ pub unsafe fn map_page(page: Page, entry: PresentPageTableEntry) -> Result<()> {
     Ok(())
 }
 
-/// Unmap a page.
+/// Unmap a page without flushing it from the TLB.
 ///
 /// # Panics
 ///
 /// This function panics if the page is not mapped.
-pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
+pub unsafe fn unmap_page_no_flush(page: Page) -> PresentPageTableEntry {
     trace!("unmapping page {page:?}");
 
     let level4 = ActivePageTable::get();
@@ -211,7 +211,19 @@ pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
     let level1 = &*level1_guard;
     let level1_entry = &level1[page.p1_index()];
 
-    unsafe { level1_entry.unmap() }
+    unsafe { level1_entry.unmap_no_flush() }
+}
+
+/// Unmap a page.
+///
+/// # Panics
+///
+/// This function panics if the page is not mapped.
+#[cfg(sanitize = "address")]
+pub unsafe fn unmap_page(page: Page) -> PresentPageTableEntry {
+    let entry = unsafe { unmap_page_no_flush(page) };
+    GlobalFlushGuard.flush_page(page);
+    entry
 }
 
 pub fn entry_for_page(page: Page) -> Option<PresentPageTableEntry> {
@@ -1104,8 +1116,6 @@ impl ActivePageTableEntry<Level1> {
         self.parent_table_entry()
             .increase_reference_count()
             .unwrap();
-
-        self.flush(true);
     }
 
     /// Map a new page or replace an existing page.
@@ -1116,17 +1126,14 @@ impl ActivePageTableEntry<Level1> {
                 .increase_reference_count()
                 .unwrap();
         }
-
-        self.flush(true);
     }
 
     /// # Panics
     ///
     /// Panics if the page isn't mapped.
-    pub unsafe fn unmap(&self) -> PresentPageTableEntry {
+    pub unsafe fn unmap_no_flush(&self) -> PresentPageTableEntry {
         let old_entry = atomic_swap(&self.entry, 0);
         let old_entry = PresentPageTableEntry::try_from(old_entry).unwrap();
-        self.flush(old_entry.global());
 
         unsafe {
             self.parent_table_entry().release_reference_count_fast();
