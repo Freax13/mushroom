@@ -3,10 +3,10 @@ use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use x86_64::registers::rflags::RFlags;
 
-pub const TDX_SUCCESS: u32 = 0x00000000;
-pub const TDX_L2_EXIT_HOST_ROUTED_ASYNC: u32 = 0x00001100;
-pub const TDX_L2_EXIT_PENDING_INTERRUPT: u32 = 0x00001102;
-pub const TDX_PENDING_INTERRUPT: u32 = 0x00001120;
+pub const TDX_SUCCESS: u16 = 0x0000;
+pub const TDX_L2_EXIT_HOST_ROUTED_ASYNC: u16 = 0x1100;
+pub const TDX_L2_EXIT_PENDING_INTERRUPT: u16 = 0x1102;
+pub const TDX_PENDING_INTERRUPT: u16 = 0x1120;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(256))]

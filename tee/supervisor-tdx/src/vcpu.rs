@@ -162,10 +162,9 @@ pub fn run_vcpu() -> ! {
         } else {
             InvdTranslations::None
         };
-        let (exit_reason, instruction_length) =
-            Tdcall::vp_enter(VmIndex::One, flush, &mut guest_state, true);
+        let vm_exit = Tdcall::vp_enter(VmIndex::One, flush, &mut guest_state, true);
 
-        match (exit_reason >> 32) as u32 {
+        match vm_exit.class {
             TDX_SUCCESS => {}
             TDX_L2_EXIT_HOST_ROUTED_ASYNC => continue,
             TDX_L2_EXIT_PENDING_INTERRUPT => continue,
@@ -173,7 +172,7 @@ pub fn run_vcpu() -> ! {
             reason => unimplemented!("{reason:#010x}"),
         }
 
-        match exit_reason as u32 {
+        match vm_exit.exit_reason {
             VMEXIT_REASON_CPUID_INSTRUCTION => {
                 let result =
                     unsafe { __cpuid_count(guest_state.rax as u32, guest_state.rcx as u32) };
@@ -181,11 +180,11 @@ pub fn run_vcpu() -> ! {
                 guest_state.rbx = u64::from(result.ebx);
                 guest_state.rcx = u64::from(result.ecx);
                 guest_state.rdx = u64::from(result.edx);
-                guest_state.rip += u64::from(instruction_length);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             VMEXIT_REASON_HLT_INSTRUCTION => {
                 handle(guest_state.rax != 0);
-                guest_state.rip += u64::from(instruction_length);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             VMEXIT_REASON_VMCALL_INSTRUCTION => {
                 // The kernel currently only executes vmcalls to flush the TLB.
@@ -204,7 +203,7 @@ pub fn run_vcpu() -> ! {
                 tlb::flush();
 
                 guest_state.rax = 0;
-                guest_state.rip += u64::from(instruction_length);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             VMEXIT_REASON_MSR_WRITE => {
                 match guest_state.rcx {
@@ -213,9 +212,9 @@ pub fn run_vcpu() -> ! {
                     }
                     rcx => panic!("{rcx:#x}"),
                 }
-                guest_state.rip += u64::from(instruction_length);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
-            unknown => panic!("{unknown:#x} {guest_state:x?}"),
+            unknown => panic!("{unknown:#x} {guest_state:x?} {vm_exit:x?}"),
         }
     }
 }
