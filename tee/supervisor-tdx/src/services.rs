@@ -30,11 +30,14 @@ pub fn handle(mut resume: bool) {
     if let Some(mut handler) = HANDLER.try_lock() {
         let mut command_buffer_reader =
             CommandBufferReader::new(&supervisor_services().command_buffer);
-        while command_buffer_reader.handle(&mut *handler) {}
+        let mut pending = supervisor_services().notification_buffer.reset();
+        while command_buffer_reader.handle(&mut *handler) {
+            pending |= supervisor_services().notification_buffer.reset();
+        }
         drop(handler);
 
         let idx = PerCpu::current_vcpu_index();
-        for id in supervisor_services().notification_buffer.reset() {
+        for id in pending {
             if id == idx {
                 resume = true;
             } else {

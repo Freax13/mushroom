@@ -192,9 +192,12 @@ pub fn main(
         finish_status: None,
     };
     let finish_status = loop {
-        while command_buffer_reader.handle(&mut handler) {}
+        let mut pending = supervisor_services.notification_buffer.reset();
+        while command_buffer_reader.handle(&mut handler) {
+            pending |= supervisor_services.notification_buffer.reset();
+        }
 
-        for i in supervisor_services.notification_buffer.reset() {
+        for i in pending {
             ap_threads[usize::from(i.as_u8())].thread().unpark();
         }
 
