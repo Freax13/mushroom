@@ -615,7 +615,7 @@ impl Registers {
         fs: 0,
         gs: 0,
         ss: 0x23,
-        rflags: 2,
+        rflags: 2 | 1 << 9,
         ..Self::ZERO
     };
 }
@@ -763,7 +763,7 @@ struct FpxSwBytes {
 
 pub fn init() {
     LStar::write(VirtAddr::new(syscall_entry as usize as u64));
-    SFMask::write(RFlags::DIRECTION_FLAG);
+    SFMask::write(RFlags::DIRECTION_FLAG | RFlags::INTERRUPT_FLAG);
 }
 
 unsafe extern "sysv64" {
@@ -800,6 +800,9 @@ global_asm!(
     "pushfq",
     "pop rax",
     "mov gs:[{K_RFLAGS_OFFSET}], rax",
+
+    // Disable interrupts.
+    "cli",
 
     // Restore user state.
     // Restore segment registers.
