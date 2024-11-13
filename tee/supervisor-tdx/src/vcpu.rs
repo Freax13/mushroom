@@ -24,7 +24,7 @@ use x86_64::{
 };
 
 use crate::{
-    exception::{send_ipi, WAKEUP_VECTOR},
+    exception::{send_ipi, WAKEUP_TOKEN, WAKEUP_VECTOR},
     per_cpu::PerCpu,
     services::handle,
     tdcall::{Tdcall, Vmcall},
@@ -215,7 +215,9 @@ pub fn run_vcpu() -> ! {
             }
             VMEXIT_REASON_HLT_INSTRUCTION => {
                 interrupts::disable();
-                let resume = guest_state.rax != 0 || APICS[idx].pending_vector().is_some();
+                let resume = WAKEUP_TOKEN.take(idx)
+                    || guest_state.rax != 0
+                    || APICS[idx].pending_vector().is_some();
                 handle(resume);
                 guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
