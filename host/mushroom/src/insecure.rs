@@ -16,7 +16,7 @@ use anyhow::{ensure, Context, Result};
 use bit_field::BitField;
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB, SUPERVISOR_SERVICES},
-    FIRST_AP, MAX_APS_COUNT,
+    MAX_APS_COUNT,
 };
 use loader::Input;
 use nix::sys::pthread::pthread_kill;
@@ -154,10 +154,7 @@ pub fn main(
     let cpuid_entries = Arc::<[KvmCpuidEntry2]>::from(cpuid_entries);
     let done = Arc::new(AtomicBool::new(false));
     let ap_threads = (0..MAX_APS_COUNT)
-        .map(|i| {
-            let id = FIRST_AP + i;
-            run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone(), done.clone())
-        })
+        .map(|i| run_kernel_vcpu(i, vm.clone(), cpuid_entries.clone(), done.clone()))
         .collect::<Vec<_>>();
     ap_threads[0].thread().unpark();
     start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
@@ -234,8 +231,8 @@ fn run_kernel_vcpu(
 ) -> JoinHandle<()> {
     let supervisor_thread = std::thread::current();
 
+    let ap = vm.create_vcpu(i32::from(id)).unwrap();
     std::thread::spawn(move || {
-        let ap = vm.create_vcpu(i32::from(id)).unwrap();
         ap.set_cpuid(&cpuid_entries).unwrap();
 
         let kvm_run = ap.get_kvm_run_block().unwrap();

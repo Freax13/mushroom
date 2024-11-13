@@ -189,6 +189,9 @@ impl ActivePageTableGuard {
         let mut guard = self.guard.flush_state.lock();
         let state = &mut *guard;
 
+        let mut other_used = state.used;
+        other_used.set(idx, false);
+
         // Check if the current AP is the only active AP.
         let mut other_active_aps = state.active;
         other_active_aps.set(idx, false);
@@ -197,6 +200,7 @@ impl ActivePageTableGuard {
         // APs to flush immediately. We only need to flush the TLB on the
         // current AP.
         if other_active_aps.is_empty() {
+            state.needs_flush |= other_used;
             drop(guard);
             return self.flush_pages_local(pages);
         }
@@ -233,7 +237,7 @@ impl ActivePageTableGuard {
         // We've run out of optimizations :(
         // Flush on the current processor and send IPIs to the other relevant
         // APs.
-        state.needs_flush |= state.used;
+        state.needs_flush |= other_used;
         drop(guard);
 
         PENDING_TLB_SHOOTDOWN.set_all(other_active_aps);
