@@ -5,7 +5,7 @@ use x86_64::{registers::model_specific::FsBase, VirtAddr};
 
 use crate::{main, per_cpu::PerCpu};
 
-pub const STACK_SIZE: usize = 16;
+pub const STACK_SIZE: usize = 8;
 
 global_asm!(
     include_str!("reset_vector.s"),
