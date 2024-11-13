@@ -281,6 +281,7 @@ impl VmContext {
         sender: &Sender<OutputEvent>,
     ) -> Result<()> {
         let kvm_run = bsp.get_kvm_run_block()?;
+        let kvm_run = kvm_run.as_ptr();
 
         while !done.load(Ordering::Relaxed) {
             let exit = kvm_run.read().exit();

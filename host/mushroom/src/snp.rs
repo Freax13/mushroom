@@ -248,6 +248,7 @@ impl VmContext {
     pub fn run_supervisor(&mut self) -> Result<MushroomResult> {
         let mut output = Vec::new();
         let kvm_run = self.bsp.get_kvm_run_block()?;
+        let kvm_run = kvm_run.as_ptr();
 
         loop {
             let exit = kvm_run.read().exit();
@@ -414,6 +415,7 @@ impl VmContext {
             ap.set_msr(DEBUG_CTL, 1).unwrap();
 
             let kvm_run = ap.get_kvm_run_block().unwrap();
+            let kvm_run = kvm_run.as_ptr();
 
             std::thread::park();
 

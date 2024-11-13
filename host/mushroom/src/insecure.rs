@@ -236,6 +236,7 @@ fn run_kernel_vcpu(
         ap.set_cpuid(&cpuid_entries).unwrap();
 
         let kvm_run = ap.get_kvm_run_block().unwrap();
+        let kvm_run = kvm_run.as_ptr();
 
         let mut sregs = ap.get_sregs().unwrap();
         sregs.es = KvmSegment::DATA64;

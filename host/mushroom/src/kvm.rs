@@ -2,11 +2,13 @@
 
 use std::{
     array::{self, from_fn},
+    ffi::c_void,
     fmt,
     fs::OpenOptions,
     mem::{size_of, size_of_val},
     num::{NonZeroU32, NonZeroUsize},
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
+    ptr::NonNull,
 };
 
 use anyhow::{ensure, Context, Result};
@@ -827,8 +829,7 @@ impl VcpuHandle {
         Ok(())
     }
 
-    pub fn get_kvm_run_block(&self) -> Result<VolatilePtr<KvmRun>> {
-        // FIXME: unmap the memory
+    pub fn get_kvm_run_block(&self) -> Result<KvmRunBox> {
         let res = unsafe {
             nix::sys::mman::mmap(
                 None,
@@ -840,8 +841,7 @@ impl VcpuHandle {
             )
         };
         let ptr = res.context("failed to map vcpu kvm_run block")?;
-        let ptr = unsafe { VolatilePtr::new(ptr.cast()) };
-        Ok(ptr)
+        Ok(KvmRunBox { ptr })
     }
 
     /// Returns `true` if the cpu ran uninterrupted or returns `false` if the
@@ -860,6 +860,23 @@ impl VcpuHandle {
                 Err(e) => return Err(e).context("failed to run vcpu"),
             }
         }
+    }
+}
+
+pub struct KvmRunBox {
+    ptr: NonNull<c_void>,
+}
+
+impl KvmRunBox {
+    pub fn as_ptr(&self) -> VolatilePtr<'_, KvmRun> {
+        unsafe { VolatilePtr::new(self.ptr.cast()) }
+    }
+}
+
+impl Drop for KvmRunBox {
+    fn drop(&mut self) {
+        let res = unsafe { nix::sys::mman::munmap(self.ptr, size_of::<KvmRun>()) };
+        res.unwrap();
     }
 }
 
