@@ -454,7 +454,6 @@ impl Pagetables {
         if needs_flush {
             flush_state_guard.needs_flush.set(ap_index, false);
         }
-        drop(flush_state_guard);
 
         if update_required || needs_flush {
             if let Some(pcid_allocation) = allocations.pcid_allocation.as_ref() {
@@ -472,10 +471,11 @@ impl Pagetables {
                     Cr3::write(allocations.pml4, Cr3Flags::empty());
                 }
             }
+        }
+        drop(flush_state_guard);
 
-            if update_required {
-                *guard = Some(allocations.clone());
-            }
+        if update_required {
+            *guard = Some(allocations.clone());
         }
 
         let guard = RefMut::map(guard, |a| a.as_mut().unwrap());
