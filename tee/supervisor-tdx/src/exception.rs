@@ -1,6 +1,7 @@
 use core::arch::naked_asm;
 
 use bit_field::BitField;
+use constants::AtomicApBitmap;
 use spin::Lazy;
 use tdx_types::vmexit::VMEXIT_REASON_CPUID_INSTRUCTION;
 use x86_64::{
@@ -8,7 +9,10 @@ use x86_64::{
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
 };
 
-use crate::tdcall::{Tdcall, Vmcall};
+use crate::{
+    per_cpu::PerCpu,
+    tdcall::{Tdcall, Vmcall},
+};
 
 pub const WAKEUP_VECTOR: u8 = 0x60;
 
@@ -94,9 +98,10 @@ extern "C" fn virtualization_handler_impl(frame: &mut VeStackFrame) {
     }
 }
 
+pub static WAKEUP_TOKEN: AtomicApBitmap = AtomicApBitmap::empty();
+
 extern "x86-interrupt" fn wakeup_handler(_frame: InterruptStackFrame) {
-    // Don't do anything.
-    // This handler only exists to move past `hlt`.
+    WAKEUP_TOKEN.set(PerCpu::current_vcpu_index());
     eoi();
 }
 
