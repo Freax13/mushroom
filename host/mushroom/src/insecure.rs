@@ -231,8 +231,8 @@ fn run_kernel_vcpu(
 ) -> JoinHandle<()> {
     let supervisor_thread = std::thread::current();
 
+    let ap = vm.create_vcpu(i32::from(id)).unwrap();
     std::thread::spawn(move || {
-        let ap = vm.create_vcpu(i32::from(id)).unwrap();
         ap.set_cpuid(&cpuid_entries).unwrap();
 
         let kvm_run = ap.get_kvm_run_block().unwrap();
