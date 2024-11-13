@@ -73,18 +73,22 @@ pub fn main(
             let done = done.clone();
             let sender = sender.clone();
             std::thread::spawn(move || {
-                vm_context.run_vcpu(&vcpu, done, sender).unwrap();
+                let res = vm_context.run_vcpu(&vcpu, done, &sender);
+                if let Err(err) = res {
+                    let _ = sender.send(OutputEvent::Fail(err));
+                }
             })
         })
         .collect::<Vec<_>>();
 
     // Collect the output and report.
     let mut output: Vec<u8> = Vec::new();
-    let td_report = loop {
+    let res = loop {
         let event = receiver.recv().unwrap();
         match event {
             OutputEvent::Write(mut vec) => output.append(&mut vec),
-            OutputEvent::Finish(attestation_report) => break attestation_report,
+            OutputEvent::Finish(attestation_report) => break Ok(attestation_report),
+            OutputEvent::Fail(err) => break Err(err),
         }
     };
 
@@ -96,6 +100,8 @@ pub fn main(
         pthread_kill(thread.as_pthread_t(), SIG_KICK)?;
         thread.join().unwrap();
     }
+
+    let td_report = res?;
 
     // Convert the TD report into a TD quote.
     let report = try_pod_read_unaligned::<tdx_types::report::TdReport>(&td_report)?;
@@ -272,7 +278,7 @@ impl VmContext {
         &self,
         bsp: &VcpuHandle,
         done: Arc<AtomicBool>,
-        sender: Sender<OutputEvent>,
+        sender: &Sender<OutputEvent>,
     ) -> Result<()> {
         let kvm_run = bsp.get_kvm_run_block()?;
 
@@ -427,4 +433,5 @@ impl VmContext {
 enum OutputEvent {
     Write(Vec<u8>),
     Finish(Vec<u8>),
+    Fail(anyhow::Error),
 }
