@@ -507,7 +507,7 @@ async fn poll(
         let ready_fut = futures.next();
         let sleep_fut = async {
             if let Some(deadline) = deadline {
-                sleep_until(deadline).await;
+                sleep_until(deadline, ClockId::Monotonic).await;
             } else {
                 // Infinite timeout.
                 pending::<()>().await;
@@ -1071,11 +1071,11 @@ async fn select_impl(
         if let Some(deadline) = deadline {
             // If there are no fds to select from, just sleep and return.
             if futures.is_empty() {
-                sleep_until(deadline).await;
+                sleep_until(deadline, ClockId::Monotonic).await;
                 break 0;
             }
 
-            let sleep_until = pin!(sleep_until(deadline));
+            let sleep_until = pin!(sleep_until(deadline, ClockId::Monotonic));
             let res = future::select(futures.next(), sleep_until).await;
 
             // Break out of the loop if the timeout expired.
@@ -1164,7 +1164,7 @@ async fn nanosleep(
 
     let now = time::now(ClockId::Monotonic);
     let deadline = now + rqtp;
-    sleep_until(deadline).await;
+    sleep_until(deadline, ClockId::Monotonic).await;
     Ok(0)
 }
 
@@ -2957,7 +2957,12 @@ async fn futex(
 
             let deadline = if !utime.is_null() {
                 let deadline = virtual_memory.read_with_abi(utime, abi)?;
-                Some(deadline)
+                let clock_id = if op.flags.contains(FutexFlags::CLOCK_REALTIME) {
+                    ClockId::Realtime
+                } else {
+                    ClockId::Monotonic
+                };
+                Some((deadline, clock_id))
             } else {
                 None
             };
@@ -3063,18 +3068,16 @@ async fn clock_nanosleep(
 ) -> SyscallResult {
     let request = virtual_memory.read_with_abi(request, abi)?;
 
-    let (ClockId::Realtime | ClockId::Monotonic) = clock_id;
-
     let deadline = if flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
         request
     } else {
-        time::now(ClockId::Monotonic) + request
+        time::now(clock_id) + request
     };
 
     let res = thread
         .interruptable(
             async {
-                sleep_until(deadline).await;
+                sleep_until(deadline, clock_id).await;
                 Ok(())
             },
             false,
@@ -3082,7 +3085,7 @@ async fn clock_nanosleep(
         .await;
 
     if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let difference = deadline.saturating_sub(time::now(ClockId::Monotonic));
+        let difference = deadline.saturating_sub(time::now(clock_id));
         virtual_memory.write_with_abi(remain, difference, abi)?;
     }
 
@@ -3125,7 +3128,7 @@ async fn epoll_wait(
         let timeout = u64::try_from(timeout)?;
         let timeout = Timespec::from_ms(timeout);
         let deadline = now(ClockId::Monotonic) + timeout;
-        sleep_until(deadline).fuse()
+        sleep_until(deadline, ClockId::Monotonic).fuse()
     } else {
         Fuse::terminated()
     };

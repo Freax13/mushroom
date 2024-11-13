@@ -9,7 +9,7 @@ use futures::{select_biased, FutureExt};
 
 use super::{
     memory::VirtualMemory,
-    syscall::args::{Pointer, Timespec},
+    syscall::args::{ClockId, Pointer, Timespec},
 };
 use crate::{error::Result, rt::oneshot, time::sleep_until};
 
@@ -29,7 +29,7 @@ impl Futexes {
         uaddr: Pointer<u32>,
         val: u32,
         bitset: Option<NonZeroU32>,
-        deadline: Option<Timespec>,
+        deadline: Option<(Timespec, ClockId)>,
         vm: Arc<VirtualMemory>,
     ) -> Result<()> {
         // Check if the value already changed. This can help avoid taking the lock.
@@ -49,13 +49,13 @@ impl Futexes {
             .push(FutexWaiter { sender, bitset });
         drop(guard);
 
-        if let Some(deadline) = deadline {
+        if let Some((deadline, clock_id)) = deadline {
             select_biased! {
                 res = receiver.recv().fuse() => {
                     res.unwrap();
                     Ok(())
                 }
-                _ = sleep_until(deadline).fuse() => bail!(TimedOut),
+                _ = sleep_until(deadline, clock_id).fuse() => bail!(TimedOut),
             }
         } else {
             let res = receiver.recv().await;
