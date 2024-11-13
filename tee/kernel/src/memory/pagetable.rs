@@ -61,28 +61,36 @@ static PML4: StaticPml4 = {
 static PDP_256: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_256_0, flags!(WRITE));
-    page_table.set_page(1, PROFILER_BUFFER, flags!(WRITE));
+    page_table.set_page(1, PROFILER_BUFFER, flags!(WRITE | GLOBAL));
     page_table
 };
 
 #[link_section = ".pagetables"]
 static PD_256_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page(0, RESET_VECTOR, flags!());
-    page_table.set_page_range(1, TEXT, flags!());
-    page_table.set_page_range(8, RODATA, flags!(EXECUTE_DISABLE));
-    page_table.set_page_range(16, DATA, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page_range(32, STACK, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page_range(40, PROFILER_CONTROL, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(0, RESET_VECTOR, flags!(GLOBAL));
+    page_table.set_page_range(1, TEXT, flags!(GLOBAL));
+    page_table.set_page_range(8, RODATA, flags!(GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(16, DATA, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(32, STACK, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(
+        40,
+        PROFILER_CONTROL,
+        flags!(WRITE | GLOBAL | EXECUTE_DISABLE),
+    );
     page_table.set_table(48, &PT_256_0_48, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page(56, LOG_BUFFER, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page(56, LOG_BUFFER, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
 #[link_section = ".pagetables"]
 static PT_256_0_48: StaticPt = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(0, SUPERVISOR_SERVICES, flags!(WRITE | EXECUTE_DISABLE));
+    page_table.set_page_range(
+        0,
+        SUPERVISOR_SERVICES,
+        flags!(WRITE | GLOBAL | EXECUTE_DISABLE),
+    );
     page_table
 };
 
@@ -98,35 +106,39 @@ static PDP_352: StaticPdp = {
 #[link_section = ".pagetables"]
 static PD_352_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page(0, TEXT_SHADOW, flags!(EXECUTE_DISABLE));
-    page_table.set_page(1, RODATA_SHADOW, flags!(EXECUTE_DISABLE));
-    page_table.set_page(2, DATA_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page(4, STACK_SHADOW, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page(6, SUPERVISOR_SERVICES_SHADOW, flags!(EXECUTE_DISABLE));
-    page_table.set_page(7, LOG_BUFFER_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(0, TEXT_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page(1, RODATA_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page(2, DATA_SHADOW, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page(4, STACK_SHADOW, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page(
+        6,
+        SUPERVISOR_SERVICES_SHADOW,
+        flags!(GLOBAL | EXECUTE_DISABLE),
+    );
+    page_table.set_page(7, LOG_BUFFER_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
 #[link_section = ".pagetables"]
 static PD_352_72: StaticPd = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page(0, INIT_FILE_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(0, INIT_FILE_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
 #[link_section = ".pagetables"]
 static PD_352_80: StaticPd = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page(0, INPUT_FILE_SHADOW, flags!(EXECUTE_DISABLE));
+    page_table.set_page(0, INPUT_FILE_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
 #[link_section = ".pagetables"]
 static PDP_257: StaticPdp = {
     let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(0, DYNAMIC, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_page_range(64, INIT_FILE, flags!(EXECUTE_DISABLE));
-    page_table.set_page_range(128, INPUT_FILE, flags!(EXECUTE_DISABLE));
+    page_table.set_page_range(0, DYNAMIC, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(64, INIT_FILE, flags!(GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(128, INPUT_FILE, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
@@ -157,7 +169,7 @@ static TDX_PDP_256: StaticPdp = {
 static TDX_PD_256_0: StaticPd = {
     let mut page_table = unsafe { PD_256_0.clone() };
     page_table.clear_entry(56);
-    page_table.set_page(56, LOG_BUFFER, flags!(S | WRITE | EXECUTE_DISABLE));
+    page_table.set_page(56, LOG_BUFFER, flags!(S | WRITE | GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
