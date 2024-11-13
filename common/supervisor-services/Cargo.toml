@@ -11,3 +11,4 @@ kernel = []
 [dependencies]
 bit_field = "0.10.2"
 bytemuck = { version = "1.15.0", features = ["derive"] }
+constants = { workspace = true }

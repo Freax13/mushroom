@@ -26,13 +26,15 @@ pub fn run() -> ! {
 
     loop {
         // Handle all pending commands.
-        while command_buffer_reader.handle(&mut handler) {}
+        let mut pending = supervisor_services().notification_buffer.reset();
+        while command_buffer_reader.handle(&mut handler) {
+            pending |= supervisor_services().notification_buffer.reset();
+        }
 
         // Notify the APs that requested a notification and wait for the next
         // command.
-
-        for id in supervisor_services().notification_buffer.reset() {
-            kick(id as u8);
+        for id in pending {
+            kick(id);
         }
 
         wait_for_command();

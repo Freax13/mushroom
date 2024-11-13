@@ -26,26 +26,23 @@ fn supervisor_services() -> &'static SupervisorServices {
 
 static HANDLER: Lazy<Mutex<Handler>> = Lazy::new(|| Mutex::new(Handler::new()));
 
-pub fn handle(resume: bool) {
-    interrupts::disable();
-
+pub fn handle(mut resume: bool) {
     if let Some(mut handler) = HANDLER.try_lock() {
         let mut command_buffer_reader =
             CommandBufferReader::new(&supervisor_services().command_buffer);
-        while command_buffer_reader.handle(&mut *handler) {}
+        let mut pending = supervisor_services().notification_buffer.reset();
+        while command_buffer_reader.handle(&mut *handler) {
+            pending |= supervisor_services().notification_buffer.reset();
+        }
         drop(handler);
 
-        let mut saw_self = false;
-        for id in supervisor_services().notification_buffer.reset() {
-            if id == PerCpu::current_vcpu_index() {
-                saw_self = true;
+        let idx = PerCpu::current_vcpu_index();
+        for id in pending {
+            if id == idx {
+                resume = true;
             } else {
-                send_ipi(id as u32, WAKEUP_VECTOR);
+                send_ipi(u32::from(id.as_u8()), WAKEUP_VECTOR);
             }
-        }
-        if saw_self {
-            interrupts::enable();
-            return;
         }
     }
 

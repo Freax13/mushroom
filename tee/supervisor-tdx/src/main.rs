@@ -7,8 +7,8 @@ use exception::setup_idt;
 use log::{debug, LevelFilter};
 use per_cpu::PerCpu;
 use spin::Once;
-use tdx_types::tdcall::Apic;
 use vcpu::{init_vcpu, run_vcpu, wait_for_vcpu_start};
+use x86_64::registers::model_specific::Msr;
 
 use crate::logging::SerialLogger;
 
@@ -23,7 +23,6 @@ mod per_cpu;
 mod reset_vector;
 mod services;
 mod tdcall;
-mod tlb;
 mod vcpu;
 
 fn main() -> ! {
@@ -36,14 +35,18 @@ fn main() -> ! {
         });
     }
 
+    const IA32_TSC_AUX: u32 = 0xC000_0103;
+    unsafe {
+        Msr::new(IA32_TSC_AUX).write(PerCpu::current_vcpu_index().as_u8() as u64);
+    }
+
     setup_idt();
 
-    if PerCpu::current_vcpu_index() == 0 {
+    if PerCpu::current_vcpu_index().is_first() {
         input::init();
     }
 
-    let mut apic = Apic::default();
-    unsafe { init_vcpu(&mut apic) };
+    init_vcpu();
     wait_for_vcpu_start();
     run_vcpu()
 }

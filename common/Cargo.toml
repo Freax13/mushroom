@@ -9,4 +9,4 @@ snp-types = { path = "snp-types" }
 tdx-types = { path = "tdx-types" }
 
 [patch.crates-io]
-x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "c5bc9fc" }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "3fc9106" }

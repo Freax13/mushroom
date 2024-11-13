@@ -7,6 +7,7 @@ use core::{
     ptr::null_mut,
 };
 
+use crate::memory::pagetable::flush::{tlb_shootdown_handler, TLB_VECTOR};
 use crate::spin::lazy::Lazy;
 use crate::user::process::syscall::cpu_state::exception_entry;
 use alloc::alloc::alloc;
@@ -30,16 +31,6 @@ use x86_64::{
 };
 
 use crate::{memory::pagetable::entry_for_page, per_cpu::PerCpu};
-
-/// Initialize exception handling.
-///
-/// # Safety
-///
-/// This function must only be called once by main.
-pub unsafe fn init() {
-    load_gdt();
-    load_idt();
-}
 
 pub fn switch_stack(f: extern "C" fn() -> !) -> ! {
     let stack = allocate_stack();
@@ -156,6 +147,7 @@ pub fn load_idt() {
             .set_handler_fn(general_protection_fault_handler);
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt.vmm_communication_exception.set_handler_fn(vc_handler);
+        idt[TLB_VECTOR].set_handler_fn(tlb_shootdown_handler);
 
         idt[0x80]
             .set_handler_fn(int0x80_handler)

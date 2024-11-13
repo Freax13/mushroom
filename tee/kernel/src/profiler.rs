@@ -1,11 +1,10 @@
 use core::arch::{asm, global_asm};
 use core::mem::{offset_of, size_of};
-use core::sync::atomic::AtomicU8;
 
-use constants::MAX_APS_COUNT;
+use constants::{AtomicApBitmap, MAX_APS_COUNT};
 use profiler_types::{
     AllEntries, Entry, PerCpuEntries, PerCpuHeader, ProfilerControl, CALL_STACK_CAPACITY,
-    NOTIFY_BYTES, PROFILER_ENTRIES,
+    PROFILER_ENTRIES,
 };
 use x86_64::registers::model_specific::Msr;
 
@@ -22,7 +21,7 @@ pub fn flush() {
 
 #[link_section = ".profiler_control"]
 static mut PROFILER_CONTROL: ProfilerControl = ProfilerControl {
-    notify_flags: [const { AtomicU8::new(0) }; NOTIFY_BYTES],
+    notify_flags: AtomicApBitmap::empty(),
     headers: [PerCpuHeader {
         start_idx: 0,
         len: 0,

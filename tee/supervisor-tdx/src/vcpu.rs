@@ -4,7 +4,8 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use constants::MAX_APS_COUNT;
+use bit_field::BitField;
+use constants::{ApIndex, MAX_APS_COUNT};
 use tdx_types::{
     tdcall::{
         Apic, GuestState, InvdTranslations, MdFieldId, VmIndex, TDX_L2_EXIT_HOST_ROUTED_ASYNC,
@@ -12,7 +13,6 @@ use tdx_types::{
     },
     vmexit::{
         VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_HLT_INSTRUCTION, VMEXIT_REASON_MSR_WRITE,
-        VMEXIT_REASON_VMCALL_INSTRUCTION,
     },
 };
 use x86_64::{
@@ -28,7 +28,6 @@ use crate::{
     per_cpu::PerCpu,
     services::handle,
     tdcall::{Tdcall, Vmcall},
-    tlb,
 };
 
 static READY: AtomicUsize = AtomicUsize::new(0);
@@ -51,7 +50,7 @@ pub fn wait_for_vcpu_start() {
         interrupts::disable();
 
         let ready = READY.load(Ordering::Relaxed);
-        if ready == PerCpu::current_vcpu_index() {
+        if ready == usize::from(PerCpu::current_vcpu_index().as_u8()) {
             break;
         }
 
@@ -62,77 +61,101 @@ pub fn wait_for_vcpu_start() {
 }
 
 /// Initialize the L2 VM.
-///
-/// # Safety
-///
-/// The caller must ensure the `apic` is valid until the end of time.
-pub unsafe fn init_vcpu(apic: &mut Apic) {
-    let apic = core::ptr::from_mut(apic) as u64;
-
+pub fn init_vcpu() {
     // Enable access to the shared EPT.
-    Tdcall::vp_wr(
-        MdFieldId::TDVPS_L2_CTLS1,
-        u64::from(cfg!(not(feature = "harden"))),
-        1,
-    );
+    unsafe {
+        Tdcall::vp_wr(
+            MdFieldId::TDVPS_L2_CTLS1,
+            u64::from(cfg!(not(feature = "harden"))),
+            1,
+        );
+    }
 
     // Enable 64-bit mode.
-    Tdcall::vp_wr(MdFieldId::VMX_VM_ENTRY_CONTROL, 1 << 9, 1 << 9);
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::VMX_VM_ENTRY_CONTROL, 1 << 9, 1 << 9);
+    }
 
     // Enabled mode-based execute control for EPT.
-    Tdcall::vp_wr(
-        MdFieldId::VMX_VM_EXECUTION_CONTROL_SECONDARY_PROC_BASED,
-        1 << 22,
-        1 << 22,
-    );
+    unsafe {
+        Tdcall::vp_wr(
+            MdFieldId::VMX_VM_EXECUTION_CONTROL_SECONDARY_PROC_BASED,
+            1 << 22,
+            1 << 22,
+        );
+    }
 
     // Adjust CS segment.
-    Tdcall::vp_wr(MdFieldId::VMX_GUEST_CS_ARBYTE, 0xa09b, !0);
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::VMX_GUEST_CS_ARBYTE, 0xa09b, !0);
+    }
 
-    Tdcall::vp_wr(MdFieldId::VMX_VIRTUAL_APIC_PAGE_ADDRESS, apic, !0);
+    let idx = PerCpu::current_vcpu_index();
+    let apic = &APICS[idx];
+    apic.set_id(u32::from(idx.as_u8()));
+    unsafe {
+        Tdcall::vp_wr(
+            MdFieldId::VMX_VIRTUAL_APIC_PAGE_ADDRESS,
+            apic as *const _ as u64,
+            !0,
+        );
+    }
 
-    Tdcall::vp_wr(
-        MdFieldId::VMX_GUEST_IA32_EFER,
-        EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
-            | EferFlags::LONG_MODE_ENABLE.bits()
-            | EferFlags::LONG_MODE_ACTIVE.bits()
-            | EferFlags::NO_EXECUTE_ENABLE.bits(),
-        !0,
-    );
+    unsafe {
+        Tdcall::vp_wr(
+            MdFieldId::VMX_GUEST_IA32_EFER,
+            EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
+                | EferFlags::LONG_MODE_ENABLE.bits()
+                | EferFlags::LONG_MODE_ACTIVE.bits()
+                | EferFlags::NO_EXECUTE_ENABLE.bits(),
+            !0,
+        );
+    }
 
-    Tdcall::vp_wr(
-        MdFieldId::VMX_GUEST_CR4,
-        Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
-            | Cr4Flags::MACHINE_CHECK_EXCEPTION.bits()
-            | Cr4Flags::PAGE_GLOBAL.bits()
-            | Cr4Flags::OSFXSR.bits()
-            | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
-            | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits()
-            | Cr4Flags::FSGSBASE.bits()
-            | Cr4Flags::PCID.bits()
-            | Cr4Flags::OSXSAVE.bits()
-            | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
-            | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
-        !0,
-    );
+    let cr4_flags = Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
+        | Cr4Flags::MACHINE_CHECK_EXCEPTION.bits()
+        | Cr4Flags::PAGE_GLOBAL.bits()
+        | Cr4Flags::OSFXSR.bits()
+        | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
+        | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits()
+        | Cr4Flags::FSGSBASE.bits()
+        | Cr4Flags::PCID.bits()
+        | Cr4Flags::OSXSAVE.bits()
+        | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
+        | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits();
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR4, cr4_flags, !0);
+        Tdcall::vp_wr(MdFieldId::VMX_CR4_READ_SHADOW, cr4_flags, !0);
+    }
 
-    Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR3, 0x100_0000_1000, !0);
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR3, 0x100_0000_1000, !0);
+    }
 
-    Tdcall::vp_wr(
-        MdFieldId::VMX_GUEST_CR0,
-        Cr0Flags::PROTECTED_MODE_ENABLE.bits()
-            | Cr0Flags::MONITOR_COPROCESSOR.bits()
-            | Cr0Flags::EXTENSION_TYPE.bits()
-            | Cr0Flags::NUMERIC_ERROR.bits()
-            | Cr0Flags::WRITE_PROTECT.bits()
-            | Cr0Flags::PAGING.bits(),
-        !0,
-    );
+    let cr0_flags = Cr0Flags::PROTECTED_MODE_ENABLE.bits()
+        | Cr0Flags::MONITOR_COPROCESSOR.bits()
+        | Cr0Flags::EXTENSION_TYPE.bits()
+        | Cr0Flags::NUMERIC_ERROR.bits()
+        | Cr0Flags::WRITE_PROTECT.bits()
+        | Cr0Flags::PAGING.bits();
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::VMX_GUEST_CR0, cr0_flags, !0);
+        Tdcall::vp_wr(MdFieldId::VMX_CR0_READ_SHADOW, cr0_flags, !0);
+    }
 
-    Tdcall::vp_wr(MdFieldId::STAR_WRITE, 0, MdFieldId::STAR_WRITE_MASK);
-    Tdcall::vp_wr(MdFieldId::LSTAR_WRITE, 0, MdFieldId::LSTAR_WRITE_MASK);
-    Tdcall::vp_wr(MdFieldId::SFMASK_WRITE, 0, MdFieldId::SFMASK_WRITE_MASK);
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::STAR_WRITE, 0, MdFieldId::STAR_WRITE_MASK);
+        Tdcall::vp_wr(MdFieldId::LSTAR_WRITE, 0, MdFieldId::LSTAR_WRITE_MASK);
+        Tdcall::vp_wr(MdFieldId::SFMASK_WRITE, 0, MdFieldId::SFMASK_WRITE_MASK);
+        Tdcall::vp_wr(
+            MdFieldId::X2APIC_EOI_WRITE,
+            0,
+            MdFieldId::X2APIC_EOI_WRITE_MASK,
+        );
+    }
 }
+
+static APICS: [Apic; MAX_APS_COUNT as usize] = [const { Apic::new() }; MAX_APS_COUNT as usize];
 
 pub fn run_vcpu() -> ! {
     let mut guest_state = GuestState {
@@ -158,18 +181,21 @@ pub fn run_vcpu() -> ! {
         guest_interrupt_status: 0,
     };
 
+    let idx = PerCpu::current_vcpu_index();
+
     loop {
         interrupts::disable();
-        tlb::pre_enter();
-        let flush = if PerCpu::with(|per_cpu| per_cpu.pending_flushes.take()) {
-            InvdTranslations::All
-        } else {
-            InvdTranslations::None
-        };
-        let (exit_reason, instruction_length) =
-            Tdcall::vp_enter(VmIndex::One, flush, &mut guest_state, true);
 
-        match (exit_reason >> 32) as u32 {
+        // Update the RVI field.
+        let rvi = APICS[idx].pending_vector().unwrap_or_default();
+        guest_state
+            .guest_interrupt_status
+            .set_bits(0..8, u16::from(rvi));
+
+        let vm_exit =
+            Tdcall::vp_enter(VmIndex::One, InvdTranslations::None, &mut guest_state, true);
+
+        match vm_exit.class {
             TDX_SUCCESS => {}
             TDX_L2_EXIT_HOST_ROUTED_ASYNC => continue,
             TDX_L2_EXIT_PENDING_INTERRUPT => continue,
@@ -177,7 +203,7 @@ pub fn run_vcpu() -> ! {
             reason => unimplemented!("{reason:#010x}"),
         }
 
-        match exit_reason as u32 {
+        match vm_exit.exit_reason {
             VMEXIT_REASON_CPUID_INSTRUCTION => {
                 let result =
                     unsafe { __cpuid_count(guest_state.rax as u32, guest_state.rcx as u32) };
@@ -185,41 +211,42 @@ pub fn run_vcpu() -> ! {
                 guest_state.rbx = u64::from(result.ebx);
                 guest_state.rcx = u64::from(result.ecx);
                 guest_state.rdx = u64::from(result.edx);
-                guest_state.rip += u64::from(instruction_length);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             VMEXIT_REASON_HLT_INSTRUCTION => {
-                handle(guest_state.rax != 0);
-                guest_state.rip += u64::from(instruction_length);
-            }
-            VMEXIT_REASON_VMCALL_INSTRUCTION => {
-                // The kernel currently only executes vmcalls to flush the TLB.
-                // Double-check this.
-                assert_eq!(
-                    guest_state.rcx, 0x10002,
-                    "unsupported request: {:#x}",
-                    guest_state.rcx
-                );
-                assert_eq!(
-                    guest_state.rdx, 3,
-                    "unsupported flags: {:#x}",
-                    guest_state.rdx
-                );
-
-                tlb::flush();
-
-                guest_state.rax = 0;
-                guest_state.rip += u64::from(instruction_length);
+                interrupts::disable();
+                let resume = guest_state.rax != 0 || APICS[idx].pending_vector().is_some();
+                handle(resume);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             VMEXIT_REASON_MSR_WRITE => {
+                let value = guest_state.rax.get_bits(..32) | (guest_state.rdx << 32);
                 match guest_state.rcx {
-                    0x40000000 => {
-                        // Ignore writes to HV_X64_MSR_GUEST_OS_ID.
+                    // IA32_X2APIC_ICR
+                    0x830 => {
+                        // We don't support all options. Check that we support the fields.
+                        assert_eq!(value.get_bits(8..11), 0); // Delivery Mode: Fixed
+                        assert!(!value.get_bit(11)); // Destination Mode: Physical
+                        assert!(value.get_bit(14)); // Level: Assert
+                        assert_eq!(value.get_bits(18..20), 0b00); // Destination Shorthand: Destination
+
+                        // Set the IRR bit in the APIC page.
+                        let vector = value.get_bits(..8) as u8;
+                        let destination = value.get_bits(32..) as u32;
+                        let idx = ApIndex::new(destination as u8);
+                        let was_set = APICS[idx].set_irr(vector);
+
+                        // If the bit was not already set, send an IPI to the
+                        // supervisor, so that it re-evaluates the RVI.
+                        if !was_set {
+                            send_ipi(destination, WAKEUP_VECTOR);
+                        }
                     }
-                    rcx => panic!("{rcx:#x}"),
+                    rcx => unimplemented!("MSR write: {rcx:#x}"),
                 }
-                guest_state.rip += u64::from(instruction_length);
+                guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
-            unknown => panic!("{unknown:#x} {guest_state:x?}"),
+            unknown => panic!("{unknown:#x} {guest_state:x?} {vm_exit:x?}"),
         }
     }
 }

@@ -1,11 +1,11 @@
 use core::{arch::global_asm, mem::MaybeUninit};
 
-use constants::MAX_APS_COUNT;
+use constants::{ApIndex, MAX_APS_COUNT};
 use x86_64::{registers::model_specific::FsBase, VirtAddr};
 
 use crate::{main, per_cpu::PerCpu};
 
-pub const STACK_SIZE: usize = 16;
+pub const STACK_SIZE: usize = 8;
 
 global_asm!(
     include_str!("reset_vector.s"),
@@ -14,7 +14,7 @@ global_asm!(
 );
 
 #[export_name = "_start"]
-extern "sysv64" fn premain(vcpu_index: usize) {
+extern "sysv64" fn premain(vcpu_index: ApIndex) {
     // Setup a `PerCpu` instance for the current cpu.
     let mut per_cpu = MaybeUninit::uninit();
     let ptr = per_cpu.as_mut_ptr();

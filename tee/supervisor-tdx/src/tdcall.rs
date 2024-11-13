@@ -232,7 +232,7 @@ impl Tdcall {
         invd_translations: InvdTranslations,
         guest_state: &mut GuestState,
         with_sti: bool,
-    ) -> (u64, u32) {
+    ) -> VmExit {
         let mut tdcall = Self::new(25);
         tdcall.rcx.set_bits(0..=1, invd_translations as u64);
         tdcall.rcx.set_bits(52..=53, index as u64);
@@ -242,7 +242,25 @@ impl Tdcall {
             tdcall.execute();
         }
 
-        (tdcall.rax, (tdcall.r11 >> 32) as u32)
+        VmExit {
+            class: tdcall.rax.get_bits(32..=47) as u16,
+            exit_reason: tdcall.rax as u32,
+            exit_qualification: tdcall.rcx,
+            guest_linear_address: tdcall.rdx,
+            cs_selector: tdcall.rsi.get_bits(0..=15) as u16,
+            cs_ar_bit: tdcall.rsi.get_bits(16..=31) as u16,
+            cs_limit: tdcall.rsi.get_bits(32..) as u32,
+            cs_base: tdcall.rdi,
+            guest_physical_address: tdcall.r8,
+            vm_exit_interruption_information: tdcall.r9.get_bits(..=31) as u32,
+            vm_exit_interruption_error_code: tdcall.r9.get_bits(32..) as u32,
+            idt_vectoring_information: tdcall.r10.get_bits(..=31) as u32,
+            idt_vectoring_error_code: tdcall.r10.get_bits(32..) as u32,
+            vm_exit_instruction_information: tdcall.r11.get_bits(..=31) as u32,
+            vm_exit_instruction_length: tdcall.r11.get_bits(32..) as u32,
+            cpl: tdcall.r12.get_bits(0..=1) as u8,
+            extended_exit_qualification: tdcall.r13.get_bits(..=3) as u8,
+        }
     }
 
     pub fn vp_veinfo_get() -> VeInfo {
@@ -261,6 +279,28 @@ impl Tdcall {
             instruction_information: (tdcall.r10 >> 32) as u32,
         }
     }
+}
+
+#[derive(Debug)]
+#[expect(dead_code)]
+pub struct VmExit {
+    pub class: u16,
+    pub exit_reason: u32,
+    pub exit_qualification: u64,
+    pub guest_linear_address: u64,
+    pub cs_selector: u16,
+    pub cs_ar_bit: u16,
+    pub cs_limit: u32,
+    pub cs_base: u64,
+    pub guest_physical_address: u64,
+    pub vm_exit_interruption_information: u32,
+    pub vm_exit_interruption_error_code: u32,
+    pub idt_vectoring_information: u32,
+    pub idt_vectoring_error_code: u32,
+    pub vm_exit_instruction_information: u32,
+    pub vm_exit_instruction_length: u32,
+    pub cpl: u8,
+    pub extended_exit_qualification: u8,
 }
 
 #[expect(dead_code)]

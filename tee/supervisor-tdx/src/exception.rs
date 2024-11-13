@@ -8,13 +8,9 @@ use x86_64::{
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
 };
 
-use crate::{
-    tdcall::{Tdcall, Vmcall},
-    tlb::flush_handler,
-};
+use crate::tdcall::{Tdcall, Vmcall};
 
 pub const WAKEUP_VECTOR: u8 = 0x60;
-pub const FLUSH_VECTOR: u8 = 0x61;
 
 pub fn setup_idt() {
     IDT.load();
@@ -26,7 +22,6 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     let mut idt = InterruptDescriptorTable::new();
     idt.virtualization.set_handler_fn(virtualization_handler);
     idt[WAKEUP_VECTOR].set_handler_fn(wakeup_handler);
-    idt[FLUSH_VECTOR].set_handler_fn(flush_handler);
     idt
 });
 

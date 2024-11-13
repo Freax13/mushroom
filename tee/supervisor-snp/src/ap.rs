@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use constants::{FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT};
+use constants::{ApIndex, FIRST_AP, KICK_AP_PORT};
 use snp_types::vmsa::SevFeatures;
 
 use crate::{
@@ -21,26 +21,26 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
 
 pub fn start_next_ap() {
     static APIC_COUNTER: FakeSync<Cell<u8>> = FakeSync::new(Cell::new(0));
-    let apic_id = APIC_COUNTER.get();
-    if apic_id >= MAX_APS_COUNT {
+    let counter = APIC_COUNTER.get();
+    let Some(apic_id) = ApIndex::try_new(counter) else {
         return;
-    }
-    APIC_COUNTER.set(apic_id + 1);
+    };
+    APIC_COUNTER.set(counter + 1);
 
     // Initialize the VMSA.
-    let mut vmsa = InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id));
+    let mut vmsa = InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id.as_u8()));
     unsafe {
         vmsa.set_runnable(true);
     }
 
     // Tell the host about the new VMSA.
     let vmsa_pa = vmsa.phys_addr();
-    create_ap(u32::from(FIRST_AP + apic_id), vmsa_pa, SEV_FEATURES);
+    create_ap(u32::from(FIRST_AP + apic_id.as_u8()), vmsa_pa, SEV_FEATURES);
 
     // Start the AP.
     kick(apic_id);
 }
 
-pub fn kick(apic_id: u8) {
-    ioio_write(KICK_AP_PORT, u32::from(FIRST_AP + apic_id));
+pub fn kick(apic_id: ApIndex) {
+    ioio_write(KICK_AP_PORT, u32::from(FIRST_AP + apic_id.as_u8()));
 }

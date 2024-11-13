@@ -1,12 +1,14 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use x86_64::registers::rflags::RFlags;
 
-pub const TDX_SUCCESS: u32 = 0x00000000;
-pub const TDX_L2_EXIT_HOST_ROUTED_ASYNC: u32 = 0x00001100;
-pub const TDX_L2_EXIT_PENDING_INTERRUPT: u32 = 0x00001102;
-pub const TDX_PENDING_INTERRUPT: u32 = 0x00001120;
+pub const TDX_SUCCESS: u16 = 0x0000;
+pub const TDX_L2_EXIT_HOST_ROUTED_ASYNC: u16 = 0x1100;
+pub const TDX_L2_EXIT_PENDING_INTERRUPT: u16 = 0x1102;
+pub const TDX_PENDING_INTERRUPT: u16 = 0x1120;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(256))]
@@ -42,6 +44,8 @@ impl MdFieldId {
     pub const VMX_VM_ENTRY_CONTROL: Self = Self::vmcs1(0x4012);
     pub const VMX_VM_EXECUTION_CONTROL_SECONDARY_PROC_BASED: Self = Self::vmcs1(0x401E);
     pub const VMX_GUEST_CS_ARBYTE: Self = Self::vmcs1(0x4816);
+    pub const VMX_CR0_READ_SHADOW: Self = Self::vmcs1(0x6004);
+    pub const VMX_CR4_READ_SHADOW: Self = Self::vmcs1(0x6006);
     pub const VMX_GUEST_CR0: Self = Self::vmcs1(0x6800);
     pub const VMX_GUEST_CR3: Self = Self::vmcs1(0x6802);
     pub const VMX_GUEST_CR4: Self = Self::vmcs1(0x6804);
@@ -54,6 +58,9 @@ impl MdFieldId {
 
     pub const SFMASK_WRITE: Self = Self::msr_bitmaps1(0xC000_0084, true);
     pub const SFMASK_WRITE_MASK: u64 = Self::msr_bitmaps_mask(0xC000_0084);
+
+    pub const X2APIC_EOI_WRITE: Self = Self::msr_bitmaps1(0x80b, true);
+    pub const X2APIC_EOI_WRITE_MASK: u64 = Self::msr_bitmaps_mask(0x80b);
 
     pub const TDVPS_L2_CTLS1: Self = Self::new(
         81,
@@ -198,10 +205,77 @@ pub enum VmIndex {
 }
 
 #[repr(C, align(4096))]
-pub struct Apic([u8; 4096]);
+pub struct Apic([AtomicU32; 512]);
+
+impl Apic {
+    pub const fn new() -> Self {
+        Self([const { AtomicU32::new(0) }; 512])
+    }
+
+    /// Set the local APIC id.
+    pub fn set_id(&self, value: u32) {
+        self.0[0x20 / 4].store(value, Ordering::SeqCst);
+    }
+
+    /// Returns the highest priority requested interrupt.
+    pub fn pending_vectora_todo(&self) -> Option<u8> {
+        (0..8).rev().find_map(|i| {
+            let offset = 0x100 | (i * 16);
+            let idx = offset / 4;
+            let irr = self.0[idx].load(Ordering::SeqCst);
+            (irr != 0).then(|| i as u8 * 32 + 31 - irr.leading_zeros() as u8)
+        })
+    }
+
+    /// Returns the highest priority requested interrupt.
+    pub fn pending_vector(&self) -> Option<u8> {
+        (0..8).rev().find_map(|i| {
+            let offset = 0x200 | (i * 16);
+            let idx = offset / 4;
+            let irr = self.0[idx].load(Ordering::SeqCst);
+            (irr != 0).then(|| i as u8 * 32 + 31 - irr.leading_zeros() as u8)
+        })
+    }
+
+    /// Sets the IRR bit for the given vector and returns the previous value.
+    pub fn set_irr(&self, vector: u8) -> bool {
+        let offset = 0x200 | ((usize::from(vector) & 0xe0) >> 1);
+        let idx = offset / 4;
+        let mask = 1u32.wrapping_shl(u32::from(vector));
+        self.0[idx].fetch_or(mask, Ordering::SeqCst) & mask != 0
+    }
+}
 
 impl Default for Apic {
     fn default() -> Self {
-        Self([0; 4096])
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Apic;
+
+    #[test]
+    fn rvi() {
+        // Check that the value is correct if only a single bit is set.
+        for i in 0..=255 {
+            let apic = Apic::new();
+            assert_eq!(apic.pending_vector(), None);
+            apic.set_irr(i);
+            assert_eq!(apic.pending_vector(), Some(i));
+        }
+
+        // Check that that higher vectors are prioritized.
+        for i in 0..=255 {
+            for j in 0..i {
+                let apic = Apic::new();
+                assert_eq!(apic.pending_vector(), None);
+                apic.set_irr(j);
+                assert_eq!(apic.pending_vector(), Some(j));
+                apic.set_irr(i);
+                assert_eq!(apic.pending_vector(), Some(i));
+            }
+        }
     }
 }

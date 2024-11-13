@@ -12,7 +12,7 @@ use x86_64::{
 
 use crate::memory::{
     frame::{allocate_frame, deallocate_frame},
-    pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry},
+    pagetable::{map_page, unmap_page_no_flush, PageTableFlags, PresentPageTableEntry},
 };
 
 pub struct HugeAllocator {
@@ -91,7 +91,7 @@ unsafe impl Allocator for HugeAllocator {
         let base = Page::<Size4KiB>::from_start_address(addr).unwrap();
 
         for page in (base..).take(pages) {
-            let entry = unsafe { unmap_page(page) };
+            let entry = unsafe { unmap_page_no_flush(page) };
             let frame = entry.frame();
             unsafe {
                 deallocate_frame(frame);
