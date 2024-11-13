@@ -41,7 +41,8 @@ struct State {
     backend_offset: u64,
     skip_offset: u64,
     realtime_offset: Timespec,
-    timeouts: BinaryHeap<Timeout>,
+    monotonic_timeouts: BinaryHeap<Timeout>,
+    realtime_timeouts: BinaryHeap<Timeout>,
 }
 
 impl State {
@@ -51,17 +52,35 @@ impl State {
             backend_offset: 0,
             skip_offset: 1_000_000_000,
             realtime_offset: Timespec::ZERO,
-            timeouts: BinaryHeap::new(),
+            monotonic_timeouts: BinaryHeap::new(),
+            realtime_timeouts: BinaryHeap::new(),
         }
     }
 
     fn fire_clocks(&mut self) {
+        self.fire_monotonic_clocks();
+        self.fire_realtime_clocks();
+    }
+
+    fn fire_monotonic_clocks(&mut self) {
         let now = self.combine();
-        while let Some(first) = self.timeouts.peek() {
+        while let Some(first) = self.monotonic_timeouts.peek() {
             if !first.has_expired(now) {
                 break;
             };
-            let first = self.timeouts.pop().unwrap();
+            let first = self.monotonic_timeouts.pop().unwrap();
+            first.fire();
+        }
+    }
+
+    fn fire_realtime_clocks(&mut self) {
+        let now = self.combine();
+        let now = self.realtime_offset.into_ns() + now;
+        while let Some(first) = self.realtime_timeouts.peek() {
+            if !first.has_expired(now) {
+                break;
+            };
+            let first = self.realtime_timeouts.pop().unwrap();
             first.fire();
         }
     }
@@ -75,25 +94,54 @@ impl State {
     }
 
     fn advance_to_next_timeout(&mut self) -> Result<(), NoTimeoutScheduledError> {
-        let timeout = self
-            .timeouts
+        // Calculate the duration to the next timeout relative to the monotonic
+        // clock.
+        let current = self.combine();
+        let next_monotonic_offset = self
+            .monotonic_timeouts
             .iter()
             .find(|t| t.valid())
+            .map(|timeout| timeout.time.saturating_sub(current));
+
+        // Calculate the duration to the next timeout relative to the realtime
+        // clock.
+        let current = self.realtime_offset.into_ns() + current;
+        let next_realtime_offset = self
+            .realtime_timeouts
+            .iter()
+            .find(|t| t.valid())
+            .map(|timeout| timeout.time.saturating_sub(current));
+
+        // Skip to the next timeout.
+        let next_offset = [next_monotonic_offset, next_realtime_offset]
+            .into_iter()
+            .flatten()
+            .min()
             .ok_or(NoTimeoutScheduledError)?;
-        let current = self.combine();
-        self.skip_offset += timeout.time.saturating_sub(current);
+        self.skip_offset += next_offset;
+
         self.fire_clocks();
         Ok(())
     }
 
     fn add_timeout(&mut self, timeout: Timeout) {
-        // Immediatly queue expired timeouts.
+        // Immediately queue expired timeouts.
         if timeout.has_expired(self.combine()) {
             timeout.fire();
             return;
         }
 
-        self.timeouts.push(timeout);
+        self.monotonic_timeouts.push(timeout);
+    }
+
+    fn add_realtime_timeout(&mut self, timeout: Timeout) {
+        // Immediately queue expired timeouts.
+        if timeout.has_expired(self.realtime_offset.into_ns() + self.combine()) {
+            timeout.fire();
+            return;
+        }
+
+        self.realtime_timeouts.push(timeout);
     }
 
     fn combine(&self) -> u64 {
@@ -111,6 +159,7 @@ impl State {
     fn set_real_time(&mut self, time: Timespec) -> Result<()> {
         let now = self.read_clock(ClockId::Monotonic);
         self.realtime_offset = time.checked_sub(now).ok_or(err!(Inval))?;
+        self.fire_realtime_clocks();
         Ok(())
     }
 }
@@ -191,14 +240,18 @@ impl Timespec {
     }
 }
 
-pub async fn sleep_until(deadline: Timespec) {
+pub async fn sleep_until(deadline: Timespec, clock_id: ClockId) {
     let (sender, receiver) = oneshot::new();
-
-    let mut guard = STATE.lock();
-    guard.add_timeout(Timeout {
+    let timeout = Timeout {
         time: deadline.into_ns(),
         sender,
-    });
+    };
+
+    let mut guard = STATE.lock();
+    match clock_id {
+        ClockId::Realtime => guard.add_realtime_timeout(timeout),
+        ClockId::Monotonic => guard.add_timeout(timeout),
+    }
     drop(guard);
 
     receiver.recv().await.unwrap();

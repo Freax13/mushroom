@@ -387,7 +387,7 @@ impl Process {
                 _ = cancel_rx.recv().fuse() => {
                     // The alarm has been cancelled -> do nothing.
                 }
-                _ = sleep_until(deadline).fuse() => {
+                _ = sleep_until(deadline, ClockId::Monotonic).fuse() => {
                     // The alarm has fired -> queue a signal.
                     this.queue_signal(SigInfo {
                         signal: Signal::ALRM,
