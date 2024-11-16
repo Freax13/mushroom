@@ -56,7 +56,7 @@ mushroom could be the basis of a secure remote build system: mushroom could be u
 
 ## Usage
 
-KVM host support for AMD SEV-SNP has been partially upstreamed into the Linux kernel, but [additional patches](https://github.com/Freax13/linux/tree/snp-guest-req-v1b-mushroom) are needed. KVM host support for Intel TDX has not yet been upstreamed. A [tree](https://github.com/Freax13/linux/tree/mushroom-tdx) based on Intel's partitioning patches can be used.
+KVM host support for AMD SEV-SNP has been partially upstreamed into the Linux kernel, but [additional patches](https://github.com/Freax13/linux/tree/svsm_vmpl_vmsa_restinj-mushroom) are needed. KVM host support for Intel TDX has not yet been upstreamed. A [tree](https://github.com/Freax13/linux/tree/mushroom-tdx) based on Intel's partitioning patches can be used.
 
 The host folder contains cargo-make files to simplify the process of running a workload.
 
