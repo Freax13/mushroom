@@ -85,6 +85,8 @@ jobs:
           key: build-cli-stable
           workspaces: |
             host
+      - name: "Update stable toolchain"
+        run: rustup update stable
       - name: "Build"
         run: cargo +stable build --all-features
         working-directory: host/mushroom
