@@ -7,7 +7,7 @@ use core::{
 
 use constants::{physical_address::supervisor::snp::VMSAS, MAX_APS_COUNT};
 use snp_types::{
-    vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap},
+    vmsa::{Segment, SevFeatures, Vmsa, VmsaTweakBitmap},
     VmplPermissions,
 };
 use x86_64::{
@@ -97,6 +97,7 @@ impl InitializedVmsa {
             ),
             tweak_bitmap,
         );
+        vmsa.set_cs(Segment::CODE64, tweak_bitmap);
         vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);
         vmsa.set_rsp(0xffff_8000_0400_3ff8, tweak_bitmap);
         vmsa.set_sev_features(SEV_FEATURES, tweak_bitmap);

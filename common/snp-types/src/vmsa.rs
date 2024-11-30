@@ -142,7 +142,7 @@ impl Vmsa {
 
 vmsa_def! {
     pub es: Segment = Segment::DATA,
-    pub cs: Segment = Segment::CODE,
+    pub cs: Segment = Segment::CODE16,
     pub ss: Segment = Segment::DATA,
     pub ds: Segment = Segment::DATA,
     pub fs: Segment = Segment::FS_GS,
@@ -160,16 +160,16 @@ vmsa_def! {
     pub vmpl: u8 = 0,
     pub cpl: u8 = 0,
     reserved2: Reserved<4, false> = Reserved::ZERO,
-    pub efer: EferFlags = EferFlags::from_bits_retain(0),
+    pub efer: EferFlags = EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE,
     reserved3: Reserved<104, false> = Reserved::ZERO,
     pub xss: u64 = 0,
-    pub cr4: Cr4Flags = Cr4Flags::TIMESTAMP_DISABLE,
+    pub cr4: Cr4Flags = Cr4Flags::MACHINE_CHECK_EXCEPTION,
     pub cr3: u64 = 0,
-    pub cr0: Cr0Flags = Cr0Flags::empty(),
+    pub cr0: Cr0Flags = Cr0Flags::EXTENSION_TYPE,
     pub dr7: Dr7Flags = Dr7Flags::GENERAL_DETECT_ENABLE,
     pub dr6: Dr6Flags = Dr6Flags::from_bits_retain(0xffff0ff0),
     pub rflags: RFlags = RFlags::from_bits_retain(2),
-    pub rip: u64 = 0,
+    pub rip: u64 = 0xfff0,
     pub dr0: u64 = 0,
     pub dr1: u64 = 0,
     pub dr2: u64 = 0,
@@ -240,7 +240,7 @@ vmsa_def! {
     pub mxcsr: MxCsr = MxCsr::from_bits_retain(0x1f80),
     pub x87_ftw: u16 = 0,
     pub x87_fsw: u16 = 0,
-    pub x87_fcw: u16 = 0x40,
+    pub x87_fcw: u16 = 0x37f,
     pub x87_fop: u16 = 0,
     pub x87_ds: u16 = 0,
     pub x87_cs: u16 = 0,
@@ -280,7 +280,14 @@ impl Segment {
         base: 0,
     };
 
-    const CODE: Self = Self {
+    const CODE16: Self = Self {
+        selector: 0xf000,
+        attrib: 0x9a,
+        limit: 0xffff,
+        base: 0xffff0000,
+    };
+
+    pub const CODE64: Self = Self {
         selector: 0x08,
         attrib: 0x29b,
         limit: 0xffffffff,
