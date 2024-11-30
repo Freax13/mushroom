@@ -2,7 +2,7 @@
 
 use bit_field::BitArray;
 use bitflags::bitflags;
-use bytemuck::{bytes_of, bytes_of_mut, cast, offset_of, CheckedBitPattern, Pod, Zeroable};
+use bytemuck::{bytes_of, bytes_of_mut, offset_of, CheckedBitPattern, Pod, Zeroable};
 use paste::paste;
 use x86_64::registers::control::Cr4Flags;
 
@@ -26,6 +26,12 @@ macro_rules! vmsa_def {
         paste! {
             #[expect(dead_code, clippy::missing_transmute_annotations, clippy::transmute_num_to_bytes)]
             impl Vmsa {
+                pub const fn new() -> Self {
+                    Self {
+                        $($ident: unsafe { core::mem::transmute::<$ty, _>($default) },)*
+                    }
+                }
+
                 $(
                     $vis fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
                         let mut buffer = [0; size_of::<$ty>()];
@@ -43,9 +49,7 @@ macro_rules! vmsa_def {
 
         impl Default for Vmsa {
             fn default() -> Self {
-                Self {
-                    $($ident: cast::<$ty, _>($default),)*
-                }
+                Self::new()
             }
         }
 
