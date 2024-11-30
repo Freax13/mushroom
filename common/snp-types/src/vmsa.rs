@@ -2,7 +2,7 @@
 
 use bit_field::BitArray;
 use bitflags::bitflags;
-use bytemuck::{bytes_of, bytes_of_mut, offset_of, CheckedBitPattern, Pod, Zeroable};
+use bytemuck::{bytes_of_mut, CheckedBitPattern, Pod, Zeroable};
 use paste::paste;
 use x86_64::registers::control::Cr4Flags;
 
@@ -10,7 +10,7 @@ use crate::{Reserved, Uninteresting};
 
 use core::{
     fmt::{self, Debug},
-    mem::size_of,
+    mem::{offset_of, size_of},
 };
 
 macro_rules! vmsa_def {
@@ -33,13 +33,13 @@ macro_rules! vmsa_def {
                 }
 
                 $(
-                    $vis fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
+                    $vis const fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
                         let mut buffer = [0; size_of::<$ty>()];
                         self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
                         unsafe { core::mem::transmute(buffer) }
                     }
 
-                    $vis fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
+                    $vis const fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
                         let buffer: [u8; size_of::<$ty>()] = unsafe { core::mem::transmute(value) };
                         self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
                     }
@@ -72,24 +72,46 @@ macro_rules! vmsa_def {
 
 impl Vmsa {
     /// Read bytes from the VMSA and deobfuscate protected registers.
-    fn read(&self, offset: usize, buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
-        for (b, offset) in buffer.iter_mut().zip(offset..) {
-            *b = bytes_of(self)[offset];
-
-            if tweak_bitmap.bitmap.get_bit(offset / 8) {
-                *b ^= self.reg_prot_nonce[offset % 8];
-            }
+    const fn read(&self, mut offset: usize, mut buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
+        while let Some((b, new_buffer)) = buffer.split_first_mut() {
+            *b = unsafe { core::ptr::from_ref(self).cast::<u8>().add(offset).read() };
+            self.apply_reg_prot_nonce(offset, b, tweak_bitmap);
+            buffer = new_buffer;
+            offset += 1;
         }
     }
 
-    /// Write bytes to the VMSA and deobfuscate protected registers.
-    fn write(&mut self, offset: usize, buffer: &[u8], tweak_bitmap: &VmsaTweakBitmap) {
-        for (mut b, offset) in buffer.iter().copied().zip(offset..) {
-            if tweak_bitmap.bitmap.get_bit(offset / 8) {
-                b ^= self.reg_prot_nonce[offset % 8];
+    /// Write bytes to the VMSA and obfuscate protected registers.
+    const fn write(
+        &mut self,
+        mut offset: usize,
+        mut buffer: &[u8],
+        tweak_bitmap: &VmsaTweakBitmap,
+    ) {
+        while let Some((b, new_buffer)) = buffer.split_first() {
+            let mut b = *b;
+            self.apply_reg_prot_nonce(offset, &mut b, tweak_bitmap);
+            unsafe {
+                core::ptr::from_mut(self).cast::<u8>().add(offset).write(b);
             }
+            buffer = new_buffer;
+            offset += 1;
+        }
+    }
 
-            bytes_of_mut(self)[offset] = b;
+    const fn apply_reg_prot_nonce(
+        &self,
+        offset: usize,
+        value: &mut u8,
+        tweak_bitmap: &VmsaTweakBitmap,
+    ) {
+        let bitmap_idx = offset / 8;
+        let byte_idx = bitmap_idx / 8;
+        let bit_offset = bitmap_idx % 8;
+        let bitmap_byte = tweak_bitmap.bitmap[byte_idx];
+        let bit = (bitmap_byte >> bit_offset) & 1 != 0;
+        if bit {
+            *value ^= self.reg_prot_nonce[offset % 8];
         }
     }
 
