@@ -7,7 +7,7 @@ use sha2::{Digest, Sha384};
 use snp_types::{
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
     guest_policy::GuestPolicy,
-    PageType, VmplPermissions,
+    VmplPermissions,
 };
 use thiserror::Error;
 use vcek_kds::Vcek;
@@ -42,9 +42,6 @@ impl Configuration {
             };
             launch_digest = Sha384::digest(bytes_of(&info)).into();
         }
-
-        let info = PageInfo::linux_vmsa(launch_digest);
-        launch_digest = Sha384::digest(bytes_of(&info)).into();
 
         Self {
             launch_digest,
@@ -170,6 +167,11 @@ impl PageInfo {
     fn new(digest_cur: [u8; 48], command: &LoadCommand) -> Option<Self> {
         let contents = match command.payload {
             LoadCommandPayload::Normal(page) => Sha384::digest(page).into(),
+            LoadCommandPayload::Vmsa(mut page) => {
+                // Zero out GUEST_TSC_SCALE and GUEST_TSC_OFFSET.
+                page[0x2f0..=0x2ff].fill(0);
+                Sha384::digest(page).into()
+            }
             LoadCommandPayload::Zero
             | LoadCommandPayload::Secrets
             | LoadCommandPayload::Cpuid(_) => [0; 48],
@@ -188,28 +190,6 @@ impl PageInfo {
             vmpl3_perms: VmplPermissions::empty(),
             gpa: command.physical_address.start_address().as_u64(),
         })
-    }
-
-    fn linux_vmsa(digest_cur: [u8; 48]) -> Self {
-        const VMSA_CONTENT: [u8; 48] = [
-            0x8d, 0xed, 0x26, 0x62, 0x7a, 0xe8, 0x93, 0x79, 0x3a, 0x1e, 0x8c, 0x03, 0x50, 0x17,
-            0xaa, 0x0a, 0x9c, 0x45, 0x73, 0xeb, 0xbc, 0x25, 0xe3, 0xe6, 0x29, 0xb4, 0x90, 0xc6,
-            0xad, 0xd9, 0x8c, 0xdb, 0x20, 0xf4, 0xba, 0xd7, 0xc4, 0x2e, 0x55, 0x27, 0x71, 0x4e,
-            0x2b, 0x63, 0xfb, 0xb1, 0xea, 0xd1,
-        ];
-
-        Self {
-            digest_cur,
-            contents: VMSA_CONTENT,
-            length: u16::try_from(size_of::<Self>()).unwrap(),
-            page_type: PageType::Vmsa as u8,
-            imi_page: false,
-            vmpl3_perms: VmplPermissions::empty(),
-            vmpl2_perms: VmplPermissions::empty(),
-            vmpl1_perms: VmplPermissions::empty(),
-            zero: 0,
-            gpa: 0xffff_ffff_f000,
-        }
     }
 }
 

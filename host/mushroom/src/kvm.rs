@@ -361,12 +361,14 @@ impl VmHandle {
     }
 
     #[cfg(feature = "snp")]
+    #[allow(clippy::too_many_arguments)]
     pub fn sev_snp_launch_update(
         &self,
         start_addr: u64,
         uaddr: u64,
         len: u64,
         page_type: PageType,
+        vcpu_id: u32,
         vmpl1_perms: VmplPermissions,
         // FIXME: figure out if we need a sev handle for this operation
         sev_handle: &SevHandle,
@@ -387,7 +389,7 @@ impl VmHandle {
                 page_type: page_type as u8,
                 pad0: 0,
                 flags: 0,
-                vcpu_id: 0,
+                vcpu_id,
                 pad2: [0; 4],
             },
             vmpl3_perms: VmplPermissions::empty(),

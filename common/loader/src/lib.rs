@@ -16,6 +16,7 @@ pub use io::input::HashType;
 #[derive(Debug)]
 pub struct LoadCommand {
     pub physical_address: PhysFrame,
+    pub vcpu_id: u32,
     pub vmpl1_perms: VmplPermissions,
     pub payload: LoadCommandPayload,
 }
@@ -24,6 +25,7 @@ pub struct LoadCommand {
 #[derive(Debug, Clone, Copy)]
 pub enum LoadCommandPayload {
     Normal([u8; 0x1000]),
+    Vmsa([u8; 0x1000]),
     Zero,
     Secrets,
     Cpuid(CpuidPage),
@@ -34,6 +36,7 @@ impl LoadCommandPayload {
     pub fn page_type(&self) -> Option<PageType> {
         match self {
             LoadCommandPayload::Normal(_) => Some(PageType::Normal),
+            LoadCommandPayload::Vmsa(..) => Some(PageType::Vmsa),
             LoadCommandPayload::Zero => Some(PageType::Zero),
             LoadCommandPayload::Secrets => Some(PageType::Secrets),
             LoadCommandPayload::Cpuid(_) => Some(PageType::Cpuid),
@@ -44,6 +47,7 @@ impl LoadCommandPayload {
     pub fn bytes(&self) -> [u8; 0x1000] {
         match self {
             LoadCommandPayload::Normal(bytes) => *bytes,
+            LoadCommandPayload::Vmsa(bytes) => *bytes,
             LoadCommandPayload::Zero => [0; 0x1000],
             LoadCommandPayload::Secrets => [0; 0x1000],
             LoadCommandPayload::Cpuid(cpuid) => cast(*cpuid),

@@ -10,6 +10,7 @@ PHDRS
     shadow_stack        PT_LOAD AT(0x00240000000);
     shared              PT_LOAD AT(0x00280000000) FLAGS((1 << 30));
     vmsas               PT_LOAD AT(0x002c0001000);
+    supervisor_vmsas    PT_LOAD AT(0x00300001000) FLAGS((1 << 27));
     log_buffer          PT_LOAD AT(0x90000200000) FLAGS((1 << 30));
     cpuid_page          PT_LOAD FLAGS((1 << 2) | (1 << 28));
     pagetables          PT_LOAD FLAGS((1 << 2));
@@ -72,6 +73,11 @@ SECTIONS {
     {
         *(.vmsas .vmsas.*)
     } :vmsas
+
+    .supervisor_vmsas (0x45001000) :
+    {
+        KEEP(*(.supervisor_vmsas .supervisor_vmsas.*))
+    } :supervisor_vmsas
 
     .cpuid_page (0xffa00000) : 
     {

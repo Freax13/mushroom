@@ -121,6 +121,9 @@ impl VmContext {
 
         vm.sev_snp_launch_start(policy, sev_handle)?;
 
+        let bsp = vm.create_vcpu(0)?;
+        bsp.set_cpuid(&cpuid_entries)?;
+
         let (load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
             kernel,
@@ -152,6 +155,7 @@ impl VmContext {
                 let following_load_command = load_commands.next_if(|next_load_segment| {
                     next_load_segment.physical_address > gpa
                         && next_load_segment.physical_address - gpa == i
+                        && first_page_type != Some(PageType::Vmsa)
                         && next_load_segment.payload.page_type() == first_page_type
                         && next_load_segment.vmpl1_perms == first_vmpl1_perms
                 });
@@ -184,6 +188,7 @@ impl VmContext {
                     u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
                     slot.shared_mapping().len().get() as u64,
                     first_page_type,
+                    first_load_command.vcpu_id,
                     first_vmpl1_perms,
                     sev_handle,
                 )?;
@@ -200,9 +205,6 @@ impl VmContext {
             pages.clear();
             slot_id += 1;
         }
-
-        let bsp = vm.create_vcpu(0)?;
-        bsp.set_cpuid(&cpuid_entries)?;
 
         vm.sev_snp_launch_finish(sev_handle, host_data)?;
 

@@ -36,6 +36,7 @@ pub fn load(
             let execute = ph.p_flags.get_bit(0);
             let write = ph.p_flags.get_bit(1);
             let read = ph.p_flags.get_bit(2);
+            let vmsa_page = ph.p_flags.get_bit(27);
             let cpuid_page = ph.p_flags.get_bit(28);
             let secrets_page = ph.p_flags.get_bit(29);
             let shared_page = ph.p_flags.get_bit(30);
@@ -62,7 +63,8 @@ pub fn load(
 
             PhysFrame::range_inclusive(start_frame, end_inclusive_frame)
                 .into_iter()
-                .map(move |frame| {
+                .enumerate()
+                .map(move |(i, frame)| {
                     assert!(!(cpuid_page & secrets_page));
                     assert!(!(cpuid_page & shared_page));
                     assert!(!(secrets_page & shared_page));
@@ -94,14 +96,20 @@ pub fn load(
                                 .copy_from_slice(&elf_bytes[offset_start..=offset_end_inclusive]);
                         }
 
-                        if shared_page {
+                        if vmsa_page {
+                            LoadCommandPayload::Vmsa(bytes)
+                        } else if shared_page {
                             LoadCommandPayload::Shared(bytes)
                         } else {
                             LoadCommandPayload::Normal(bytes)
                         }
                     };
+
+                    let vcpu_id = if vmsa_page { i as u32 } else { 0 };
+
                     LoadCommand {
                         physical_address: frame,
+                        vcpu_id,
                         vmpl1_perms,
                         payload,
                     }
@@ -173,6 +181,7 @@ pub fn load_shadow_mapping(
 
                 Some(LoadCommand {
                     physical_address: mapping_frame,
+                    vcpu_id: 0,
                     vmpl1_perms,
                     payload: LoadCommandPayload::Normal(payload),
                 })
