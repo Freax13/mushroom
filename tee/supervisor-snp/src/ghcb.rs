@@ -25,7 +25,7 @@ use snp_types::{
     guest_message::{Algo, Content, ContentV1, Message},
     intercept::{VMEXIT_IOIO, VMEXIT_MSR},
     secrets::Secrets,
-    vmsa::{SevFeatures, VmsaTweakBitmap},
+    vmsa::SevFeatures,
 };
 use volatile::{map_field, VolatilePtr};
 use x86_64::structures::paging::PhysFrame;
@@ -38,11 +38,6 @@ fn secrets() -> &'static Secrets {
         static SECRETS: Secrets;
     }
     unsafe { &SECRETS }
-}
-
-pub fn vmsa_tweak_bitmap() -> &'static VmsaTweakBitmap {
-    let Secrets::V3(v3) = secrets();
-    &v3.vmsa_tweak_bitmap
 }
 
 /// Initialize a GHCB and pass it to the closure.

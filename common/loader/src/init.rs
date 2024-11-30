@@ -38,6 +38,7 @@ pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
         .zip(frames)
         .map(|((vmpl1_perms, payload), physical_address)| LoadCommand {
             physical_address,
+            vcpu_id: 0,
             vmpl1_perms,
             payload,
         })

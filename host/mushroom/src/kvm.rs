@@ -361,12 +361,14 @@ impl VmHandle {
     }
 
     #[cfg(feature = "snp")]
+    #[allow(clippy::too_many_arguments)]
     pub fn sev_snp_launch_update(
         &self,
         start_addr: u64,
         uaddr: u64,
         len: u64,
         page_type: PageType,
+        vcpu_id: u32,
         vmpl1_perms: VmplPermissions,
         // FIXME: figure out if we need a sev handle for this operation
         sev_handle: &SevHandle,
@@ -379,21 +381,23 @@ impl VmHandle {
         );
         let gfn_start = start_addr >> 12;
 
-        let mut data = KvmSevSnpLaunchUpdate {
-            gfn_start,
-            uaddr,
-            len,
-            page_type: page_type as u8,
-            pad0: 0,
-            flags: 0,
-            vmpl1_perms,
-            vmpl2_perms: VmplPermissions::empty(),
+        let mut data = KvmSevSnpLaunchUpdateVmpls {
+            base: KvmSevSnpLaunchUpdate {
+                gfn_start,
+                uaddr,
+                len,
+                page_type: page_type as u8,
+                pad0: 0,
+                flags: 0,
+                vcpu_id,
+                pad2: [0; 4],
+            },
             vmpl3_perms: VmplPermissions::empty(),
-            pad1: 0,
-            pad2: [0; 4],
+            vmpl2_perms: VmplPermissions::empty(),
+            vmpl1_perms,
         };
-        while data.len != 0 {
-            let payload = KvmSevCmdPayload::KvmSevSnpLaunchUpdate { data: &mut data };
+        while data.base.len != 0 {
+            let payload = KvmSevCmdPayload::KvmSevSnpLaunchUpdateVmpls { data: &mut data };
             let res = unsafe { self.memory_encrypt_op(payload, Some(sev_handle)) };
             res.context("failed to update sev snp launch")?;
         }
@@ -1462,10 +1466,18 @@ struct KvmSevCmd<'a, 'b> {
 #[repr(C, u32)]
 // FIXME: Figure out which ones need `&mut T` and which ones need `&T`
 pub enum KvmSevCmdPayload<'a> {
-    KvmSevInit2 { data: &'a mut KvmSevInit } = 22,
-    KvmSevSnpLaunchStart { data: &'a mut KvmSevSnpLaunchStart } = 100,
-    KvmSevSnpLaunchUpdate { data: &'a mut KvmSevSnpLaunchUpdate } = 101,
-    KvmSevSnpLaunchFinish { data: &'a mut KvmSevSnpLaunchFinish } = 102,
+    KvmSevInit2 {
+        data: &'a mut KvmSevInit,
+    } = 22,
+    KvmSevSnpLaunchStart {
+        data: &'a mut KvmSevSnpLaunchStart,
+    } = 100,
+    KvmSevSnpLaunchFinish {
+        data: &'a mut KvmSevSnpLaunchFinish,
+    } = 102,
+    KvmSevSnpLaunchUpdateVmpls {
+        data: &'a mut KvmSevSnpLaunchUpdateVmpls,
+    } = 103,
 }
 
 #[cfg(feature = "snp")]
@@ -1502,11 +1514,17 @@ pub struct KvmSevSnpLaunchUpdate {
     pub page_type: u8,
     pub pad0: u8,
     pub flags: u16,
-    pub vmpl1_perms: VmplPermissions,
-    pub vmpl2_perms: VmplPermissions,
-    pub vmpl3_perms: VmplPermissions,
-    pub pad1: u8,
+    pub vcpu_id: u32,
     pub pad2: [u64; 4],
+}
+
+#[cfg(feature = "snp")]
+#[repr(C)]
+pub struct KvmSevSnpLaunchUpdateVmpls {
+    pub base: KvmSevSnpLaunchUpdate,
+    pub vmpl3_perms: VmplPermissions,
+    pub vmpl2_perms: VmplPermissions,
+    pub vmpl1_perms: VmplPermissions,
 }
 
 #[cfg(feature = "snp")]

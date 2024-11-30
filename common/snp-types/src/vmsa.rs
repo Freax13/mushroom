@@ -2,15 +2,21 @@
 
 use bit_field::BitArray;
 use bitflags::bitflags;
-use bytemuck::{bytes_of, bytes_of_mut, cast, offset_of, CheckedBitPattern, Pod, Zeroable};
+use bytemuck::{bytes_of_mut, CheckedBitPattern, Pod, Zeroable};
 use paste::paste;
-use x86_64::registers::control::Cr4Flags;
+use x86_64::registers::{
+    control::{Cr0Flags, Cr4Flags, EferFlags},
+    debug::{Dr6Flags, Dr7Flags},
+    mxcsr::MxCsr,
+    rflags::RFlags,
+    xcontrol::XCr0Flags,
+};
 
 use crate::{Reserved, Uninteresting};
 
 use core::{
     fmt::{self, Debug},
-    mem::size_of,
+    mem::{offset_of, size_of},
 };
 
 macro_rules! vmsa_def {
@@ -24,17 +30,23 @@ macro_rules! vmsa_def {
         }
 
         paste! {
-            #[allow(dead_code)]
+            #[expect(dead_code, clippy::missing_transmute_annotations, clippy::transmute_num_to_bytes)]
             impl Vmsa {
+                pub const fn new() -> Self {
+                    Self {
+                        $($ident: unsafe { core::mem::transmute::<$ty, _>($default) },)*
+                    }
+                }
+
                 $(
-                    $vis fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
+                    $vis const fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
                         let mut buffer = [0; size_of::<$ty>()];
                         self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
-                        bytemuck::checked::cast(buffer)
+                        unsafe { core::mem::transmute(buffer) }
                     }
 
-                    $vis fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
-                        let buffer: [u8; size_of::<$ty>()] = cast(value);
+                    $vis const fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
+                        let buffer: [u8; size_of::<$ty>()] = unsafe { core::mem::transmute(value) };
                         self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
                     }
                 )*
@@ -43,9 +55,7 @@ macro_rules! vmsa_def {
 
         impl Default for Vmsa {
             fn default() -> Self {
-                Self {
-                    $($ident: cast::<$ty, _>($default),)*
-                }
+                Self::new()
             }
         }
 
@@ -68,24 +78,46 @@ macro_rules! vmsa_def {
 
 impl Vmsa {
     /// Read bytes from the VMSA and deobfuscate protected registers.
-    fn read(&self, offset: usize, buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
-        for (b, offset) in buffer.iter_mut().zip(offset..) {
-            *b = bytes_of(self)[offset];
-
-            if tweak_bitmap.bitmap.get_bit(offset / 8) {
-                *b ^= self.reg_prot_nonce[offset % 8];
-            }
+    const fn read(&self, mut offset: usize, mut buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
+        while let Some((b, new_buffer)) = buffer.split_first_mut() {
+            *b = unsafe { core::ptr::from_ref(self).cast::<u8>().add(offset).read() };
+            self.apply_reg_prot_nonce(offset, b, tweak_bitmap);
+            buffer = new_buffer;
+            offset += 1;
         }
     }
 
-    /// Write bytes to the VMSA and deobfuscate protected registers.
-    fn write(&mut self, offset: usize, buffer: &[u8], tweak_bitmap: &VmsaTweakBitmap) {
-        for (mut b, offset) in buffer.iter().copied().zip(offset..) {
-            if tweak_bitmap.bitmap.get_bit(offset / 8) {
-                b ^= self.reg_prot_nonce[offset % 8];
+    /// Write bytes to the VMSA and obfuscate protected registers.
+    const fn write(
+        &mut self,
+        mut offset: usize,
+        mut buffer: &[u8],
+        tweak_bitmap: &VmsaTweakBitmap,
+    ) {
+        while let Some((b, new_buffer)) = buffer.split_first() {
+            let mut b = *b;
+            self.apply_reg_prot_nonce(offset, &mut b, tweak_bitmap);
+            unsafe {
+                core::ptr::from_mut(self).cast::<u8>().add(offset).write(b);
             }
+            buffer = new_buffer;
+            offset += 1;
+        }
+    }
 
-            bytes_of_mut(self)[offset] = b;
+    const fn apply_reg_prot_nonce(
+        &self,
+        offset: usize,
+        value: &mut u8,
+        tweak_bitmap: &VmsaTweakBitmap,
+    ) {
+        let bitmap_idx = offset / 8;
+        let byte_idx = bitmap_idx / 8;
+        let bit_offset = bitmap_idx % 8;
+        let bitmap_byte = tweak_bitmap.bitmap[byte_idx];
+        let bit = (bitmap_byte >> bit_offset) & 1 != 0;
+        if bit {
+            *value ^= self.reg_prot_nonce[offset % 8];
         }
     }
 
@@ -110,7 +142,7 @@ impl Vmsa {
 
 vmsa_def! {
     pub es: Segment = Segment::DATA,
-    pub cs: Segment = Segment::CODE,
+    pub cs: Segment = Segment::CODE16,
     pub ss: Segment = Segment::DATA,
     pub ds: Segment = Segment::DATA,
     pub fs: Segment = Segment::FS_GS,
@@ -124,20 +156,20 @@ vmsa_def! {
     pub pl2_ssp: u64 = 0,
     pub pl3_ssp: u64 = 0,
     pub ucet: u64 = 0,
-    reserved1: Reserved<2> = Reserved::ZERO,
+    reserved1: Reserved<2, false> = Reserved::ZERO,
     pub vmpl: u8 = 0,
     pub cpl: u8 = 0,
-    reserved2: Reserved<4> = Reserved::ZERO,
-    pub efer: u64 = 0,
-    reserved3: Reserved<104> = Reserved::ZERO,
+    reserved2: Reserved<4, false> = Reserved::ZERO,
+    pub efer: EferFlags = EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE,
+    reserved3: Reserved<104, false> = Reserved::ZERO,
     pub xss: u64 = 0,
-    pub cr4: u64 = Cr4Flags::TIMESTAMP_DISABLE.bits(),
+    pub cr4: Cr4Flags = Cr4Flags::MACHINE_CHECK_EXCEPTION,
     pub cr3: u64 = 0,
-    pub cr0: u64 = 0,
-    pub dr7: u64 = 0x400,
-    pub dr6: u64 = 0xffff0ff0,
-    pub rflags: u64 = 2,
-    pub rip: u64 = 0,
+    pub cr0: Cr0Flags = Cr0Flags::EXTENSION_TYPE,
+    pub dr7: Dr7Flags = Dr7Flags::GENERAL_DETECT_ENABLE,
+    pub dr6: Dr6Flags = Dr6Flags::from_bits_retain(0xffff0ff0),
+    pub rflags: RFlags = RFlags::from_bits_retain(2),
+    pub rip: u64 = 0xfff0,
     pub dr0: u64 = 0,
     pub dr1: u64 = 0,
     pub dr2: u64 = 0,
@@ -146,7 +178,7 @@ vmsa_def! {
     pub dr1_addr_mask: u64 = 0,
     pub dr2_addr_mask: u64 = 0,
     pub dr3_addr_mask: u64 = 0,
-    reserved4: Reserved<24> = Reserved::ZERO,
+    reserved4: Reserved<24, false> = Reserved::ZERO,
     pub rsp: u64 = 0,
     pub s_cet: u64 = 0,
     pub ssp: u64 = 0,
@@ -161,15 +193,15 @@ vmsa_def! {
     pub sysenter_esp: u64 = 0,
     pub sysenter_eip: u64 = 0,
     pub cr2: u64 = 0,
-    reserved5: Reserved<32> = Reserved::ZERO,
+    reserved5: Reserved<32, false> = Reserved::ZERO,
     pub g_pat: u64 = 0x7040600070406,
     pub dbgctl: u64 = 0,
     pub br_from: u64 = 0,
     pub br_to: u64 = 0,
     pub lsat_excp_from: u64 = 0,
     pub last_excp_to: u64 = 0,
-    reserved6: Reserved<72> = Reserved::ZERO,
-    reserved7: Reserved<8> = Reserved::ZERO,
+    reserved6: Reserved<72, false> = Reserved::ZERO,
+    reserved7: Reserved<8, false> = Reserved::ZERO,
     pub pkru: u32 = 0,
     pub tsc_aux: u32 = 0,
     pub guest_tsc_scale: u64 = 0,
@@ -178,7 +210,7 @@ vmsa_def! {
     pub rcx: u64 = 0,
     pub rdx: u64 = 0,
     pub rbx: u64 = 0,
-    reserved8: Reserved<8> = Reserved::ZERO,
+    reserved8: Reserved<8, false> = Reserved::ZERO,
     pub rbp: u64 = 0,
     pub rsi: u64 = 0,
     pub rdi: u64 = 0,
@@ -202,13 +234,13 @@ vmsa_def! {
     pub tlb_id: u64 = 0,
     pub pcpu_id: u64 = 0,
     pub event_inj: u64 = 0,
-    pub xcr0: u64 = 1,
-    reserved10: Reserved<16> = Reserved::ZERO,
+    pub xcr0: XCr0Flags = XCr0Flags::X87,
+    reserved10: Reserved<16, false> = Reserved::ZERO,
     pub x87_dp: u64 = 0,
-    pub mxcsr: u32 = 0x1f80,
+    pub mxcsr: MxCsr = MxCsr::from_bits_retain(0x1f80),
     pub x87_ftw: u16 = 0,
     pub x87_fsw: u16 = 0,
-    pub x87_fcw: u16 = 0x40,
+    pub x87_fcw: u16 = 0x37f,
     pub x87_fop: u16 = 0,
     pub x87_ds: u16 = 0,
     pub x87_cs: u16 = 0,
@@ -228,7 +260,7 @@ vmsa_def! {
     pub ibs_dc_linaddr: u64 = 0,
     pub bp_ibstgt_rip: u64 = 0,
     pub ic_ibs_extd_ctl: u64 = 0,
-    padding: Reserved<2104> = Reserved::ZERO,
+    padding: Reserved<2104, false> = Reserved::ZERO,
 }
 
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -248,7 +280,14 @@ impl Segment {
         base: 0,
     };
 
-    const CODE: Self = Self {
+    const CODE16: Self = Self {
+        selector: 0xf000,
+        attrib: 0x9a,
+        limit: 0xffff,
+        base: 0xffff0000,
+    };
+
+    pub const CODE64: Self = Self {
         selector: 0x08,
         attrib: 0x29b,
         limit: 0xffffffff,

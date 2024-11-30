@@ -60,6 +60,7 @@ pub fn load_input(
             .zip(payloads)
             .map(|(physical_address, payload)| LoadCommand {
                 physical_address,
+                vcpu_id: 0,
                 vmpl1_perms: VmplPermissions::empty(),
                 payload,
             }),
