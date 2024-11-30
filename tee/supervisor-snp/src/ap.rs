@@ -4,7 +4,7 @@ use constants::{ApIndex, FIRST_AP, KICK_AP_PORT};
 use snp_types::vmsa::SevFeatures;
 
 use crate::{
-    ghcb::{create_ap, ioio_write, vmsa_tweak_bitmap},
+    ghcb::{create_ap, ioio_write},
     FakeSync,
 };
 
@@ -28,7 +28,7 @@ pub fn start_next_ap() {
     APIC_COUNTER.set(counter + 1);
 
     // Initialize the VMSA.
-    let mut vmsa = InitializedVmsa::new(vmsa_tweak_bitmap(), u32::from(apic_id.as_u8()));
+    let mut vmsa = InitializedVmsa::new();
     unsafe {
         vmsa.set_runnable(true);
     }
