@@ -24,17 +24,17 @@ macro_rules! vmsa_def {
         }
 
         paste! {
-            #[allow(dead_code)]
+            #[expect(dead_code, clippy::missing_transmute_annotations, clippy::transmute_num_to_bytes)]
             impl Vmsa {
                 $(
                     $vis fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
                         let mut buffer = [0; size_of::<$ty>()];
                         self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
-                        bytemuck::checked::cast(buffer)
+                        unsafe { core::mem::transmute(buffer) }
                     }
 
                     $vis fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
-                        let buffer: [u8; size_of::<$ty>()] = cast(value);
+                        let buffer: [u8; size_of::<$ty>()] = unsafe { core::mem::transmute(value) };
                         self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
                     }
                 )*
