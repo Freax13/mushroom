@@ -57,36 +57,44 @@ impl InitializedVmsa {
         vmsa.set_vmpl(1, tweak_bitmap);
         vmsa.set_virtual_tom(!0, tweak_bitmap);
         vmsa.set_efer(
-            EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
-                | EferFlags::LONG_MODE_ENABLE.bits()
-                | EferFlags::LONG_MODE_ACTIVE.bits()
-                | EferFlags::NO_EXECUTE_ENABLE.bits()
-                | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
+            EferFlags::from_bits_retain(
+                EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
+                    | EferFlags::LONG_MODE_ENABLE.bits()
+                    | EferFlags::LONG_MODE_ACTIVE.bits()
+                    | EferFlags::NO_EXECUTE_ENABLE.bits()
+                    | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
+            ),
             tweak_bitmap,
         );
         vmsa.set_cr4(
-            Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
-                | Cr4Flags::PAGE_GLOBAL.bits()
-                | Cr4Flags::OSFXSR.bits()
-                | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
-                | Cr4Flags::FSGSBASE.bits()
-                | Cr4Flags::PCID.bits()
-                | Cr4Flags::OSXSAVE.bits()
-                | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
-                | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
+            Cr4Flags::from_bits_retain(
+                Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
+                    | Cr4Flags::PAGE_GLOBAL.bits()
+                    | Cr4Flags::OSFXSR.bits()
+                    | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
+                    | Cr4Flags::FSGSBASE.bits()
+                    | Cr4Flags::PCID.bits()
+                    | Cr4Flags::OSXSAVE.bits()
+                    | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
+                    | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits(),
+            ),
             tweak_bitmap,
         );
         vmsa.set_cr3(0x100_0000_0000, tweak_bitmap);
         vmsa.set_cr0(
-            Cr0Flags::PROTECTED_MODE_ENABLE.bits()
-                | Cr0Flags::MONITOR_COPROCESSOR.bits()
-                | Cr0Flags::EXTENSION_TYPE.bits()
-                | Cr0Flags::WRITE_PROTECT.bits()
-                | Cr0Flags::PAGING.bits(),
+            Cr0Flags::from_bits_retain(
+                Cr0Flags::PROTECTED_MODE_ENABLE.bits()
+                    | Cr0Flags::MONITOR_COPROCESSOR.bits()
+                    | Cr0Flags::EXTENSION_TYPE.bits()
+                    | Cr0Flags::WRITE_PROTECT.bits()
+                    | Cr0Flags::PAGING.bits(),
+            ),
             tweak_bitmap,
         );
         vmsa.set_xcr0(
-            XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
+            XCr0Flags::from_bits_retain(
+                XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
+            ),
             tweak_bitmap,
         );
         vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);
@@ -95,7 +103,10 @@ impl InitializedVmsa {
 
         // Enable SecureTSC.
         let sev_features = vmsa.sev_features(tweak_bitmap);
-        vmsa.set_sev_features(sev_features | SevFeatures::SECURE_TSC, tweak_bitmap);
+        vmsa.set_sev_features(
+            SevFeatures::from_bits_retain(sev_features.bits() | SevFeatures::SECURE_TSC.bits()),
+            tweak_bitmap,
+        );
         // Set TSC scaling to 1.
         vmsa.set_guest_tsc_scale(0x01_00000000, tweak_bitmap);
         // Disable TSC offset.

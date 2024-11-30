@@ -4,7 +4,13 @@ use bit_field::BitArray;
 use bitflags::bitflags;
 use bytemuck::{bytes_of_mut, CheckedBitPattern, Pod, Zeroable};
 use paste::paste;
-use x86_64::registers::control::Cr4Flags;
+use x86_64::registers::{
+    control::{Cr0Flags, Cr4Flags, EferFlags},
+    debug::{Dr6Flags, Dr7Flags},
+    mxcsr::MxCsr,
+    rflags::RFlags,
+    xcontrol::XCr0Flags,
+};
 
 use crate::{Reserved, Uninteresting};
 
@@ -154,15 +160,15 @@ vmsa_def! {
     pub vmpl: u8 = 0,
     pub cpl: u8 = 0,
     reserved2: Reserved<4, false> = Reserved::ZERO,
-    pub efer: u64 = 0,
+    pub efer: EferFlags = EferFlags::from_bits_retain(0),
     reserved3: Reserved<104, false> = Reserved::ZERO,
     pub xss: u64 = 0,
-    pub cr4: u64 = Cr4Flags::TIMESTAMP_DISABLE.bits(),
+    pub cr4: Cr4Flags = Cr4Flags::TIMESTAMP_DISABLE,
     pub cr3: u64 = 0,
-    pub cr0: u64 = 0,
-    pub dr7: u64 = 0x400,
-    pub dr6: u64 = 0xffff0ff0,
-    pub rflags: u64 = 2,
+    pub cr0: Cr0Flags = Cr0Flags::empty(),
+    pub dr7: Dr7Flags = Dr7Flags::GENERAL_DETECT_ENABLE,
+    pub dr6: Dr6Flags = Dr6Flags::from_bits_retain(0xffff0ff0),
+    pub rflags: RFlags = RFlags::from_bits_retain(2),
     pub rip: u64 = 0,
     pub dr0: u64 = 0,
     pub dr1: u64 = 0,
@@ -228,10 +234,10 @@ vmsa_def! {
     pub tlb_id: u64 = 0,
     pub pcpu_id: u64 = 0,
     pub event_inj: u64 = 0,
-    pub xcr0: u64 = 1,
+    pub xcr0: XCr0Flags = XCr0Flags::X87,
     reserved10: Reserved<16, false> = Reserved::ZERO,
     pub x87_dp: u64 = 0,
-    pub mxcsr: u32 = 0x1f80,
+    pub mxcsr: MxCsr = MxCsr::from_bits_retain(0x1f80),
     pub x87_ftw: u16 = 0,
     pub x87_fsw: u16 = 0,
     pub x87_fcw: u16 = 0x40,
