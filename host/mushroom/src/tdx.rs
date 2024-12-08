@@ -114,7 +114,7 @@ pub fn main(
 }
 
 struct VmContext {
-    vm: Arc<VmHandle>,
+    vm: VmHandle,
     memory_slots: Mutex<HashMap<u16, Slot>>,
     start: Instant,
 }
@@ -148,7 +148,6 @@ impl VmContext {
         xsave.ecx.set_bit(12, true);
 
         let vm = kvm_handle.create_tdx_vm()?;
-        let vm = Arc::new(vm);
 
         vm.enable_capability(KvmCap::MAX_VCPUS, u64::from(MAX_APS_COUNT))?;
 
@@ -276,11 +275,11 @@ impl VmContext {
 
     pub fn run_vcpu(
         &self,
-        bsp: &VcpuHandle,
+        vcpu: &VcpuHandle,
         done: Arc<AtomicBool>,
         sender: &Sender<OutputEvent>,
     ) -> Result<()> {
-        let kvm_run = bsp.get_kvm_run_block()?;
+        let kvm_run = vcpu.get_kvm_run_block()?;
         let kvm_run = kvm_run.as_ptr();
 
         while !done.load(Ordering::Relaxed) {
@@ -423,7 +422,7 @@ impl VmContext {
                 }
             }
 
-            bsp.run()?;
+            vcpu.run()?;
         }
 
         Ok(())

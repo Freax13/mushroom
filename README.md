@@ -22,7 +22,7 @@ This kernel runs at VMPL 0 on AMD SEV-SNP and runs as the L1 VM on Intel TDX. It
 
 The code running in the VM has been split up into two parts, the workload kernel and the supervisor kernel, to reduce the amount security relevant code. It should be sufficient to audit the supervisor kernels as the the workload kernel should never come into contact with untrusted data.
 
-The supervisor kernels are the only component directly talking to the host. The supervisor kernels are intentionally kept small and is hardended against exploits. On AMD SEV-SNP, it is entirely single-threaded.
+The supervisor kernels are the only component directly talking to the host. The supervisor kernels are intentionally kept small and is hardended against exploits.
 
 The workload kernel cannot access host shared memory and even though it's in theory not impossible for it to communicate to the host through some side-channels, it should be very unlikely that the host can influence the code running in the workload kernel.
 

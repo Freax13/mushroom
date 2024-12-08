@@ -1,16 +1,17 @@
 use core::{
-    cell::{LazyCell, RefCell},
+    cell::LazyCell,
     mem::{size_of, MaybeUninit},
 };
 
 use constants::{FINISH_OUTPUT_MSR, UPDATE_OUTPUT_MSR};
 use sha2::{Digest, Sha256};
 use snp_types::attestation::AttestionReport;
+use spin::Mutex;
 use x86_64::instructions::hlt;
 
 use crate::{
     ghcb::{self, write_msr},
-    shared, FakeSync,
+    shared,
 };
 
 #[derive(Default)]
@@ -32,14 +33,15 @@ impl Hasher {
 
 /// This hasher is used to calculate the hash of the output that's included in
 /// the attestation report.
-static HASHER: FakeSync<LazyCell<RefCell<Option<Hasher>>>> =
-    FakeSync::new(LazyCell::new(|| RefCell::new(Some(Hasher::default()))));
+static HASHER: Mutex<LazyCell<Option<Hasher>>> =
+    Mutex::new(LazyCell::new(|| Some(Hasher::default())));
 
 /// Append some bytes to the output.
 pub fn update_output(bytes: &[u8]) {
     // Update the hasher.
-    let mut guard = HASHER.borrow_mut();
-    let hasher = guard.as_mut().expect("hasher was already finished");
+    let mut guard = HASHER.lock();
+    let hasher = LazyCell::force_mut(&mut guard);
+    let hasher = hasher.as_mut().expect("hasher was already finished");
     hasher.update(bytes);
 
     shared! {
@@ -64,8 +66,9 @@ pub fn update_output(bytes: &[u8]) {
 // Finish output.
 pub fn finish() -> ! {
     // Finish the running hash.
-    let mut guard = HASHER.borrow_mut();
-    let hasher = guard.take().expect("hasher was already finished");
+    let mut guard = HASHER.lock();
+    let hasher = LazyCell::force_mut(&mut guard);
+    let hasher = hasher.take().expect("hasher was already finished");
     let (hash, len) = hasher.finalize();
 
     // Create the attestation report.

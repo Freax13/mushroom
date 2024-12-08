@@ -16,7 +16,7 @@ stack:
 entry32bit:
 
 # 1. Sanitize & check initial registers.
-# 1.1 Clean RCX. This registers is controlled by the hypervisor
+# 1.1 Clean RCX. This register is controlled by the hypervisor.
 xor ecx, ecx
 # 1.2 Clean RDX
 xor edx, edx

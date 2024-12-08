@@ -1,3 +1,4 @@
+use spin::Mutex;
 use supervisor_services::{
     allocation_buffer::SlotIndex,
     command_buffer::{CommandBufferReader, CommandHandler},
@@ -5,10 +6,11 @@ use supervisor_services::{
 };
 
 use crate::{
-    ap::{kick, start_next_ap},
+    ap::kick,
     dynamic::HostAllocator,
     ghcb::exit,
     output::{finish, update_output},
+    scheduler::start_next_ap,
 };
 
 extern "C" {
@@ -20,29 +22,25 @@ fn supervisor_services() -> &'static SupervisorServices {
     unsafe { &SUPERVISOR_SERVICES }
 }
 
-pub fn run() -> ! {
+static HANDLER: Mutex<Handler> = Mutex::new(Handler::new());
+
+pub fn handle_commands() {
     let mut command_buffer_reader = CommandBufferReader::new(&supervisor_services().command_buffer);
-    let mut handler = Handler::new();
+    let Some(mut handler) = HANDLER.try_lock() else {
+        return;
+    };
 
-    loop {
-        // Handle all pending commands.
-        let mut pending = supervisor_services().notification_buffer.reset();
-        while command_buffer_reader.handle(&mut handler) {
-            pending |= supervisor_services().notification_buffer.reset();
-        }
-
-        // Notify the APs that requested a notification and wait for the next
-        // command.
-        for id in pending {
-            kick(id);
-        }
-
-        wait_for_command();
+    // Handle all pending commands.
+    let mut pending = supervisor_services().notification_buffer.reset();
+    while command_buffer_reader.handle(&mut *handler) {
+        pending |= supervisor_services().notification_buffer.reset();
     }
-}
 
-fn wait_for_command() {
-    x86_64::instructions::hlt();
+    // Notify the APs that requested a notification and wait for the next
+    // command.
+    for id in pending {
+        kick(id);
+    }
 }
 
 struct Handler {
@@ -50,7 +48,7 @@ struct Handler {
 }
 
 impl Handler {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             host_allocator: HostAllocator::new(),
         }

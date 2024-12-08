@@ -1,51 +1,56 @@
-use core::arch::{global_asm, naked_asm};
+use core::{arch::global_asm, mem::MaybeUninit};
 
+use constants::{ApIndex, MAX_APS_COUNT};
 use snp_types::vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap};
+use x86_64::{registers::model_specific::FsBase, VirtAddr};
 
-use crate::main;
+use crate::{main, per_cpu::PerCpu};
 
-global_asm!(include_str!("reset_vector.s"));
+pub const STACK_SIZE: usize = 16;
+
+global_asm!(
+    include_str!("reset_vector.s"),
+    MAX_APS_COUNT = const MAX_APS_COUNT,
+    STACK_SIZE = const STACK_SIZE * 0x1000,
+);
 
 #[export_name = "_start"]
-#[naked]
-extern "sysv64" fn start() -> ! {
-    const STACK_SIZE: usize = 32 * 4096;
-    #[link_section = ".stack"]
-    static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+extern "sysv64" fn premain(vcpu_index: ApIndex) {
+    // Setup a `PerCpu` instance for the current cpu.
+    let mut per_cpu = MaybeUninit::uninit();
+    let ptr = per_cpu.as_mut_ptr();
+    per_cpu.write(PerCpu::new(ptr, vcpu_index));
+    FsBase::write(VirtAddr::from_ptr(ptr));
 
-    unsafe {
-        naked_asm!(
-            "lea rsp, [rip + {STACK} + {STACK_SIZE}]",
-            "and rsp, ~15",
-            "call {PREMAIN}",
-            "int3",
-            STACK = sym STACK,
-            STACK_SIZE = const STACK_SIZE,
-            PREMAIN = sym premain,
-        );
-    }
-}
-
-extern "sysv64" fn premain() {
     main();
 }
 
 #[link_section = ".supervisor_vmsas"]
 #[used]
-static VMSA: Vmsa = {
-    let mut vmsa = Vmsa::new();
+static VMSAS: [Vmsa; MAX_APS_COUNT as usize] = {
+    let mut vmsas = [const { Vmsa::new() }; MAX_APS_COUNT as usize];
     let tweak_bitmap = &VmsaTweakBitmap::ZERO;
-    unsafe {
-        vmsa.set_sev_features(
-            SevFeatures::from_bits_retain(
-                SevFeatures::SNP_ACTIVE.bits()
-                    | SevFeatures::RESTRICTED_INJECTION.bits()
-                    | SevFeatures::SECURE_TSC.bits()
-                    | SevFeatures::VMSA_REG_PROT.bits(),
-            ),
-            tweak_bitmap,
-        );
+
+    let mut i = 0;
+    while i < MAX_APS_COUNT {
+        let vmsa = &mut vmsas[i as usize];
+
+        unsafe {
+            vmsa.set_sev_features(
+                SevFeatures::from_bits_retain(
+                    SevFeatures::SNP_ACTIVE.bits()
+                        | SevFeatures::RESTRICTED_INJECTION.bits()
+                        | SevFeatures::SECURE_TSC.bits()
+                        | SevFeatures::VMSA_REG_PROT.bits(),
+                ),
+                tweak_bitmap,
+            );
+        }
+        vmsa.set_guest_tsc_scale(0x1_0000_0000, tweak_bitmap);
+        vmsa.set_rsi(i as u64, tweak_bitmap);
+
+        i += 1;
     }
-    vmsa.set_guest_tsc_scale(0x1_0000_0000, tweak_bitmap);
-    vmsa
+
+    vmsas
 };

@@ -732,6 +732,7 @@ dependencies = [
  "log-types",
  "sha2",
  "snp-types",
+ "spin",
  "static-page-tables",
  "supervisor-services",
  "volatile 0.6.1",

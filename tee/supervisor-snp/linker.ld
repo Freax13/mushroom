@@ -29,6 +29,10 @@ SECTIONS {
         *(.rodata .rodata.*)
         *(.eh_frame .eh_frame.*)
         *(.eh_frame_hdr .eh_frame_hdr.*)
+
+        __interruptable_start = .;
+        *(.interruptable .interruptable.*)
+        __interruptable_end = .;
     } :rodata
 
     .data (0x42000000) :

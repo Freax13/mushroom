@@ -785,6 +785,13 @@ impl VcpuHandle {
         Ok(())
     }
 
+    pub fn set_mp_state(&self, mp_state: MpState) -> Result<()> {
+        ioctl_write_ptr!(kvm_set_mp_state, KVMIO, 0x99, MpState);
+        let res = unsafe { kvm_set_mp_state(self.fd.as_raw_fd(), &mp_state) };
+        res.context("failed to set mp state")?;
+        Ok(())
+    }
+
     #[cfg(feature = "tdx")]
     unsafe fn memory_encrypt_op_tdx<'a>(
         &self,
@@ -1539,6 +1546,11 @@ pub struct KvmSevSnpLaunchFinish {
     pad0: [u8; 3],
     flags: u16,
     pad1: [u64; 4],
+}
+
+#[repr(u32)]
+pub enum MpState {
+    Runnable,
 }
 
 #[cfg(feature = "tdx")]

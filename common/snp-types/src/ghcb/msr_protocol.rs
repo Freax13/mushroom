@@ -55,6 +55,12 @@ pub enum GhcbInfo {
     SnpPageStateChangeResponse {
         error_code: Option<NonZeroU32>,
     },
+    SnpRunVmplRequest {
+        vmpl: u8,
+    },
+    SnpRunVmplResponse {
+        error_code: Option<NonZeroU32>,
+    },
     HypervisorFeatureSupportRequest,
     #[non_exhaustive]
     HypervisorFeatureSupportResponse {
@@ -148,6 +154,19 @@ impl From<GhcbInfo> for u64 {
                 let error_code = error_code.map(NonZeroU32::get).unwrap_or(0);
 
                 msr_value.set_bits(0..=11, 0x015); // GHCBInfo
+                msr_value.set_bits(12..=31, 0); // Reserved, must be zero
+                msr_value.set_bits(32..=63, u64::from(error_code));
+            }
+            GhcbInfo::SnpRunVmplRequest { vmpl } => {
+                msr_value.set_bits(0..=11, 0x016); // GHCBInfo
+                msr_value.set_bits(12..=31, 0); // Reserved, must be zero
+                msr_value.set_bits(32..=39, u64::from(vmpl));
+                msr_value.set_bits(40..=63, 0); // Reserved, must be zero
+            }
+            GhcbInfo::SnpRunVmplResponse { error_code } => {
+                let error_code = error_code.map(NonZeroU32::get).unwrap_or(0);
+
+                msr_value.set_bits(0..=11, 0x017); // GHCBInfo
                 msr_value.set_bits(12..=31, 0); // Reserved, must be zero
                 msr_value.set_bits(32..=63, u64::from(error_code));
             }
@@ -302,6 +321,24 @@ impl TryFrom<u64> for GhcbInfo {
                 let error_code = msr_value.get_bits(32..=63) as u32;
                 let error_code = NonZeroU32::new(error_code);
                 Ok(Self::SnpPageStateChangeResponse { error_code })
+            }
+            0x016 => {
+                if msr_value.get_bits(12..=31) != 0 {
+                    return Err(ParseError(()));
+                }
+                let vmpl = msr_value.get_bits(32..=39) as u8;
+                if msr_value.get_bits(40..=63) != 0 {
+                    return Err(ParseError(()));
+                }
+                Ok(Self::SnpRunVmplRequest { vmpl })
+            }
+            0x017 => {
+                if msr_value.get_bits(12..=31) != 0 {
+                    return Err(ParseError(()));
+                }
+                let error_code = msr_value.get_bits(32..=63) as u32;
+                let error_code = NonZeroU32::new(error_code);
+                Ok(Self::SnpRunVmplResponse { error_code })
             }
             0x080 => {
                 if msr_value.get_bits(12..=63) != 0 {

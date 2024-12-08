@@ -1,46 +1,76 @@
-use core::cell::Cell;
+use core::sync::atomic::Ordering;
 
-use constants::{ApIndex, FIRST_AP, KICK_AP_PORT};
-use snp_types::vmsa::SevFeatures;
+use constants::ApIndex;
+use snp_types::{intercept::VMEXIT_VMGEXIT, vmsa::SevFeatures};
+use x86_64::instructions::hlt;
 
 use crate::{
-    ghcb::{create_ap, ioio_write},
-    FakeSync,
+    exception::{eoi, pop_pending_event, send_ipi},
+    ghcb::{create_ap, run_vmpl, vmsa_tweak_bitmap},
+    per_cpu::PerCpu,
+    scheduler::WAKE_UP_VECTOR,
+    services::handle_commands,
 };
 
-use self::vmsa::InitializedVmsa;
+use self::vmsa::Vmpl1Vmsa;
 
-mod vmsa;
+pub mod vmsa;
 
 const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
     SevFeatures::SNP_ACTIVE.bits()
         | SevFeatures::V_TOM.bits()
-        | SevFeatures::RESTRICTED_INJECTION.bits()
+        | SevFeatures::ALTERNATE_INJECTION.bits()
         | SevFeatures::VMSA_REG_PROT.bits(),
 );
 
-pub fn start_next_ap() {
-    static APIC_COUNTER: FakeSync<Cell<u8>> = FakeSync::new(Cell::new(0));
-    let counter = APIC_COUNTER.get();
-    let Some(apic_id) = ApIndex::try_new(counter) else {
-        return;
-    };
-    APIC_COUNTER.set(counter + 1);
-
+pub fn run_vcpu() -> ! {
     // Initialize the VMSA.
-    let mut vmsa = InitializedVmsa::new();
+    let mut vmsa = unsafe { Vmpl1Vmsa::get() };
     unsafe {
         vmsa.set_runnable(true);
     }
 
     // Tell the host about the new VMSA.
     let vmsa_pa = vmsa.phys_addr();
-    create_ap(u32::from(FIRST_AP + apic_id.as_u8()), vmsa_pa, SEV_FEATURES);
+    create_ap(vmsa_pa, SEV_FEATURES);
 
-    // Start the AP.
-    kick(apic_id);
+    let tweak_bitmap = vmsa_tweak_bitmap();
+
+    loop {
+        // Start the AP.
+        run_vmpl(1);
+
+        let guard = vmsa.modify();
+
+        let mut resume = false;
+        if guard.guest_exit_code(tweak_bitmap) == VMEXIT_VMGEXIT {
+            handle_commands();
+            resume |= guard.rax(tweak_bitmap) != 0;
+        } else {
+            resume = true;
+        }
+
+        loop {
+            if PerCpu::get().interrupted.swap(false, Ordering::SeqCst) {
+                resume = true;
+
+                while let Some(vector) = pop_pending_event() {
+                    match vector.get() {
+                        WAKE_UP_VECTOR => eoi(),
+                        vector => unimplemented!("unhandled vector: {vector}"),
+                    }
+                }
+            }
+
+            if resume {
+                break;
+            }
+
+            hlt();
+        }
+    }
 }
 
 pub fn kick(apic_id: ApIndex) {
-    ioio_write(KICK_AP_PORT, u32::from(FIRST_AP + apic_id.as_u8()));
+    send_ipi(u32::from(apic_id.as_u8()), WAKE_UP_VECTOR);
 }

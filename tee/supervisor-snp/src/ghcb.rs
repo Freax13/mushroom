@@ -1,8 +1,6 @@
 use core::{
     arch::asm,
-    cell::{LazyCell, RefCell},
-    mem::size_of,
-    ptr::NonNull,
+    mem::{offset_of, size_of},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -11,8 +9,9 @@ use bit_field::BitField;
 use bytemuck::{
     bytes_of, cast,
     checked::{self, pod_read_unaligned},
-    offset_of, NoUninit,
+    NoUninit,
 };
+use constants::MAX_APS_COUNT;
 use log::debug;
 use snp_types::{
     attestation::{
@@ -25,12 +24,12 @@ use snp_types::{
     guest_message::{Algo, Content, ContentV1, Message},
     intercept::{VMEXIT_IOIO, VMEXIT_MSR},
     secrets::Secrets,
-    vmsa::SevFeatures,
+    vmsa::{SevFeatures, VmsaTweakBitmap},
 };
 use volatile::{map_field, VolatilePtr};
 use x86_64::structures::paging::PhysFrame;
 
-use crate::{shared, FakeSync};
+use crate::{per_cpu::PerCpu, shared};
 
 fn secrets() -> &'static Secrets {
     extern "C" {
@@ -40,28 +39,50 @@ fn secrets() -> &'static Secrets {
     unsafe { &SECRETS }
 }
 
+pub fn vmsa_tweak_bitmap() -> &'static VmsaTweakBitmap {
+    let Secrets::V3(v3) = secrets();
+    &v3.vmsa_tweak_bitmap
+}
+
 /// Initialize a GHCB and pass it to the closure.
-pub fn with_ghcb<R>(f: impl FnOnce(&mut VolatilePtr<'static, Ghcb>) -> R) -> Result<R, GhcbInUse> {
-    static GHCB: FakeSync<LazyCell<RefCell<VolatilePtr<'static, Ghcb>>>> =
-        FakeSync::new(LazyCell::new(|| {
-            shared! {
-                static GHCB_STORAGE: Ghcb = Ghcb::ZERO;
-            }
+pub fn with_ghcb<R, F>(f: F) -> Result<R, GhcbInUse>
+where
+    F: for<'a> FnOnce(VolatilePtr<'a, Ghcb>) -> R,
+{
+    let per_cpu = PerCpu::get();
 
-            let address = GHCB_STORAGE.frame();
-            register_ghcb(address);
+    if per_cpu.ghcb_in_use.replace(true) {
+        return Err(GhcbInUse(()));
+    }
 
-            let mut msr = GhcbProtocolMsr::MSR;
-            unsafe {
-                msr.write(u64::from(GhcbInfo::GhcbGuestPhysicalAddress { address }));
-            }
+    shared! {
+        static GHCB_STORAGE: [Ghcb; MAX_APS_COUNT as usize] = [Ghcb::ZERO; MAX_APS_COUNT as usize];
+    }
 
-            RefCell::new(unsafe { VolatilePtr::new(NonNull::from(&GHCB_STORAGE).cast()) })
+    let frame = GHCB_STORAGE.frame() + u64::from(per_cpu.vcpu_index.as_u8());
+
+    if !per_cpu.ghcb_registered.get() {
+        register_ghcb(frame);
+        per_cpu.ghcb_registered.set(true);
+    }
+
+    let mut msr = GhcbProtocolMsr::MSR;
+    unsafe {
+        msr.write(u64::from(GhcbInfo::GhcbGuestPhysicalAddress {
+            address: frame,
         }));
+    }
 
-    let res = GHCB.try_borrow_mut();
-    let mut ghcb = res.map_err(|_| GhcbInUse(()))?;
-    Ok(f(&mut ghcb))
+    let ghcb = GHCB_STORAGE
+        .as_ptr()
+        .as_slice()
+        .index(usize::from(per_cpu.vcpu_index.as_u8()));
+
+    let res = f(ghcb);
+
+    per_cpu.ghcb_in_use.set(false);
+
+    Ok(res)
 }
 
 #[derive(Debug)]
@@ -97,12 +118,30 @@ fn vmgexit() {
     unsafe { asm!("rep vmmcall", options(nostack, preserves_flags)) }
 }
 
+fn interruptable_vmgexit() {
+    unsafe {
+        asm!(
+            "66:",
+            "test byte ptr fs:[{INTERRUPTED_OFFSET}], 1",
+            "jnz 67f",
+            // LLVM doesn't support the `vmgexit` instruction
+            "rep vmmcall",
+            "67:",
+            ".pushsection .interruptable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            INTERRUPTED_OFFSET = const offset_of!(PerCpu, interrupted)
+        );
+    }
+}
+
 /// A macro to write to a field of the GHCB and also mark it in the valid
 /// bitmap.
 macro_rules! ghcb_write {
     ($ghcb:ident.$field:ident = $value:expr) => {{
         map_field!($ghcb.$field).write($value);
-        let bit_offset = offset_of!(Ghcb::ZERO, Ghcb, $field);
+        let bit_offset = offset_of!(Ghcb, $field);
         map_field!($ghcb.valid_bitmap).update(|mut value| {
             value.set_bit(bit_offset / 8, true);
             value
@@ -317,14 +356,14 @@ pub fn get_host_data() -> [u8; 32] {
     report.host_data
 }
 
-pub fn create_ap(apic_id: u32, vmsa: PhysFrame, features: SevFeatures) {
+pub fn create_ap(vmsa: PhysFrame, features: SevFeatures) {
     with_ghcb(|ghcb| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
         let mut sw_exit_info1 = 0;
-        sw_exit_info1.set_bits(32..=63, u64::from(apic_id));
-        sw_exit_info1.set_bits(0..=31, 1); // Run the CPU immediately.
+        sw_exit_info1.set_bits(32..=63, u64::from(PerCpu::current_vcpu_index().as_u8()));
+        sw_exit_info1.set_bits(16..=19, 1); // VMPL: 1
 
         ghcb_write!(ghcb.rax = features.bits());
         ghcb_write!(ghcb.sw_exit_code = 0x8000_0013);
@@ -350,4 +389,42 @@ pub fn exit() -> ! {
 
         vmgexit();
     }
+}
+
+pub fn run_vmpl(vmpl: u8) {
+    let mut msr = GhcbProtocolMsr::MSR;
+
+    // Write the request.
+    let request = u64::from(GhcbInfo::SnpRunVmplRequest { vmpl });
+    unsafe {
+        msr.write(request);
+    }
+
+    interruptable_vmgexit();
+}
+
+pub fn set_hv_doorbell_page(frame: PhysFrame) {
+    with_ghcb(|ghcb| {
+        ghcb.write(Ghcb::ZERO);
+        map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
+
+        ghcb_write!(ghcb.sw_exit_code = 0x8000_0014);
+        ghcb_write!(ghcb.sw_exit_info1 = 1);
+        ghcb_write!(ghcb.sw_exit_info2 = frame.start_address().as_u64());
+
+        vmgexit();
+    })
+    .unwrap();
+
+    with_ghcb(|ghcb| {
+        ghcb.write(Ghcb::ZERO);
+        map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
+
+        ghcb_write!(ghcb.sw_exit_code = 0x8000_0014);
+        ghcb_write!(ghcb.sw_exit_info1 = 2);
+        ghcb_write!(ghcb.sw_exit_info2 = 0);
+
+        vmgexit();
+    })
+    .unwrap();
 }

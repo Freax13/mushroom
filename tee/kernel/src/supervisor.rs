@@ -4,6 +4,7 @@ use crate::{memory::pagetable::flush, spin::mutex::Mutex};
 use arrayvec::ArrayVec;
 use bit_field::BitField;
 use constants::{physical_address::DYNAMIC_2MIB, ApBitmap, ApIndex};
+use snp_types::ghcb::msr_protocol::{GhcbInfo, GhcbProtocolMsr};
 use supervisor_services::{
     allocation_buffer::SlotIndex,
     command_buffer::{
@@ -45,15 +46,33 @@ fn kick_supervisor(resume: bool) {
     let mut bits = 0u64;
     bits.set_bit(0, resume);
 
+    run_vmpl(0, resume);
+}
+
+fn vmgexit(resume: bool) {
+    // LLVM doesn't support the `vmgexit` instruction
+    unsafe { asm!("rep vmmcall", in("rax") u64::from(resume), options(nostack, preserves_flags)) }
+}
+
+pub fn run_vmpl(vmpl: u8, resume: bool) {
+    let mut msr = GhcbProtocolMsr::MSR;
+
+    // Write the request.
+    let request = u64::from(GhcbInfo::SnpRunVmplRequest { vmpl });
     unsafe {
-        asm!(
-            // The SNP and insecure supervisors look at CR8.
-            // The TDX supervisor looks at RAX.
-            "mov cr8, rax",
-            "hlt",
-            in("rax") bits,
-        );
+        msr.write(request);
     }
+
+    vmgexit(resume);
+
+    // Read the response.
+    let response = GhcbInfo::try_from(unsafe { msr.read() }).unwrap();
+
+    // Verify the response.
+    let GhcbInfo::SnpRunVmplResponse { error_code } = response else {
+        panic!("unexpected response: {response:?}")
+    };
+    assert_eq!(error_code, None);
 }
 
 /// Push a command, don't notify the supervisor about it and don't wait for it
