@@ -32,18 +32,20 @@ static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
         let tsc_aux = i as u32;
 
         let mut vmsa = Vmsa::new();
-        vmsa.set_vmpl(1, tweak_bitmap);
+        unsafe {
+            vmsa.set_vmpl(1, tweak_bitmap);
+            vmsa.set_efer(
+                EferFlags::from_bits_retain(
+                    EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
+                        | EferFlags::LONG_MODE_ENABLE.bits()
+                        | EferFlags::LONG_MODE_ACTIVE.bits()
+                        | EferFlags::NO_EXECUTE_ENABLE.bits()
+                        | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
+                ),
+                tweak_bitmap,
+            );
+        }
         vmsa.set_virtual_tom(!0, tweak_bitmap);
-        vmsa.set_efer(
-            EferFlags::from_bits_retain(
-                EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
-                    | EferFlags::LONG_MODE_ENABLE.bits()
-                    | EferFlags::LONG_MODE_ACTIVE.bits()
-                    | EferFlags::NO_EXECUTE_ENABLE.bits()
-                    | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
-            ),
-            tweak_bitmap,
-        );
         vmsa.set_cr4(
             Cr4Flags::from_bits_retain(
                 Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
@@ -78,14 +80,15 @@ static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
         vmsa.set_cs(Segment::CODE64, tweak_bitmap);
         vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);
         vmsa.set_rsp(0xffff_8000_0400_3ff8, tweak_bitmap);
-        vmsa.set_sev_features(SEV_FEATURES, tweak_bitmap);
 
         // Enable SecureTSC.
-        let sev_features = vmsa.sev_features(tweak_bitmap);
-        vmsa.set_sev_features(
-            SevFeatures::from_bits_retain(sev_features.bits() | SevFeatures::SECURE_TSC.bits()),
-            tweak_bitmap,
-        );
+        let sev_features = SEV_FEATURES;
+        unsafe {
+            vmsa.set_sev_features(
+                SevFeatures::from_bits_retain(sev_features.bits() | SevFeatures::SECURE_TSC.bits()),
+                tweak_bitmap,
+            );
+        }
         // Set TSC scaling to 1.
         vmsa.set_guest_tsc_scale(0x01_00000000, tweak_bitmap);
         // Disable TSC offset.

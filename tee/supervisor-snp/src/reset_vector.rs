@@ -35,15 +35,17 @@ extern "sysv64" fn premain() {
 static VMSA: Vmsa = {
     let mut vmsa = Vmsa::new();
     let tweak_bitmap = &VmsaTweakBitmap::ZERO;
-    vmsa.set_sev_features(
-        SevFeatures::from_bits_retain(
-            SevFeatures::SNP_ACTIVE.bits()
-                | SevFeatures::RESTRICTED_INJECTION.bits()
-                | SevFeatures::SECURE_TSC.bits()
-                | SevFeatures::VMSA_REG_PROT.bits(),
-        ),
-        tweak_bitmap,
-    );
+    unsafe {
+        vmsa.set_sev_features(
+            SevFeatures::from_bits_retain(
+                SevFeatures::SNP_ACTIVE.bits()
+                    | SevFeatures::RESTRICTED_INJECTION.bits()
+                    | SevFeatures::SECURE_TSC.bits()
+                    | SevFeatures::VMSA_REG_PROT.bits(),
+            ),
+            tweak_bitmap,
+        );
+    }
     vmsa.set_guest_tsc_scale(0x1_0000_0000, tweak_bitmap);
     vmsa
 };
