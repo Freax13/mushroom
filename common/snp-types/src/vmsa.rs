@@ -118,6 +118,7 @@ macro_rules! vmsa_def {
 
 impl Vmsa {
     /// Read bytes from the VMSA and deobfuscate protected registers.
+    #[inline(always)]
     const fn read(&self, mut offset: usize, mut buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
         while let Some((b, new_buffer)) = buffer.split_first_mut() {
             *b = unsafe { core::ptr::from_ref(self).cast::<u8>().add(offset).read() };
@@ -128,6 +129,7 @@ impl Vmsa {
     }
 
     /// Write bytes to the VMSA and obfuscate protected registers.
+    #[inline(always)]
     const fn write(
         &mut self,
         mut offset: usize,
@@ -145,6 +147,7 @@ impl Vmsa {
         }
     }
 
+    #[inline(always)]
     const fn apply_reg_prot_nonce(
         &self,
         offset: usize,
@@ -383,4 +386,10 @@ pub struct VmsaTweakBitmap {
 
 impl VmsaTweakBitmap {
     pub const ZERO: Self = Self { bitmap: [0; 0x40] };
+
+    /// Returns if the field at `offset` is tweaked with the register
+    /// protection nonce.
+    pub fn is_tweaked(&self, offset: usize) -> bool {
+        self.bitmap.get_bit(offset / 8)
+    }
 }

@@ -1,10 +1,15 @@
-# Shadow stack
-.section .shadow_stack, "a"
+# Stack
+.section .stack, "a"
 .align 4096
 .set SHADOW_STACK_SIZE, 4096
-shadow_stack:
-.fill SHADOW_STACK_SIZE - 8, 1, 0
-.quad shadow_stack + SHADOW_STACK_SIZE + 1
+stack:
+.set i, 0
+.rept {MAX_APS_COUNT}
+    .fill SHADOW_STACK_SIZE - 8, 1, 0
+    .quad stack + {STACK_SIZE} * i + SHADOW_STACK_SIZE + 1
+    .fill {STACK_SIZE} - SHADOW_STACK_SIZE, 1, 0
+    .set i, i+1
+.endr
 
 .section .reset_vector, "ax"
 .code16
@@ -41,8 +46,24 @@ entry_32bit_flat:
 mov ax, 0x10
 mov ds, ax
 
-# 3. Set C bit in page tables.
-# 3.1 Find the C bit location in the cpuid page.
+# 3. If this AP is the first AP, initialize the C bit in page table...
+test esi, esi
+jz init_page_tables
+
+# 3.1.1 ... otherwise wait for the page tables to be initialized.
+check_or_wait:
+test byte ptr [initialized], 1
+jnz done_fixing_entries
+pause
+jmp check_or_wait
+# 3.1.2 Execute a memory fence just to be sure.
+done_waiting:
+mfence
+jmp post_pg_init
+
+# 3.2 Set C bit in page tables.
+# 3.2.1 Find the C bit location in the cpuid page.
+init_page_tables:
 mov eax, dword ptr [CPUID_PAGE]
 lea ecx, dword ptr [CPUID_PAGE + 16]
 check_next_entry:
@@ -73,8 +94,8 @@ and cl, 0x3f
 # Check the we can support the C-bit position.
 cmp cl, 32
 jl fail_32bit
-# 3.2 Fix the C-bit in the page tables.
-# By default, we set bit 51 in the page tables. This is the C-bit for Zen 3
+# 3.2.2 Fix the C-bit in the page tables.
+# By default, we set bit 51 in the page tables. This is the C-bit for Zen 4
 # based CPUs. To support other generations, we test for bit 51 and replace it
 # with the appropriate bit.
 # Prepare a mask to XOR into the upper half of the page table entries, to unset
@@ -101,6 +122,11 @@ done_fixing_entry:
 add eax, 8
 jmp fix_next_entry
 done_fixing_entries:
+# 3.2.3 Tell the other APs that initialization has been completed.
+mfence
+mov byte ptr [initialized], 1
+
+post_pg_init:
 
 # 4. Enter Compatibility Mode.
 # 4.1 Set the PAE flag in CR4.
@@ -162,27 +188,43 @@ mov rax, cr0
 or rax, 1 << 16
 mov cr0, rax
 
-# 8. Enable Shadow Stacks
-# 8.1 Enable CR4.CET
+# 8. Determine CPU-local addresses
+# 8.1 Calculate stack base address
+mov r8, qword ptr [rip+stack_addr]
+mov rbx, rsi # RSI contains the vCPU index as part of the launch VMSA
+imul rbx, {STACK_SIZE}
+add r8, rbx
+# 8.2 Calculate stack address
+mov rsp, r8
+add rsp, {STACK_SIZE}
+# 8.3 Calculate shadow stack address
+add r8, SHADOW_STACK_SIZE - 8
+
+# 9. Enable Shadow Stacks
+# 9.1 Enable CR4.CET
 mov rax, cr4
 or rax, 1 << 23
 mov cr4, rax
-# 8.2 Enable Shadow Stacks in in SCET MSR
+# 9.2 Enable Shadow Stacks in in SCET MSR
 mov ecx, 0x6a2
 xor edx, edx
-mov eax, 1
+mov eax, 1 | 2 # SH_STK_EN | WR_SHSTK_EN
 wrmsr
-# 8.3 Load SSP
-mov rax, [rip+shadow_stack_token_addr]
-rstorssp [rax]
+# 9.3 Load SSP
+rstorssp [r8]
 
-# 9. Enter the Kernel
+# 10. Enter the Kernel
 mov rax, qword ptr [rip+start_addr]
-jmp rax
+mov rdi, rsi
+call rax
+ud2
+
+initialized:
+.byte 0
 
 # Addresses
-shadow_stack_token_addr:
-.quad shadow_stack + SHADOW_STACK_SIZE - 8
+stack_addr:
+.quad stack
 start_addr:
 .quad _start
 

@@ -1,15 +1,13 @@
-use core::{cell::RefCell, fmt::Write};
+use core::fmt::Write;
 
 use log::{Log, Metadata, Record};
 use log_types::{LogBuffer, LogWriter};
-
-use crate::FakeSync;
+use spin::Mutex;
 
 #[link_section = ".log_buffer"]
 static LOG_BUFFER: LogBuffer = LogBuffer::new();
 
-static WRITER: FakeSync<RefCell<LogWriter>> =
-    FakeSync::new(RefCell::new(LogWriter::new(&LOG_BUFFER)));
+static WRITER: Mutex<LogWriter> = Mutex::new(LogWriter::new(&LOG_BUFFER));
 
 pub struct SerialLogger;
 
@@ -28,7 +26,7 @@ impl Log for SerialLogger {
         };
         let reset_color = "\x1b[0m";
 
-        let mut writer = WRITER.borrow_mut();
+        let mut writer = WRITER.lock();
         let _ = writeln!(
             writer,
             "{level_color}[{:<5} {}:{}]{reset_color} {}",

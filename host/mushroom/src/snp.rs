@@ -2,10 +2,10 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     os::unix::thread::JoinHandleExt,
     sync::{
-        atomic::{self, AtomicBool},
-        Arc,
+        atomic::{self, AtomicBool, Ordering},
+        mpsc::{self, Sender},
+        Arc, RwLock,
     },
-    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -14,29 +14,28 @@ use bit_field::BitField;
 use bytemuck::{bytes_of, pod_read_unaligned};
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
-    FINISH_OUTPUT_MSR, FIRST_AP, KICK_AP_PORT, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
+    FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
 };
 use loader::Input;
 use nix::sys::pthread::pthread_kill;
 use snp_types::PageType;
 use tracing::{debug, info};
-use volatile::map_field;
 use x86_64::{
     structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
     PhysAddr,
 };
 
 use crate::{
-    find_slot, install_signal_handler, is_efault,
+    find_slot, install_signal_handler,
     kvm::{
-        KvmCap, KvmCpuidEntry2, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
-        KvmMemoryAttributes, Page, SevHandle, VcpuHandle, VmHandle, KVM_HC_MAP_GPA_RANGE,
+        KvmCap, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle, KvmMemoryAttributes, MpState,
+        Page, SevHandle, VcpuHandle, VmHandle, KVM_HC_MAP_GPA_RANGE,
     },
     logging::start_log_collection,
     profiler::{start_profile_collection, ProfileFolder},
     raise_file_no_limit,
     slot::Slot,
-    MushroomResult, SIG_KICK,
+    MushroomResult, SIG_KICK, TSC_MHZ,
 };
 
 pub use snp_types::guest_policy::GuestPolicy;
@@ -56,7 +55,7 @@ pub fn main(
 ) -> Result<MushroomResult> {
     let sev_handle = SevHandle::new()?;
 
-    let mut vm_context = VmContext::prepare_vm(
+    let (vm_context, vcpus) = VmContext::prepare_vm(
         supervisor,
         kernel,
         init,
@@ -65,20 +64,65 @@ pub fn main(
         policy,
         kvm_handle,
         &sev_handle,
-        vcek,
         profiler_folder,
     )?;
-    vm_context.run_supervisor()
+
+    // Spawn threads to run the vCPUs.
+    let vm_context = Arc::new(vm_context);
+    let done = Arc::new(AtomicBool::new(false));
+    let (sender, receiver) = mpsc::channel();
+    let threads = vcpus
+        .into_iter()
+        .map(|vcpu| {
+            let vm_context = vm_context.clone();
+            let done = done.clone();
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let res = vm_context.run_vcpu(vcpu, done, &sender);
+                if let Err(err) = res {
+                    let _ = sender.send(OutputEvent::Fail(err));
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Collect the output and report.
+    let mut output: Vec<u8> = Vec::new();
+    let res = loop {
+        let event = receiver.recv().unwrap();
+        match event {
+            OutputEvent::Write(mut vec) => output.append(&mut vec),
+            OutputEvent::Finish(attestation_report) => break Ok(attestation_report),
+            OutputEvent::Fail(err) => break Err(err),
+        }
+    };
+
+    // Set the done flag.
+    done.store(true, atomic::Ordering::Relaxed);
+
+    // Force all threads to exit out of KVM_RUN, so that they can observe
+    // `done` and exit.
+    for handle in threads {
+        handle.thread().unpark();
+        let _ = pthread_kill(handle.as_pthread_t(), SIG_KICK);
+        handle.join().unwrap();
+    }
+
+    let mut attestation_report = res?;
+
+    // Append the VCEK to the attestation report.
+    attestation_report.extend_from_slice(vcek.raw());
+
+    Ok(MushroomResult {
+        output,
+        attestation_report: Some(attestation_report),
+    })
 }
 
 struct VmContext {
     vm: Arc<VmHandle>,
-    bsp: VcpuHandle,
-    ap_threads: HashMap<u8, JoinHandle<()>>,
-    memory_slots: HashMap<u16, Slot>,
+    memory_slots: RwLock<HashMap<u16, Slot>>,
     start: Instant,
-    vcek: Vcek,
-    done: Arc<AtomicBool>,
 }
 
 impl VmContext {
@@ -93,9 +137,8 @@ impl VmContext {
         policy: GuestPolicy,
         kvm_handle: &KvmHandle,
         sev_handle: &SevHandle,
-        vcek: Vcek,
         profiler_folder: Option<ProfileFolder>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Vec<VcpuHandle>)> {
         let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
         let piafb = cpuid_entries
             .iter_mut()
@@ -117,12 +160,31 @@ impl VmContext {
             KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
         )?;
 
+        vm.enable_capability(KvmCap::X2APIC_API, 0)?;
+
+        vm.set_tsc_khz(TSC_MHZ * 1000)?;
+
+        vm.create_irqchip()?;
+
         vm.sev_snp_init()?;
 
         vm.sev_snp_launch_start(policy, sev_handle)?;
 
-        let bsp = vm.create_vcpu(0)?;
-        bsp.set_cpuid(&cpuid_entries)?;
+        let vcpus = (0..MAX_APS_COUNT)
+            .map(|i| {
+                let vcpu = vm.create_vcpu(i32::from(i))?;
+                vcpu.set_cpuid(&cpuid_entries)?;
+
+                // Allow the kernel to query it's processor id through TSC_AUX.
+                // This is needed on EPYC Milan, it's part of the VMSA on later
+                // generations.
+                const TSC_AUX: u32 = 0xc0000103;
+                vcpu.set_msr(TSC_AUX, u64::from(i)).unwrap();
+
+                vcpu.set_mp_state(MpState::Runnable)?;
+                Result::Ok(vcpu)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let (load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
@@ -216,17 +278,6 @@ impl VmContext {
         );
         let start = Instant::now();
 
-        // Create a bunch of APs.
-        let done = Arc::new(AtomicBool::new(false));
-        let aps = (0..MAX_APS_COUNT)
-            .map(|i| {
-                let id = FIRST_AP + i;
-                let ap_thread =
-                    Self::run_kernel_vcpu(id, vm.clone(), cpuid_entries.clone(), done.clone());
-                Ok((id, ap_thread))
-            })
-            .collect::<Result<_>>()?;
-
         start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
         start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
         if let Some(profiler_folder) = profiler_folder {
@@ -236,23 +287,26 @@ impl VmContext {
         install_signal_handler();
         raise_file_no_limit();
 
-        Ok(Self {
-            vm,
-            bsp,
-            ap_threads: aps,
-            memory_slots,
-            start,
-            vcek,
-            done,
-        })
+        Ok((
+            Self {
+                vm,
+                memory_slots: RwLock::new(memory_slots),
+                start,
+            },
+            vcpus,
+        ))
     }
 
-    pub fn run_supervisor(&mut self) -> Result<MushroomResult> {
-        let mut output = Vec::new();
-        let kvm_run = self.bsp.get_kvm_run_block()?;
+    pub fn run_vcpu(
+        &self,
+        vcpu: VcpuHandle,
+        done: Arc<AtomicBool>,
+        sender: &Sender<OutputEvent>,
+    ) -> Result<()> {
+        let kvm_run = vcpu.get_kvm_run_block()?;
         let kvm_run = kvm_run.as_ptr();
 
-        loop {
+        while !done.load(Ordering::Relaxed) {
             let exit = kvm_run.read().exit();
 
             match exit {
@@ -295,7 +349,8 @@ impl VmContext {
 
                             let base = 1 << 6;
                             let kvm_slot_id = base + slot_id;
-                            let entry = self.memory_slots.entry(kvm_slot_id);
+                            let mut guard = self.memory_slots.write().unwrap();
+                            let entry = guard.entry(kvm_slot_id);
                             match entry {
                                 Entry::Occupied(entry) => {
                                     assert!(
@@ -332,14 +387,6 @@ impl VmContext {
                                 }
                             }
                         }
-                        KICK_AP_PORT => {
-                            let id = u8::try_from(value)?;
-                            self.ap_threads
-                                .get(&id)
-                                .context("couldn't find AP thread")?
-                                .thread()
-                                .unpark();
-                        }
                         other => unimplemented!("unimplemented io port: {other}"),
                     }
                 }
@@ -353,11 +400,14 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = ((msr.data & 0xfff) + 1) as usize;
 
-                        let slot = find_slot(gfn, &mut self.memory_slots)?;
+                        let mut guard = self.memory_slots.write().unwrap();
+                        let slot = find_slot(gfn, &mut guard)?;
                         let output_buffer = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
                         let output_slice = &output_buffer[..len];
-                        output.extend_from_slice(output_slice);
+                        sender
+                            .send(OutputEvent::Write(output_slice.to_vec()))
+                            .unwrap();
                     }
                     FINISH_OUTPUT_MSR => {
                         info!("finished after {:?}", self.start.elapsed());
@@ -366,15 +416,15 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = (msr.data & 0xfff) as usize;
 
-                        let slot = find_slot(gfn, &mut self.memory_slots)?;
+                        let mut guard = self.memory_slots.write().unwrap();
+                        let slot = find_slot(gfn, &mut guard)?;
                         let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
-                        let mut attestation_report = attestation_report[..len].to_vec();
-                        attestation_report.extend_from_slice(self.vcek.raw());
-                        return Ok(MushroomResult {
-                            output,
-                            attestation_report: Some(attestation_report),
-                        });
+                        let attestation_report = attestation_report[..len].to_vec();
+                        sender
+                            .send(OutputEvent::Finish(attestation_report.to_vec()))
+                            .unwrap();
+                        return Ok(());
                     }
                     index => unimplemented!("unsupported MSR: {index:#08x}"),
                 },
@@ -388,86 +438,16 @@ impl VmContext {
                 }
             }
 
-            let run_res = self.bsp.run();
-
-            run_res?;
+            vcpu.run()?;
         }
-    }
 
-    fn run_kernel_vcpu(
-        id: u8,
-        vm: Arc<VmHandle>,
-        cpuid_entries: Arc<[KvmCpuidEntry2]>,
-        done: Arc<AtomicBool>,
-    ) -> JoinHandle<()> {
-        let supervisor_thread = std::thread::current();
-
-        std::thread::spawn(move || {
-            let ap = vm.create_vcpu(i32::from(id)).unwrap();
-            ap.set_cpuid(&cpuid_entries).unwrap();
-
-            // Allow the kernel to query it's processor id through TSC_AUX.
-            // Note that this doesn't do anything on EPYC Milan.
-            const TSC_AUX: u32 = 0xc0000103;
-            ap.set_msr(TSC_AUX, u64::from(id - FIRST_AP)).unwrap();
-
-            // Work around a bug where KVM fails to enable LBR virtualization
-            // for SEV-ES vCPUs creating using AP creation.
-            const DEBUG_CTL: u32 = 0x000001d9;
-            ap.set_msr(DEBUG_CTL, 1).unwrap();
-
-            let kvm_run = ap.get_kvm_run_block().unwrap();
-            let kvm_run = kvm_run.as_ptr();
-
-            std::thread::park();
-
-            while !done.load(atomic::Ordering::Relaxed) {
-                map_field!(kvm_run.cr8).write(0);
-
-                // Run the AP.
-                let res = ap.run();
-                match res {
-                    Ok(_) => {}
-                    Err(err) if is_efault(&err) => {
-                        // The VM has been shut down.
-                        break;
-                    }
-                    Err(err) => {
-                        panic!("{err}");
-                    }
-                }
-
-                // Check the exit.
-                let kvm_run = kvm_run.read();
-                match kvm_run.exit() {
-                    KvmExit::Hlt => {
-                        let resume = kvm_run.cr8.get_bit(0);
-
-                        supervisor_thread.unpark();
-
-                        if !resume {
-                            std::thread::park();
-                        }
-                    }
-                    KvmExit::Interrupted => {}
-                    exit => panic!("unexpected exit {exit:?}"),
-                }
-            }
-        })
+        Ok(())
     }
 }
 
-impl Drop for VmContext {
-    fn drop(&mut self) {
-        // Set the done flag.
-        self.done.store(true, atomic::Ordering::Relaxed);
-
-        // Force all threads to exit out of KVM_RUN, so that they can observe
-        // `done` and exit.
-        for (_, handle) in self.ap_threads.drain() {
-            handle.thread().unpark();
-            let _ = pthread_kill(handle.as_pthread_t(), SIG_KICK);
-            handle.join().unwrap();
-        }
-    }
+#[derive(Debug)]
+enum OutputEvent {
+    Write(Vec<u8>),
+    Finish(Vec<u8>),
+    Fail(anyhow::Error),
 }
