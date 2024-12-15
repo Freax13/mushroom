@@ -6,6 +6,7 @@ use core::{
 
 use constants::{physical_address::supervisor::snp::VMSAS, MAX_APS_COUNT};
 use snp_types::{
+    intercept::VMEXIT_INVALID,
     vmsa::{Segment, SevFeatures, Vmsa, VmsaTweakBitmap},
     VmplPermissions,
 };
@@ -81,6 +82,7 @@ static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
         vmsa.set_cs(Segment::CODE64, tweak_bitmap);
         vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);
         vmsa.set_rsp(0xffff_8000_0400_3ff8, tweak_bitmap);
+        vmsa.set_guest_exit_code(VMEXIT_INVALID, tweak_bitmap);
 
         // Enable SecureTSC.
         let sev_features = SEV_FEATURES;

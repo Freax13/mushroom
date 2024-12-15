@@ -26,7 +26,6 @@ use x86_64::{
 
 use crate::{
     error::{ensure, err, Result},
-    exception::emulate_cpuid,
     per_cpu::PerCpu,
     spin::lazy::Lazy,
     user::process::{
@@ -159,7 +158,6 @@ impl CpuState {
                         code,
                     })
                 }
-                0x1d => Exit::Vc(PerCpu::get().error_code.get()),
                 0x80 => {
                     let no = self.registers.rax as u32;
                     let arg0 = self.registers.rbx as u32;
@@ -532,18 +530,6 @@ impl CpuState {
         Ok((ucontext.stack, ucontext.sigmask))
     }
 
-    pub fn emulate_cpuid(&mut self) {
-        let (eax, ebx, ecx, edx) =
-            emulate_cpuid(self.registers.rax as u32, self.registers.rcx as u32);
-        self.registers.rax = u64::from(eax);
-        self.registers.rbx = u64::from(ebx);
-        self.registers.rcx = u64::from(ecx);
-        self.registers.rdx = u64::from(edx);
-
-        // skip over the cpuid instruction.
-        self.registers.rip += 2;
-    }
-
     #[cfg(not(feature = "harden"))]
     pub fn last_exit(&self) -> Option<Exit> {
         self.last_exit
@@ -663,7 +649,6 @@ pub enum Exit {
     Syscall(SyscallArgs),
     DivideError,
     GeneralProtectionFault,
-    Vc(u64),
     PageFault(PageFaultExit),
 }
 
