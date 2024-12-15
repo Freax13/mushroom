@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 
 use crate::{memory::pagetable::flush, spin::mutex::Mutex};
 use arrayvec::ArrayVec;
@@ -49,7 +49,9 @@ fn kick_supervisor(resume: bool) {
     let mut bits = 0u64;
     bits.set_bit(0, resume);
 
-    return run_vmpl(0, resume);
+    unsafe { asm!("vmmcall", in("rax") u64::from(resume), options(nostack, preserves_flags)) };
+
+    return;
 
     unsafe {
         asm!(

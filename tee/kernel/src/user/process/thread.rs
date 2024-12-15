@@ -35,7 +35,6 @@ use bytemuck::{Pod, Zeroable};
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{select_biased, FutureExt};
 use pin_project::pin_project;
-use snp_types::intercept::VMEXIT_CPUID;
 use x86_64::VirtAddr;
 
 use crate::{
@@ -245,13 +244,6 @@ impl Thread {
                                 };
                                 assert!(self.queue_signal(sig_info));
                             }
-                            Exit::Vc(vc) => match vc {
-                                VMEXIT_CPUID => {
-                                    let mut guard = self.cpu_state.lock();
-                                    guard.emulate_cpuid();
-                                }
-                                code => todo!("unimplemented VC error code: {code:#x}"),
-                            },
                             Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
                         }
                     }
@@ -442,10 +434,9 @@ impl Thread {
                             )?;
                         }
                     }
-                    Exit::DivideError
-                    | Exit::GeneralProtectionFault
-                    | Exit::Vc(_)
-                    | Exit::PageFault(_) => writeln!(write, "{:indent$}{exit:?}", "")?,
+                    Exit::DivideError | Exit::GeneralProtectionFault | Exit::PageFault(_) => {
+                        writeln!(write, "{:indent$}{exit:?}", "")?
+                    }
                 }
             } else {
                 writeln!(write, "{:indent$}thread has never exited", "")?;
