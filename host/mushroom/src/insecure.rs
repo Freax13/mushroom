@@ -16,13 +16,23 @@ use anyhow::{bail, Context, Result};
 use bit_field::BitField;
 use constants::{
     physical_address::{kernel, supervisor, DYNAMIC_2MIB},
-    INSECURE_SUPERVISOR_CALL_PORT, MAX_APS_COUNT,
+    INSECURE_SUPERVISOR_CALL_PORT, MAX_APS_COUNT, TIMER_VECTOR,
 };
 use loader::Input;
-use nix::sys::pthread::pthread_kill;
+use nix::{
+    sys::{
+        pthread::pthread_kill,
+        signal::SigEvent,
+        time::TimeSpec,
+        timer::{Timer, TimerSetTimeFlags},
+    },
+    time::ClockId,
+    unistd::gettid,
+};
 use snp_types::PageType;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
+use volatile::map_field;
 use x86_64::registers::{
     control::{Cr0Flags, Cr4Flags},
     model_specific::EferFlags,
@@ -44,6 +54,8 @@ static YMM_OFFSET: LazyLock<usize> = LazyLock::new(|| {
     assert_eq!(res.eax, 256, "CPU doesn't support AVX");
     res.ebx as usize
 });
+
+const TIMER_PERIOD: Duration = Duration::from_millis(10);
 
 /// Create the VM, load the kernel, init & input and run the APs.
 pub fn main(
@@ -293,9 +305,40 @@ fn run_kernel_vcpu(
     let xsave_size = *KVM_XSAVE_SIZE.get().unwrap();
 
     let run_state = &run_states[usize::from(id)];
-    run_state.wait();
+    run_state.wait(Duration::MAX);
+
+    // Setup a timer to reguluarly kick the thread out of KVM_RUN.
+    let mut timer = Timer::new(
+        ClockId::CLOCK_MONOTONIC,
+        SigEvent::new(nix::sys::signal::SigevNotify::SigevThreadId {
+            signal: SIG_KICK,
+            thread_id: gettid().as_raw(),
+            si_value: 0,
+        }),
+    )?;
+    timer.set(
+        nix::sys::timer::Expiration::Interval(TimeSpec::from_duration(TIMER_PERIOD)),
+        TimerSetTimeFlags::empty(),
+    )?;
+    let mut last_timer_injection = Instant::now();
+    let mut in_service_timer_irq = false;
 
     while !run_state.is_stopped() {
+        // Check if we need to inject a timer interrupt.
+        if !in_service_timer_irq && last_timer_injection.elapsed() >= TIMER_PERIOD {
+            if map_field!(kvm_run.ready_for_interrupt_injection).read() != 0 {
+                map_field!(kvm_run.request_interrupt_window).write(0);
+
+                ap.interrupt(TIMER_VECTOR)?;
+
+                last_timer_injection = Instant::now();
+                in_service_timer_irq = true;
+            } else {
+                // Ask to be notified when the guest can receive an interrupt.
+                map_field!(kvm_run.request_interrupt_window).write(1);
+            }
+        }
+
         // Run the AP.
         let res = ap.run();
         match res {
@@ -321,7 +364,10 @@ fn run_kernel_vcpu(
                             run_state.kick();
                         }
                     }
-                    nr if nr == SupervisorCallNr::Halt as u64 => run_state.wait(),
+                    nr if nr == SupervisorCallNr::Halt as u64 => {
+                        let timeout = TIMER_PERIOD.saturating_sub(last_timer_injection.elapsed());
+                        run_state.wait(timeout);
+                    }
                     nr if nr == SupervisorCallNr::Kick as u64 => {
                         let index = regs.rdi as usize;
                         run_states[index].kick();
@@ -390,6 +436,12 @@ fn run_kernel_vcpu(
                     k
                 });
             }
+            KvmExit::WrMsr(msr) => match msr.index {
+                // EOI.
+                0x80b => in_service_timer_irq = false,
+                index => unimplemented!("unimplemented MSR write to {index:#x}"),
+            },
+            KvmExit::IrqWindowOpen => {}
             KvmExit::Interrupted => {}
             exit => {
                 let regs = ap.get_regs()?;
@@ -428,24 +480,28 @@ impl RunState {
         *self.running.lock().unwrap() == NextRunStateValue::Stopped
     }
 
-    pub fn wait(&self) {
+    pub fn wait(&self, timeout: Duration) {
         drop(
             self.condvar
-                .wait_while(self.running.lock().unwrap(), |state| match *state {
-                    NextRunStateValue::Halted => {
-                        // Keep waiting.
-                        true
-                    }
-                    NextRunStateValue::Ready => {
-                        // Consume the ready state and return.
-                        *state = NextRunStateValue::Halted;
-                        false
-                    }
-                    NextRunStateValue::Stopped => {
-                        // Don't update the state, but return.
-                        false
-                    }
-                })
+                .wait_timeout_while(
+                    self.running.lock().unwrap(),
+                    timeout,
+                    |state| match *state {
+                        NextRunStateValue::Halted => {
+                            // Keep waiting.
+                            true
+                        }
+                        NextRunStateValue::Ready => {
+                            // Consume the ready state and return.
+                            *state = NextRunStateValue::Halted;
+                            false
+                        }
+                        NextRunStateValue::Stopped => {
+                            // Don't update the state, but return.
+                            false
+                        }
+                    },
+                )
                 .unwrap(),
         );
     }
