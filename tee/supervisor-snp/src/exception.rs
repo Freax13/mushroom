@@ -9,6 +9,7 @@ use bit_field::BitField;
 use constants::MAX_APS_COUNT;
 use spin::Lazy;
 use x86_64::{
+    registers::model_specific::Msr,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
     VirtAddr,
 };
@@ -17,6 +18,7 @@ use crate::{
     ghcb::{set_hv_doorbell_page, write_msr},
     pagetable::Synchronized,
     per_cpu::PerCpu,
+    scheduler::TIMER_VECTOR,
     shared,
 };
 
@@ -33,6 +35,17 @@ pub fn init() {
 
     // Enable the x2apic.
     write_msr(0x80f, 0x1ff).unwrap();
+
+    // Enable APIC timer.
+    const PERIODIC_TIMER_MODE: u64 = 1 << 17;
+    // Initialize APIC Timer Local Vector Table Register.
+    write_msr(0x832, u64::from(TIMER_VECTOR) | PERIODIC_TIMER_MODE).unwrap();
+    // Initialize Divide Configuration Register. Divide by 1.
+    write_msr(0x83e, 0b1011).unwrap();
+    // Initialize Timer Initial Count Register.
+    let tsc_frequency = unsafe { Msr::new(0xC001_0134).read() } * 1_000_000;
+    let timer_hz = 100;
+    write_msr(0x838, tsc_frequency / timer_hz).unwrap();
 }
 
 static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {

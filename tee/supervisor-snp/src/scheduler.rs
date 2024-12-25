@@ -10,6 +10,7 @@ use crate::{
 
 pub const STARTUP_VECTOR: u8 = 0x20;
 pub const WAKE_UP_VECTOR: u8 = 0x21;
+pub const TIMER_VECTOR: u8 = 0x22;
 
 static READY: AtomicUsize = AtomicUsize::new(0);
 
@@ -39,6 +40,7 @@ pub fn wait_for_vcpu_start() {
             match vector.get() {
                 STARTUP_VECTOR => eoi(),
                 WAKE_UP_VECTOR => eoi(),
+                TIMER_VECTOR => eoi(),
                 event => unimplemented!("unimplemented event {event}"),
             }
         }
