@@ -4,7 +4,7 @@ use bit_field::BitField;
 use constants::{ApIndex, AtomicApBitmap};
 use snp_types::{
     intercept::{
-        VMEXIT_CPUID, VMEXIT_INIT, VMEXIT_INTR, VMEXIT_INVALID, VMEXIT_NMI, VMEXIT_NPF,
+        VMEXIT_CPUID, VMEXIT_INIT, VMEXIT_INTR, VMEXIT_INVALID, VMEXIT_MSR, VMEXIT_NMI, VMEXIT_NPF,
         VMEXIT_PAUSE, VMEXIT_SMI, VMEXIT_VMMCALL,
     },
     vmsa::SevFeatures,
@@ -18,7 +18,7 @@ use crate::{
     ghcb::{create_ap, exit, run_vmpl, vmsa_tweak_bitmap},
     output,
     per_cpu::PerCpu,
-    scheduler::{start_next_ap, WAKE_UP_VECTOR},
+    scheduler::{start_next_ap, TIMER_VECTOR, WAKE_UP_VECTOR},
 };
 
 use self::vmsa::Vmpl1Vmsa;
@@ -49,15 +49,26 @@ pub fn run_vcpu() -> ! {
     let tweak_bitmap = vmsa_tweak_bitmap();
 
     let mut halted = false;
+    let mut requested_timer_irq = false;
+    let mut in_service_timer_irq = false;
     loop {
         // Handle interrupts.
         if PerCpu::get().interrupted.swap(false, Ordering::SeqCst) {
             while let Some(vector) = pop_pending_event() {
                 match vector.get() {
                     WAKE_UP_VECTOR => eoi(),
+                    TIMER_VECTOR => {
+                        requested_timer_irq = true;
+                        eoi();
+                    }
                     vector => unimplemented!("unhandled vector: {vector}"),
                 }
             }
+        }
+
+        // Don't halt if we can a timer IRQ.
+        if requested_timer_irq && !in_service_timer_irq {
+            halted = false;
         }
 
         // See if the kernel was kicked.
@@ -69,6 +80,30 @@ pub fn run_vcpu() -> ! {
         if halted {
             hlt();
             continue;
+        }
+
+        // Inject pending timer IRQ if possible.
+        if !in_service_timer_irq && requested_timer_irq {
+            let mut guard = vmsa.modify();
+            let mut vintr_ctrl = guard.vintr_ctrl(tweak_bitmap);
+            // Check if V_IRQ is not already set.
+            if !vintr_ctrl.get_bit(8) {
+                // Set V_IRQ.
+                vintr_ctrl.set_bit(8, true);
+                // Set VGIF.
+                vintr_ctrl.set_bit(9, true);
+                // Set V_INTR_PRIO.
+                vintr_ctrl.set_bits(16..=19, 2);
+                // Clear V_IGN_TPR.
+                vintr_ctrl.set_bit(20, false);
+                // Set V_INTR_VECTOR.
+                vintr_ctrl.set_bits(32..=39, u64::from(constants::TIMER_VECTOR));
+
+                guard.set_vintr_ctrl(vintr_ctrl, tweak_bitmap);
+
+                requested_timer_irq = false;
+                in_service_timer_irq = true;
+            }
         }
 
         // Run the AP.
@@ -110,6 +145,18 @@ pub fn run_vcpu() -> ! {
                 guard.set_rbx(u64::from(ebx), tweak_bitmap);
                 guard.set_rcx(u64::from(ecx), tweak_bitmap);
                 guard.set_rdx(u64::from(edx), tweak_bitmap);
+
+                let next_rip = guard.guest_nrip(tweak_bitmap);
+                guard.set_rip(next_rip, tweak_bitmap);
+            }
+            VMEXIT_MSR => {
+                // Make sure that the MSR access was a write.
+                assert_eq!(guard.guest_exit_info1(tweak_bitmap), 1);
+
+                match guard.rcx(tweak_bitmap) as u32 {
+                    0x80b => in_service_timer_irq = false, // EOI.
+                    unknown => unimplemented!("unimplemented MSR write {unknown:#x}"),
+                }
 
                 let next_rip = guard.guest_nrip(tweak_bitmap);
                 guard.set_rip(next_rip, tweak_bitmap);

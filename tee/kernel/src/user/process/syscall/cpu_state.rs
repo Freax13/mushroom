@@ -10,6 +10,7 @@ use core::{
 use alloc::{vec, vec::Vec};
 use bit_field::BitField;
 use bytemuck::{bytes_of, bytes_of_mut, from_bytes, from_bytes_mut, Pod, Zeroable};
+use constants::TIMER_VECTOR;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
@@ -158,6 +159,7 @@ impl CpuState {
                         code,
                     })
                 }
+                TIMER_VECTOR => Exit::Timer,
                 0x80 => {
                     let no = self.registers.rax as u32;
                     let arg0 = self.registers.rbx as u32;
@@ -650,6 +652,7 @@ pub enum Exit {
     DivideError,
     GeneralProtectionFault,
     PageFault(PageFaultExit),
+    Timer,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -753,6 +756,7 @@ pub fn init() {
 
 unsafe extern "sysv64" {
     fn enter_userspace();
+    pub fn interrupt_entry();
     pub fn exception_entry();
     fn syscall_entry();
 }
@@ -858,7 +862,16 @@ global_asm!(
     // Enter usermode.
     "iretq",
 
-    // Exit point for an exception/interrupt.
+    // Exit point for an exception.
+    // Note that `swapgs` was already executed by the exception/interrupt handler.
+    ".global interrupt_entry",
+    "interrupt_entry:",
+    // Clear the IF flag in the kernel's RFLAGS registers.
+    "and dword ptr gs:[{K_RFLAGS_OFFSET}], ~{INTERRUPT_FLAG}",
+
+    // Fall through to exception_entry.
+
+    // Exit point for an interrupt.
     // Note that `swapgs` was already executed by the exception/interrupt handler.
     ".global exception_entry",
     "exception_entry:",
@@ -972,4 +985,5 @@ global_asm!(
     U_FS_BASE_OFFSET = const userspace_reg_offset!(fs_base),
     U_GS_OFFSET = const userspace_reg_offset!(gs),
     U_SS_OFFSET = const userspace_reg_offset!(ss),
+    INTERRUPT_FLAG = const RFlags::INTERRUPT_FLAG.bits(),
 );

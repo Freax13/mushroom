@@ -7,11 +7,14 @@ use core::{
     ptr::null_mut,
 };
 
-use crate::memory::pagetable::flush::{tlb_shootdown_handler, TLB_VECTOR};
+use crate::memory::pagetable::flush::tlb_shootdown_handler;
 use crate::spin::lazy::Lazy;
-use crate::user::process::syscall::cpu_state::exception_entry;
+use crate::time;
+use crate::user::process::syscall::cpu_state::{exception_entry, interrupt_entry};
 use alloc::alloc::alloc;
+use constants::{TIMER_VECTOR, TLB_VECTOR};
 use log::{debug, error, trace};
+use x86_64::registers::model_specific::Msr;
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::{
     instructions::tables::load_tss,
@@ -146,6 +149,7 @@ pub fn load_idt() {
             .set_handler_fn(general_protection_fault_handler);
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt[TLB_VECTOR].set_handler_fn(tlb_shootdown_handler);
+        idt[TIMER_VECTOR].set_handler_fn(timer_handler);
 
         idt[0x80]
             .set_handler_fn(int0x80_handler)
@@ -329,6 +333,35 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
 }
 
 #[naked]
+extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
+    unsafe {
+        naked_asm!(
+            "cld",
+            // Check whether the irq happened in userspace.
+            "test word ptr [rsp+8], 3",
+            "je {kernel_timer_handler}",
+
+            // Userspace code path:
+            "swapgs",
+            // Store the error code.
+            "mov byte ptr gs:[{VECTOR_OFFSET}], {TIMER_VECTOR}",
+            // Jump to the userspace exit point.
+            "jmp {interrupt_entry}",
+
+            kernel_timer_handler = sym kernel_timer_handler,
+            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+            TIMER_VECTOR = const TIMER_VECTOR,
+            interrupt_entry = sym interrupt_entry,
+        );
+    }
+}
+
+extern "x86-interrupt" fn kernel_timer_handler(_: InterruptStackFrame) {
+    time::try_fire_clocks();
+    eoi();
+}
+
+#[naked]
 extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // The code that entered userspace stored addresses where execution should
     // continue when userspace exits.
@@ -341,5 +374,12 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             exception_entry = sym exception_entry,
         );
+    }
+}
+
+/// Signal EOI.
+pub fn eoi() {
+    unsafe {
+        Msr::new(0x80b).write(0);
     }
 }

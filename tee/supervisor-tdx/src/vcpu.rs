@@ -1,14 +1,15 @@
 use core::{
     arch::{
         asm,
-        x86_64::{CpuidResult, __cpuid_count},
+        x86_64::{CpuidResult, __cpuid, __cpuid_count, _rdtsc},
     },
     cmp,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use bit_field::BitField;
-use constants::{ApIndex, MAX_APS_COUNT};
+use constants::{ApIndex, MAX_APS_COUNT, TIMER_VECTOR};
+use spin::Lazy;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tdx_types::{
     tdcall::{
@@ -16,7 +17,8 @@ use tdx_types::{
         TDX_L2_EXIT_PENDING_INTERRUPT, TDX_PENDING_INTERRUPT, TDX_SUCCESS,
     },
     vmexit::{
-        VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_MSR_WRITE, VMEXIT_REASON_VMCALL_INSTRUCTION,
+        VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_MSR_WRITE,
+        VMEXIT_REASON_PREEMPTION_TIMER_EXPIRED, VMEXIT_REASON_VMCALL_INSTRUCTION,
     },
 };
 use x86_64::{
@@ -158,6 +160,8 @@ pub fn init_vcpu() {
             MdFieldId::X2APIC_EOI_WRITE_MASK,
         );
     }
+
+    update_tsc_deadline();
 }
 
 static APICS: [Apic; MAX_APS_COUNT as usize] = [const { Apic::new() }; MAX_APS_COUNT as usize];
@@ -323,7 +327,33 @@ pub fn run_vcpu() -> ! {
                 }
                 guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
+            VMEXIT_REASON_PREEMPTION_TIMER_EXPIRED => {
+                APICS[PerCpu::current_vcpu_index()].set_irr(TIMER_VECTOR);
+                update_tsc_deadline();
+            }
             unknown => panic!("{unknown:#x} {guest_state:x?} {vm_exit:x?}"),
         }
+    }
+}
+
+/// Returns `delta(TSC)/s`.
+fn tsc_frequency() -> u64 {
+    // Try to get the frequency from cpuid.
+    let result = unsafe { __cpuid(0x15) };
+    assert_ne!(result.ebx, 0);
+    u64::from(result.ecx) * u64::from(result.ebx) / u64::from(result.eax)
+}
+
+const TIMER_HZ: u64 = 100;
+static TIMER_INTERRUPT_PERIOD: Lazy<u64> = Lazy::new(|| tsc_frequency() / TIMER_HZ);
+
+/// Set the deadline to `now + TIMER_INTERRUPT_PERIOD`.
+fn update_tsc_deadline() {
+    unsafe {
+        Tdcall::vp_wr(
+            MdFieldId::TDVPS_TSC_DEADLINE,
+            _rdtsc() + *TIMER_INTERRUPT_PERIOD,
+            !0,
+        );
     }
 }

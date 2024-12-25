@@ -12,11 +12,12 @@ use core::{
 
 use crate::{
     error::bail,
+    exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
         node::FileAccessContext,
     },
-    rt::notify::Notify,
+    rt::{self, notify::Notify},
     spin::mutex::{Mutex, MutexGuard},
     time,
     user::process::{
@@ -35,7 +36,7 @@ use bytemuck::{Pod, Zeroable};
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{select_biased, FutureExt};
 use pin_project::pin_project;
-use x86_64::VirtAddr;
+use x86_64::{instructions::interrupts, VirtAddr};
 
 use crate::{
     error::Result,
@@ -245,6 +246,19 @@ impl Thread {
                                 assert!(self.queue_signal(sig_info));
                             }
                             Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
+                            Exit::Timer => {
+                                // Handle the timer interrupt.
+                                time::try_fire_clocks();
+
+                                // Signal that we're done handling the interrupt.
+                                eoi();
+
+                                // Re-enable interrupts.
+                                interrupts::enable();
+
+                                // Yield to the scheduler.
+                                rt::r#yield().await;
+                            }
                         }
                     }
                 };
@@ -434,9 +448,10 @@ impl Thread {
                             )?;
                         }
                     }
-                    Exit::DivideError | Exit::GeneralProtectionFault | Exit::PageFault(_) => {
-                        writeln!(write, "{:indent$}{exit:?}", "")?
-                    }
+                    Exit::DivideError
+                    | Exit::GeneralProtectionFault
+                    | Exit::PageFault(_)
+                    | Exit::Timer => writeln!(write, "{:indent$}{exit:?}", "")?,
                 }
             } else {
                 writeln!(write, "{:indent$}thread has never exited", "")?;

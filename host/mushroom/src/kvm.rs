@@ -792,6 +792,17 @@ impl VcpuHandle {
         Ok(())
     }
 
+    pub fn interrupt(&self, vector: u8) -> Result<()> {
+        #[repr(transparent)]
+        struct KvmInterrupt(u32);
+        let kvm_interrupt_val = KvmInterrupt(u32::from(vector));
+
+        ioctl_write_ptr!(kvm_interrupt, KVMIO, 0x86, KvmInterrupt);
+        let res = unsafe { kvm_interrupt(self.fd.as_raw_fd(), &kvm_interrupt_val) };
+        res.context("failed to interrupt")?;
+        Ok(())
+    }
+
     #[cfg(feature = "tdx")]
     unsafe fn memory_encrypt_op_tdx<'a>(
         &self,
