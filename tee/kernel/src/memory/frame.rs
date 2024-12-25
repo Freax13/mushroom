@@ -508,9 +508,9 @@ impl Drop for PrivateState {
     fn drop(&mut self) {
         self.refresh();
 
-        // Hot-unplug completly unused chunks.
+        // Hot-unplug completely unused chunks.
         for i in ChunkIndex::ALL {
-            if self.free < CHUNK_SIZE as u32 && self.l1_metadata[i] == CHUNK_SIZE as u16 {
+            if self.free >= CHUNK_SIZE as u32 && self.l1_metadata[i] == CHUNK_SIZE as u16 {
                 self.l1_metadata[i] = 0;
                 self.allocated_bitmask.set(i, false);
                 let slot_idx = self.physical_addresses[i];
