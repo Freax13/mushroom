@@ -75,7 +75,7 @@ impl OpenFileDescription for Output {
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
-        supervisor::output(buf);
+        supervisor::update_output(buf);
         Ok(buf.len())
     }
 
@@ -89,12 +89,12 @@ impl OpenFileDescription for Output {
         let mut remaining_len = len;
         while remaining_len > 0 {
             let buffer_len = cmp::min(remaining_len, 0x1000);
-            let mut buf = [0; 0x1000];
+            let mut buf = [0; supervisor::OUTPUT_BUFFER_CAPACITY];
             let buf = &mut buf[..buffer_len];
 
             vm.read_bytes(addr, buf)?;
 
-            supervisor::output(buf);
+            supervisor::update_output(buf);
 
             addr += u64::from_usize(buf.len());
             remaining_len -= buf.len();

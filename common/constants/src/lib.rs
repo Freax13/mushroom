@@ -253,6 +253,7 @@ pub const MEMORY_PORT: u16 = 0x1337;
 pub const KICK_AP_PORT: u16 = 0x7331;
 pub const SCHEDULE_PORT: u16 = 0x1373;
 pub const HALT_PORT: u16 = 0x7313;
+pub const INSECURE_SUPERVISOR_CALL_PORT: u16 = 0x17;
 pub const MEMORY_MSR: u32 = 0x7000_0000;
 pub const UPDATE_OUTPUT_MSR: u32 = 0x7000_0001;
 pub const FINISH_OUTPUT_MSR: u32 = 0x7000_0002;

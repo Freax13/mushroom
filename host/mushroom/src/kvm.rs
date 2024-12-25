@@ -840,6 +840,19 @@ impl VcpuHandle {
         Ok(())
     }
 
+    /// # Safety
+    ///
+    /// The caller has to ensure that `buffer` is large enough.
+    pub unsafe fn get_xsave2(&self, buffer: &mut [u8]) -> Result<()> {
+        #[repr(transparent)]
+        struct KvmXsave([u8; 4096]);
+        ioctl_read!(kvm_get_xsave2, KVMIO, 0xcf, KvmXsave);
+
+        let res = unsafe { kvm_get_xsave2(self.fd.as_raw_fd(), buffer.as_mut_ptr().cast()) };
+        res.context("failed to get xsave area")?;
+        Ok(())
+    }
+
     pub fn get_kvm_run_block(&self) -> Result<KvmRunBox> {
         let res = unsafe {
             nix::sys::mman::mmap(
@@ -1036,7 +1049,7 @@ pub struct KvmCpuidEntry2 {
     pub ebx: u32,
     pub ecx: u32,
     pub edx: u32,
-    padding: [u32; 3],
+    pub padding: [u32; 3],
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1410,6 +1423,7 @@ impl KvmCap {
     pub const X2APIC_API: Self = Self(129);
     pub const X86_USER_SPACE_MSR: Self = Self(188);
     pub const EXIT_HYPERCALL: Self = Self(201);
+    pub const XSAVE2: Self = Self(208);
     pub const VM_TYPES: Self = Self(235);
 }
 

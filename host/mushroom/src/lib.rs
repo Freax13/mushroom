@@ -107,3 +107,10 @@ fn raise_file_no_limit() {
         setrlimit(Resource::RLIMIT_NOFILE, hard, hard).unwrap();
     });
 }
+
+#[derive(Debug)]
+enum OutputEvent<T = Vec<u8>> {
+    Write(Vec<u8>),
+    Finish(T),
+    Fail(anyhow::Error),
+}

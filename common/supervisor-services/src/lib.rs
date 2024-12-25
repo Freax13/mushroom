@@ -9,6 +9,17 @@ use allocation_buffer::AllocationBuffer;
 use command_buffer::CommandBuffer;
 use notification_buffer::NotificationBuffer;
 
+pub enum SupervisorCallNr {
+    StartNextAp,
+    Halt,
+    Kick,
+    AllocateMemory,
+    DeallocateMemory,
+    UpdateOutput,
+    FinishOutput,
+    FailOutput,
+}
+
 pub mod allocation_buffer;
 pub mod command_buffer;
 pub mod notification_buffer;

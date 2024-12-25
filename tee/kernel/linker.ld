@@ -11,7 +11,6 @@ PHDRS
     stack               PT_LOAD AT(0x10140000000);
     init_file           PT_LOAD AT(0x30000000000) FLAGS((1 << 2) | (1 << 31));
     input_file          PT_LOAD AT(0x40000000000) FLAGS((1 << 2) | (1 << 31));
-    supervisor_services PT_LOAD AT(0x50000000000);
     profiler_control    PT_LOAD AT(0x80000000000) FLAGS((1 << 30));
     profiler_buffer     PT_LOAD AT(0x80040000000) FLAGS((1 << 30));
     log_buffer          PT_LOAD AT(0x90000000000) FLAGS((1 << 1) | (1 << 30));

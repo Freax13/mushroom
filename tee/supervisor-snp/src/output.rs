@@ -94,3 +94,11 @@ pub fn finish() -> ! {
         hlt();
     }
 }
+
+// Fail the output.
+pub fn fail() {
+    let mut guard = HASHER.lock();
+    let hasher = LazyCell::force_mut(&mut guard);
+    hasher.take();
+    drop(guard);
+}

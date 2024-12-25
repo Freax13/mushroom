@@ -35,7 +35,7 @@ extern crate alloc;
 
 use exception::switch_stack;
 use memory::pagetable::flush;
-use supervisor::SCHEDULER;
+use user::SCHEDULER;
 use x86_64::instructions::interrupts;
 
 use crate::per_cpu::PerCpu;
