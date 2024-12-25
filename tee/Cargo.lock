@@ -428,7 +428,6 @@ dependencies = [
  "log-types",
  "pin-project",
  "profiler-types",
- "snp-types",
  "static-page-tables",
  "supervisor-services",
  "usize_conversions",
@@ -713,11 +712,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "supervisor-services"
 version = "0.1.0"
-dependencies = [
- "bit_field",
- "bytemuck",
- "constants",
-]
 
 [[package]]
 name = "supervisor-snp"

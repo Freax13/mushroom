@@ -1,6 +1,7 @@
 use core::sync::atomic::Ordering;
 
-use constants::ApIndex;
+use bit_field::BitField;
+use constants::{ApIndex, AtomicApBitmap};
 use snp_types::{
     intercept::{
         VMEXIT_CPUID, VMEXIT_INIT, VMEXIT_INTR, VMEXIT_INVALID, VMEXIT_NMI, VMEXIT_NPF,
@@ -8,14 +9,16 @@ use snp_types::{
     },
     vmsa::SevFeatures,
 };
+use supervisor_services::{SlotIndex, SupervisorCallNr};
 use x86_64::instructions::hlt;
 
 use crate::{
+    dynamic::{allocate_memory, deallocate_memory},
     exception::{eoi, pop_pending_event, send_ipi},
-    ghcb::{create_ap, run_vmpl, vmsa_tweak_bitmap},
+    ghcb::{create_ap, exit, run_vmpl, vmsa_tweak_bitmap},
+    output,
     per_cpu::PerCpu,
-    scheduler::WAKE_UP_VECTOR,
-    services::handle_commands,
+    scheduler::{start_next_ap, WAKE_UP_VECTOR},
 };
 
 use self::vmsa::Vmpl1Vmsa;
@@ -30,6 +33,8 @@ const SEV_FEATURES: SevFeatures = SevFeatures::from_bits_truncate(
         | SevFeatures::REFLECT_VC.bits(),
 );
 
+static WAKEUP_TOKEN: AtomicApBitmap = AtomicApBitmap::empty();
+
 pub fn run_vcpu() -> ! {
     // Initialize the VMSA.
     let mut vmsa = unsafe { Vmpl1Vmsa::get() };
@@ -43,19 +48,59 @@ pub fn run_vcpu() -> ! {
 
     let tweak_bitmap = vmsa_tweak_bitmap();
 
+    let mut halted = false;
     loop {
+        // Handle interrupts.
+        if PerCpu::get().interrupted.swap(false, Ordering::SeqCst) {
+            while let Some(vector) = pop_pending_event() {
+                match vector.get() {
+                    WAKE_UP_VECTOR => eoi(),
+                    vector => unimplemented!("unhandled vector: {vector}"),
+                }
+            }
+        }
+
+        // See if the kernel was kicked.
+        if halted && WAKEUP_TOKEN.get(PerCpu::current_vcpu_index()) {
+            halted = false;
+        }
+
+        // Halt if the kernel requested to halt.
+        if halted {
+            hlt();
+            continue;
+        }
+
         // Run the AP.
         run_vmpl(1);
 
-        // Handle the AP's #VC.
-
         let mut guard = vmsa.modify();
+
+        // Check if the busy bit is set.
+        let mut vintr_ctrl = guard.vintr_ctrl(tweak_bitmap);
+        if vintr_ctrl.get_bit(63) {
+            // Transfer the pending exception to the event_inj field.
+
+            let guext_exit_int_info = guard.guest_exit_int_info(tweak_bitmap);
+            assert!(guext_exit_int_info.get_bit(31)); // Make sure that event is valid.
+            guard.set_guest_exit_int_info(0, tweak_bitmap);
+
+            let event_inj = guard.event_inj(tweak_bitmap);
+            assert_eq!(event_inj, 0); // Make sure there's not already an event that should be injected.
+            guard.set_event_inj(guext_exit_int_info, tweak_bitmap);
+
+            // Clear the busy bit.
+            vintr_ctrl.set_bit(63, false);
+            guard.set_vintr_ctrl(vintr_ctrl, tweak_bitmap);
+            continue;
+        }
+
+        // Handle the AP's reflected #VC.
 
         // Take the exit code.
         let guest_exit_code = guard.guest_exit_code(tweak_bitmap);
         guard.set_guest_exit_code(VMEXIT_INVALID, tweak_bitmap);
 
-        let mut resume = true;
         match guest_exit_code {
             VMEXIT_CPUID => {
                 let eax = guard.rax(tweak_bitmap) as u32;
@@ -70,8 +115,51 @@ pub fn run_vcpu() -> ! {
                 guard.set_rip(next_rip, tweak_bitmap);
             }
             VMEXIT_VMMCALL => {
-                handle_commands();
-                resume = guard.rax(tweak_bitmap) != 0;
+                match guard.rax(tweak_bitmap) {
+                    nr if nr == SupervisorCallNr::StartNextAp as u64 => start_next_ap(),
+                    nr if nr == SupervisorCallNr::Halt as u64 => halted = true,
+                    nr if nr == SupervisorCallNr::Kick as u64 => {
+                        let apic_id = ApIndex::new(u8::try_from(guard.rdi(tweak_bitmap)).unwrap());
+                        WAKEUP_TOKEN.set(apic_id);
+                        send_ipi(u32::from(apic_id.as_u8()), WAKE_UP_VECTOR);
+                    }
+                    nr if nr == SupervisorCallNr::AllocateMemory as u64 => {
+                        let slot_index = allocate_memory();
+                        guard.set_rax(u64::from(slot_index.get()), tweak_bitmap);
+                    }
+                    nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
+                        let slot_index = guard.rdi(tweak_bitmap);
+                        let slot_index = SlotIndex::new(u16::try_from(slot_index).unwrap());
+                        deallocate_memory(slot_index);
+                    }
+                    nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
+                        let chunk_len = guard.rdi(tweak_bitmap);
+                        let xmm = guard.fpreg_xmm(tweak_bitmap);
+                        let ymm = guard.fpreg_ymm(tweak_bitmap);
+
+                        // The xmm and ymm registers are split into two
+                        // buffers. Reassemble the values into a single
+                        // contigous buffer.
+                        let mut buffer = [0; 512];
+                        for (dst, src) in buffer.chunks_mut(16).zip(
+                            xmm.0
+                                .chunks(16)
+                                .zip(ymm.0.chunks(16))
+                                .flat_map(|(lower, upper)| [lower, upper]),
+                        ) {
+                            dst.copy_from_slice(src);
+                        }
+
+                        let chunk = &buffer[..chunk_len as usize];
+                        output::update_output(chunk);
+                    }
+                    nr if nr == SupervisorCallNr::FinishOutput as u64 => output::finish(),
+                    nr if nr == SupervisorCallNr::FailOutput as u64 => {
+                        output::fail();
+                        exit()
+                    }
+                    nr => unimplemented!("unknown supervisor call: {nr}"),
+                }
 
                 let next_rip = guard.guest_nrip(tweak_bitmap);
                 guard.set_rip(next_rip, tweak_bitmap);
@@ -86,36 +174,14 @@ pub fn run_vcpu() -> ! {
             }
             unknown => unimplemented!("unknown exit code: {unknown:#x}"),
         }
-
-        loop {
-            if PerCpu::get().interrupted.swap(false, Ordering::SeqCst) {
-                resume = true;
-
-                while let Some(vector) = pop_pending_event() {
-                    match vector.get() {
-                        WAKE_UP_VECTOR => eoi(),
-                        vector => unimplemented!("unhandled vector: {vector}"),
-                    }
-                }
-            }
-
-            if resume {
-                break;
-            }
-
-            hlt();
-        }
     }
-}
-
-pub fn kick(apic_id: ApIndex) {
-    send_ipi(u32::from(apic_id.as_u8()), WAKE_UP_VECTOR);
 }
 
 fn emulate_cpuid(eax: u32, ecx: u32) -> (u32, u32, u32, u32) {
     // These values are based on EPYC Milan.
     // TODO: Add support for other CPU models.
     match (eax, ecx) {
+        // basic range
         (0x0000_0000, _) => (0x00000010, 0x68747541, 0x444d4163, 0x69746e65),
         (0x0000_0001, _) => (0x00a00f11, 0x51800800, 0x7eda320b, 0x178bfbff),
         (0x0000_0007, _) => (0x00000000, 0x219c95a9, 0x0040069c, 0x00000000),
@@ -131,6 +197,7 @@ fn emulate_cpuid(eax: u32, ecx: u32) -> (u32, u32, u32, u32) {
         (0x0000_000d, 0x0c) => (0x00000018, 0x00000000, 0x00000001, 0x00000000),
         (0x0000_000d, 0x0d..) => (0x00000000, 0x00000000, 0x00000000, 0x00000000),
         (0x0000_0011..=0x0000_ffff, _) => (0x00000000, 0x00000000, 0x00000000, 0x00000000),
+        // extended range
         (0x8000_0000, _) => (0x80000023, 0x68747541, 0x444d4163, 0x69746e65),
         (0x8000_0001, _) => (0x00a00f11, 0x40000000, 0x75c237ff, 0x2fd3fbff),
         (0x8000_0007, _) => (0x00000000, 0x0000003b, 0x00000000, 0x00006799),
@@ -138,6 +205,9 @@ fn emulate_cpuid(eax: u32, ecx: u32) -> (u32, u32, u32, u32) {
         (0x8000_000a, _) => (0x00000001, 0x00008000, 0x00000000, 0x119b9cff),
         (0x8000_001d, _) => (0x00004121, 0x01c0003f, 0x0000003f, 0x00000000),
         (0x8000_0024..=0x8000_ffff, _) => (0x00000000, 0x00000000, 0x00000000, 0x00000000),
+        // hypervisor/supervisor range
+        (0x4000_0000, _) => (0x40000001, 0x4853554d, 0x4d4f4f52, 0x504e5320),
+        (0x4000_0001, _) => (0x5352534d, 0, 0, 0),
         (eax, ecx) => todo!("unimplemented CPUID function eax={eax:#x}, ecx={ecx:#x}"),
     }
 }

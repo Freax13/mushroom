@@ -1,6 +1,7 @@
 use bit_field::BitField;
 use constants::{physical_address::DYNAMIC_2MIB, MEMORY_PORT};
-use supervisor_services::allocation_buffer::SlotIndex;
+use spin::Mutex;
+use supervisor_services::SlotIndex;
 use tdx_types::tdcall::GpaAttr;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
 
@@ -8,6 +9,16 @@ use crate::tdcall::{Tdcall, Vmcall};
 
 const SLOTS: usize = 1 << 15;
 const BITMAP_SIZE: usize = SLOTS / 8;
+
+static HOST_ALLOCATOR: Mutex<HostAllocator> = Mutex::new(HostAllocator::new());
+
+pub fn allocate_memory() -> SlotIndex {
+    HOST_ALLOCATOR.lock().allocate_frame().unwrap()
+}
+
+pub fn deallocate_memory(slot_idx: SlotIndex) {
+    HOST_ALLOCATOR.lock().deallocate_frame(slot_idx);
+}
 
 /// An allocator for dynamically allocating 2MiB frames from the host.
 ///

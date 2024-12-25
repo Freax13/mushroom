@@ -15,7 +15,6 @@ PHDRS
     cpuid_page          PT_LOAD FLAGS((1 << 2) | (1 << 28));
     pagetables          PT_LOAD FLAGS((1 << 2));
     reset_vector        PT_LOAD;
-    supervisor_services PT_LOAD FLAGS(1 << 31);
 }
 
 SECTIONS {
@@ -62,11 +61,6 @@ SECTIONS {
     {
         *(.shared .shared.*)
     } :shared
-
-    .supervisor_services (0x44400000) :
-    {
-        supervisor_services_shared = .;
-    } :supervisor_services
 
     .log_buffer (0x44800000) :
     {

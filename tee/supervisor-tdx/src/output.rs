@@ -89,3 +89,10 @@ pub fn finish() -> ! {
         hlt();
     }
 }
+
+// Fail the output.
+pub fn fail() {
+    let mut guard = HASHER.lock();
+    let _ = guard.take();
+    drop(guard);
+}

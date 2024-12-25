@@ -35,7 +35,7 @@ use crate::{
     profiler::{start_profile_collection, ProfileFolder},
     raise_file_no_limit,
     slot::Slot,
-    MushroomResult, SIG_KICK, TSC_MHZ,
+    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ,
 };
 
 pub use snp_types::guest_policy::GuestPolicy;
@@ -443,11 +443,4 @@ impl VmContext {
 
         Ok(())
     }
-}
-
-#[derive(Debug)]
-enum OutputEvent {
-    Write(Vec<u8>),
-    Finish(Vec<u8>),
-    Fail(anyhow::Error),
 }

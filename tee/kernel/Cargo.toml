@@ -29,8 +29,7 @@ log = { version = "0.4.21", default-features = false }
 log-types = { workspace = true }
 pin-project = "1.1.7"
 profiler-types = { workspace = true, optional = true }
-snp-types = { workspace = true }
 static-page-tables = { workspace = true }
-supervisor-services = { workspace = true, features = ["kernel"], default-features = false }
+supervisor-services = { workspace = true }
 usize_conversions = "0.2.0"
 x86_64 = "0.15.1"

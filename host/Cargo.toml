@@ -11,7 +11,7 @@ log-types = { path = "../common/log-types" }
 profiler-types = { path = "../common/profiler-types" }
 qgs-client = { path = "qgs-client" }
 snp-types = { path = "../common/snp-types" }
-supervisor-services = { path = "../common/supervisor-services", default-features = false }
+supervisor-services = { path = "../common/supervisor-services" }
 tdx-types = { path = "../common/tdx-types", features = ["quote"] }
 vcek-kds = { path = "vcek-kds" }
 

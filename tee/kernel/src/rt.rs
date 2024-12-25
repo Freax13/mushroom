@@ -6,13 +6,11 @@ use core::{
     task::{Context, Waker},
 };
 
-use crate::spin::mutex::Mutex;
+use crate::{spin::mutex::Mutex, user::schedule_vcpu};
 use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
 use log::warn;
-
-use crate::supervisor::schedule_vcpu;
 
 pub mod mpmc;
 pub mod mpsc;

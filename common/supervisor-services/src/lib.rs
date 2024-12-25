@@ -3,30 +3,32 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
-#![allow(clippy::new_without_default)]
 
-use allocation_buffer::AllocationBuffer;
-use command_buffer::CommandBuffer;
-use notification_buffer::NotificationBuffer;
-
-pub mod allocation_buffer;
-pub mod command_buffer;
-pub mod notification_buffer;
-
-#[repr(C)]
-pub struct SupervisorServices {
-    pub command_buffer: CommandBuffer,
-    pub allocation_buffer: AllocationBuffer,
-    pub notification_buffer: NotificationBuffer,
+pub enum SupervisorCallNr {
+    StartNextAp,
+    Halt,
+    Kick,
+    AllocateMemory,
+    DeallocateMemory,
+    UpdateOutput,
+    FinishOutput,
+    FailOutput,
 }
 
-impl SupervisorServices {
-    #[cfg(feature = "kernel")]
-    pub const fn new() -> Self {
-        Self {
-            command_buffer: CommandBuffer::new(),
-            allocation_buffer: AllocationBuffer::new(),
-            notification_buffer: NotificationBuffer::new(),
-        }
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct SlotIndex(u16);
+
+impl SlotIndex {
+    pub const EMPTY: Self = Self(0xffff);
+
+    pub fn new(value: u16) -> Self {
+        assert!(value < u16::MAX / 2);
+        Self(value)
+    }
+
+    pub const fn get(&self) -> u16 {
+        assert!(self.0 < u16::MAX / 2);
+        self.0
     }
 }

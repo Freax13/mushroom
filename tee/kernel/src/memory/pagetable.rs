@@ -29,7 +29,7 @@ use constants::{
 };
 use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
-use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
+use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4};
 use x86_64::{
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
@@ -78,19 +78,7 @@ static PD_256_0: StaticPd = {
         PROFILER_CONTROL,
         flags!(WRITE | GLOBAL | EXECUTE_DISABLE),
     );
-    page_table.set_table(48, &PT_256_0_48, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page(56, LOG_BUFFER, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
-    page_table
-};
-
-#[link_section = ".pagetables"]
-static PT_256_0_48: StaticPt = {
-    let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(
-        0,
-        SUPERVISOR_SERVICES,
-        flags!(WRITE | GLOBAL | EXECUTE_DISABLE),
-    );
     page_table
 };
 
@@ -110,11 +98,6 @@ static PD_352_0: StaticPd = {
     page_table.set_page(1, RODATA_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table.set_page(2, DATA_SHADOW, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
     page_table.set_page(4, STACK_SHADOW, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
-    page_table.set_page(
-        6,
-        SUPERVISOR_SERVICES_SHADOW,
-        flags!(GLOBAL | EXECUTE_DISABLE),
-    );
     page_table.set_page(7, LOG_BUFFER_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };

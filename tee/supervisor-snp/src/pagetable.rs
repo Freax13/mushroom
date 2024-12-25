@@ -3,7 +3,6 @@ use core::{cell::SyncUnsafeCell, ops::Deref, ptr::NonNull};
 use bytemuck::AnyBitPattern;
 use constants::{
     physical_address::{
-        self,
         supervisor::{snp::*, LOG_BUFFER},
         DYNAMIC, INPUT_FILE,
     },
@@ -51,7 +50,6 @@ static PD_0_1: StaticPd = {
     page_table.set_page(27, SECRETS, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(29, SHADOW_STACK, flags!(C | EXECUTE_DISABLE | DIRTY));
     page_table.set_page(32, SHARED, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_table(34, &PT_0_1_34, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(36, LOG_BUFFER, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page(38, VMSAS, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table
@@ -87,17 +85,6 @@ static PT_0_1_25: [StaticPt; NUM_STACK_PAGE_TABLES] = {
     }
 
     page_tables
-};
-
-#[link_section = ".pagetables"]
-static PT_0_1_34: StaticPt = {
-    let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(
-        0,
-        physical_address::SUPERVISOR_SERVICES,
-        flags!(C | WRITE | EXECUTE_DISABLE),
-    );
-    page_table
 };
 
 #[link_section = ".pagetables"]

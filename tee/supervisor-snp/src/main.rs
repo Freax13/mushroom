@@ -29,7 +29,6 @@ mod per_cpu;
 mod reset_vector;
 mod rmp;
 mod scheduler;
-mod services;
 
 mod exception;
 

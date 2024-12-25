@@ -19,7 +19,7 @@ log-types = { workspace = true }
 sha2 = { version = "0.10.8", features = ["force-soft"], default-features = false }
 spin = "0.9.8"
 static-page-tables = { workspace = true }
-supervisor-services = { workspace = true, features = ["supervisor"], default-features = false }
+supervisor-services = { workspace = true }
 tdx-types = { workspace = true }
 volatile = { version = "0.6.1", features = ["unstable"] }
 x86_64 = "0.15.1"

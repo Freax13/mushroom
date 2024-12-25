@@ -21,7 +21,6 @@ mod pagetable;
 mod panic;
 mod per_cpu;
 mod reset_vector;
-mod services;
 mod tdcall;
 mod vcpu;
 
