@@ -785,6 +785,13 @@ impl VcpuHandle {
         Ok(())
     }
 
+    pub fn set_mp_state(&self, mp_state: MpState) -> Result<()> {
+        ioctl_write_ptr!(kvm_set_mp_state, KVMIO, 0x99, MpState);
+        let res = unsafe { kvm_set_mp_state(self.fd.as_raw_fd(), &mp_state) };
+        res.context("failed to set mp state")?;
+        Ok(())
+    }
+
     #[cfg(feature = "tdx")]
     unsafe fn memory_encrypt_op_tdx<'a>(
         &self,
@@ -830,6 +837,19 @@ impl VcpuHandle {
 
         let res = unsafe { kvm_memory_mapping(self.fd.as_raw_fd(), &mut data) };
         res.context("failed to create memory mapping")?;
+        Ok(())
+    }
+
+    /// # Safety
+    ///
+    /// The caller has to ensure that `buffer` is large enough.
+    pub unsafe fn get_xsave2(&self, buffer: &mut [u8]) -> Result<()> {
+        #[repr(transparent)]
+        struct KvmXsave([u8; 4096]);
+        ioctl_read!(kvm_get_xsave2, KVMIO, 0xcf, KvmXsave);
+
+        let res = unsafe { kvm_get_xsave2(self.fd.as_raw_fd(), buffer.as_mut_ptr().cast()) };
+        res.context("failed to get xsave area")?;
         Ok(())
     }
 
@@ -1029,7 +1049,7 @@ pub struct KvmCpuidEntry2 {
     pub ebx: u32,
     pub ecx: u32,
     pub edx: u32,
-    padding: [u32; 3],
+    pub padding: [u32; 3],
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1403,6 +1423,7 @@ impl KvmCap {
     pub const X2APIC_API: Self = Self(129);
     pub const X86_USER_SPACE_MSR: Self = Self(188);
     pub const EXIT_HYPERCALL: Self = Self(201);
+    pub const XSAVE2: Self = Self(208);
     pub const VM_TYPES: Self = Self(235);
 }
 
@@ -1539,6 +1560,11 @@ pub struct KvmSevSnpLaunchFinish {
     pad0: [u8; 3],
     flags: u16,
     pad1: [u64; 4],
+}
+
+#[repr(u32)]
+pub enum MpState {
+    Runnable,
 }
 
 #[cfg(feature = "tdx")]

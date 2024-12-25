@@ -1,7 +1,7 @@
 use core::ops::Range;
 
 use x86_64::{
-    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB},
+    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB},
     PhysAddr,
 };
 
@@ -53,7 +53,6 @@ pub mod kernel {
     pub const RODATA_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800001000000);
     pub const DATA_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800002000000);
     pub const STACK_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800004000000);
-    pub const SUPERVISOR_SERVICES_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800006000000);
     pub const LOG_BUFFER_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff800007000000);
     pub const INIT_FILE_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff809000000000);
     pub const INPUT_FILE_SHADOW: PhysFrame<Size2MiB> = shadow_addr(0xffff80a000000000);
@@ -108,11 +107,6 @@ pub const INIT_FILE: Range<PhysFrame<Size1GiB>> =
     addr_range(0x0000_0300_0000_0000, 0x0000_030f_ffff_ffff);
 pub const INPUT_FILE: Range<PhysFrame<Size1GiB>> =
     addr_range(0x0000_0400_0000_0000, 0x0000_040f_ffff_ffff);
-/// A shared buffer between the kernel and the supervisor to store output
-/// chunks.
-pub const OUTPUT: PhysFrame<Size4KiB> = addr(0x50000000000);
-pub const SUPERVISOR_SERVICES: Range<PhysFrame<Size4KiB>> =
-    addr_range(0x50000000000, 0x5000000ffff);
 
 // Regions for kernel-guest communication during profiling.
 pub const PROFILER_CONTROL: Range<PhysFrame<Size2MiB>> = addr_range(0x80000000000, 0x80000ffffff);

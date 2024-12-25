@@ -1,18 +1,22 @@
 use core::{
-    arch::x86_64::__cpuid_count,
+    arch::{
+        asm,
+        x86_64::{CpuidResult, __cpuid_count},
+    },
     cmp,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use bit_field::BitField;
 use constants::{ApIndex, MAX_APS_COUNT};
+use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tdx_types::{
     tdcall::{
         Apic, GuestState, InvdTranslations, MdFieldId, VmIndex, TDX_L2_EXIT_HOST_ROUTED_ASYNC,
         TDX_L2_EXIT_PENDING_INTERRUPT, TDX_PENDING_INTERRUPT, TDX_SUCCESS,
     },
     vmexit::{
-        VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_HLT_INSTRUCTION, VMEXIT_REASON_MSR_WRITE,
+        VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_MSR_WRITE, VMEXIT_REASON_VMCALL_INSTRUCTION,
     },
 };
 use x86_64::{
@@ -24,9 +28,10 @@ use x86_64::{
 };
 
 use crate::{
+    dynamic::{allocate_memory, deallocate_memory},
     exception::{send_ipi, WAKEUP_TOKEN, WAKEUP_VECTOR},
+    output,
     per_cpu::PerCpu,
-    services::handle,
     tdcall::{Tdcall, Vmcall},
 };
 
@@ -205,20 +210,90 @@ pub fn run_vcpu() -> ! {
 
         match vm_exit.exit_reason {
             VMEXIT_REASON_CPUID_INSTRUCTION => {
-                let result =
-                    unsafe { __cpuid_count(guest_state.rax as u32, guest_state.rcx as u32) };
+                let result = match guest_state.rax as u32 {
+                    0x4000_0000 => CpuidResult {
+                        eax: 0x40000001,
+                        ebx: 0x4853554d,
+                        ecx: 0x4d4f4f52,
+                        edx: 0x504e5320,
+                    },
+                    0x4000_0001 => CpuidResult {
+                        eax: 0x5452534d,
+                        ebx: 0,
+                        ecx: 0,
+                        edx: 0,
+                    },
+                    _ => unsafe { __cpuid_count(guest_state.rax as u32, guest_state.rcx as u32) },
+                };
                 guest_state.rax = u64::from(result.eax);
                 guest_state.rbx = u64::from(result.ebx);
                 guest_state.rcx = u64::from(result.ecx);
                 guest_state.rdx = u64::from(result.edx);
                 guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
-            VMEXIT_REASON_HLT_INSTRUCTION => {
-                interrupts::disable();
-                let resume = WAKEUP_TOKEN.take(idx)
-                    || guest_state.rax != 0
-                    || APICS[idx].pending_vector().is_some();
-                handle(resume);
+            VMEXIT_REASON_VMCALL_INSTRUCTION => {
+                match guest_state.rax {
+                    nr if nr == SupervisorCallNr::StartNextAp as u64 => start_next(),
+                    nr if nr == SupervisorCallNr::Halt as u64 => {
+                        interrupts::disable();
+                        let resume =
+                            WAKEUP_TOKEN.take(idx) || APICS[idx].pending_vector().is_some();
+                        if resume {
+                            interrupts::enable();
+                        } else {
+                            Vmcall::instruction_hlt(false, true);
+                        }
+                    }
+                    nr if nr == SupervisorCallNr::Kick as u64 => {
+                        let apic_id = ApIndex::new(u8::try_from(guest_state.rdi).unwrap());
+                        send_ipi(u32::from(apic_id.as_u8()), WAKEUP_VECTOR);
+                    }
+                    nr if nr == SupervisorCallNr::AllocateMemory as u64 => {
+                        let slot_index = allocate_memory();
+                        guest_state.rax = u64::from(slot_index.get());
+                    }
+                    nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
+                        let slot_index = guest_state.rdi;
+                        let slot_index = SlotIndex::new(u16::try_from(slot_index).unwrap());
+                        deallocate_memory(slot_index);
+                    }
+                    nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
+                        let chunk_len = guest_state.rdi;
+
+                        let mut buffer = [0u8; 512];
+                        unsafe {
+                            asm!(
+                                "vmovdqu [{dst} + 32 * 0],  ymm0",
+                                "vmovdqu [{dst} + 32 * 1],  ymm1",
+                                "vmovdqu [{dst} + 32 * 2],  ymm2",
+                                "vmovdqu [{dst} + 32 * 3],  ymm3",
+                                "vmovdqu [{dst} + 32 * 4],  ymm4",
+                                "vmovdqu [{dst} + 32 * 5],  ymm5",
+                                "vmovdqu [{dst} + 32 * 6],  ymm6",
+                                "vmovdqu [{dst} + 32 * 7],  ymm7",
+                                "vmovdqu [{dst} + 32 * 8],  ymm8",
+                                "vmovdqu [{dst} + 32 * 9],  ymm9",
+                                "vmovdqu [{dst} + 32 * 10], ymm10",
+                                "vmovdqu [{dst} + 32 * 11], ymm11",
+                                "vmovdqu [{dst} + 32 * 12], ymm12",
+                                "vmovdqu [{dst} + 32 * 13], ymm13",
+                                "vmovdqu [{dst} + 32 * 14], ymm14",
+                                "vmovdqu [{dst} + 32 * 15], ymm15",
+                                dst = in(reg) buffer.as_mut_ptr(),
+                            );
+                        }
+
+                        let chunk = &buffer[..chunk_len as usize];
+                        output::update_output(chunk);
+                    }
+                    nr if nr == SupervisorCallNr::FinishOutput as u64 => output::finish(),
+                    nr if nr == SupervisorCallNr::FailOutput as u64 => {
+                        output::fail();
+                        panic!()
+                    }
+                    nr => unimplemented!("unknown supervisor call: {nr}"),
+                }
+
                 guest_state.rip += u64::from(vm_exit.vm_exit_instruction_length);
             }
             VMEXIT_REASON_MSR_WRITE => {

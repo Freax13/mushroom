@@ -203,7 +203,7 @@ impl Process {
             // Commit or fail the output depending on the exit status of the
             // init process.
             if exit_status == WStatus::exit(0) {
-                supervisor::commit_output();
+                supervisor::finish_output();
             } else {
                 supervisor::fail();
             }

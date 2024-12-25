@@ -1,17 +1,24 @@
-use core::{cell::SyncUnsafeCell, ptr::NonNull};
+use core::{cell::SyncUnsafeCell, ops::Deref, ptr::NonNull};
 
 use bytemuck::AnyBitPattern;
-use constants::physical_address::{
-    self,
-    supervisor::{snp::*, LOG_BUFFER},
-    DYNAMIC, INPUT_FILE,
+use constants::{
+    physical_address::{
+        supervisor::{snp::*, LOG_BUFFER},
+        DYNAMIC, INPUT_FILE,
+    },
+    MAX_APS_COUNT,
 };
 use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
 use volatile::{
-    access::{ReadOnly, WriteOnly},
+    access::{ReadOnly, ReadWrite, WriteOnly},
     VolatilePtr,
 };
-use x86_64::structures::paging::PhysFrame;
+use x86_64::{
+    structures::paging::{PageSize, PhysFrame, Size4KiB},
+    PhysAddr,
+};
+
+use crate::reset_vector::STACK_SIZE;
 
 #[link_section = ".pagetables"]
 #[export_name = "pml4"]
@@ -39,25 +46,45 @@ static PD_0_1: StaticPd = {
     page_table.set_page_range(0, TEXT, flags!(C));
     page_table.set_page_range(8, RODATA, flags!(C | EXECUTE_DISABLE));
     page_table.set_page_range(16, DATA, flags!(C | WRITE | EXECUTE_DISABLE));
-    page_table.set_page(25, STACK, flags!(C | WRITE | EXECUTE_DISABLE));
+    page_table.set_table_range(25, &PT_0_1_25, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(27, SECRETS, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(29, SHADOW_STACK, flags!(C | EXECUTE_DISABLE | DIRTY));
     page_table.set_page(32, SHARED, flags!(WRITE | EXECUTE_DISABLE));
-    page_table.set_table(34, &PT_0_1_34, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table.set_page(36, LOG_BUFFER, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page(38, VMSAS, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table
 };
 
+const NUM_STACK_PAGE_TABLES: usize = (STACK_SIZE * MAX_APS_COUNT as usize).div_ceil(512);
+
 #[link_section = ".pagetables"]
-static PT_0_1_34: StaticPt = {
-    let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(
-        0,
-        physical_address::SUPERVISOR_SERVICES,
-        flags!(C | WRITE | EXECUTE_DISABLE),
-    );
-    page_table
+static PT_0_1_25: [StaticPt; NUM_STACK_PAGE_TABLES] = {
+    let mut page_tables = [const { StaticPageTable::new() }; NUM_STACK_PAGE_TABLES];
+
+    let mut i = 0;
+    while i < NUM_STACK_PAGE_TABLES {
+        let mut page_table = StaticPageTable::new();
+
+        let mut j = 0;
+        while j < 512 {
+            let combined_index = i * 512 + j;
+            let addr = PhysFrame::containing_address(PhysAddr::new(
+                STACK.start_address().as_u64() + Size4KiB::SIZE * combined_index as u64,
+            ));
+            let flags = if combined_index % STACK_SIZE == 0 {
+                flags!(C | DIRTY | EXECUTE_DISABLE)
+            } else {
+                flags!(C | WRITE | EXECUTE_DISABLE)
+            };
+            page_table.set_page(j, addr, flags);
+            j += 1;
+        }
+
+        page_tables[i] = page_table;
+        i += 1;
+    }
+
+    page_tables
 };
 
 #[link_section = ".pagetables"]
@@ -140,4 +167,29 @@ impl<T> Shared<T> {
         let ptr = NonNull::from(&self.0).cast();
         unsafe { VolatilePtr::new_restricted(WriteOnly, ptr) }
     }
+
+    pub fn as_ptr(&self) -> VolatilePtr<'_, T, ReadWrite> {
+        let ptr = NonNull::from(&self.0).cast();
+        unsafe { VolatilePtr::new(ptr) }
+    }
 }
+
+impl<T> Deref for Shared<T>
+where
+    T: Synchronized,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0.get() }
+    }
+}
+
+/// This trait marks types where every byte is covered by `UnsafeCell` (note
+/// that the atomic types use `UnsafeCell` internally). This makes it safe to
+/// share such a value with the hypervisor.
+/// Just to be safe, the type should have no internal padding.
+#[allow(clippy::missing_safety_doc)]
+pub unsafe trait Synchronized: Sync {}
+
+unsafe impl<T, const N: usize> Synchronized for [T; N] where T: Synchronized {}

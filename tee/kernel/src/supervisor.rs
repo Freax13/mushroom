@@ -1,117 +1,202 @@
-use core::arch::asm;
+// Yes, we want to pass pointers to asm blocks that are marked with `nomem`.
+// The pointers are function pointers. We don't access the bytes stored at the
+// addresses, but we do jump to it.
+#![expect(clippy::pointers_in_nomem_asm_block)]
 
-use crate::{memory::pagetable::flush, spin::mutex::Mutex};
+use core::arch::{asm, naked_asm, x86_64::__cpuid};
+
+use crate::spin::{lazy::Lazy, mutex::Mutex};
 use arrayvec::ArrayVec;
-use bit_field::BitField;
-use constants::{physical_address::DYNAMIC_2MIB, ApBitmap, ApIndex};
-use supervisor_services::{
-    allocation_buffer::SlotIndex,
-    command_buffer::{
-        AllocateMemory, Command, CommandBufferWriter, DeallocateMemory, FailOutput, FinishOutput,
-        StartNextAp, UpdateOutput,
-    },
-    SupervisorServices,
-};
+use constants::{physical_address::DYNAMIC_2MIB, ApIndex, INSECURE_SUPERVISOR_CALL_PORT};
+use supervisor_services::{SlotIndex, SupervisorCallNr};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
 
-use crate::per_cpu::PerCpu;
+// Note that we don't actually use the C abi.
+type SupervisorCallFn = unsafe extern "C" fn();
 
-#[link_section = ".supervisor_services"]
-static SUPERVISOR_SERVICES: SupervisorServices = SupervisorServices::new();
+static SUPERVISOR_CALL_FN: Lazy<SupervisorCallFn> = Lazy::new(|| {
+    for base in (0x4000_0000..0x4fff_ffff).step_by(0x100) {
+        // Query the hypervisor max leaf.
+        let vendor_leaf = base;
+        let values = unsafe {
+            // SAFETY: CPUID is available.
+            __cpuid(vendor_leaf)
+        };
+        // Bail if the leaf doesn't contain the maximum supported leaf.
+        if values.eax == 0 {
+            break;
+        }
 
-static WRITER: Mutex<CommandBufferWriter> = Mutex::new(CommandBufferWriter::new(
-    &SUPERVISOR_SERVICES.command_buffer,
-));
+        // Query the hypervisor interface id.
+        let interface_id_leaf = base + 1;
+        let values = unsafe {
+            // SAFETY: CPUID is available.
+            __cpuid(interface_id_leaf)
+        };
 
-fn try_push_command<C>(command: &C) -> Result<(), ()>
-where
-    C: Command,
-{
-    WRITER.lock().push(command).map_err(drop)?;
-    Ok(())
-}
+        match values.eax {
+            0x4952534d => return insecure_supervisor_call,
+            0x5352534d => return snp_supervisor_call,
+            0x5452534d => return tdx_supervisor_call,
+            _ => {}
+        }
+    }
 
-fn arm() {
-    SUPERVISOR_SERVICES
-        .notification_buffer
-        .arm(PerCpu::get().idx);
-}
+    panic!("couldn't determine hypervisor interface");
+});
 
-/// Kick the supervisor thread. If `resume` is true, this method immediately
-/// resumes. If `resume` is false, this method waits for the supervisor to kick
-/// this thread ([`arm`] should be called before this method; spurios wake ups
-/// are possible).
-fn kick_supervisor(resume: bool) {
-    let mut bits = 0u64;
-    bits.set_bit(0, resume);
-
+#[naked]
+unsafe extern "C" fn tdx_supervisor_call() {
     unsafe {
-        asm!(
-            // The SNP and insecure supervisors look at CR8.
-            // The TDX supervisor looks at RAX.
-            "mov cr8, rax",
-            "hlt",
-            in("rax") bits,
+        naked_asm!("vmcall", "ret");
+    }
+}
+
+#[naked]
+unsafe extern "C" fn snp_supervisor_call() {
+    unsafe {
+        naked_asm!("vmmcall", "ret");
+    }
+}
+
+#[naked]
+unsafe extern "C" fn insecure_supervisor_call() {
+    unsafe {
+        naked_asm!(
+            "out {port}, al",
+            "ret",
+            port = const INSECURE_SUPERVISOR_CALL_PORT,
         );
     }
 }
 
-/// Push a command, don't notify the supervisor about it and don't wait for it
-/// to complete.
-fn push_background_command<C>(command: C)
-where
-    C: Command,
-{
-    if try_push_command(&command).is_ok() {
-        return;
+pub unsafe fn start_next_ap() {
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            in("rax") SupervisorCallNr::StartNextAp as u64,
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(nomem),
+        );
     }
+}
 
-    loop {
-        arm();
-        if try_push_command(&command).is_ok() {
-            return;
+pub fn halt() {
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            in("rax") SupervisorCallNr::Halt as u64,
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(nomem),
+        );
+    }
+}
+
+pub fn kick(ap: ApIndex) {
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            in("rax") SupervisorCallNr::Kick as u64,
+            in("rdi") u64::from(ap.as_u8()),
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(nomem),
+        );
+    }
+}
+
+pub const OUTPUT_BUFFER_CAPACITY: usize = 32 * 16;
+
+pub fn update_output(data: &[u8]) {
+    let mut buffer = [0; OUTPUT_BUFFER_CAPACITY];
+
+    for chunk in data.chunks(OUTPUT_BUFFER_CAPACITY) {
+        // We want a slice of size `BUFFER_CAPACITY`. If chunk has this size
+        // use it, otherwise copy the chunk into `buffer` and create a slice
+        // reference to it.
+        let full_buffer = <&[u8; OUTPUT_BUFFER_CAPACITY]>::try_from(chunk).unwrap_or_else(|_| {
+            buffer[..chunk.len()].copy_from_slice(chunk);
+            &buffer
+        });
+
+        unsafe {
+            asm!(
+                "vmovdqu ymm0,  [{src} + 32 * 0]",
+                "vmovdqu ymm1,  [{src} + 32 * 1]",
+                "vmovdqu ymm2,  [{src} + 32 * 2]",
+                "vmovdqu ymm3,  [{src} + 32 * 3]",
+                "vmovdqu ymm4,  [{src} + 32 * 4]",
+                "vmovdqu ymm5,  [{src} + 32 * 5]",
+                "vmovdqu ymm6,  [{src} + 32 * 6]",
+                "vmovdqu ymm7,  [{src} + 32 * 7]",
+                "vmovdqu ymm8,  [{src} + 32 * 8]",
+                "vmovdqu ymm9,  [{src} + 32 * 9]",
+                "vmovdqu ymm10, [{src} + 32 * 10]",
+                "vmovdqu ymm11, [{src} + 32 * 11]",
+                "vmovdqu ymm12, [{src} + 32 * 12]",
+                "vmovdqu ymm13, [{src} + 32 * 13]",
+                "vmovdqu ymm14, [{src} + 32 * 14]",
+                "vmovdqu ymm15, [{src} + 32 * 15]",
+                "call {supervisor_call}",
+                in("rax") SupervisorCallNr::UpdateOutput as u64,
+                in("rdi") chunk.len(),
+                src = in(reg) full_buffer.as_ptr(),
+                supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+                options(readonly),
+            );
         }
-
-        kick_supervisor(false);
     }
 }
 
-/// Push a command, immediately tell the supervisor about it, but don't wait for
-/// it to complete.
-fn push_async_command<C>(command: C)
-where
-    C: Command,
-{
-    push_background_command(command);
-    kick_supervisor(true);
+/// Tell to supervisor to commit the output and produce and attestation report.
+pub fn finish_output() -> ! {
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            "ud2",
+            in("rax") SupervisorCallNr::FinishOutput as u64,
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(noreturn)
+        );
+    }
 }
 
-pub fn start_next_ap() {
-    push_async_command(StartNextAp);
+/// Tell the supervisor that something went wrong and to discard the output.
+pub fn fail() -> ! {
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            "ud2",
+            in("rax") SupervisorCallNr::FailOutput as u64,
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(noreturn)
+        );
+    }
 }
 
 fn allocate() -> SlotIndex {
-    let allocation = SUPERVISOR_SERVICES.allocation_buffer.pop_allocation();
-    if let Some(allocation) = allocation {
-        return allocation;
+    let slot_id: u16;
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            in("rax") SupervisorCallNr::AllocateMemory as u64,
+            lateout("rax") slot_id,
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(nomem),
+        );
     }
-
-    loop {
-        arm();
-
-        let allocation = SUPERVISOR_SERVICES.allocation_buffer.pop_allocation();
-        if let Some(allocation) = allocation {
-            return allocation;
-        }
-
-        let _ = try_push_command(&AllocateMemory);
-
-        kick_supervisor(false);
-    }
+    SlotIndex::new(slot_id)
 }
 
 fn deallocate(slot_idx: SlotIndex) {
-    push_async_command(DeallocateMemory { slot_idx });
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            in("rax") SupervisorCallNr::DeallocateMemory as u64,
+            in("rdi") u64::from(slot_idx.get()),
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(nomem),
+        );
+    }
 }
 
 pub static ALLOCATOR: Allocator = Allocator::new();
@@ -169,143 +254,5 @@ impl FrameDeallocator<Size2MiB> for &'_ Allocator {
 
         let slot_idx = SlotIndex::new(u16::try_from(frame - DYNAMIC_2MIB.start).unwrap());
         deallocate(slot_idx);
-    }
-}
-
-/// Halt this vcpu.
-#[inline(never)]
-pub fn halt() -> Result<(), LastRunningVcpuError> {
-    SCHEDULER.halt()?;
-
-    #[cfg(feature = "profiling")]
-    crate::profiler::flush();
-
-    flush::pre_halt();
-
-    kick_supervisor(false);
-
-    flush::post_halt();
-
-    SCHEDULER.resume();
-
-    Ok(())
-}
-
-/// An error that is returned when the last running vCPU request to be halted.
-#[derive(Debug, Clone, Copy)]
-pub struct LastRunningVcpuError;
-
-pub static SCHEDULER: Scheduler = Scheduler::new();
-
-pub struct Scheduler(Mutex<SchedulerState>);
-
-struct SchedulerState {
-    /// One bit for every vCPU.
-    bits: ApBitmap,
-    /// The number of vCPUs that have finished being launched.
-    launched: u8,
-    /// Whether a vCPU is being launched right now.
-    is_launching: bool,
-}
-
-impl Scheduler {
-    pub const fn new() -> Self {
-        let mut bits = ApBitmap::empty();
-        bits.set(ApIndex::new(0), true);
-
-        Self(Mutex::new(SchedulerState {
-            bits,
-            launched: 0,
-            is_launching: true,
-        }))
-    }
-
-    fn pick_any(&self) -> Option<ScheduledCpu> {
-        let mut state = self.0.lock();
-        let idx = state.bits.first_unset()?;
-        if idx.as_u8() < state.launched {
-            state.bits.set(idx, true);
-
-            Some(ScheduledCpu::Existing(idx))
-        } else {
-            if state.is_launching {
-                return None;
-            }
-
-            state.is_launching = true;
-            state.bits.set(idx, true);
-
-            Some(ScheduledCpu::New)
-        }
-    }
-
-    fn halt(&self) -> Result<(), LastRunningVcpuError> {
-        let mut state = self.0.lock();
-        let mut new_bits = state.bits;
-        new_bits.set(PerCpu::get().idx, false);
-        // Ensure that this vCPU isn't the last one running.
-        if new_bits.is_empty() {
-            return Err(LastRunningVcpuError);
-        }
-        state.bits = new_bits;
-        Ok(())
-    }
-
-    fn resume(&self) {
-        let mut state = self.0.lock();
-        state.bits.set(PerCpu::get().idx, true);
-    }
-
-    pub fn finish_launch(&self) {
-        let mut state = self.0.lock();
-        assert!(state.is_launching);
-        state.is_launching = false;
-        state.launched += 1;
-    }
-}
-
-enum ScheduledCpu {
-    Existing(ApIndex),
-    New,
-}
-
-/// Tell the supervisor to schedule another vcpu.
-pub fn schedule_vcpu() {
-    let Some(cpu) = SCHEDULER.pick_any() else {
-        return;
-    };
-
-    match cpu {
-        ScheduledCpu::Existing(cpu) => {
-            SUPERVISOR_SERVICES.notification_buffer.arm(cpu);
-            kick_supervisor(true);
-        }
-        ScheduledCpu::New => start_next_ap(),
-    }
-}
-
-pub fn output(bytes: &[u8]) {
-    for chunk in bytes.chunks(0x1000) {
-        push_background_command(UpdateOutput::new(chunk));
-    }
-}
-
-/// Tell to supervisor to commit the output and produce and attestation report.
-pub fn commit_output() -> ! {
-    push_async_command(FinishOutput);
-
-    // Halt.
-    loop {
-        kick_supervisor(false);
-    }
-}
-
-/// Tell the supervisor that something went wrong and to discard the output.
-pub fn fail() -> ! {
-    push_async_command(FailOutput);
-
-    // Halt.
-    loop {
-        kick_supervisor(false);
     }
 }

@@ -1,10 +1,12 @@
 use core::{
     cell::SyncUnsafeCell,
-    sync::atomic::{AtomicUsize, Ordering},
+    ops::{Deref, DerefMut},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use constants::{physical_address::supervisor::snp::VMSAS, MAX_APS_COUNT};
 use snp_types::{
+    intercept::VMEXIT_INVALID,
     vmsa::{Segment, SevFeatures, Vmsa, VmsaTweakBitmap},
     VmplPermissions,
 };
@@ -18,7 +20,7 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::rmp::rmpadjust;
+use crate::{ghcb::vmsa_tweak_bitmap, per_cpu::PerCpu, rmp::rmpadjust};
 
 use super::SEV_FEATURES;
 
@@ -32,18 +34,20 @@ static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
         let tsc_aux = i as u32;
 
         let mut vmsa = Vmsa::new();
-        vmsa.set_vmpl(1, tweak_bitmap);
+        unsafe {
+            vmsa.set_vmpl(1, tweak_bitmap);
+            vmsa.set_efer(
+                EferFlags::from_bits_retain(
+                    EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
+                        | EferFlags::LONG_MODE_ENABLE.bits()
+                        | EferFlags::LONG_MODE_ACTIVE.bits()
+                        | EferFlags::NO_EXECUTE_ENABLE.bits()
+                        | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
+                ),
+                tweak_bitmap,
+            );
+        }
         vmsa.set_virtual_tom(!0, tweak_bitmap);
-        vmsa.set_efer(
-            EferFlags::from_bits_retain(
-                EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
-                    | EferFlags::LONG_MODE_ENABLE.bits()
-                    | EferFlags::LONG_MODE_ACTIVE.bits()
-                    | EferFlags::NO_EXECUTE_ENABLE.bits()
-                    | EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
-            ),
-            tweak_bitmap,
-        );
         vmsa.set_cr4(
             Cr4Flags::from_bits_retain(
                 Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
@@ -78,14 +82,16 @@ static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
         vmsa.set_cs(Segment::CODE64, tweak_bitmap);
         vmsa.set_rip(0xffff_8000_0000_0000, tweak_bitmap);
         vmsa.set_rsp(0xffff_8000_0400_3ff8, tweak_bitmap);
-        vmsa.set_sev_features(SEV_FEATURES, tweak_bitmap);
+        vmsa.set_guest_exit_code(VMEXIT_INVALID, tweak_bitmap);
 
         // Enable SecureTSC.
-        let sev_features = vmsa.sev_features(tweak_bitmap);
-        vmsa.set_sev_features(
-            SevFeatures::from_bits_retain(sev_features.bits() | SevFeatures::SECURE_TSC.bits()),
-            tweak_bitmap,
-        );
+        let sev_features = SEV_FEATURES;
+        unsafe {
+            vmsa.set_sev_features(
+                SevFeatures::from_bits_retain(sev_features.bits() | SevFeatures::SECURE_TSC.bits()),
+                tweak_bitmap,
+            );
+        }
         // Set TSC scaling to 1.
         vmsa.set_guest_tsc_scale(0x01_00000000, tweak_bitmap);
         // Disable TSC offset.
@@ -114,32 +120,25 @@ static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
     vmsas
 };
 
-/// Allocate a VMSA out of a pool.
-fn allocate_vmsa() -> *mut Vmsa {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    let idx = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let ptr = SLOTS[idx].get();
-
-    // There's an erratum which says that 2MiB aligned VMSAs can cause spurious
-    // #NPFs under certain conditions. For that reason the Linux kernel rejects
-    // all AP Creation events with a 2MiB aligned VMSA.
-    assert!(!ptr.is_aligned_to(0x200000));
-
-    ptr
-}
-
 /// A wrapper around a reference to a VMSA.
-pub struct InitializedVmsa {
+pub struct Vmpl1Vmsa {
     /// A reference to an VMSA allocated out of a pool.
     vmsa: *mut Vmsa,
 }
 
-impl InitializedVmsa {
-    pub fn new() -> Self {
-        Self {
-            vmsa: allocate_vmsa(),
-        }
+impl Vmpl1Vmsa {
+    /// # Safety
+    ///
+    /// This function must only be called once per vCPU.
+    pub unsafe fn get() -> Self {
+        let vmsa = SLOTS[PerCpu::current_vcpu_index()].get();
+
+        // There's an erratum which says that 2MiB aligned VMSAs can cause spurious
+        // #NPFs under certain conditions. For that reason the Linux kernel rejects
+        // all AP Creation events with a 2MiB aligned VMSA.
+        assert!(!vmsa.is_aligned_to(0x200000));
+
+        Self { vmsa }
     }
 
     pub fn phys_addr(&self) -> PhysFrame {
@@ -164,5 +163,64 @@ impl InitializedVmsa {
         unsafe {
             rmpadjust(page, 1, VmplPermissions::empty(), runnable).unwrap();
         }
+    }
+
+    #[inline(always)]
+    pub fn modify(&mut self) -> VmsaModifyGuard {
+        // The following code would be much more complicated if the EFER MSR
+        // was obfuscated with the register protection nonce. Make sure that's
+        // not the case.
+        assert!(!vmsa_tweak_bitmap().is_tweaked(0xd0));
+
+        // Clear the SVME bit in the EFER MSR. This prevents the VMSA from
+        // being executed.
+        let prev = self.efer().fetch_and(
+            !EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
+            Ordering::SeqCst,
+        );
+
+        // We can't rely on `VmsaModifyGuard`'s `drop` implementation to be
+        // executed, so we need to make sure that the SVME bit isn't already
+        // unset.
+        assert_ne!(prev & EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(), 0);
+
+        VmsaModifyGuard { vmsa: self }
+    }
+
+    /// Return a reference to the EFER field in the VMSA.
+    #[inline(always)]
+    fn efer(&self) -> &AtomicU64 {
+        unsafe { &*self.vmsa.byte_add(0xd0).cast::<AtomicU64>() }
+    }
+}
+
+pub struct VmsaModifyGuard<'a> {
+    vmsa: &'a mut Vmpl1Vmsa,
+}
+
+impl Deref for VmsaModifyGuard<'_> {
+    type Target = Vmsa;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.vmsa.vmsa }
+    }
+}
+
+impl DerefMut for VmsaModifyGuard<'_> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.vmsa.vmsa }
+    }
+}
+
+impl Drop for VmsaModifyGuard<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        // Set the the SVME bit to make the VMSA usable again.
+        self.vmsa.efer().fetch_or(
+            EferFlags::SECURE_VIRTUAL_MACHINE_ENABLE.bits(),
+            Ordering::SeqCst,
+        );
     }
 }

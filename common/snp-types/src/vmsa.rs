@@ -19,6 +19,57 @@ use core::{
     mem::{offset_of, size_of},
 };
 
+macro_rules! vmsa_field_accessor {
+    ($ident:ident: $ty:ty) => {
+        // Don't emit anything if $vis is empty (default -> private).
+    };
+    // Setters for these fields should be unsafe.
+    ($vis:vis vmpl: $ty:ty) => { vmsa_field_unsafe_accessor!($vis vmpl: $ty); };
+    ($vis:vis sev_features: $ty:ty) => { vmsa_field_unsafe_accessor!($vis sev_features: $ty); };
+    ($vis:vis efer: $ty:ty) => { vmsa_field_unsafe_accessor!($vis efer: $ty); };
+    // Emit safe accessors for all other fields.
+    ($vis:vis $ident:ident: $ty:ty) => { vmsa_field_safe_accessor!($vis $ident: $ty); };
+}
+
+macro_rules! vmsa_field_safe_accessor {
+    ($vis:vis $ident:ident: $ty:ty) => {
+        paste! {
+            #[inline(always)]
+            $vis const fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
+                let mut buffer = [0; size_of::<$ty>()];
+                self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
+                unsafe { core::mem::transmute(buffer) }
+            }
+
+            #[inline(always)]
+            $vis const fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
+                let buffer: [u8; size_of::<$ty>()] = unsafe { core::mem::transmute(value) };
+                self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
+            }
+        }
+    };
+}
+
+macro_rules! vmsa_field_unsafe_accessor {
+    ($vis:vis $ident:ident: $ty:ty) => {
+        paste! {
+            #[inline(always)]
+            $vis const fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
+                let mut buffer = [0; size_of::<$ty>()];
+                self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
+                unsafe { core::mem::transmute(buffer) }
+            }
+
+            #[inline(always)]
+            #[allow(clippy::missing_safety_doc)]
+            $vis const unsafe fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
+                let buffer: [u8; size_of::<$ty>()] = unsafe { core::mem::transmute(value) };
+                self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
+            }
+        }
+    };
+}
+
 macro_rules! vmsa_def {
     (
         $($vis:vis $ident:ident: $ty:ty = $default:expr,)*
@@ -29,28 +80,17 @@ macro_rules! vmsa_def {
             $($ident: [u8; size_of::<$ty>()],)*
         }
 
-        paste! {
-            #[expect(dead_code, clippy::missing_transmute_annotations, clippy::transmute_num_to_bytes)]
-            impl Vmsa {
-                pub const fn new() -> Self {
-                    Self {
-                        $($ident: unsafe { core::mem::transmute::<$ty, _>($default) },)*
-                    }
+        #[expect(dead_code, clippy::missing_transmute_annotations, clippy::transmute_num_to_bytes)]
+        impl Vmsa {
+            pub const fn new() -> Self {
+                Self {
+                    $($ident: unsafe { core::mem::transmute::<$ty, _>($default) },)*
                 }
-
-                $(
-                    $vis const fn $ident(&self, tweak_bitmap: &VmsaTweakBitmap) -> $ty {
-                        let mut buffer = [0; size_of::<$ty>()];
-                        self.read(offset_of!(Self, $ident), &mut buffer, tweak_bitmap);
-                        unsafe { core::mem::transmute(buffer) }
-                    }
-
-                    $vis const fn [<set_ $ident>](&mut self, value: $ty, tweak_bitmap: &VmsaTweakBitmap) {
-                        let buffer: [u8; size_of::<$ty>()] = unsafe { core::mem::transmute(value) };
-                        self.write(offset_of!(Self, $ident), &buffer, tweak_bitmap);
-                    }
-                )*
             }
+
+            $(
+                vmsa_field_accessor!($vis $ident: $ty);
+            )*
         }
 
         impl Default for Vmsa {
@@ -78,6 +118,7 @@ macro_rules! vmsa_def {
 
 impl Vmsa {
     /// Read bytes from the VMSA and deobfuscate protected registers.
+    #[inline(always)]
     const fn read(&self, mut offset: usize, mut buffer: &mut [u8], tweak_bitmap: &VmsaTweakBitmap) {
         while let Some((b, new_buffer)) = buffer.split_first_mut() {
             *b = unsafe { core::ptr::from_ref(self).cast::<u8>().add(offset).read() };
@@ -88,6 +129,7 @@ impl Vmsa {
     }
 
     /// Write bytes to the VMSA and obfuscate protected registers.
+    #[inline(always)]
     const fn write(
         &mut self,
         mut offset: usize,
@@ -105,6 +147,7 @@ impl Vmsa {
         }
     }
 
+    #[inline(always)]
     const fn apply_reg_prot_nonce(
         &self,
         offset: usize,
@@ -343,4 +386,10 @@ pub struct VmsaTweakBitmap {
 
 impl VmsaTweakBitmap {
     pub const ZERO: Self = Self { bitmap: [0; 0x40] };
+
+    /// Returns if the field at `offset` is tweaked with the register
+    /// protection nonce.
+    pub fn is_tweaked(&self, offset: usize) -> bool {
+        self.bitmap.get_bit(offset / 8)
+    }
 }

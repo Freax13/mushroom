@@ -2,7 +2,6 @@ use core::{cell::SyncUnsafeCell, ptr::NonNull};
 
 use constants::{
     physical_address::{
-        self,
         supervisor::{tdx::*, LOG_BUFFER},
         INIT_FILE, INPUT_FILE,
     },
@@ -44,7 +43,6 @@ static PD_0_1: StaticPd = {
     page_table.set_page_range(16, DATA, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_table_range(25, &PT_0_1_25, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page(32, SHARED, flags!(S | WRITE | EXECUTE_DISABLE));
-    page_table.set_table(34, &PT_0_1_34, flags!(WRITE | EXECUTE_DISABLE));
     page_table.set_page(36, LOG_BUFFER, flags!(S | WRITE | EXECUTE_DISABLE));
     page_table.set_page(40, KERNEL_ELF_HEADER, flags!(EXECUTE_DISABLE));
     page_table
@@ -80,17 +78,6 @@ static PT_0_1_25: [StaticPt; NUM_STACK_PAGE_TABLES] = {
     }
 
     page_tables
-};
-
-#[link_section = ".pagetables"]
-static PT_0_1_34: StaticPt = {
-    let mut page_table = StaticPageTable::new();
-    page_table.set_page_range(
-        0,
-        physical_address::SUPERVISOR_SERVICES,
-        flags!(WRITE | EXECUTE_DISABLE),
-    );
-    page_table
 };
 
 #[link_section = ".pagetables"]

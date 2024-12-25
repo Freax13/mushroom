@@ -1,31 +1,27 @@
 //! This module makes it possible to run the mushroom kernel outside a SNP VM
 //! and without the supervisor.
 
+use core::{
+    arch::x86_64::__cpuid_count,
+    iter::{repeat_with, Iterator},
+};
 use std::{
-    collections::{hash_map::Entry, HashMap, VecDeque},
+    collections::{hash_map::Entry, HashMap},
     os::unix::thread::JoinHandleExt,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread::{JoinHandle, Thread},
+    sync::{mpsc, Arc, Condvar, LazyLock, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, Context, Result};
 use bit_field::BitField;
 use constants::{
-    physical_address::{kernel, supervisor, DYNAMIC_2MIB, SUPERVISOR_SERVICES},
-    MAX_APS_COUNT,
+    physical_address::{kernel, supervisor, DYNAMIC_2MIB},
+    INSECURE_SUPERVISOR_CALL_PORT, MAX_APS_COUNT,
 };
 use loader::Input;
 use nix::sys::pthread::pthread_kill;
 use snp_types::PageType;
-use supervisor_services::{
-    allocation_buffer::{AllocationBuffer, SlotIndex},
-    command_buffer::{CommandBufferReader, CommandHandler},
-    SupervisorServices,
-};
+use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
 use x86_64::registers::{
     control::{Cr0Flags, Cr4Flags},
@@ -35,11 +31,19 @@ use x86_64::registers::{
 
 use crate::{
     install_signal_handler, is_efault,
-    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VmHandle},
+    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VcpuHandle, VmHandle},
     logging::start_log_collection,
     slot::Slot,
-    MushroomResult, SIG_KICK, TSC_MHZ,
+    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ,
 };
+
+static KVM_XSAVE_SIZE: OnceLock<usize> = OnceLock::new();
+const XMM_OFFSET: usize = 0xa0;
+static YMM_OFFSET: LazyLock<usize> = LazyLock::new(|| {
+    let res = unsafe { __cpuid_count(0xd, 0x2) };
+    assert_eq!(res.eax, 256, "CPU doesn't support AVX");
+    res.ebx as usize
+});
 
 /// Create the VM, load the kernel, init & input and run the APs.
 pub fn main(
@@ -69,6 +73,28 @@ pub fn main(
         }
     }
 
+    // Push CPUID entries advertising the insecure supervisor call interface.
+    cpuid_entries.push(KvmCpuidEntry2 {
+        function: 0x4000_0100,
+        index: 0,
+        flags: 0,
+        eax: 0x40000101,
+        ebx: 0x4853554d,
+        ecx: 0x4d4f4f52,
+        edx: 0x534e4920,
+        padding: [0; 3],
+    });
+    cpuid_entries.push(KvmCpuidEntry2 {
+        function: 0x4000_0101,
+        index: 0,
+        flags: 0,
+        eax: 0x4952534d,
+        ebx: 0,
+        ecx: 0,
+        edx: 0,
+        padding: [0; 3],
+    });
+
     let vm = kvm_handle.create_vm()?;
     let vm = Arc::new(vm);
 
@@ -80,6 +106,14 @@ pub fn main(
     )?;
 
     vm.set_tsc_khz(TSC_MHZ * 1000)?;
+
+    if KVM_XSAVE_SIZE.get().is_none() {
+        let xsave_size = kvm_handle.check_extension(KvmCap::XSAVE2)?;
+        let xsave_size = xsave_size
+            .context("KVM doesn't support KVM_CAP_XSAVE2")?
+            .get() as usize;
+        let _ = KVM_XSAVE_SIZE.set(xsave_size);
+    }
 
     let (load_commands, _host_data) =
         loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, inputs);
@@ -151,180 +185,282 @@ pub fn main(
     install_signal_handler();
 
     // Create a bunch of APs.
-    let cpuid_entries = Arc::<[KvmCpuidEntry2]>::from(cpuid_entries);
-    let done = Arc::new(AtomicBool::new(false));
-    let ap_threads = (0..MAX_APS_COUNT)
-        .map(|i| run_kernel_vcpu(i, vm.clone(), cpuid_entries.clone(), done.clone()))
+    let dynamic_memory = Arc::new(Mutex::new(DynamicMemory::new(vm.clone())));
+    let (sender, receiver) = mpsc::channel();
+    let run_states = repeat_with(RunState::default)
+        .take(usize::from(MAX_APS_COUNT))
+        .collect::<Arc<[_]>>();
+    let aps = (0..MAX_APS_COUNT)
+        .map(|i| {
+            let ap = vm.create_vcpu(i32::from(i))?;
+            ap.set_cpuid(&cpuid_entries)?;
+            Ok(ap)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let threads = (0..MAX_APS_COUNT)
+        .zip(aps)
+        .map(|(i, ap)| {
+            let sender = sender.clone();
+            let dynamic_memory = dynamic_memory.clone();
+            let run_states = run_states.clone();
+            std::thread::spawn(move || {
+                let res = run_kernel_vcpu(i, ap, &sender, &dynamic_memory, &run_states);
+                if let Err(err) = res {
+                    let _ = sender.send(OutputEvent::Fail(err));
+                }
+            })
+        })
         .collect::<Vec<_>>();
-    ap_threads[0].thread().unpark();
+    run_states[0].kick();
     start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
     start_log_collection(&memory_slots, supervisor::LOG_BUFFER)?;
 
-    let supervisor_services = memory_slots
-        .values()
-        .find(|s| s.gpa() == SUPERVISOR_SERVICES.start)
-        .context("couldn't find supervisor services region")?;
-    let supervisor_services = supervisor_services.shared_mapping();
-    ensure!(
-        supervisor_services.len().get() >= size_of::<SupervisorServices>(),
-        "supervisor services region is too small"
-    );
-    let supervisor_services = unsafe {
-        supervisor_services
-            .as_ptr()
-            .cast::<SupervisorServices>()
-            .as_ref()
+    // Collect the output and report.
+    let mut output: Vec<u8> = Vec::new();
+    let res = loop {
+        let event = receiver.recv()?;
+        match event {
+            OutputEvent::Write(mut vec) => output.append(&mut vec),
+            OutputEvent::Finish(()) => break Ok(()),
+            OutputEvent::Fail(err) => break Err(err),
+        }
     };
 
-    let mut command_buffer_reader = CommandBufferReader::new(&supervisor_services.command_buffer);
-    let mut handler = InsecureCommandHandler {
-        allocation_buffer: &supervisor_services.allocation_buffer,
-        dynamic_memory: DynamicMemory::new(vm),
-        pending_aps: ap_threads
-            .iter()
-            .skip(1)
-            .map(|handle| handle.thread().clone())
-            .collect(),
-        output: Vec::new(),
-        finish_status: None,
-    };
-    let finish_status = loop {
-        let mut pending = supervisor_services.notification_buffer.reset();
-        while command_buffer_reader.handle(&mut handler) {
-            pending |= supervisor_services.notification_buffer.reset();
-        }
+    // Stop all vCPUs.
+    for run_state in run_states.iter() {
+        run_state.stop();
+    }
 
-        for i in pending {
-            ap_threads[usize::from(i.as_u8())].thread().unpark();
-        }
-
-        if let Some(finish_status) = handler.finish_status {
-            break finish_status;
-        }
-
-        std::thread::park();
-    };
-
-    // Set the done flag.
-    done.store(true, Ordering::SeqCst);
     // Force all threads to exit out of KVM_RUN, so that they can observe
-    // `done` and exit.
-    for handle in ap_threads {
-        handle.thread().unpark();
-        pthread_kill(handle.as_pthread_t(), SIG_KICK)?;
+    // that their run state has been marked as stopped and exit.
+    for handle in threads {
+        let _ = pthread_kill(handle.as_pthread_t(), SIG_KICK);
         handle.join().unwrap();
     }
 
-    ensure!(finish_status, "workload failed");
+    res?;
 
     Ok(MushroomResult {
-        output: handler.output,
+        output,
         attestation_report: None,
     })
 }
 
 fn run_kernel_vcpu(
     id: u8,
-    vm: Arc<VmHandle>,
-    cpuid_entries: Arc<[KvmCpuidEntry2]>,
-    done: Arc<AtomicBool>,
-) -> JoinHandle<()> {
-    let supervisor_thread = std::thread::current();
+    ap: VcpuHandle,
+    sender: &mpsc::Sender<OutputEvent<()>>,
+    dynamic_memory: &Mutex<DynamicMemory>,
+    run_states: &[RunState],
+) -> Result<()> {
+    let kvm_run = ap.get_kvm_run_block()?;
+    let kvm_run = kvm_run.as_ptr();
 
-    let ap = vm.create_vcpu(i32::from(id)).unwrap();
-    std::thread::spawn(move || {
-        ap.set_cpuid(&cpuid_entries).unwrap();
+    let mut sregs = ap.get_sregs()?;
+    sregs.es = KvmSegment::DATA64;
+    sregs.cs = KvmSegment::CODE64;
+    sregs.ss = KvmSegment::DATA64;
+    sregs.ds = KvmSegment::DATA64;
+    sregs.efer = EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
+        | EferFlags::LONG_MODE_ENABLE.bits()
+        | EferFlags::LONG_MODE_ACTIVE.bits()
+        | EferFlags::NO_EXECUTE_ENABLE.bits();
+    sregs.cr4 = Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
+        | Cr4Flags::PAGE_GLOBAL.bits()
+        | Cr4Flags::OSFXSR.bits()
+        | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
+        | Cr4Flags::FSGSBASE.bits()
+        | Cr4Flags::OSXSAVE.bits()
+        | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
+        | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits();
+    sregs.cr3 = 0x100_0000_0000;
+    sregs.cr0 = Cr0Flags::PROTECTED_MODE_ENABLE.bits()
+        | Cr0Flags::MONITOR_COPROCESSOR.bits()
+        | Cr0Flags::EXTENSION_TYPE.bits()
+        | Cr0Flags::WRITE_PROTECT.bits()
+        | Cr0Flags::PAGING.bits();
+    ap.set_sregs(sregs)?;
+    ap.set_xcr(
+        0,
+        XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
+    )?;
 
-        let kvm_run = ap.get_kvm_run_block().unwrap();
-        let kvm_run = kvm_run.as_ptr();
+    let mut regs = ap.get_regs()?;
+    regs.rip = 0xffff_8000_0000_0000;
+    regs.rsp = 0xffff_8000_0400_3ff8;
+    ap.set_regs(regs)?;
 
-        let mut sregs = ap.get_sregs().unwrap();
-        sregs.es = KvmSegment::DATA64;
-        sregs.cs = KvmSegment::CODE64;
-        sregs.ss = KvmSegment::DATA64;
-        sregs.ds = KvmSegment::DATA64;
-        sregs.efer = EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
-            | EferFlags::LONG_MODE_ENABLE.bits()
-            | EferFlags::LONG_MODE_ACTIVE.bits()
-            | EferFlags::NO_EXECUTE_ENABLE.bits();
-        sregs.cr4 = Cr4Flags::PHYSICAL_ADDRESS_EXTENSION.bits()
-            | Cr4Flags::PAGE_GLOBAL.bits()
-            | Cr4Flags::OSFXSR.bits()
-            | Cr4Flags::OSXMMEXCPT_ENABLE.bits()
-            | Cr4Flags::FSGSBASE.bits()
-            | Cr4Flags::OSXSAVE.bits()
-            | Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION.bits()
-            | Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION.bits();
-        sregs.cr3 = 0x100_0000_0000;
-        sregs.cr0 = Cr0Flags::PROTECTED_MODE_ENABLE.bits()
-            | Cr0Flags::MONITOR_COPROCESSOR.bits()
-            | Cr0Flags::EXTENSION_TYPE.bits()
-            | Cr0Flags::WRITE_PROTECT.bits()
-            | Cr0Flags::PAGING.bits();
-        ap.set_sregs(sregs).unwrap();
-        ap.set_xcr(
-            0,
-            XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
-        )
-        .unwrap();
+    let xsave_size = *KVM_XSAVE_SIZE.get().unwrap();
 
-        let mut regs = ap.get_regs().unwrap();
-        regs.rip = 0xffff_8000_0000_0000;
-        regs.rsp = 0xffff_8000_0400_3ff8;
-        ap.set_regs(regs).unwrap();
+    let run_state = &run_states[usize::from(id)];
+    run_state.wait();
 
-        std::thread::park();
-
-        while !done.load(Ordering::Relaxed) {
-            // Run the AP.
-            let res = ap.run();
-            match res {
-                Ok(_) => {}
-                Err(err) if is_efault(&err) => {
-                    // The VM has been shut down.
-                    break;
-                }
-                Err(err) => {
-                    panic!("{err}");
-                }
+    while !run_state.is_stopped() {
+        // Run the AP.
+        let res = ap.run();
+        match res {
+            Ok(_) => {}
+            Err(err) if is_efault(&err) => {
+                // The VM has been shut down.
+                break;
             }
-
-            // Check the exit.
-            let kvm_run_value = kvm_run.read();
-            let mut exit = kvm_run_value.exit();
-            match exit {
-                KvmExit::Hlt => {
-                    let resume = kvm_run_value.cr8.get_bit(0);
-
-                    supervisor_thread.unpark();
-
-                    if !resume {
-                        std::thread::park();
-                    }
-                }
-                KvmExit::SetTpr => {}
-                KvmExit::RdMsr(ref mut msr) => {
-                    const GUEST_TSC_FREQ: u32 = 0xC001_0134;
-                    match msr.index {
-                        GUEST_TSC_FREQ => msr.data = TSC_MHZ,
-                        _ => todo!(),
-                    }
-
-                    kvm_run.update(|mut k| {
-                        k.set_exit(exit);
-                        k
-                    });
-                }
-                KvmExit::Interrupted => {}
-                exit => {
-                    let regs = ap.get_regs().unwrap();
-                    println!("{:x}", regs.rip);
-
-                    panic!("unexpected exit {exit:?}");
-                }
+            Err(err) => {
+                panic!("{err}");
             }
         }
-    })
+
+        // Check the exit.
+        let kvm_run_value = kvm_run.read();
+        let mut exit = kvm_run_value.exit();
+        match exit {
+            KvmExit::Io(io) if io.port == INSECURE_SUPERVISOR_CALL_PORT => {
+                let mut regs = ap.get_regs()?;
+                match regs.rax {
+                    nr if nr == SupervisorCallNr::StartNextAp as u64 => {
+                        if let Some(run_state) = run_states.get(usize::from(id) + 1) {
+                            run_state.kick();
+                        }
+                    }
+                    nr if nr == SupervisorCallNr::Halt as u64 => run_state.wait(),
+                    nr if nr == SupervisorCallNr::Kick as u64 => {
+                        let index = regs.rdi as usize;
+                        run_states[index].kick();
+                    }
+                    nr if nr == SupervisorCallNr::AllocateMemory as u64 => {
+                        let slot_idx = dynamic_memory
+                            .lock()
+                            .unwrap()
+                            .allocate_slot_id()?
+                            .context("OOM")?;
+                        regs.rax = u64::from(slot_idx.get());
+                        ap.set_regs(regs)?;
+                    }
+                    nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
+                        let slot_idx = SlotIndex::new(u16::try_from(regs.rdi)?);
+                        dynamic_memory
+                            .lock()
+                            .unwrap()
+                            .deallocate_slot_id(slot_idx)?;
+                    }
+                    nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
+                        let chunk_len = regs.rdi as usize;
+
+                        let mut xsave_buffer = vec![0; xsave_size];
+                        unsafe {
+                            ap.get_xsave2(&mut xsave_buffer)?;
+                        }
+
+                        let xmm = &xsave_buffer[XMM_OFFSET..][..16 * 16];
+                        let ymm = &xsave_buffer[*YMM_OFFSET..][..16 * 16];
+
+                        // The xmm and ymm registers are split into two
+                        // buffers. Reassemble the values into a single
+                        // contigous buffer.
+                        let mut buffer = [0; 512];
+                        for (dst, src) in buffer.chunks_mut(16).zip(
+                            xmm.chunks(16)
+                                .zip(ymm.chunks(16))
+                                .flat_map(|(lower, upper)| [lower, upper]),
+                        ) {
+                            dst.copy_from_slice(src);
+                        }
+
+                        let chunk = &buffer[..chunk_len];
+                        sender.send(OutputEvent::Write(chunk.to_owned()))?;
+                    }
+                    nr if nr == SupervisorCallNr::FinishOutput as u64 => {
+                        sender.send(OutputEvent::Finish(()))?;
+                        break;
+                    }
+                    nr if nr == SupervisorCallNr::FailOutput as u64 => {
+                        bail!("workload failed");
+                    }
+                    nr => unimplemented!("unknown supervisor call: {nr}"),
+                }
+            }
+            KvmExit::RdMsr(ref mut msr) => {
+                const GUEST_TSC_FREQ: u32 = 0xC001_0134;
+                match msr.index {
+                    GUEST_TSC_FREQ => msr.data = TSC_MHZ,
+                    _ => todo!(),
+                }
+
+                kvm_run.update(|mut k| {
+                    k.set_exit(exit);
+                    k
+                });
+            }
+            KvmExit::Interrupted => {}
+            exit => {
+                let regs = ap.get_regs()?;
+                println!("{:x}", regs.rip);
+
+                panic!("unexpected exit {exit:?}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct RunState {
+    running: Mutex<NextRunStateValue>,
+    condvar: Condvar,
+}
+
+impl RunState {
+    pub fn kick(&self) {
+        let mut guard = self.running.lock().unwrap();
+        if let NextRunStateValue::Halted = *guard {
+            *guard = NextRunStateValue::Ready;
+            drop(guard);
+            self.condvar.notify_all();
+        }
+    }
+
+    pub fn stop(&self) {
+        *self.running.lock().unwrap() = NextRunStateValue::Stopped;
+        self.condvar.notify_all();
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        *self.running.lock().unwrap() == NextRunStateValue::Stopped
+    }
+
+    pub fn wait(&self) {
+        drop(
+            self.condvar
+                .wait_while(self.running.lock().unwrap(), |state| match *state {
+                    NextRunStateValue::Halted => {
+                        // Keep waiting.
+                        true
+                    }
+                    NextRunStateValue::Ready => {
+                        // Consume the ready state and return.
+                        *state = NextRunStateValue::Halted;
+                        false
+                    }
+                    NextRunStateValue::Stopped => {
+                        // Don't update the state, but return.
+                        false
+                    }
+                })
+                .unwrap(),
+        );
+    }
+}
+
+/// This enum describes the action of a vCPU *after* its next request to be halted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum NextRunStateValue {
+    /// The vCPU has requested to be halted or hasn't been started yet.
+    #[default]
+    Halted,
+    /// The vCPU can run.
+    Ready,
+    /// The VM has been stopped.
+    Stopped,
 }
 
 const SLOTS: usize = 1 << 15;
@@ -342,72 +478,32 @@ impl DynamicMemory {
         }
     }
 
-    pub fn allocate_slot_id(&mut self) -> Option<SlotIndex> {
+    pub fn allocate_slot_id(&mut self) -> Result<Option<SlotIndex>> {
         for slot_id in 0..SLOTS as u16 {
             if let Entry::Vacant(entry) = self.slots.entry(slot_id) {
                 let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
-                let slot = entry.insert(Slot::new(&self.vm, gpa, false).unwrap());
+                let slot = entry.insert(Slot::new(&self.vm, gpa, false)?);
 
                 let base = 1 << 6;
                 let kvm_slot_id = base + slot_id;
                 unsafe {
-                    self.vm.map_encrypted_memory(kvm_slot_id, slot).unwrap();
+                    self.vm.map_encrypted_memory(kvm_slot_id, slot)?;
                 }
 
-                return Some(SlotIndex::new(slot_id));
+                return Ok(Some(SlotIndex::new(slot_id)));
             }
         }
 
-        None
+        Ok(None)
     }
 
-    pub fn deallcoate_slot_id(&mut self, id: SlotIndex) {
-        let slot = self.slots.remove(&id.get()).unwrap();
+    pub fn deallocate_slot_id(&mut self, id: SlotIndex) -> Result<()> {
+        let slot = self
+            .slots
+            .remove(&id.get())
+            .context("can't deallocate slot that's not present")?;
         let base = 1 << 6;
         let kvm_slot_id = base + id.get();
-        unsafe {
-            self.vm.unmap_encrypted_memory(kvm_slot_id, &slot).unwrap();
-        }
-    }
-}
-struct InsecureCommandHandler<'a> {
-    allocation_buffer: &'a AllocationBuffer,
-    dynamic_memory: DynamicMemory,
-    pending_aps: VecDeque<Thread>,
-    output: Vec<u8>,
-    finish_status: Option<bool>,
-}
-
-impl CommandHandler for InsecureCommandHandler<'_> {
-    fn start_next_ap(&mut self) {
-        let Some(pending_ap) = self.pending_aps.pop_front() else {
-            return;
-        };
-        pending_ap.unpark();
-    }
-
-    fn allocate_memory(&mut self) {
-        while let Some(entry) = self.allocation_buffer.find_free_entry() {
-            let Some(slot_idx) = self.dynamic_memory.allocate_slot_id() else {
-                break;
-            };
-            entry.set(slot_idx);
-        }
-    }
-
-    fn deallocate_memory(&mut self, slot_idx: SlotIndex) {
-        self.dynamic_memory.deallcoate_slot_id(slot_idx);
-    }
-
-    fn update_output(&mut self, output: &[u8]) {
-        self.output.extend_from_slice(output);
-    }
-
-    fn finish_output(&mut self) {
-        self.finish_status.get_or_insert(true);
-    }
-
-    fn fail_output(&mut self) {
-        self.finish_status.get_or_insert(false);
+        unsafe { self.vm.unmap_encrypted_memory(kvm_slot_id, &slot) }
     }
 }
