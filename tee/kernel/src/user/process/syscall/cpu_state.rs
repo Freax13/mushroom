@@ -10,6 +10,7 @@ use core::{
 use alloc::{vec, vec::Vec};
 use bit_field::BitField;
 use bytemuck::{bytes_of, bytes_of_mut, from_bytes, from_bytes_mut, Pod, Zeroable};
+use constants::TIMER_VECTOR;
 use usize_conversions::{usize_from, FromUsize};
 use x86_64::{
     align_down,
@@ -158,6 +159,7 @@ impl CpuState {
                         code,
                     })
                 }
+                TIMER_VECTOR => Exit::Timer,
                 0x80 => {
                     let no = self.registers.rax as u32;
                     let arg0 = self.registers.rbx as u32;
@@ -650,6 +652,7 @@ pub enum Exit {
     DivideError,
     GeneralProtectionFault,
     PageFault(PageFaultExit),
+    Timer,
 }
 
 #[derive(Debug, Clone, Copy)]

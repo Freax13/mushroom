@@ -4,7 +4,7 @@ use core::{
 };
 
 use bit_field::{BitArray, BitField};
-use constants::{ApBitmap, ApIndex, AtomicApBitmap, MAX_APS_COUNT};
+use constants::{ApBitmap, ApIndex, AtomicApBitmap, MAX_APS_COUNT, TLB_VECTOR};
 use x86_64::{
     instructions::tlb::{self, InvPicdCommand, Invlpgb},
     registers::{
@@ -14,11 +14,9 @@ use x86_64::{
     structures::{idt::InterruptStackFrame, paging::Page},
 };
 
-use crate::{per_cpu::PerCpu, spin::lazy::Lazy};
+use crate::{exception::eoi, per_cpu::PerCpu, spin::lazy::Lazy};
 
 use super::ActivePageTableGuard;
-
-pub const TLB_VECTOR: u8 = 0x20;
 
 static INVLPGB: Lazy<Option<Invlpgb>> = Lazy::new(Invlpgb::new);
 
@@ -80,10 +78,7 @@ pub extern "x86-interrupt" fn tlb_shootdown_handler(_: InterruptStackFrame) {
 
     process_flushes(idx);
 
-    // Signal EOI.
-    unsafe {
-        Msr::new(0x80b).write(0);
-    }
+    eoi();
 }
 
 fn send_tlb_ipis(aps: ApBitmap) {

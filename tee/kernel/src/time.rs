@@ -119,6 +119,15 @@ pub fn now(clock: ClockId) -> Timespec {
     STATE.lock().read_clock(clock)
 }
 
+pub fn try_fire_clocks() {
+    let Some(mut guard) = STATE.try_lock() else {
+        // Some other thread is already using the state. Don't do anything
+        // now.
+        return;
+    };
+    guard.fire_clocks();
+}
+
 pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
     match clock {
         ClockId::Realtime => STATE.lock().set_real_time(time),

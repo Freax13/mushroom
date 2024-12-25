@@ -3,7 +3,7 @@ use core::{
     future::Future,
     panic::Location,
     pin::Pin,
-    task::{Context, Waker},
+    task::{Context, Poll, Waker},
 };
 
 use crate::{spin::mutex::Mutex, user::schedule_vcpu};
@@ -139,4 +139,26 @@ enum TaskState {
     Rescheduled,
     /// The task has finished.
     Done,
+}
+
+pub async fn r#yield() {
+    struct Yield {
+        polled: bool,
+    }
+
+    impl Future for Yield {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            if self.polled {
+                Poll::Ready(())
+            } else {
+                self.polled = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    Yield { polled: false }.await
 }
