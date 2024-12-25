@@ -73,6 +73,17 @@ impl MdFieldId {
         true,
     );
 
+    pub const TDVPS_TSC_DEADLINE: Self = Self::new(
+        89,
+        ElementSizeCode::SixtyFour,
+        0,
+        0,
+        false,
+        ContextCode::TdVcpu,
+        32,
+        true,
+    );
+
     #[allow(clippy::too_many_arguments)]
     const fn new(
         field_code: u32,
@@ -215,16 +226,6 @@ impl Apic {
     /// Set the local APIC id.
     pub fn set_id(&self, value: u32) {
         self.0[0x20 / 4].store(value, Ordering::SeqCst);
-    }
-
-    /// Returns the highest priority requested interrupt.
-    pub fn pending_vectora_todo(&self) -> Option<u8> {
-        (0..8).rev().find_map(|i| {
-            let offset = 0x100 | (i * 16);
-            let idx = offset / 4;
-            let irr = self.0[idx].load(Ordering::SeqCst);
-            (irr != 0).then(|| i as u8 * 32 + 31 - irr.leading_zeros() as u8)
-        })
     }
 
     /// Returns the highest priority requested interrupt.
