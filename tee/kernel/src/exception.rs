@@ -163,7 +163,7 @@ extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
         naked_asm!(
             "cld",
             // Check whether the exception happened in userspace.
-            "test word ptr [rsp+16], 3",
+            "test word ptr [rsp+8], 3",
             "je {kernel_divide_error_handler}",
 
             // Userspace code path:
