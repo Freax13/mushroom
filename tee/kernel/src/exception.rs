@@ -10,7 +10,7 @@ use core::{
 use crate::memory::pagetable::flush::tlb_shootdown_handler;
 use crate::spin::lazy::Lazy;
 use crate::time;
-use crate::user::process::syscall::cpu_state::exception_entry;
+use crate::user::process::syscall::cpu_state::{exception_entry, interrupt_entry};
 use alloc::alloc::alloc;
 use constants::{TIMER_VECTOR, TLB_VECTOR};
 use log::{debug, error, trace};
@@ -346,12 +346,12 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
             // Store the error code.
             "mov byte ptr gs:[{VECTOR_OFFSET}], {TIMER_VECTOR}",
             // Jump to the userspace exit point.
-            "jmp {exception_entry}",
+            "jmp {interrupt_entry}",
 
             kernel_timer_handler = sym kernel_timer_handler,
             VECTOR_OFFSET = const offset_of!(PerCpu, vector),
             TIMER_VECTOR = const TIMER_VECTOR,
-            exception_entry = sym exception_entry,
+            interrupt_entry = sym interrupt_entry,
         );
     }
 }

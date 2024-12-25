@@ -36,7 +36,7 @@ use bytemuck::{Pod, Zeroable};
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{select_biased, FutureExt};
 use pin_project::pin_project;
-use x86_64::VirtAddr;
+use x86_64::{instructions::interrupts, VirtAddr};
 
 use crate::{
     error::Result,
@@ -252,6 +252,9 @@ impl Thread {
 
                                 // Signal that we're done handling the interrupt.
                                 eoi();
+
+                                // Re-enable interrupts.
+                                interrupts::enable();
 
                                 // Yield to the scheduler.
                                 rt::r#yield().await;
