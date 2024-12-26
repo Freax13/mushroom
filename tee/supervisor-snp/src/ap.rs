@@ -72,7 +72,7 @@ pub fn run_vcpu() -> ! {
         }
 
         // See if the kernel was kicked.
-        if halted && WAKEUP_TOKEN.get(PerCpu::current_vcpu_index()) {
+        if halted && WAKEUP_TOKEN.take(PerCpu::current_vcpu_index()) {
             halted = false;
         }
 
