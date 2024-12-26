@@ -88,7 +88,7 @@ impl OpenFileDescription for Output {
         let mut addr = pointer.get();
         let mut remaining_len = len;
         while remaining_len > 0 {
-            let buffer_len = cmp::min(remaining_len, 0x1000);
+            let buffer_len = cmp::min(remaining_len, supervisor::OUTPUT_BUFFER_CAPACITY);
             let mut buf = [0; supervisor::OUTPUT_BUFFER_CAPACITY];
             let buf = &mut buf[..buffer_len];
 

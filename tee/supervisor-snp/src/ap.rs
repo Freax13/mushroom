@@ -18,7 +18,7 @@ use crate::{
     ghcb::{create_ap, exit, run_vmpl, vmsa_tweak_bitmap},
     output,
     per_cpu::PerCpu,
-    scheduler::{start_next_ap, TIMER_VECTOR, WAKE_UP_VECTOR},
+    scheduler::{start_next_ap, STARTUP_VECTOR, TIMER_VECTOR, WAKE_UP_VECTOR},
 };
 
 use self::vmsa::Vmpl1Vmsa;
@@ -56,6 +56,7 @@ pub fn run_vcpu() -> ! {
         if PerCpu::get().interrupted.swap(false, Ordering::SeqCst) {
             while let Some(vector) = pop_pending_event() {
                 match vector.get() {
+                    STARTUP_VECTOR => eoi(),
                     WAKE_UP_VECTOR => eoi(),
                     TIMER_VECTOR => {
                         requested_timer_irq = true;
@@ -72,7 +73,7 @@ pub fn run_vcpu() -> ! {
         }
 
         // See if the kernel was kicked.
-        if halted && WAKEUP_TOKEN.get(PerCpu::current_vcpu_index()) {
+        if halted && WAKEUP_TOKEN.take(PerCpu::current_vcpu_index()) {
             halted = false;
         }
 
