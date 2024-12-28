@@ -1054,7 +1054,7 @@ impl INode for TmpFsCharDev {
             mode: FileTypeAndMode::new(FileType::Char, guard.ownership.mode()),
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
-            rdev: u64::from(self.major) << 8 | u64::from(self.minor),
+            rdev: (u64::from(self.major) << 8) | u64::from(self.minor),
             size: 0,
             blksize: 0,
             blocks: 0,

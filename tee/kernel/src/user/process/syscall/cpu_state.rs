@@ -603,7 +603,7 @@ impl Registers {
         fs: 0,
         gs: 0,
         ss: 0x23,
-        rflags: 2 | 1 << 9,
+        rflags: 2 | RFlags::INTERRUPT_FLAG.bits(),
         ..Self::ZERO
     };
 }
