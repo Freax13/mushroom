@@ -103,15 +103,8 @@ jobs:
             common
             host
             tee
-      - name: "Check common"
-        run: cargo clippy --workspace -- -D warnings
-        working-directory: common
-      - name: "Check host"
-        run: cargo clippy --workspace -- -D warnings
-        working-directory: host
-      - name: "Check tee"
-        run: cargo clippy --workspace --exclude example -- -D warnings
-        working-directory: tee
+      - name: "Check"
+        run: make clippy
 
   test-linux:
     runs-on: ubuntu-latest
