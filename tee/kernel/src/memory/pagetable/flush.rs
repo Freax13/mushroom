@@ -6,7 +6,7 @@ use core::{
 use bit_field::{BitArray, BitField};
 use constants::{ApBitmap, ApIndex, AtomicApBitmap, MAX_APS_COUNT, TLB_VECTOR};
 use x86_64::{
-    instructions::tlb::{self, InvPicdCommand, Invlpgb},
+    instructions::tlb::{self, InvPcidCommand, Invlpgb},
     registers::{
         control::{Cr3, Cr4, Cr4Flags},
         model_specific::Msr,
@@ -44,7 +44,7 @@ fn process_flushes(idx: ApIndex) {
     if need_global_flush {
         if Cr4::read().contains(Cr4Flags::PCID) {
             unsafe {
-                tlb::flush_pcid(tlb::InvPicdCommand::All);
+                tlb::flush_pcid(tlb::InvPcidCommand::All);
             }
         } else {
             tlb::flush_all();
@@ -55,7 +55,7 @@ fn process_flushes(idx: ApIndex) {
             // TODO: Flush less.
             let (_, pcid) = Cr3::read_pcid();
             unsafe {
-                tlb::flush_pcid(tlb::InvPicdCommand::Single(pcid));
+                tlb::flush_pcid(tlb::InvPcidCommand::Single(pcid));
             }
         } else {
             tlb::flush_all();
@@ -166,7 +166,7 @@ impl ActivePageTableGuard {
     pub fn flush_all_local(&self) {
         if let Some(pcid_allocation) = self.guard.pcid_allocation.as_ref() {
             unsafe {
-                tlb::flush_pcid(InvPicdCommand::Single(pcid_allocation.pcid));
+                tlb::flush_pcid(InvPcidCommand::Single(pcid_allocation.pcid));
             }
         } else {
             tlb::flush_all();
