@@ -125,6 +125,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysAccess);
     handlers.register(SysPipe);
     handlers.register(SysSelect);
+    handlers.register(SysMsync);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
@@ -1102,6 +1103,14 @@ async fn select_impl(
     }
 
     Ok(set)
+}
+
+#[syscall(i386 = 144, amd64 = 26)]
+fn msync(addr: Pointer<c_void>, len: u64, flags: u64) -> SyscallResult {
+    // We don't need to do anything:
+    // 1. We don't support persistent disks.
+    // 2. Shared mappings always use the same backing memory used by the file.
+    Ok(0)
 }
 
 #[syscall(i386 = 219, amd64 = 28)]
