@@ -5,10 +5,11 @@ use std::{
 
 use anyhow::{Context, Result};
 use flate2::bufread::GzDecoder;
+use include_optional::include_bytes_optional;
 use nix::mount::{mount, MsFlags};
 use tar::Archive;
 
-const BYTES: &[u8] = include_bytes!("../gcc.tar.gz");
+const BYTES: Option<&[u8]> = include_bytes_optional!("../gcc.tar.gz");
 
 fn main() -> Result<()> {
     let root = "/";
@@ -23,7 +24,8 @@ fn main() -> Result<()> {
     .context("failed to mount /dev")?;
 
     // Unpack tar archive.
-    let file = Cursor::new(BYTES);
+    let bytes = BYTES.expect("gcc.tar.gz file was missing at compile time");
+    let file = Cursor::new(bytes);
     let buf_reader = BufReader::new(file);
     let reader = GzDecoder::new(buf_reader);
     let mut archive = Archive::new(reader);
