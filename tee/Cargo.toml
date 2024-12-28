@@ -42,4 +42,4 @@ debug-assertions = true
 overflow-checks = true
 
 [patch.crates-io]
-x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "3fc9106" }
+x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "59ac07c" }

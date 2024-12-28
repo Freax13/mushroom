@@ -73,8 +73,7 @@ impl Futexes {
 
         let mut guard = self.futexes.lock();
         if let Some(waiters) = guard.get_mut(&uaddr) {
-            let drain_iter = waiters.extract_if(|waiter| waiter.matches_bitset(bitset));
-            for waiter in drain_iter {
+            for waiter in waiters.extract_if(.., |waiter| waiter.matches_bitset(bitset)) {
                 // Wake up the thread.
                 if waiter.sender.send(()).is_err() {
                     // The thread has already canceled the operation.

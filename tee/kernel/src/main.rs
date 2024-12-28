@@ -16,7 +16,6 @@
     maybe_uninit_uninit_array,
     naked_functions,
     no_sanitize,
-    noop_waker,
     pointer_is_aligned_to,
     ptr_metadata,
     slice_ptr_get,
