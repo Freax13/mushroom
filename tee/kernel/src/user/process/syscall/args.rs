@@ -413,7 +413,7 @@ bitflags! {
     pub struct MmapFlags {
         const SHARED = 1 << 0;
         const PRIVATE = 1 << 1;
-        const SHARED_VALIDATE = 1 << 0 | 1 << 1;
+        const SHARED_VALIDATE = (1 << 0) | (1 << 1);
         const FIXED = 1 << 4;
         const ANONYMOUS = 1 << 5;
         const DENYWRITE = 1 << 11;
@@ -774,7 +774,7 @@ impl fmt::Debug for FileTypeAndMode {
 
 impl FileTypeAndMode {
     pub fn new(ty: FileType, mode: FileMode) -> Self {
-        Self((ty as u32) << 12 | mode.bits() as u32)
+        Self(((ty as u32) << 12) | mode.bits() as u32)
     }
 
     pub fn ty(&self) -> FileType {

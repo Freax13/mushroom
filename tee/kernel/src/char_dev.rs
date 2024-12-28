@@ -56,7 +56,7 @@ impl Registration {
         if T::MAJOR > 0xfff {
             panic!("major number is too big");
         }
-        let rdev = (T::MAJOR as u32) << 8 | T::MINOR as u32;
+        let rdev = ((T::MAJOR as u32) << 8) | T::MINOR as u32;
         Self {
             rdev,
             new: |path, flags, stat, fs| T::new(path, flags, stat, fs).map(FileDescriptor::from),

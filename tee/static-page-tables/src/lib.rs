@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(const_ptr_is_null)]
 
 use core::{
     cell::UnsafeCell,

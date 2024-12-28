@@ -99,7 +99,7 @@ impl CpuidFunction {
 
     pub fn matches(&self, eax: u32, ecx: Option<u32>, xcr0: u64, xss: u64) -> bool {
         self.eax_in == eax
-            && ecx.map_or(true, |ecx| self.ecx_in == ecx)
+            && ecx.is_none_or(|ecx| self.ecx_in == ecx)
             && self.xcr0_in == xcr0
             && self.xss_in == xss
             && self._reserved == 0

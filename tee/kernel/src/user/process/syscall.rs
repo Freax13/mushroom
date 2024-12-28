@@ -1029,13 +1029,13 @@ async fn select_impl(
         for i in 0..numfds {
             let read = req_readfds
                 .as_ref()
-                .map_or(false, |readfds| readfds.get_bit(i));
+                .is_some_and(|readfds| readfds.get_bit(i));
             let write = req_writefds
                 .as_ref()
-                .map_or(false, |writefds| writefds.get_bit(i));
+                .is_some_and(|writefds| writefds.get_bit(i));
             let except = req_exceptfds
                 .as_ref()
-                .map_or(false, |exceptfds| exceptfds.get_bit(i));
+                .is_some_and(|exceptfds| exceptfds.get_bit(i));
 
             if !read && !write && !except {
                 continue;
