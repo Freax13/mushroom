@@ -33,9 +33,14 @@ endif
 run-example: all
 	$(MAKE) -C tee/example run
 
+clippy:
+	$(MAKE) -C common clippy
+	$(MAKE) -C host   clippy
+	$(MAKE) -C tee    clippy
+
 clean:
 	$(MAKE) -C common clean
 	$(MAKE) -C host   clean
 	$(MAKE) -C tee    clean
 
-.PHONY: all kernel supervisor-snp supervisor-tdx cli test run verify run-example clean
+.PHONY: all kernel supervisor-snp supervisor-tdx cli test run verify run-example clippy clean
