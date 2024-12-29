@@ -56,7 +56,7 @@ use super::{
         new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
         StackFlags, Thread, ThreadGuard, Uid,
     },
-    Process,
+    Process, WaitFilter,
 };
 
 pub mod args;
@@ -1659,10 +1659,10 @@ async fn wait4(
 
     let no_hang = options.contains(WaitOptions::NOHANG);
     let pid = match pid {
-        ..=-2 => todo!(),
-        -1 => None,
-        0 => todo!(),
-        1.. => Some(pid as u32),
+        ..=-2 => WaitFilter::ExactPgid(-pid as u32),
+        -1 => WaitFilter::Any,
+        0 => WaitFilter::ExactPgid(thread.process().process_group.lock().pgid),
+        1.. => WaitFilter::ExactPid(pid as u32),
     };
 
     let opt = thread.process().wait_for_child_death(pid, no_hang).await?;

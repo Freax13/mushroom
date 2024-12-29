@@ -254,7 +254,7 @@ impl Process {
 
     pub async fn wait_for_child_death(
         &self,
-        pid: Option<u32>,
+        filter: WaitFilter,
         no_hang: bool,
     ) -> Result<Option<(u32, WStatus)>> {
         self.child_death_notify
@@ -264,16 +264,17 @@ impl Process {
                     return Some(Err(err!(Child)));
                 }
 
-                let opt_idx = guard.iter().position(|child| {
-                    // If there's a pid, only consider the child with the given pid.
-                    if let Some(pid) = pid {
-                        if child.pid != pid {
-                            return false;
-                        }
-                    }
-
-                    child.exit_status.try_get().is_some()
-                });
+                let opt_idx = guard
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, child)| match filter {
+                        WaitFilter::Any => true,
+                        WaitFilter::ExactPid(pid) => child.pid() == pid,
+                        WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid == pgid,
+                    })
+                    .filter(|(_, child)| child.exit_status.try_get().is_some())
+                    .map(|(i, _)| i)
+                    .next();
 
                 let Some(idx) = opt_idx else {
                     if no_hang {
@@ -439,6 +440,13 @@ impl Process {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum WaitFilter {
+    Any,
+    ExactPid(u32),
+    ExactPgid(u32),
 }
 
 #[cfg(not(feature = "harden"))]
