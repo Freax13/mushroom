@@ -10,7 +10,7 @@ use crate::{
     user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
-use super::Events;
+use super::{Events, PipeBlocked};
 
 pub fn new(capacity: usize, atomic_write_size: Option<NonZeroUsize>) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
@@ -154,6 +154,38 @@ impl ReadHalf {
             data: self.data.clone(),
             notify: NotifyOnDrop(self.notify.0.clone()),
         }
+    }
+
+    pub fn splice_to(
+        &self,
+        len: usize,
+        write: impl FnOnce(&mut VecDeque<u8>, usize),
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let mut guard = self.data.buffer.lock();
+
+        // Bail out early if there are no bytes to be copied.
+        if guard.bytes.is_empty() {
+            // Check if the write half has been closed.
+            if Arc::strong_count(&self.data) == 1 {
+                return Ok(Ok(0));
+            }
+            return Ok(Err(PipeBlocked));
+        }
+
+        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+
+        let len = cmp::min(len, guard.bytes.len());
+        let prev_len = guard.bytes.len();
+        write(&mut guard.bytes, len);
+        assert_eq!(guard.bytes.len(), prev_len - len);
+
+        drop(guard);
+
+        if was_full {
+            self.notify();
+        }
+
+        Ok(Ok(len))
     }
 }
 
@@ -303,4 +335,87 @@ impl WriteHalf {
             notify: NotifyOnDrop(self.notify.0.clone()),
         }
     }
+
+    pub fn splice_from(
+        &self,
+        len: usize,
+        read: impl FnOnce(&mut VecDeque<u8>, usize),
+    ) -> Result<Result<usize, PipeBlocked>> {
+        // Check if the write half has been closed.
+        ensure!(Arc::strong_count(&self.data) > 1, Pipe);
+
+        let mut guard = self.data.buffer.lock();
+
+        let remaining_capacity = guard.capacity - guard.bytes.len();
+        if remaining_capacity == 0 {
+            return Ok(Err(PipeBlocked));
+        }
+
+        let len = cmp::min(len, remaining_capacity);
+
+        let prev_len = guard.bytes.len();
+
+        read(&mut guard.bytes, len);
+
+        debug_assert_eq!(guard.bytes.len(), prev_len + len);
+
+        drop(guard);
+
+        self.notify();
+
+        Ok(Ok(len))
+    }
+}
+
+pub fn splice(
+    read_half: &ReadHalf,
+    write_half: &WriteHalf,
+    len: usize,
+) -> Result<usize, SpliceBlockedError> {
+    if Arc::ptr_eq(&read_half.data, &write_half.data) {
+        todo!()
+    }
+
+    let (mut read_guard, mut write_guard) = read_half.data.buffer.lock_two(&write_half.data.buffer);
+    // Bail out early if there are no bytes to be copied.
+    if read_guard.bytes.is_empty() {
+        // Check if the write half has been closed.
+        if Arc::strong_count(&read_half.data) == 1 {
+            return Ok(0);
+        }
+        return Err(SpliceBlockedError::Read);
+    }
+
+    let was_full =
+        read_guard.capacity - read_guard.bytes.len() < read_half.data.atomic_write_size.get();
+
+    // Make sure that the write half can receive at least one byte.
+    let remaining_capacity = write_guard.capacity - write_guard.bytes.len();
+    if remaining_capacity == 0 {
+        return Err(SpliceBlockedError::Write);
+    }
+
+    // Determine the number of bytes to be copied.
+    let len = cmp::min(len, read_guard.bytes.len());
+    let len = cmp::min(len, remaining_capacity);
+
+    // Copy the bytes.
+    write_guard.bytes.extend(read_guard.bytes.drain(..len));
+
+    drop(read_guard);
+    drop(write_guard);
+
+    if was_full {
+        read_half.notify();
+    }
+    write_half.notify();
+
+    Ok(len)
+}
+
+pub enum SpliceBlockedError {
+    /// The read half of the splice operation was blocked.
+    Read,
+    /// The write half of the splice operation was blocked.
+    Write,
 }

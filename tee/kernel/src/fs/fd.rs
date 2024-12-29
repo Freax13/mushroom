@@ -321,6 +321,8 @@ bitflags! {
     }
 }
 
+pub struct PipeBlocked;
+
 #[async_trait]
 pub trait OpenFileDescription: Send + Sync + 'static {
     fn flags(&self) -> OpenFlags;
@@ -409,6 +411,30 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let _ = read_half;
+        let _ = offset;
+        let _ = len;
+        bail!(Inval)
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let _ = write_half;
+        let _ = offset;
+        let _ = len;
+        bail!(Inval)
+    }
+
     /// Copy `len` bytes from `self` at offset `offset_in` to `fd_out` at
     /// offset `offset_out`.
     ///
@@ -482,6 +508,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn getdents64(&self, capacity: usize, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = capacity;
         bail!(NotDir)
+    }
+
+    fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
+        None
+    }
+
+    fn as_pipe_write_half(&self) -> Option<&stream_buffer::WriteHalf> {
+        None
     }
 
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {

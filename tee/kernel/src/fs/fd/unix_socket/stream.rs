@@ -4,9 +4,12 @@ use futures::{select_biased, FutureExt};
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{bail, Result},
+    error::{bail, ensure, Result},
     fs::{
-        fd::stream_buffer,
+        fd::{
+            stream_buffer::{self, SpliceBlockedError},
+            PipeBlocked,
+        },
         node::{new_ino, FileAccessContext},
         ownership::Ownership,
         path::Path,
@@ -124,6 +127,34 @@ impl OpenFileDescription for StreamUnixSocket {
         len: usize,
     ) -> Result<usize> {
         self.write_half.write_from_user(vm, pointer, len)
+    }
+
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        ensure!(offset.is_none(), Inval);
+        match stream_buffer::splice(read_half, &self.write_half, len) {
+            Ok(len) => Ok(Ok(len)),
+            Err(SpliceBlockedError::Read) => Ok(Err(PipeBlocked)),
+            Err(SpliceBlockedError::Write) => bail!(Again),
+        }
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        ensure!(offset.is_none(), Inval);
+        match stream_buffer::splice(&self.read_half, write_half, len) {
+            Ok(len) => Ok(Ok(len)),
+            Err(SpliceBlockedError::Read) => bail!(Again),
+            Err(SpliceBlockedError::Write) => Ok(Err(PipeBlocked)),
+        }
     }
 
     fn poll_ready(&self, events: Events) -> Events {

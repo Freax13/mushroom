@@ -144,6 +144,10 @@ impl OpenFileDescription for ReadHalf {
         Ok(PIPE_FS.clone())
     }
 
+    fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
+        Some(&self.stream_buffer)
+    }
+
     fn file_lock(&self) -> Result<&FileLock> {
         Ok(&self.file_lock)
     }
@@ -214,6 +218,10 @@ impl OpenFileDescription for WriteHalf {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
         Ok(PIPE_FS.clone())
+    }
+
+    fn as_pipe_write_half(&self) -> Option<&stream_buffer::WriteHalf> {
+        Some(&self.stream_buffer)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

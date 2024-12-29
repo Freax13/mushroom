@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
+use super::{stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked};
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;
@@ -94,6 +94,30 @@ pub trait File: INode {
         vm.read_bytes(pointer.get(), buf)?;
 
         self.append(buf)
+    }
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: usize,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let _ = read_half;
+        let _ = offset;
+        let _ = len;
+        bail!(Inval)
+    }
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        offset: usize,
+        len: usize,
+        no_atime: bool,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let _ = write_half;
+        let _ = offset;
+        let _ = len;
+        let _ = no_atime;
+        bail!(Inval)
     }
     fn copy_file_range(
         &self,
@@ -187,6 +211,36 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
     fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
         let no_atime = self.flags.contains(OpenFlags::NOATIME);
         self.file.read(pos, buf, no_atime)
+    }
+
+    fn splice_from(
+        &self,
+        _read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        bail!(BadF)
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
+        if let Some(offset) = offset {
+            self.file.splice_to(write_half, offset, len, no_atime)
+        } else {
+            let mut guard = self.cursor_idx.lock();
+            self.file
+                .splice_to(write_half, *guard, len, no_atime)
+                .inspect(|res| {
+                    if let Ok(len) = res {
+                        *guard += len
+                    }
+                })
+        }
     }
 
     fn copy_file_range(
@@ -338,6 +392,35 @@ impl OpenFileDescription for WriteonlyFileFileDescription {
         self.file.write(pos, buf)
     }
 
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        if let Some(offset) = offset {
+            self.file.splice_from(read_half, offset, len)
+        } else {
+            let mut guard = self.cursor_idx.lock();
+            self.file
+                .splice_from(read_half, *guard, len)
+                .inspect(|res| {
+                    if let Ok(len) = res {
+                        *guard += len;
+                    }
+                })
+        }
+    }
+
+    fn splice_to(
+        &self,
+        _write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        bail!(BadF)
+    }
+
     fn copy_file_range(
         &self,
         _offset_in: Option<usize>,
@@ -463,6 +546,24 @@ impl OpenFileDescription for AppendFileFileDescription {
         len: usize,
     ) -> Result<usize> {
         self.file.append_from_user(vm, pointer, len)
+    }
+
+    fn splice_from(
+        &self,
+        _read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        bail!(Inval)
+    }
+
+    fn splice_to(
+        &self,
+        _write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        bail!(BadF)
     }
 
     fn copy_file_range(
@@ -596,6 +697,47 @@ impl OpenFileDescription for ReadWriteFileFileDescription {
 
     fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
         self.file.write(pos, buf)
+    }
+
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        if let Some(offset) = offset {
+            self.file.splice_from(read_half, offset, len)
+        } else {
+            let mut guard = self.cursor_idx.lock();
+            self.file
+                .splice_from(read_half, *guard, len)
+                .inspect(|res| {
+                    if let Ok(len) = res {
+                        *guard += len;
+                    }
+                })
+        }
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let no_atime = self.flags.contains(OpenFlags::NOATIME);
+        if let Some(offset) = offset {
+            self.file.splice_to(write_half, offset, len, no_atime)
+        } else {
+            let mut guard = self.cursor_idx.lock();
+            self.file
+                .splice_to(write_half, *guard, len, no_atime)
+                .inspect(|res| {
+                    if let Ok(len) = res {
+                        *guard += len;
+                    }
+                })
+        }
     }
 
     fn copy_file_range(

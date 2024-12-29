@@ -8,7 +8,7 @@ use crate::{
             dir::open_dir,
             file::{open_file, File},
             pipe::named::NamedPipe,
-            FileDescriptor, FileLockRecord, LazyFileLockRecord,
+            stream_buffer, FileDescriptor, FileLockRecord, LazyFileLockRecord, PipeBlocked,
         },
         ownership::Ownership,
         FileSystem, StatFs,
@@ -925,6 +925,60 @@ impl File for TmpFsFile {
         guard.buffer.write_from_user(offset, vm, pointer, len)
     }
 
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: usize,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        read_half.splice_to(len, |buffer, len| {
+            let (slice1, slice2) = buffer.as_slices();
+            let len1 = cmp::min(len, slice1.len());
+            let len2 = len - len1;
+            let slice1 = &slice1[..len1];
+            let slice2 = &slice2[..len2];
+
+            let mut guard = self.internal.write();
+            let now = now(ClockId::Realtime);
+            guard.ctime = now;
+            guard.mtime = now;
+            guard.buffer.write(offset, slice1).unwrap();
+            guard.buffer.write(offset + slice1.len(), slice2).unwrap();
+
+            buffer.drain(..len);
+        })
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        mut offset: usize,
+        len: usize,
+        no_atime: bool,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let mut guard = self.internal.write();
+        let len = cmp::min(len, guard.buffer.len().saturating_sub(offset));
+
+        let len = write_half.splice_from(len, |buffer, mut len| {
+            let mut chunk = [0; 128];
+            while len > 0 {
+                let chunk_len = cmp::min(len, chunk.len());
+                let chunk = &mut chunk[..chunk_len];
+
+                let n = guard.buffer.read(offset, chunk);
+                debug_assert_eq!(n, chunk_len);
+
+                buffer.extend(chunk.iter().copied());
+
+                offset += n;
+                len -= n;
+            }
+        })?;
+        if !no_atime {
+            guard.atime = now(ClockId::Realtime);
+        }
+        Ok(len)
+    }
 
     fn copy_file_range(
         &self,

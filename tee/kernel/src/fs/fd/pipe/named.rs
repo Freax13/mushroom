@@ -242,6 +242,10 @@ impl OpenFileDescription for ReadHalf {
         self.node.fs()
     }
 
+    fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
+        Some(&self.read_half)
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
         self.read_half.poll_ready(events)
     }
@@ -318,6 +322,10 @@ impl OpenFileDescription for WriteHalf {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
         self.node.fs()
+    }
+
+    fn as_pipe_write_half(&self) -> Option<&stream_buffer::WriteHalf> {
+        Some(&self.write_half)
     }
 
     fn poll_ready(&self, events: Events) -> Events {
@@ -415,6 +423,14 @@ impl OpenFileDescription for FullReadWrite {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
         self.node.fs()
+    }
+
+    fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
+        Some(&self.read_half)
+    }
+
+    fn as_pipe_write_half(&self) -> Option<&stream_buffer::WriteHalf> {
+        Some(&self.write_half)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

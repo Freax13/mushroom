@@ -1197,7 +1197,9 @@ impl TryFrom<RLimit64> for RLimit {
 }
 
 bitflags! {
-    pub struct SpliceFlags {}
+    pub struct SpliceFlags {
+        const NONBLOCK = 1 << 1;
+    }
 }
 
 bitflags! {

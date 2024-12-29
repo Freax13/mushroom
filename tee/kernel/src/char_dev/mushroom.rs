@@ -5,9 +5,11 @@ use kernel_macros::register;
 use usize_conversions::FromUsize;
 
 use crate::{
-    error::Result,
+    error::{bail, Result},
     fs::{
-        fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
+        fd::{
+            stream_buffer, Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked,
+        },
         node::FileAccessContext,
         path::Path,
         FileSystem,
@@ -101,6 +103,34 @@ impl OpenFileDescription for Output {
         }
 
         Ok(len)
+    }
+
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        read_half.splice_to(len, |buffer, len| {
+            let (slice1, slice2) = buffer.as_slices();
+            let len1 = cmp::min(len, slice1.len());
+            let len2 = len - len1;
+            let slice1 = &slice1[..len1];
+            let slice2 = &slice2[..len2];
+            supervisor::update_output(slice1);
+            supervisor::update_output(slice2);
+
+            buffer.drain(..len);
+        })
+    }
+
+    fn splice_to(
+        &self,
+        _write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        bail!(BadF)
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {

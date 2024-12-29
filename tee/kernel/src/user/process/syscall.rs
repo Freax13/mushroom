@@ -29,6 +29,7 @@ use crate::{
             eventfd::EventFd,
             path::PathFd,
             pipe,
+            stream_buffer::{self, SpliceBlockedError},
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
             Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
@@ -3696,6 +3697,7 @@ async fn pselect6(
 
 #[syscall(i386 = 313, amd64 = 275)]
 async fn splice(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
@@ -3704,40 +3706,131 @@ async fn splice(
     len: u64,
     flags: SpliceFlags,
 ) -> SyscallResult {
+    let len = usize_from(len);
+
     let fd_in = fdtable.get(fd_in)?;
     let fd_out = fdtable.get(fd_out)?;
 
-    if !off_in.is_null() || !off_out.is_null() {
-        todo!()
-    }
+    let read_nonblock = fd_in.flags().contains(OpenFlags::NONBLOCK);
+    let pipe_read_nonblock = read_nonblock || flags.contains(SpliceFlags::NONBLOCK);
+    let write_nonblock = fd_out.flags().contains(OpenFlags::NONBLOCK);
+    let pipe_write_nonblock = write_nonblock || flags.contains(SpliceFlags::NONBLOCK);
 
-    let mut len = usize_from(len);
-    let mut copied = 0;
+    let read_half = fd_in.as_pipe_read_half();
+    let write_half = fd_out.as_pipe_write_half();
+    match (read_half, write_half) {
+        (Some(read_half), Some(write_half)) => {
+            ensure!(off_in.is_null(), SPipe);
+            ensure!(off_out.is_null(), SPipe);
 
-    let mut buffer = [0; 128];
+            loop {
+                // Start wait operations on both halves.
+                let read_half_wait = read_half.wait();
+                let write_half_wait = write_half.wait();
 
-    while len > 0 {
-        // Setup buffer.
-        let chunk_len = cmp::min(buffer.len(), len);
-        let buffer = &mut buffer[..chunk_len];
-
-        // Read from fd_in.
-        let num = do_io(&*fd_in, Events::READ, || fd_in.read(buffer)).await?;
-        if num == 0 {
-            break;
+                match stream_buffer::splice(read_half, write_half, len) {
+                    Ok(len) => return Ok(u64::from_usize(len)),
+                    Err(err) => {
+                        // If the operation can't be completed right now, wait and try again.
+                        match err {
+                            SpliceBlockedError::Read => {
+                                ensure!(!pipe_read_nonblock, Again);
+                                read_half_wait.await
+                            }
+                            SpliceBlockedError::Write => {
+                                ensure!(!pipe_write_nonblock, Again);
+                                write_half_wait.await
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
         }
+        (Some(read_half), None) => {
+            ensure!(off_in.is_null(), SPipe);
 
-        // Write to fd_out.
-        let buffer = &buffer[..num];
-        fd_out.write_all(buffer).await?;
+            let offset = if off_out.is_null() {
+                let offset = virtual_memory.read(off_out)?;
+                Some(usize::try_from(offset.0)?)
+            } else {
+                None
+            };
 
-        // Update len and copied.
-        len -= num;
-        let num = u64::from_usize(num);
-        copied += num;
+            loop {
+                // Start a wait operation on the read half.
+                let wait = read_half.wait();
+
+                let res = fd_in.splice_from(read_half, offset, len);
+
+                // If the operation can't be completed right now, wait and try again.
+                if res
+                    .as_ref()
+                    .is_err_and(|err| err.kind() == ErrorKind::Again)
+                {
+                    ensure!(!write_nonblock, Again);
+                    fd_out.ready_for_write(1).await?;
+                    continue;
+                }
+
+                // If the pipe wasn't ready, wait for it to be ready and try again.
+                let Ok(len) = res? else {
+                    ensure!(!pipe_read_nonblock, Again);
+                    wait.await;
+                    continue;
+                };
+
+                // Otherwise, write back the new offset and return the result.
+                if let Some(offset) = offset {
+                    let new_offset = offset + len;
+                    virtual_memory.write(off_out, LongOffset(i64::try_from(new_offset)?))?;
+                }
+                return Ok(u64::from_usize(len));
+            }
+        }
+        (None, Some(write_half)) => {
+            ensure!(off_out.is_null(), SPipe);
+
+            let offset = if off_in.is_null() {
+                let offset = virtual_memory.read(off_in)?;
+                Some(usize::try_from(offset.0)?)
+            } else {
+                None
+            };
+
+            loop {
+                // Start a wait operation on the write half.
+                let wait = write_half.wait();
+
+                let res = fd_in.splice_to(write_half, offset, len);
+
+                // If the operation can't be completed right now, wait and try again.
+                if res
+                    .as_ref()
+                    .is_err_and(|err| err.kind() == ErrorKind::Again)
+                {
+                    ensure!(!read_nonblock, Again);
+                    fd_in.ready(Events::READ).await?;
+                    continue;
+                }
+
+                // If the pipe wasn't ready, wait for it to be ready and try again.
+                let Ok(len) = res? else {
+                    ensure!(!pipe_write_nonblock, Again);
+                    wait.await;
+                    continue;
+                };
+
+                // Otherwise, write back the new offset and return the result.
+                if let Some(offset) = offset {
+                    let new_offset = offset + len;
+                    virtual_memory.write(off_in, LongOffset(i64::try_from(new_offset)?))?;
+                }
+                return Ok(u64::from_usize(len));
+            }
+        }
+        (None, None) => bail!(Inval),
     }
-
-    Ok(copied)
 }
 
 #[syscall(i386 = 320, amd64 = 280)]
