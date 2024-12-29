@@ -1,3 +1,5 @@
+use core::num::NonZeroUsize;
+
 use crate::{
     fs::{
         node::{new_ino, FileAccessContext},
@@ -57,7 +59,7 @@ struct Internal {
 pub struct ReadHalf {
     ino: u64,
     internal: Arc<Mutex<Internal>>,
-    stream_buffer: stream_buffer::ReadHalf<CAPACITY, PIPE_BUF>,
+    stream_buffer: stream_buffer::ReadHalf,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
@@ -150,7 +152,7 @@ impl OpenFileDescription for ReadHalf {
 pub struct WriteHalf {
     ino: u64,
     internal: Arc<Mutex<Internal>>,
-    stream_buffer: stream_buffer::WriteHalf<CAPACITY, PIPE_BUF>,
+    stream_buffer: stream_buffer::WriteHalf,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
@@ -249,7 +251,7 @@ pub fn new(flags: Pipe2Flags, uid: Uid, gid: Gid) -> (ReadHalf, WriteHalf) {
     let internal = Arc::new(Mutex::new(Internal {
         ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
     }));
-    let (read_half, write_half) = stream_buffer::new();
+    let (read_half, write_half) = stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
     let flags = flags.into();
 
     (

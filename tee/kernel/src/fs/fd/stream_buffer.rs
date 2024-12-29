@@ -1,4 +1,4 @@
-use core::{cmp, future::Future, iter::from_fn};
+use core::{cmp, future::Future, iter::from_fn, num::NonZeroUsize};
 
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
 use usize_conversions::FromUsize;
@@ -12,51 +12,64 @@ use crate::{
 
 use super::Events;
 
-pub fn new<const MAX_CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize>() -> (
-    ReadHalf<MAX_CAPACITY, ATOMIC_WRITE_SIZE>,
-    WriteHalf<MAX_CAPACITY, ATOMIC_WRITE_SIZE>,
-) {
-    let buffer = Arc::new(Mutex::new(VecDeque::new()));
+pub fn new(capacity: usize, atomic_write_size: Option<NonZeroUsize>) -> (ReadHalf, WriteHalf) {
+    let buffer = Arc::new(PipeData {
+        atomic_write_size: atomic_write_size.unwrap_or_else(|| NonZeroUsize::new(1).unwrap()),
+        buffer: Mutex::new(PipeDataBuffer {
+            bytes: VecDeque::new(),
+            capacity,
+        }),
+    });
     let notify = Arc::new(Notify::new());
     (
         ReadHalf {
-            buffer: buffer.clone(),
+            data: buffer.clone(),
             notify: NotifyOnDrop(notify.clone()),
         },
         WriteHalf {
-            buffer,
+            data: buffer,
             notify: NotifyOnDrop(notify),
         },
     )
 }
 
-pub struct ReadHalf<const MAX_CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> {
-    buffer: Arc<Mutex<VecDeque<u8>>>,
+struct PipeData {
+    atomic_write_size: NonZeroUsize,
+    buffer: Mutex<PipeDataBuffer>,
+}
+
+struct PipeDataBuffer {
+    bytes: VecDeque<u8>,
+    capacity: usize,
+}
+
+pub struct ReadHalf {
+    data: Arc<PipeData>,
     notify: NotifyOnDrop,
 }
 
-impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
+impl ReadHalf {
     pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
 
-        let mut guard = self.buffer.lock();
+        let mut guard = self.data.buffer.lock();
 
         // Check if there is data to receive.
-        if guard.is_empty() {
+        if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.buffer) == 1 {
+            if Arc::strong_count(&self.data) == 1 {
                 return Ok(0);
             }
 
             bail!(Again);
         }
 
-        let was_full = CAPACITY - guard.len() < ATOMIC_WRITE_SIZE;
+        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
 
         let mut read = 0;
-        for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.pop_front())) {
+        for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.bytes.pop_front())) {
             *dest = src;
             read += 1;
         }
@@ -78,21 +91,21 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, A
             return Ok(0);
         }
 
-        let mut guard = self.buffer.lock();
+        let mut guard = self.data.buffer.lock();
 
         // Check if there is data to receive.
-        if guard.is_empty() {
+        if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.buffer) == 1 {
+            if Arc::strong_count(&self.data) == 1 {
                 return Ok(0);
             }
 
             bail!(Again);
         }
-        let was_full = CAPACITY - guard.len() < ATOMIC_WRITE_SIZE;
+        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
 
-        let len = cmp::min(len, guard.len());
-        let (slice1, slice2) = guard.as_slices();
+        let len = cmp::min(len, guard.bytes.len());
+        let (slice1, slice2) = guard.bytes.as_slices();
         let len1 = cmp::min(len, slice1.len());
         let len2 = len - len1;
         let slice1 = &slice1[..len1];
@@ -105,7 +118,7 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, A
         }
 
         // Remove the bytes from the VecDeque.
-        guard.drain(..len);
+        guard.bytes.drain(..len);
 
         if was_full {
             self.notify.notify();
@@ -115,12 +128,12 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, A
     }
 
     pub fn poll_ready(&self, events: Events) -> Events {
-        let guard = self.buffer.lock();
+        let guard = self.data.buffer.lock();
 
         let mut ready_events = Events::empty();
 
-        let strong_count = Arc::strong_count(&self.buffer);
-        ready_events.set(Events::READ, !guard.is_empty() || strong_count == 1);
+        let strong_count = Arc::strong_count(&self.data);
+        ready_events.set(Events::READ, !guard.bytes.is_empty() || strong_count == 1);
         ready_events.set(Events::HUP, strong_count == 1);
 
         ready_events &= events;
@@ -135,42 +148,42 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> ReadHalf<CAPACITY, A
         self.notify.notify();
     }
 
-    pub fn make_write_half(&self) -> WriteHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
-        assert_eq!(Arc::strong_count(&self.buffer), 1);
+    pub fn make_write_half(&self) -> WriteHalf {
+        assert_eq!(Arc::strong_count(&self.data), 1);
         WriteHalf {
-            buffer: self.buffer.clone(),
+            data: self.data.clone(),
             notify: NotifyOnDrop(self.notify.0.clone()),
         }
     }
 }
 
-pub struct WriteHalf<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> {
-    buffer: Arc<Mutex<VecDeque<u8>>>,
+pub struct WriteHalf {
+    data: Arc<PipeData>,
     notify: NotifyOnDrop,
 }
 
-impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
+impl WriteHalf {
     pub fn write(&self, buf: &[u8]) -> Result<usize> {
         // Check if the write half has been closed.
-        ensure!(Arc::strong_count(&self.buffer) > 1, Pipe);
+        ensure!(Arc::strong_count(&self.data) > 1, Pipe);
 
         if buf.is_empty() {
             return Ok(0);
         }
 
-        let mut guard = self.buffer.lock();
+        let mut guard = self.data.buffer.lock();
 
-        let atomic_write = buf.len() <= ATOMIC_WRITE_SIZE;
-        let max_remaining_capacity = CAPACITY - guard.len();
+        let atomic_write = buf.len() <= self.data.atomic_write_size.get();
+        let remaining_capacity = guard.capacity - guard.bytes.len();
         if atomic_write {
-            ensure!(max_remaining_capacity >= buf.len(), Again);
+            ensure!(remaining_capacity >= buf.len(), Again);
         } else {
-            ensure!(max_remaining_capacity > 0, Again);
+            ensure!(remaining_capacity > 0, Again);
         }
-        let len = cmp::min(buf.len(), max_remaining_capacity);
+        let len = cmp::min(buf.len(), remaining_capacity);
         let buf = &buf[..len];
 
-        guard.extend(buf.iter().copied());
+        guard.bytes.extend(buf.iter().copied());
         drop(guard);
 
         self.notify.notify();
@@ -185,28 +198,28 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
         len: usize,
     ) -> Result<usize> {
         // Check if the write half has been closed.
-        ensure!(Arc::strong_count(&self.buffer) > 1, Pipe);
+        ensure!(Arc::strong_count(&self.data) > 1, Pipe);
 
         if len == 0 {
             return Ok(0);
         }
 
-        let mut guard = self.buffer.lock();
+        let mut guard = self.data.buffer.lock();
 
-        let atomic_write = len <= ATOMIC_WRITE_SIZE;
-        let max_remaining_capacity = CAPACITY - guard.len();
+        let atomic_write = len <= self.data.atomic_write_size.get();
+        let remaining_capacity = guard.capacity - guard.bytes.len();
         if atomic_write {
-            ensure!(max_remaining_capacity >= len, Again);
+            ensure!(remaining_capacity >= len, Again);
         } else {
-            ensure!(max_remaining_capacity > 0, Again);
+            ensure!(remaining_capacity > 0, Again);
         }
-        let len = cmp::min(len, max_remaining_capacity);
+        let len = cmp::min(len, remaining_capacity);
 
-        let start_idx = guard.len();
+        let start_idx = guard.bytes.len();
         // Reserve some space for the new bytes.
-        guard.resize(start_idx + len, 0);
+        guard.bytes.resize(start_idx + len, 0);
 
-        let (first, second) = guard.as_mut_slices();
+        let (first, second) = guard.bytes.as_mut_slices();
         let res = if second.len() >= len {
             let second_len = second.len();
             vm.read_bytes(pointer.get(), &mut second[second_len - len..])
@@ -222,7 +235,7 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
         // Rollback all bytes if an error occured.
         // FIXME: We should not roll back all bytes.
         if res.is_err() {
-            guard.truncate(start_idx);
+            guard.bytes.truncate(start_idx);
         }
 
         drop(guard);
@@ -237,9 +250,12 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
     pub fn poll_ready(&self, events: Events) -> Events {
         let mut ready_events = Events::empty();
 
-        let guard = self.buffer.lock();
-        let strong_count = Arc::strong_count(&self.buffer);
-        ready_events.set(Events::WRITE, guard.len() < CAPACITY || strong_count == 1);
+        let guard = self.data.buffer.lock();
+        let strong_count = Arc::strong_count(&self.data);
+        ready_events.set(
+            Events::WRITE,
+            guard.bytes.len() < guard.capacity || strong_count == 1,
+        );
         ready_events.set(Events::ERR, strong_count == 1);
         drop(guard);
 
@@ -248,20 +264,20 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
     }
 
     pub async fn ready_for_write(&self, count: usize) -> Result<()> {
-        let is_atomic = count <= ATOMIC_WRITE_SIZE;
+        let is_atomic = count <= self.data.atomic_write_size.get();
 
         loop {
             let wait = self.notify.wait();
 
             {
-                let guard = self.buffer.lock();
-                let max_remaining_capacity = CAPACITY - guard.len();
+                let guard = self.data.buffer.lock();
+                let remaining_capacity = guard.capacity - guard.bytes.len();
                 let can_write = if is_atomic {
-                    count <= max_remaining_capacity
+                    count <= remaining_capacity
                 } else {
-                    0 < max_remaining_capacity
+                    0 < remaining_capacity
                 };
-                if can_write || Arc::strong_count(&self.buffer) == 1 {
+                if can_write || Arc::strong_count(&self.data) == 1 {
                     break;
                 }
             }
@@ -280,10 +296,10 @@ impl<const CAPACITY: usize, const ATOMIC_WRITE_SIZE: usize> WriteHalf<CAPACITY, 
         self.notify.notify();
     }
 
-    pub fn make_read_half(&self) -> ReadHalf<CAPACITY, ATOMIC_WRITE_SIZE> {
-        assert_eq!(Arc::strong_count(&self.buffer), 1);
+    pub fn make_read_half(&self) -> ReadHalf {
+        assert_eq!(Arc::strong_count(&self.data), 1);
         ReadHalf {
-            buffer: self.buffer.clone(),
+            data: self.data.clone(),
             notify: NotifyOnDrop(self.notify.0.clone()),
         }
     }

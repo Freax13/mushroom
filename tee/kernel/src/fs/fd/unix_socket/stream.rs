@@ -27,8 +27,8 @@ const CAPACITY: usize = 262144;
 pub struct StreamUnixSocket {
     ino: u64,
     internal: Mutex<StreamUnixSocketInternal>,
-    write_half: stream_buffer::WriteHalf<CAPACITY, 1>,
-    read_half: stream_buffer::ReadHalf<CAPACITY, 1>,
+    write_half: stream_buffer::WriteHalf,
+    read_half: stream_buffer::ReadHalf,
     file_lock: FileLock,
 }
 
@@ -46,8 +46,8 @@ impl StreamUnixSocket {
         );
         flags.set(OpenFlags::CLOEXEC, r#type.contains(SocketPairType::CLOEXEC));
 
-        let (read_half1, write_half1) = stream_buffer::new();
-        let (read_half2, write_half2) = stream_buffer::new();
+        let (read_half1, write_half1) = stream_buffer::new(CAPACITY, None);
+        let (read_half2, write_half2) = stream_buffer::new(CAPACITY, None);
 
         (
             Self {

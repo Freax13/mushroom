@@ -1,3 +1,5 @@
+use core::num::NonZeroUsize;
+
 use alloc::{
     boxed::Box,
     sync::{Arc, Weak},
@@ -29,8 +31,8 @@ pub struct NamedPipe {
 }
 
 struct NamedPipeInternal {
-    read_half: Weak<stream_buffer::ReadHalf<CAPACITY, PIPE_BUF>>,
-    write_half: Weak<stream_buffer::WriteHalf<CAPACITY, PIPE_BUF>>,
+    read_half: Weak<stream_buffer::ReadHalf>,
+    write_half: Weak<stream_buffer::WriteHalf>,
 }
 
 impl NamedPipe {
@@ -63,7 +65,8 @@ impl NamedPipe {
 
                 write_half
             } else {
-                let (read_half, write_half) = stream_buffer::new();
+                let (read_half, write_half) =
+                    stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
                 let read_half = Arc::new(read_half);
                 let write_half = Arc::new(write_half);
 
@@ -116,7 +119,8 @@ impl NamedPipe {
                         (read_half, write_half)
                     }
                     (None, None) => {
-                        let (read_half, write_half) = stream_buffer::new();
+                        let (read_half, write_half) =
+                            stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
                         let read_half = Arc::new(read_half);
                         let write_half = Arc::new(write_half);
 
@@ -147,7 +151,8 @@ impl NamedPipe {
 
                 read_half
             } else {
-                let (read_half, write_half) = stream_buffer::new();
+                let (read_half, write_half) =
+                    stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
                 let read_half = Arc::new(read_half);
                 let write_half = Arc::new(write_half);
 
@@ -188,7 +193,7 @@ impl NamedPipe {
 struct ReadHalf {
     node: DynINode,
     path: Path,
-    read_half: Arc<stream_buffer::ReadHalf<CAPACITY, PIPE_BUF>>,
+    read_half: Arc<stream_buffer::ReadHalf>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
@@ -266,7 +271,7 @@ impl OpenFileDescription for ReadHalf {
 struct WriteHalf {
     node: DynINode,
     path: Path,
-    write_half: Arc<stream_buffer::WriteHalf<CAPACITY, PIPE_BUF>>,
+    write_half: Arc<stream_buffer::WriteHalf>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
@@ -348,8 +353,8 @@ impl OpenFileDescription for WriteHalf {
 struct FullReadWrite {
     node: DynINode,
     path: Path,
-    read_half: Arc<stream_buffer::ReadHalf<CAPACITY, PIPE_BUF>>,
-    write_half: Arc<stream_buffer::WriteHalf<CAPACITY, PIPE_BUF>>,
+    read_half: Arc<stream_buffer::ReadHalf>,
+    write_half: Arc<stream_buffer::WriteHalf>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
 }
