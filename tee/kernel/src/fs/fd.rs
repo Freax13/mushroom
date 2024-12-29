@@ -31,6 +31,7 @@ use crate::{
 use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
+use file::File;
 use log::debug;
 
 use crate::{
@@ -320,6 +321,8 @@ bitflags! {
     }
 }
 
+pub struct PipeBlocked;
+
 #[async_trait]
 pub trait OpenFileDescription: Send + Sync + 'static {
     fn flags(&self) -> OpenFlags;
@@ -408,6 +411,68 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let _ = read_half;
+        let _ = offset;
+        let _ = len;
+        bail!(Inval)
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let _ = write_half;
+        let _ = offset;
+        let _ = len;
+        bail!(Inval)
+    }
+
+    /// Copy `len` bytes from `self` at offset `offset_in` to `fd_out` at
+    /// offset `offset_out`.
+    ///
+    /// If this file descriptor represents a file, it should get a reference to
+    /// the file and call copy_range_from_file on `fd_out`.
+    fn copy_file_range(
+        &self,
+        offset_in: Option<usize>,
+        fd_out: &dyn OpenFileDescription,
+        offset_out: Option<usize>,
+        len: usize,
+    ) -> Result<usize> {
+        let _ = offset_in;
+        let _ = fd_out;
+        let _ = offset_out;
+        let _ = len;
+        bail!(Inval)
+    }
+
+    /// Copy `len` bytes from `file_in` at offset `offset_in` to `self` at
+    /// offset `offset_out`.
+    ///
+    /// If this file descriptor represents a file, it should get a reference to
+    /// the file and call [`File::copy_file_range`].
+    fn copy_range_from_file(
+        &self,
+        offset_out: Option<usize>,
+        file_in: &dyn File,
+        offset_in: usize,
+        len: usize,
+    ) -> Result<usize> {
+        let _ = offset_out;
+        let _ = file_in;
+        let _ = offset_in;
+        let _ = len;
+        bail!(Inval)
+    }
+
     fn truncate(&self, length: usize) -> Result<()> {
         let _ = length;
         bail!(Inval)
@@ -443,6 +508,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn getdents64(&self, capacity: usize, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
         let _ = capacity;
         bail!(NotDir)
+    }
+
+    fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
+        None
+    }
+
+    fn as_pipe_write_half(&self) -> Option<&stream_buffer::WriteHalf> {
+        None
     }
 
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {

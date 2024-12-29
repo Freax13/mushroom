@@ -1,4 +1,4 @@
-use core::iter::from_fn;
+use core::iter::{from_fn, repeat_n};
 
 use alloc::sync::Arc;
 use kernel_macros::register;
@@ -8,7 +8,9 @@ use x86_64::instructions::random::RdRand;
 use crate::{
     error::{bail, Result},
     fs::{
-        fd::{Events, FileLock, LazyFileLockRecord, OpenFileDescription},
+        fd::{
+            stream_buffer, Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked,
+        },
         node::FileAccessContext,
         path::Path,
         FileSystem,
@@ -112,6 +114,26 @@ impl OpenFileDescription for Null {
 
     fn pwrite(&self, _pos: usize, buf: &[u8]) -> Result<usize> {
         Ok(buf.len())
+    }
+
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        read_half.splice_to(len, |buffer, len| {
+            buffer.drain(..len);
+        })
+    }
+
+    fn splice_to(
+        &self,
+        _write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        Ok(Ok(0))
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
@@ -220,6 +242,28 @@ impl OpenFileDescription for Zero {
         Ok(buf.len())
     }
 
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        read_half.splice_to(len, |buffer, len| {
+            buffer.drain(..len);
+        })
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        write_half.splice_from(len, |buffer, len| {
+            buffer.extend(repeat_n(0, len));
+        })
+    }
+
     fn truncate(&self, _length: usize) -> Result<()> {
         Ok(())
     }
@@ -326,6 +370,28 @@ impl OpenFileDescription for Random {
         Ok(len)
     }
 
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        read_half.splice_to(len, |buffer, len| {
+            buffer.drain(..len);
+        })
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        write_half.splice_from(len, |buffer, len| {
+            buffer.extend(random_bytes().take(len));
+        })
+    }
+
     fn truncate(&self, _length: usize) -> Result<()> {
         Ok(())
     }
@@ -425,6 +491,28 @@ impl OpenFileDescription for URandom {
         len: usize,
     ) -> crate::error::Result<usize> {
         Ok(len)
+    }
+
+    fn splice_from(
+        &self,
+        read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        read_half.splice_to(len, |buffer, len| {
+            buffer.drain(..len);
+        })
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        write_half.splice_from(len, |buffer, len| {
+            buffer.extend(random_bytes().take(len));
+        })
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {

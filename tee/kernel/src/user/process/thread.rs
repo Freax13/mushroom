@@ -372,6 +372,7 @@ impl Thread {
                 state.sigmask.add(sig_info.signal);
             }
             let sigaltstack = state.sigaltstack;
+            state.sigaltstack.flags |= StackFlags::ONSTACK;
             if sigaltstack.flags.contains(StackFlags::AUTODISARM)
                 && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
             {

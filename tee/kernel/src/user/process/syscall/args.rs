@@ -1137,6 +1137,8 @@ unsafe impl CheckedBitPattern for UserDescFlags {
 
 pub struct Offset(#[allow(dead_code)] pub i64);
 
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
 pub struct LongOffset(#[allow(dead_code)] pub i64);
 
 bitflags! {
@@ -1195,7 +1197,9 @@ impl TryFrom<RLimit64> for RLimit {
 }
 
 bitflags! {
-    pub struct SpliceFlags {}
+    pub struct SpliceFlags {
+        const NONBLOCK = 1 << 1;
+    }
 }
 
 bitflags! {

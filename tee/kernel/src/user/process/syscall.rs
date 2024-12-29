@@ -29,6 +29,7 @@ use crate::{
             eventfd::EventFd,
             path::PathFd,
             pipe,
+            stream_buffer::{self, SpliceBlockedError},
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
             Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
@@ -55,7 +56,7 @@ use super::{
         new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
         StackFlags, Thread, ThreadGuard, Uid,
     },
-    Process,
+    Process, WaitFilter,
 };
 
 pub mod args;
@@ -125,6 +126,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysAccess);
     handlers.register(SysPipe);
     handlers.register(SysSelect);
+    handlers.register(SysMsync);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
@@ -1104,6 +1106,14 @@ async fn select_impl(
     Ok(set)
 }
 
+#[syscall(i386 = 144, amd64 = 26)]
+fn msync(addr: Pointer<c_void>, len: u64, flags: u64) -> SyscallResult {
+    // We don't need to do anything:
+    // 1. We don't support persistent disks.
+    // 2. Shared mappings always use the same backing memory used by the file.
+    Ok(0)
+}
+
 #[syscall(i386 = 219, amd64 = 28)]
 fn madvise(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1649,10 +1659,10 @@ async fn wait4(
 
     let no_hang = options.contains(WaitOptions::NOHANG);
     let pid = match pid {
-        ..=-2 => todo!(),
-        -1 => None,
-        0 => todo!(),
-        1.. => Some(pid as u32),
+        ..=-2 => WaitFilter::ExactPgid(-pid as u32),
+        -1 => WaitFilter::Any,
+        0 => WaitFilter::ExactPgid(thread.process().process_group.lock().pgid),
+        1.. => WaitFilter::ExactPid(pid as u32),
     };
 
     let opt = thread.process().wait_for_child_death(pid, no_hang).await?;
@@ -3687,6 +3697,7 @@ async fn pselect6(
 
 #[syscall(i386 = 313, amd64 = 275)]
 async fn splice(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
@@ -3695,40 +3706,131 @@ async fn splice(
     len: u64,
     flags: SpliceFlags,
 ) -> SyscallResult {
+    let len = usize_from(len);
+
     let fd_in = fdtable.get(fd_in)?;
     let fd_out = fdtable.get(fd_out)?;
 
-    if !off_in.is_null() || !off_out.is_null() {
-        todo!()
-    }
+    let read_nonblock = fd_in.flags().contains(OpenFlags::NONBLOCK);
+    let pipe_read_nonblock = read_nonblock || flags.contains(SpliceFlags::NONBLOCK);
+    let write_nonblock = fd_out.flags().contains(OpenFlags::NONBLOCK);
+    let pipe_write_nonblock = write_nonblock || flags.contains(SpliceFlags::NONBLOCK);
 
-    let mut len = usize_from(len);
-    let mut copied = 0;
+    let read_half = fd_in.as_pipe_read_half();
+    let write_half = fd_out.as_pipe_write_half();
+    match (read_half, write_half) {
+        (Some(read_half), Some(write_half)) => {
+            ensure!(off_in.is_null(), SPipe);
+            ensure!(off_out.is_null(), SPipe);
 
-    let mut buffer = [0; 128];
+            loop {
+                // Start wait operations on both halves.
+                let read_half_wait = read_half.wait();
+                let write_half_wait = write_half.wait();
 
-    while len > 0 {
-        // Setup buffer.
-        let chunk_len = cmp::min(buffer.len(), len);
-        let buffer = &mut buffer[..chunk_len];
-
-        // Read from fd_in.
-        let num = do_io(&*fd_in, Events::READ, || fd_in.read(buffer)).await?;
-        if num == 0 {
-            break;
+                match stream_buffer::splice(read_half, write_half, len) {
+                    Ok(len) => return Ok(u64::from_usize(len)),
+                    Err(err) => {
+                        // If the operation can't be completed right now, wait and try again.
+                        match err {
+                            SpliceBlockedError::Read => {
+                                ensure!(!pipe_read_nonblock, Again);
+                                read_half_wait.await
+                            }
+                            SpliceBlockedError::Write => {
+                                ensure!(!pipe_write_nonblock, Again);
+                                write_half_wait.await
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
         }
+        (Some(read_half), None) => {
+            ensure!(off_in.is_null(), SPipe);
 
-        // Write to fd_out.
-        let buffer = &buffer[..num];
-        fd_out.write_all(buffer).await?;
+            let offset = if off_out.is_null() {
+                let offset = virtual_memory.read(off_out)?;
+                Some(usize::try_from(offset.0)?)
+            } else {
+                None
+            };
 
-        // Update len and copied.
-        len -= num;
-        let num = u64::from_usize(num);
-        copied += num;
+            loop {
+                // Start a wait operation on the read half.
+                let wait = read_half.wait();
+
+                let res = fd_in.splice_from(read_half, offset, len);
+
+                // If the operation can't be completed right now, wait and try again.
+                if res
+                    .as_ref()
+                    .is_err_and(|err| err.kind() == ErrorKind::Again)
+                {
+                    ensure!(!write_nonblock, Again);
+                    fd_out.ready_for_write(1).await?;
+                    continue;
+                }
+
+                // If the pipe wasn't ready, wait for it to be ready and try again.
+                let Ok(len) = res? else {
+                    ensure!(!pipe_read_nonblock, Again);
+                    wait.await;
+                    continue;
+                };
+
+                // Otherwise, write back the new offset and return the result.
+                if let Some(offset) = offset {
+                    let new_offset = offset + len;
+                    virtual_memory.write(off_out, LongOffset(i64::try_from(new_offset)?))?;
+                }
+                return Ok(u64::from_usize(len));
+            }
+        }
+        (None, Some(write_half)) => {
+            ensure!(off_out.is_null(), SPipe);
+
+            let offset = if off_in.is_null() {
+                let offset = virtual_memory.read(off_in)?;
+                Some(usize::try_from(offset.0)?)
+            } else {
+                None
+            };
+
+            loop {
+                // Start a wait operation on the write half.
+                let wait = write_half.wait();
+
+                let res = fd_in.splice_to(write_half, offset, len);
+
+                // If the operation can't be completed right now, wait and try again.
+                if res
+                    .as_ref()
+                    .is_err_and(|err| err.kind() == ErrorKind::Again)
+                {
+                    ensure!(!read_nonblock, Again);
+                    fd_in.ready(Events::READ).await?;
+                    continue;
+                }
+
+                // If the pipe wasn't ready, wait for it to be ready and try again.
+                let Ok(len) = res? else {
+                    ensure!(!pipe_write_nonblock, Again);
+                    wait.await;
+                    continue;
+                };
+
+                // Otherwise, write back the new offset and return the result.
+                if let Some(offset) = offset {
+                    let new_offset = offset + len;
+                    virtual_memory.write(off_in, LongOffset(i64::try_from(new_offset)?))?;
+                }
+                return Ok(u64::from_usize(len));
+            }
+        }
+        (None, None) => bail!(Inval),
     }
-
-    Ok(copied)
 }
 
 #[syscall(i386 = 320, amd64 = 280)]
@@ -3964,7 +4066,8 @@ fn getrandom(
 }
 
 #[syscall(i386 = 377, amd64 = 326)]
-async fn copy_file_range(
+fn copy_file_range(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
@@ -3973,16 +4076,38 @@ async fn copy_file_range(
     len: u64,
     flags: CopyFileRangeFlags,
 ) -> SyscallResult {
-    splice(
-        fdtable,
-        fd_in,
-        off_in,
-        fd_out,
-        off_out,
-        len,
-        SpliceFlags::empty(),
-    )
-    .await
+    let fd_in = fdtable.get(fd_in)?;
+    let fd_out = fdtable.get(fd_out)?;
+
+    // Read the offset.
+    let off_in_val = if !off_in.is_null() {
+        let off_in_val = virtual_memory.read(off_in)?;
+        Some(usize::try_from(off_in_val.0)?)
+    } else {
+        None
+    };
+    let off_out_val = if !off_out.is_null() {
+        let off_out_val = virtual_memory.read(off_out)?;
+        Some(usize::try_from(off_out_val.0)?)
+    } else {
+        None
+    };
+    let len = usize::try_from(len)?;
+
+    // Do the copy operations.
+    let len = fd_in.copy_file_range(off_in_val, &*fd_out, off_out_val, len)?;
+
+    // Write the offset back.
+    if let Some(off_in_val) = off_in_val {
+        let new_offset = off_in_val + len;
+        virtual_memory.write(off_in, LongOffset(i64::try_from(new_offset)?))?;
+    }
+    if let Some(off_out_val) = off_out_val {
+        let new_offset = off_out_val + len;
+        virtual_memory.write(off_out, LongOffset(i64::try_from(new_offset)?))?;
+    }
+
+    Ok(u64::from_usize(len))
 }
 
 #[syscall(i386 = 452, amd64 = 452)]
