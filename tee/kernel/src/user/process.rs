@@ -245,7 +245,7 @@ impl Process {
     }
 
     pub fn thread_group_leader(&self) -> Weak<Thread> {
-        self.threads.lock()[0].clone()
+        self.threads.lock().first().cloned().unwrap_or_default()
     }
 
     pub async fn exit_status(&self) -> WStatus {
