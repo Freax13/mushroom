@@ -3973,7 +3973,8 @@ fn getrandom(
 }
 
 #[syscall(i386 = 377, amd64 = 326)]
-async fn copy_file_range(
+fn copy_file_range(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
@@ -3982,16 +3983,38 @@ async fn copy_file_range(
     len: u64,
     flags: CopyFileRangeFlags,
 ) -> SyscallResult {
-    splice(
-        fdtable,
-        fd_in,
-        off_in,
-        fd_out,
-        off_out,
-        len,
-        SpliceFlags::empty(),
-    )
-    .await
+    let fd_in = fdtable.get(fd_in)?;
+    let fd_out = fdtable.get(fd_out)?;
+
+    // Read the offset.
+    let off_in_val = if !off_in.is_null() {
+        let off_in_val = virtual_memory.read(off_in)?;
+        Some(usize::try_from(off_in_val.0)?)
+    } else {
+        None
+    };
+    let off_out_val = if !off_out.is_null() {
+        let off_out_val = virtual_memory.read(off_out)?;
+        Some(usize::try_from(off_out_val.0)?)
+    } else {
+        None
+    };
+    let len = usize::try_from(len)?;
+
+    // Do the copy operations.
+    let len = fd_in.copy_file_range(off_in_val, &*fd_out, off_out_val, len)?;
+
+    // Write the offset back.
+    if let Some(off_in_val) = off_in_val {
+        let new_offset = off_in_val + len;
+        virtual_memory.write(off_in, LongOffset(i64::try_from(new_offset)?))?;
+    }
+    if let Some(off_out_val) = off_out_val {
+        let new_offset = off_out_val + len;
+        virtual_memory.write(off_out, LongOffset(i64::try_from(new_offset)?))?;
+    }
+
+    Ok(u64::from_usize(len))
 }
 
 #[syscall(i386 = 452, amd64 = 452)]

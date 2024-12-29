@@ -1,4 +1,4 @@
-use core::{any::Any, ops::Deref};
+use core::{any::Any, cmp, ops::Deref};
 
 use crate::{
     char_dev,
@@ -862,7 +862,7 @@ impl File for TmpFsFile {
         if !no_atime {
             guard.atime = now(ClockId::Realtime);
         }
-        guard.buffer.read(offset, buf)
+        Ok(guard.buffer.read(offset, buf))
     }
 
     fn read_to_user(
@@ -923,6 +923,113 @@ impl File for TmpFsFile {
         guard.mtime = now;
         let offset = guard.buffer.len();
         guard.buffer.write_from_user(offset, vm, pointer, len)
+    }
+
+
+    fn copy_file_range(
+        &self,
+        mut offset_in: usize,
+        out: &dyn File,
+        mut offset_out: usize,
+        mut len: usize,
+    ) -> Result<usize> {
+        // TODO: Update access times.
+
+        if len == 0 {
+            return Ok(0);
+        }
+
+        let mut copied = 0;
+
+        if core::ptr::addr_eq(self, out) {
+            // Make sure the range don't overlap.
+            let range_in = offset_in..offset_in + len;
+            let range_out = offset_out..offset_out + len;
+            ensure!(
+                !range_in.contains(&range_out.start)
+                    && !range_in.contains(&range_out.end)
+                    && !range_out.contains(&range_in.start)
+                    && !range_out.contains(&range_in.end),
+                Inval
+            );
+
+            let mut guard = self.internal.write();
+            let mut chunk = [0; 0x1000];
+            while len > 0 {
+                let chunk_len = cmp::min(len, chunk.len());
+                let chunk = &mut chunk[..chunk_len];
+
+                // Copy bytes from the in file.
+                let n = guard.buffer.read(offset_in, chunk);
+
+                // Exit the loop if there are no more bytes to be copied.
+                if n == 0 {
+                    break;
+                }
+
+                // Copy bytes to the out file.
+                let res = guard.buffer.write(offset_out, &chunk[..n]);
+                let n = match res {
+                    Ok(n) => n,
+                    Err(err) => {
+                        // If this is the first write operation, return the
+                        // error.
+                        if copied == 0 {
+                            return Err(err);
+                        }
+                        // Otherwise exit the loop.
+                        break;
+                    }
+                };
+
+                // Advance all the counters.
+                len -= n;
+                offset_in += n;
+                offset_out += n;
+                copied += n;
+            }
+        } else {
+            let out = <dyn Any>::downcast_ref::<Self>(out as &dyn Any).ok_or(err!(XDev))?;
+
+            let (in_guard, mut out_guard) = self.internal.write_two(&out.internal);
+
+            let mut chunk = [0; 0x1000];
+            while len > 0 {
+                let chunk_len = cmp::min(len, chunk.len());
+                let chunk = &mut chunk[..chunk_len];
+
+                // Copy bytes from the in file.
+                let n = in_guard.buffer.read(offset_in, chunk);
+
+                // Exit the loop if there are no more bytes to be copied.
+                if n == 0 {
+                    break;
+                }
+
+                // Copy bytes to the out file.
+                let res = out_guard.buffer.write(offset_out, &chunk[..n]);
+                let n = match res {
+                    Ok(n) => n,
+                    Err(err) => {
+                        // If this is the first write operation, return the
+                        // error.
+                        if copied == 0 {
+                            return Err(err);
+                        }
+                        // Otherwise exit the loop.
+                        break;
+                    }
+                };
+
+                // Advance all the counters.
+                len -= n;
+                offset_in += n;
+                offset_out += n;
+                copied += n;
+            }
+        }
+
+        Ok(copied)
     }
 
     fn truncate(&self, len: usize) -> Result<()> {

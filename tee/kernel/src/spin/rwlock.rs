@@ -1,5 +1,6 @@
 use core::{
     cell::UnsafeCell,
+    cmp,
     num::Wrapping,
     ops::{Deref, DerefMut},
     panic::Location,
@@ -142,6 +143,38 @@ impl<T> RwLock<T> {
             if counter.0 == 0 {
                 warn!("lock stalling at {}", Location::caller());
             }
+        }
+    }
+
+    /// Lock two mutexes. This method avoids deadlocks with other threads
+    /// trying to acquire the same Mutexes.
+    #[track_caller]
+    pub fn write_two<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> (WriteRwLockGuard<'a, T>, WriteRwLockGuard<'a, T>) {
+        // Compare the pointers of the mutexes to get a determinstic ordering.
+        let self_ptr = self as *const Self;
+        let other_ptr = other as *const Self;
+        let cmp = self_ptr.cmp(&other_ptr);
+
+        // Lock the mutex with the lower address first.
+        match cmp {
+            cmp::Ordering::Less => loop {
+                let self_guard = self.write();
+                let Some(other_guard) = other.try_write() else {
+                    continue;
+                };
+                return (self_guard, other_guard);
+            },
+            cmp::Ordering::Equal => panic!("can't lock the same Mutex twice"),
+            cmp::Ordering::Greater => loop {
+                let other_guard = other.write();
+                let Some(self_guard) = self.try_write() else {
+                    continue;
+                };
+                return (self_guard, other_guard);
+            },
         }
     }
 

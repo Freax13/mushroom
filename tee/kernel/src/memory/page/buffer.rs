@@ -67,10 +67,10 @@ impl Buffer {
         Ok(())
     }
 
-    pub fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+    pub fn read(&self, offset: usize, buf: &mut [u8]) -> usize {
         let len = cmp::min(self.len.saturating_sub(offset), buf.len());
         if len == 0 {
-            return Ok(0);
+            return 0;
         }
 
         let start = offset;
@@ -111,7 +111,7 @@ impl Buffer {
             }
         }
 
-        Ok(len)
+        len
     }
 
     pub fn read_to_user(
