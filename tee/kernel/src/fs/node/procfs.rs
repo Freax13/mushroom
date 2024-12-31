@@ -8,6 +8,7 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
+use constants::MAX_APS_COUNT;
 
 use crate::{
     error::{bail, ensure, err, ErrorKind, Result},
@@ -22,10 +23,11 @@ use crate::{
         FileSystem, StatFs,
     },
     memory::page::KernelPage,
+    time::now,
     user::process::{
-        memory::VirtualMemory,
+        memory::{VirtualMemory, WriteToVec},
         syscall::args::{
-            FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
+            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
         },
         thread::{Gid, Uid},
         Process,
@@ -69,10 +71,12 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
         file_lock_record: LazyFileLockRecord::new(),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
-            fs,
+            fs: fs.clone(),
             ino: new_ino(),
             file_lock_record: LazyFileLockRecord::new(),
         }),
+        stat_file: StatFile::new(fs.clone()),
+        uptime_file: UptimeFile::new(fs),
     }))
 }
 
@@ -83,6 +87,8 @@ struct ProcFsRoot {
     location: MountLocation,
     file_lock_record: LazyFileLockRecord,
     self_link: Arc<SelfLink>,
+    stat_file: Arc<StatFile>,
+    uptime_file: Arc<UptimeFile>,
 }
 
 impl INode for ProcFsRoot {
@@ -135,19 +141,25 @@ impl Directory for ProcFsRoot {
     }
 
     fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
-        if file_name == "self" {
-            Ok(self.self_link.clone())
-        } else {
-            let bytes = file_name.as_bytes();
-            let str = core::str::from_utf8(bytes).map_err(|_| err!(NoEnt))?;
-            let pid = str.parse().map_err(|_| err!(NoEnt))?;
-            let process = Process::find_by_pid(pid).ok_or(err!(NoEnt))?;
-            Ok(ProcessDir::new(
-                StaticLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned()),
-                self.fs.clone(),
-                Arc::downgrade(&process),
-            ))
-        }
+        Ok(match file_name.as_bytes() {
+            b"self" => self.self_link.clone(),
+            b"stat" => self.stat_file.clone(),
+            b"uptime" => self.uptime_file.clone(),
+            _ => {
+                let bytes = file_name.as_bytes();
+                let str = core::str::from_utf8(bytes).map_err(|_| err!(NoEnt))?;
+                let pid = str.parse().map_err(|_| err!(NoEnt))?;
+                let process = Process::find_by_pid(pid).ok_or(err!(NoEnt))?;
+                ProcessDir::new(
+                    StaticLocation::new(
+                        self.this.upgrade().unwrap(),
+                        file_name.clone().into_owned(),
+                    ),
+                    self.fs.clone(),
+                    Arc::downgrade(&process),
+                )
+            }
+        })
     }
 
     fn create_file(
@@ -214,6 +226,16 @@ impl Directory for ProcFsRoot {
             ino: self.self_link.ino,
             ty: FileType::Link,
             name: DirEntryName::FileName(FileName::new(b"self").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.stat_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.uptime_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"uptime").unwrap()),
         });
         entries.extend(Process::all().map(|process| {
             DirEntry {
@@ -353,6 +375,7 @@ pub struct ProcessInos {
     fd_dir: u64,
     exe_link: u64,
     maps_file: u64,
+    stat_file: u64,
 }
 
 impl ProcessInos {
@@ -363,6 +386,7 @@ impl ProcessInos {
             fd_dir: new_ino(),
             exe_link: new_ino(),
             maps_file: new_ino(),
+            stat_file: new_ino(),
         }
     }
 }
@@ -376,6 +400,7 @@ struct ProcessDir {
     fd_file_lock_record: LazyFileLockRecord,
     exe_link_lock_record: LazyFileLockRecord,
     maps_file_lock_record: LazyFileLockRecord,
+    stat_file_lock_record: LazyFileLockRecord,
 }
 
 impl ProcessDir {
@@ -393,6 +418,7 @@ impl ProcessDir {
             fd_file_lock_record: LazyFileLockRecord::new(),
             exe_link_lock_record: LazyFileLockRecord::new(),
             maps_file_lock_record: LazyFileLockRecord::new(),
+            stat_file_lock_record: LazyFileLockRecord::new(),
         })
     }
 }
@@ -448,28 +474,30 @@ impl Directory for ProcessDir {
     }
 
     fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
-        if file_name == "fd" {
-            Ok(FdDir::new(
+        Ok(match file_name.as_bytes() {
+            b"fd" => FdDir::new(
                 StaticLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned()),
                 self.fs.clone(),
                 self.process.clone(),
                 self.fd_file_lock_record.get().clone(),
-            ))
-        } else if file_name == "exe" {
-            Ok(ExeLink::new(
+            ),
+            b"exe" => ExeLink::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.exe_link_lock_record.get().clone(),
-            ))
-        } else if file_name == "maps" {
-            Ok(MapsFile::new(
+            ),
+            b"maps" => MapsFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.maps_file_lock_record.get().clone(),
-            ))
-        } else {
-            bail!(NoEnt)
-        }
+            ),
+            b"stat" => ProcessStatFile::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.stat_file_lock_record.get().clone(),
+            ),
+            _ => bail!(NoEnt),
+        })
     }
 
     fn create_file(
@@ -547,6 +575,11 @@ impl Directory for ProcessDir {
             ino: process.inos.maps_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"maps").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.stat_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
         });
         Ok(entries)
     }
@@ -1137,6 +1170,424 @@ impl File for MapsFile {
         let maps = &maps[offset..];
         let len = cmp::min(maps.len(), len);
         vm.write_bytes(pointer.get(), &maps[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append_from_user(
+        &self,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+struct ProcessStatFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
+}
+
+impl ProcessStatFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            process,
+            file_lock_record,
+        })
+    }
+}
+
+impl INode for ProcessStatFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.maps_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+}
+
+impl File for ProcessStatFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let stat = thread.lock().stat();
+        let offset = cmp::min(offset, stat.len());
+        let stat = &stat[offset..];
+        let len = cmp::min(stat.len(), buf.len());
+        buf[..len].copy_from_slice(&stat[..len]);
+        Ok(len)
+    }
+
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _no_atime: bool,
+    ) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let stat = thread.lock().stat();
+        let offset = cmp::min(offset, stat.len());
+        let stat = &stat[offset..];
+        let len = cmp::min(stat.len(), len);
+        vm.write_bytes(pointer.get(), &stat[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append_from_user(
+        &self,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+struct StatFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: LazyFileLockRecord,
+}
+
+impl StatFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        // TODO: Don't hard-code values.
+        buffer
+            .extend_from_slice(b"cpu 10132153 290696 3084719 46828483 16683 0 25195 0 175628 0\n");
+        for cpu in 0..MAX_APS_COUNT {
+            writeln!(
+                buffer,
+                "cpu{cpu} 10132153 290696 3084719 46828483 16683 0 25195 0 175628 0",
+            )
+            .unwrap();
+        }
+
+        buffer
+    }
+}
+
+impl INode for StatFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+}
+
+impl File for StatFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.len());
+        buf[..len].copy_from_slice(&content[..len]);
+        Ok(len)
+    }
+
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _no_atime: bool,
+    ) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), len);
+        vm.write_bytes(pointer.get(), &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append_from_user(
+        &self,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+struct UptimeFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: LazyFileLockRecord,
+}
+
+impl UptimeFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        let uptime = now(ClockId::Monotonic);
+        // TODO: We currently don't track the idle time, so we just multiple
+        // the uptime by 3.
+        let idle_time = uptime.saturating_add(uptime).saturating_add(uptime);
+
+        write!(
+            buffer,
+            "{}.{:02}",
+            uptime.tv_sec,
+            uptime.tv_nsec / 10_000_000
+        )
+        .unwrap();
+        write!(
+            buffer,
+            "{}.{:02}",
+            idle_time.tv_sec,
+            idle_time.tv_nsec / 10_000_000
+        )
+        .unwrap();
+
+        buffer
+    }
+}
+
+impl INode for UptimeFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+}
+
+impl File for UptimeFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.len());
+        buf[..len].copy_from_slice(&content[..len]);
+        Ok(len)
+    }
+
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _no_atime: bool,
+    ) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), len);
+        vm.write_bytes(pointer.get(), &content[..len])?;
         Ok(len)
     }
 

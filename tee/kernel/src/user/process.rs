@@ -14,6 +14,7 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use arrayvec::ArrayVec;
 use futures::{select_biased, FutureExt};
 use limits::{CurrentStackLimit, Limits};
 use syscall::args::{ClockId, Rusage, Timespec};
@@ -28,7 +29,7 @@ use crate::{
             tmpfs::{TmpFs, TmpFsFile},
             DynINode, FileAccessContext, INode,
         },
-        path::Path,
+        path::{Path, PathSegment},
         StaticFile,
     },
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
@@ -59,8 +60,11 @@ pub mod syscall;
 pub mod thread;
 pub mod usage;
 
+const TASK_COMM_CAPACITY: usize = 16;
+
 pub struct Process {
     pid: u32,
+    start_time: Timespec,
     futexes: Arc<Futexes>,
     exit_status: OnceCell<WStatus>,
     parent: Weak<Self>,
@@ -74,6 +78,7 @@ pub struct Process {
     running: AtomicUsize,
     pub inos: ProcessInos,
     exe: RwLock<Path>,
+    task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
     stop_state: StopState,
     pub credentials: Mutex<Credentials>,
@@ -99,8 +104,19 @@ impl Process {
         limits: Limits,
         umask: FileMode,
     ) -> Arc<Self> {
+        let PathSegment::FileName(last_path_segment) = exe.segments().last().unwrap() else {
+            unreachable!()
+        };
+        let task_comm = last_path_segment
+            .as_bytes()
+            .iter()
+            .copied()
+            .take(TASK_COMM_CAPACITY)
+            .collect();
+
         let this = Self {
             pid: first_tid,
+            start_time: now(ClockId::Monotonic),
             futexes: Arc::new(Futexes::new()),
             exit_status: OnceCell::new(),
             parent: parent.clone(),
@@ -113,6 +129,7 @@ impl Process {
             running: AtomicUsize::new(0),
             inos: ProcessInos::new(),
             exe: RwLock::new(exe),
+            task_comm: Mutex::new(task_comm),
             alarm: Mutex::new(None),
             stop_state: StopState::default(),
             credentials: Mutex::new(credentials),
@@ -137,8 +154,24 @@ impl Process {
         self.pid
     }
 
+    pub fn ppid(&self) -> u32 {
+        self.parent.upgrade().map_or(1, |parent| parent.pid())
+    }
+
+    pub fn pgrp(&self) -> u32 {
+        self.process_group.lock().pgid
+    }
+
+    pub fn sid(&self) -> u32 {
+        self.process_group.lock().session.lock().sid
+    }
+
     pub fn exe(&self) -> Path {
         self.exe.read().clone()
+    }
+
+    pub fn task_comm(&self) -> ArrayVec<u8, TASK_COMM_CAPACITY> {
+        self.task_comm.lock().clone()
     }
 
     pub fn cwd(&self) -> DynINode {

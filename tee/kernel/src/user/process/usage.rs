@@ -24,9 +24,7 @@ impl MemoryUsage {
             rss: AtomicU64::new(rss),
         }
     }
-}
 
-impl MemoryUsage {
     pub fn record_minor_page_fault(&self) {
         self.minflt.fetch_add(1, Ordering::Relaxed);
     }
@@ -43,6 +41,10 @@ impl MemoryUsage {
     pub fn decrease_rss(&self, delta: usize) {
         self.rss
             .fetch_sub(u64::from_usize(delta), Ordering::Relaxed);
+    }
+
+    pub fn rss(&self) -> u64 {
+        self.rss.load(Ordering::Relaxed)
     }
 }
 

@@ -29,6 +29,7 @@ use alloc::{
     collections::VecDeque,
     string::String,
     sync::{Arc, Weak},
+    vec::Vec,
 };
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -46,7 +47,7 @@ use crate::{
 
 use super::{
     limits::{CurrentStackLimit, Limits},
-    memory::VirtualMemory,
+    memory::{VirtualMemory, WriteToVec},
     syscall::{
         args::{FileMode, Nice, Pointer, Rusage, Signal, UserDesc, WStatus},
         cpu_state::{CpuState, Exit, PageFaultExit},
@@ -671,6 +672,110 @@ impl ThreadGuard<'_> {
 
     pub fn get_rusage(&self) -> Rusage {
         usage::collect(self.virtual_memory.usage(), &self.thread.usage)
+    }
+
+    pub fn stat(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        write!(buffer, "{}", self.process().pid()).unwrap();
+
+        buffer.extend_from_slice(b" (");
+        buffer.extend_from_slice(&self.process().task_comm());
+        buffer.extend_from_slice(b")");
+
+        buffer.extend_from_slice(b" R"); // TODO: Don't always display the thread as running.
+
+        write!(buffer, " {}", self.process().ppid()).unwrap();
+
+        write!(buffer, " {}", self.process().pgrp()).unwrap();
+
+        write!(buffer, " {}", self.process().sid()).unwrap();
+
+        buffer.extend_from_slice(b" 1"); // TODO: tty_nr
+
+        write!(buffer, " {}", self.process().pgrp()).unwrap(); // TODO: tpgid
+
+        buffer.extend_from_slice(b" 0"); // TODO: flags
+
+        let rusage = self.get_rusage();
+        let children_rusage = *self.process().children_usage.lock();
+        write!(buffer, " {}", rusage.minflt).unwrap();
+        write!(buffer, " {}", children_rusage.minflt).unwrap();
+        write!(buffer, " {}", rusage.majflt).unwrap();
+        write!(buffer, " {}", children_rusage.majflt).unwrap();
+        write!(buffer, " {}", rusage.utime.kernel_ticks()).unwrap();
+        write!(buffer, " {}", rusage.stime.kernel_ticks()).unwrap();
+        write!(buffer, " {}", children_rusage.utime.kernel_ticks()).unwrap();
+        write!(buffer, " {}", children_rusage.stime.kernel_ticks()).unwrap();
+
+        let nice = self.thread.nice.load();
+        write!(buffer, " {}", nice.as_syscall_return_value()).unwrap();
+        write!(buffer, " {}", nice.get()).unwrap();
+
+        write!(buffer, " {}", self.process().threads.lock().len()).unwrap();
+
+        buffer.extend_from_slice(b" 0"); // hard-coded to be 0.
+
+        write!(buffer, " {}", self.process().start_time.kernel_ticks()).unwrap();
+
+        write!(buffer, " {}", self.virtual_memory().size()).unwrap();
+
+        let virtual_memory_usage = self.virtual_memory.usage();
+        write!(buffer, " {}", virtual_memory_usage.rss()).unwrap();
+
+        buffer.extend_from_slice(b" 18446744073709551615"); // rsslim
+
+        buffer.extend_from_slice(b" 0"); // TODO: startcode
+        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: encode
+
+        buffer.extend_from_slice(b" 0"); // TODO: startstack
+        buffer.extend_from_slice(b" 0"); // TODO: kstkesp
+        buffer.extend_from_slice(b" 0"); // TODO: kstkeip
+
+        buffer.extend_from_slice(b" 0"); // TODO: signal
+        buffer.extend_from_slice(b" 0"); // TODO: blocked
+        buffer.extend_from_slice(b" 0"); // TODO: sigignore
+        buffer.extend_from_slice(b" 0"); // TODO: sigcatch
+
+        buffer.extend_from_slice(b" 0"); // wchan
+
+        buffer.extend_from_slice(b" 0"); // nswap
+        buffer.extend_from_slice(b" 0"); // cnswap
+
+        write!(
+            buffer,
+            " {}",
+            self.process().termination_signal.map_or(0, |s| s.get())
+        )
+        .unwrap();
+
+        buffer.extend_from_slice(b" 0"); // processor
+
+        buffer.extend_from_slice(b" 0"); // rt_priority
+
+        buffer.extend_from_slice(b" 0"); // policy
+
+        buffer.extend_from_slice(b" 0"); // delayacct_blkio_ticks
+
+        buffer.extend_from_slice(b" 0"); // guest_time
+        buffer.extend_from_slice(b" 0"); // cguest_time
+
+        buffer.extend_from_slice(b" 0"); // TODO: start_data
+        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: end_data
+
+        buffer.extend_from_slice(b" 0"); // TODO: start_brk
+
+        buffer.extend_from_slice(b" 0"); // TODO: arg_start
+        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: arg_end
+
+        buffer.extend_from_slice(b" 0"); // TODO: env_start
+        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: env_end
+
+        buffer.extend_from_slice(b" 0"); // TODO: exit_code
+
+        buffer.push(b'\n');
+
+        buffer
     }
 }
 

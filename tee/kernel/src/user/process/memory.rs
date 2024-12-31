@@ -24,7 +24,7 @@ use crate::{
     },
     user::process::syscall::args::Stat,
 };
-use alloc::{collections::BTreeMap, ffi::CString, format, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
 use log::debug;
 use usize_conversions::{usize_from, FromUsize};
@@ -323,8 +323,7 @@ impl VirtualMemory {
             let permissions = mapping.permissions;
             let offset = mapping.page_offset;
             let (major, minor, ino, path) = mapping.backing.location();
-            let line= format!("{start:08x}-{end:08x} {permissions}p {offset:05x}000 {major:02x}:{minor:02x} {ino} ");
-            maps.extend_from_slice(line.as_bytes());
+            write!(maps,"{start:08x}-{end:08x} {permissions}p {offset:05x}000 {major:02x}:{minor:02x} {ino} ").unwrap();
             if let Some(path) = path {
                 maps.extend_from_slice(path.as_bytes());
             }
@@ -335,6 +334,16 @@ impl VirtualMemory {
 
     pub fn usage(&self) -> &MemoryUsage {
         &self.usage
+    }
+
+    pub fn size(&self) -> usize {
+        self.state
+            .read()
+            .mappings
+            .values()
+            .map(|mapping| mapping.lock().pages.len())
+            .sum::<usize>()
+            * 0x1000
     }
 }
 
@@ -1093,5 +1102,24 @@ impl<T> Drop for SplitVec<T> {
                 }
             }
         }
+    }
+}
+
+/// An extension trait for Vec<u8> that makes it possible to use the `write!()`
+/// macro on it.
+pub trait WriteToVec {
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result;
+}
+
+impl WriteToVec for Vec<u8> {
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        struct WriteImpl<'a>(&'a mut Vec<u8>);
+        impl Write for WriteImpl<'_> {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                self.0.extend_from_slice(s.as_bytes());
+                Ok(())
+            }
+        }
+        core::fmt::write(&mut WriteImpl(self), args)
     }
 }

@@ -2412,17 +2412,13 @@ fn setpgid(thread: &mut ThreadGuard, pid: u32, pgid: u32) -> SyscallResult {
 
 #[syscall(i386 = 64, amd64 = 110)]
 fn getppid(thread: &mut ThreadGuard) -> SyscallResult {
-    let ppid = thread
-        .process()
-        .parent
-        .upgrade()
-        .map_or(1, |parent| parent.pid);
+    let ppid = thread.process().ppid();
     Ok(u64::from(ppid))
 }
 
 #[syscall(i386 = 65, amd64 = 111)]
 fn getpgrp(thread: &mut ThreadGuard) -> SyscallResult {
-    let pgrp = thread.process().pid;
+    let pgrp = thread.process().pgrp();
     Ok(u64::from(pgrp))
 }
 
