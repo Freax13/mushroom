@@ -236,6 +236,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPselect6);
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
+    handlers.register(SysEpollPwait);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
@@ -3898,6 +3899,49 @@ fn utimensat(
     }
 
     Ok(0)
+}
+
+#[syscall(i386 = 319, amd64 = 281)]
+async fn epoll_pwait(
+    abi: Abi,
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    epfd: FdNum,
+    event: Pointer<[EpollEvent]>,
+    maxevents: i32,
+    timeout: i32,
+    sigmask: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let mut old_mask = None;
+
+    // If the sigmask parameter is not null, replace the signal mask.
+    if !sigmask.is_null() {
+        let sigmask = virtual_memory.read_with_abi(sigmask, abi)?;
+
+        // Replace the signal mask.
+        let mut guard = thread.lock();
+        old_mask = Some(core::mem::replace(&mut guard.sigmask, sigmask));
+        drop(guard);
+    }
+
+    // Execute epoll_wait.
+    let res = thread
+        .interruptable(
+            epoll_wait(virtual_memory, fdtable, epfd, event, maxevents, timeout),
+            false,
+        )
+        .await;
+
+    // If the signal mask was changed, restore the old one.
+    if let Some(old_mask) = old_mask {
+        // Restore the signal mask.
+        let mut guard = thread.lock();
+        guard.sigmask = old_mask;
+    }
+
+    res
 }
 
 #[syscall(i386 = 323, amd64 = 290)]
