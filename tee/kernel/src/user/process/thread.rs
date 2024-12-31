@@ -232,7 +232,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                assert!(self.queue_signal(sig_info));
+                                self.queue_signal_or_die(sig_info);
                             }
                             Exit::Syscall(args) => self.clone().execute_syscall(args).await,
                             Exit::GeneralProtectionFault => {
@@ -243,7 +243,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                assert!(self.queue_signal(sig_info));
+                                self.queue_signal_or_die(sig_info);
                             }
                             Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
                             Exit::Timer => {
@@ -314,9 +314,7 @@ impl Thread {
                     addr: page_fault.addr,
                 }),
             };
-            if !self.queue_signal(sig_info) {
-                self.process().exit_group(WStatus::signaled(Signal::SEGV));
-            }
+            self.queue_signal_or_die(sig_info);
         }
     }
 
@@ -326,6 +324,14 @@ impl Thread {
         let res = guard.pending_signals.add(sig_info);
         self.signal_notify.notify();
         res
+    }
+
+    /// Try to queue a signal and kill the process if the signal is already pending.
+    pub fn queue_signal_or_die(&self, sig_info: SigInfo) {
+        if !self.queue_signal(sig_info) {
+            self.process()
+                .exit_group(WStatus::signaled(sig_info.signal));
+        }
     }
 
     async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
