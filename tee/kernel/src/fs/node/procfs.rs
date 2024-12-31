@@ -23,10 +23,11 @@ use crate::{
         FileSystem, StatFs,
     },
     memory::page::KernelPage,
+    time::now,
     user::process::{
         memory::{VirtualMemory, WriteToVec},
         syscall::args::{
-            FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
+            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
         },
         thread::{Gid, Uid},
         Process,
@@ -74,7 +75,8 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
             ino: new_ino(),
             file_lock_record: LazyFileLockRecord::new(),
         }),
-        stat_file: StatFile::new(fs),
+        stat_file: StatFile::new(fs.clone()),
+        uptime_file: UptimeFile::new(fs),
     }))
 }
 
@@ -86,6 +88,7 @@ struct ProcFsRoot {
     file_lock_record: LazyFileLockRecord,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
+    uptime_file: Arc<UptimeFile>,
 }
 
 impl INode for ProcFsRoot {
@@ -141,6 +144,7 @@ impl Directory for ProcFsRoot {
         Ok(match file_name.as_bytes() {
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
+            b"uptime" => self.uptime_file.clone(),
             _ => {
                 let bytes = file_name.as_bytes();
                 let str = core::str::from_utf8(bytes).map_err(|_| err!(NoEnt))?;
@@ -227,6 +231,11 @@ impl Directory for ProcFsRoot {
             ino: self.stat_file.ino,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.uptime_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"uptime").unwrap()),
         });
         entries.extend(Process::all().map(|process| {
             DirEntry {
@@ -1405,6 +1414,154 @@ impl INode for StatFile {
 }
 
 impl File for StatFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.len());
+        buf[..len].copy_from_slice(&content[..len]);
+        Ok(len)
+    }
+
+    fn read_to_user(
+        &self,
+        offset: usize,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _no_atime: bool,
+    ) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), len);
+        vm.write_bytes(pointer.get(), &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn write_from_user(
+        &self,
+        _offset: usize,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &[u8]) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append_from_user(
+        &self,
+        _vm: &VirtualMemory,
+        _pointer: Pointer<[u8]>,
+        _len: usize,
+    ) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+struct UptimeFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: LazyFileLockRecord,
+}
+
+impl UptimeFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        let uptime = now(ClockId::Monotonic);
+        // TODO: We currently don't track the idle time, so we just multiple
+        // the uptime by 3.
+        let idle_time = uptime.saturating_add(uptime).saturating_add(uptime);
+
+        write!(
+            buffer,
+            "{}.{:02}",
+            uptime.tv_sec,
+            uptime.tv_nsec / 10_000_000
+        )
+        .unwrap();
+        write!(
+            buffer,
+            "{}.{:02}",
+            idle_time.tv_sec,
+            idle_time.tv_nsec / 10_000_000
+        )
+        .unwrap();
+
+        buffer
+    }
+}
+
+impl INode for UptimeFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+        open_file(path, self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+}
+
+impl File for UptimeFile {
     fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
