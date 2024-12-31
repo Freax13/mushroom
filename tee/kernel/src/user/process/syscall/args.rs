@@ -919,6 +919,10 @@ impl Timespec {
             tv_nsec: 0,
         })
     }
+
+    pub fn kernel_ticks(&self) -> u64 {
+        u64::from(self.tv_sec) * 1_000_000 + u64::from(self.tv_nsec).div_ceil(1000)
+    }
 }
 
 impl Add for Timespec {
@@ -953,6 +957,10 @@ impl Timeval {
         } else {
             Self { tv_sec, tv_usec }
         }
+    }
+
+    pub fn kernel_ticks(&self) -> u64 {
+        u64::from(self.tv_sec) * 1_000_000 + u64::from(self.tv_usec)
     }
 }
 
@@ -1408,6 +1416,10 @@ pub struct Nice(i8);
 
 impl Nice {
     pub const DEFAULT: Self = Self(0);
+
+    pub fn get(&self) -> i8 {
+        self.0
+    }
 
     pub fn as_syscall_return_value(self) -> u64 {
         (self.0 + 21) as u64
