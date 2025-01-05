@@ -27,7 +27,7 @@ use crate::{
     user::process::{
         memory::VirtualMemory,
         syscall::args::{
-            Accept4Flags, FileMode, OpenFlags, Pointer, SocketAddr, SocketAddrInet,
+            Accept4Flags, FileMode, OpenFlags, Pointer, ShutdownHow, SocketAddr, SocketAddrInet,
             SocketTypeWithFlags, Stat,
         },
         thread::{Gid, Uid},
@@ -247,6 +247,22 @@ impl OpenFileDescription for TcpSocket {
 
         passive.notify.notify();
 
+        Ok(())
+    }
+
+    fn shutdown(&self, how: ShutdownHow) -> Result<()> {
+        let mode = self.mode.get().ok_or_else(|| err!(Inval))?;
+        let Mode::Active(active) = mode else {
+            bail!(Inval)
+        };
+        match how {
+            ShutdownHow::Rd => active.read_half.shutdown(),
+            ShutdownHow::Wr => active.write_half.shutdown(),
+            ShutdownHow::RdWr => {
+                active.read_half.shutdown();
+                active.write_half.shutdown();
+            }
+        }
         Ok(())
     }
 

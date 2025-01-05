@@ -23,8 +23,8 @@ use crate::{
         limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::args::{
-            Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, SocketAddr,
-            Stat, Timespec, Whence,
+            Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, ShutdownHow,
+            SocketAddr, Stat, Timespec, Whence,
         },
         thread::{Gid, Uid},
     },
@@ -521,6 +521,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn shutdown(&self, how: ShutdownHow) -> Result<()> {
+        let _ = how;
+        bail!(NotSock)
+    }
+
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()>;
@@ -610,7 +615,8 @@ bitflags! {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
         const ERR = 1 << 2;
-        const HUP = 1 << 3;
+        const RDHUP = 1 << 3;
+        const HUP = 1 << 4;
     }
 }
 
