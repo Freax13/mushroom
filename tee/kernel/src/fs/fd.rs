@@ -492,6 +492,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
+    fn listen(&self, backlog: usize) -> Result<()> {
+        let _ = backlog;
+        bail!(NotSock)
+    }
+
     fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
         let _ = vm;
         let _ = pointer;

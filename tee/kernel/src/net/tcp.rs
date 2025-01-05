@@ -1,11 +1,12 @@
 use core::{
     net::{Ipv4Addr, SocketAddrV4},
     ops::Bound,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use alloc::{
     boxed::Box,
-    collections::btree_map::BTreeMap,
+    collections::{btree_map::BTreeMap, vec_deque::VecDeque},
     sync::{Arc, Weak},
 };
 use async_trait::async_trait;
@@ -18,7 +19,8 @@ use crate::{
         path::Path,
         FileSystem,
     },
-    spin::{once::Once, rwlock::RwLock},
+    rt::notify::Notify,
+    spin::{mutex::Mutex, once::Once, rwlock::RwLock},
     user::process::{
         memory::VirtualMemory,
         syscall::args::{
@@ -35,6 +37,7 @@ pub struct TcpSocket {
     this: Weak<Self>,
     flags: OpenFlags,
     addr: Once<SocketAddrV4>,
+    mode: Once<Mode>,
 }
 
 impl TcpSocket {
@@ -43,6 +46,7 @@ impl TcpSocket {
             this: this.clone(),
             flags: r#type.flags,
             addr: Once::new(),
+            mode: Once::new(),
         })
     }
 
@@ -106,6 +110,15 @@ impl TcpSocket {
 
         Ok(true)
     }
+
+    fn addr_or_bind_ephemeral(&self) -> Result<&SocketAddrV4> {
+        self.try_bind(SocketAddrInet {
+            port: 0,
+            addr: [0, 0, 0, 0],
+            _pad: [0; 8],
+        })?;
+        Ok(self.addr.get().unwrap())
+    }
 }
 
 #[async_trait]
@@ -128,6 +141,23 @@ impl OpenFileDescription for TcpSocket {
 
         ensure!(self.try_bind(addr)?, Inval);
 
+        Ok(())
+    }
+
+    fn listen(&self, backlog: usize) -> Result<()> {
+        self.addr_or_bind_ephemeral()?;
+        let mode = self.mode.call_once(|| {
+            Mode::Passive(PassiveTcpSocket {
+                backlog: AtomicUsize::new(backlog),
+                notify: Notify::new(),
+                queue: Mutex::new(VecDeque::new()),
+            })
+        });
+        let Mode::Passive(passive) = mode else {
+            bail!(IsConn);
+        };
+        // TODO: Is this correct?
+        passive.backlog.fetch_max(backlog, Ordering::Relaxed);
         Ok(())
     }
 
@@ -166,4 +196,15 @@ impl OpenFileDescription for TcpSocket {
     fn file_lock(&self) -> Result<&FileLock> {
         todo!()
     }
+}
+
+#[non_exhaustive]
+enum Mode {
+    Passive(PassiveTcpSocket),
+}
+
+struct PassiveTcpSocket {
+    backlog: AtomicUsize,
+    notify: Notify,
+    queue: Mutex<VecDeque<()>>,
 }

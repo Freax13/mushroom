@@ -1351,10 +1351,12 @@ fn bind(
     Ok(0)
 }
 
-#[syscall(amd64 = 50)]
+#[syscall(i386 = 363, amd64 = 50)]
 fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    let backlog = usize::try_from(backlog)?;
+    fd.listen(backlog)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 360, amd64 = 53)]
