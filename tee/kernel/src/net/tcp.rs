@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use crate::{
     error::{bail, ensure, err, Result},
     fs::{
-        fd::{Events, FileLock, OpenFileDescription},
+        fd::{stream_buffer, Events, FileLock, OpenFileDescription},
         node::FileAccessContext,
         path::Path,
         FileSystem,
@@ -161,6 +161,60 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
+    fn connect(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<()> {
+        let local_addr = self.addr_or_bind_ephemeral()?;
+
+        ensure!(addrlen == size_of::<SocketAddr>(), Inval);
+        let remote_addr = virtual_memory.read(addr)?;
+        let SocketAddr::Inet(remote_addr) = remote_addr else {
+            bail!(Inval);
+        };
+        let remote_addr = SocketAddrV4::new(
+            Ipv4Addr::new(
+                remote_addr.addr[0],
+                remote_addr.addr[1],
+                remote_addr.addr[2],
+                remote_addr.addr[3],
+            ),
+            remote_addr.port,
+        );
+
+        let guard = TCP_SOCKETS.read();
+        let remote_socket = guard
+            .get(&remote_addr)
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| err!(ConnRefused))?;
+        let mode = remote_socket.mode.get().ok_or_else(|| err!(ConnRefused))?;
+        let Mode::Passive(passive) = mode else {
+            bail!(ConnRefused);
+        };
+        let mut guard = passive.queue.lock();
+
+        let backlog = passive.backlog.load(Ordering::Relaxed);
+        ensure!(guard.len() <= backlog, ConnRefused);
+
+        let mut initialized = false;
+        self.mode.call_once(|| {
+            initialized = true;
+
+            let (socket1, socket2) = ActiveTcpSocket::new_pair(*local_addr, remote_addr);
+            guard.push_back(socket2);
+
+            Mode::Active(socket1)
+        });
+        drop(guard);
+        ensure!(initialized, IsConn);
+
+        passive.notify.notify();
+
+        Ok(())
+    }
+
     fn path(&self) -> Result<Path> {
         todo!()
     }
@@ -198,13 +252,38 @@ impl OpenFileDescription for TcpSocket {
     }
 }
 
-#[non_exhaustive]
 enum Mode {
     Passive(PassiveTcpSocket),
+    Active(ActiveTcpSocket),
 }
 
 struct PassiveTcpSocket {
     backlog: AtomicUsize,
     notify: Notify,
-    queue: Mutex<VecDeque<()>>,
+    queue: Mutex<VecDeque<ActiveTcpSocket>>,
+}
+
+struct ActiveTcpSocket {
+    remote_addr: SocketAddrV4,
+    read_half: stream_buffer::ReadHalf,
+    write_half: stream_buffer::WriteHalf,
+}
+
+impl ActiveTcpSocket {
+    fn new_pair(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> (Self, Self) {
+        let (rx1, tx1) = stream_buffer::new(0x10000, stream_buffer::Type::Socket);
+        let (rx2, tx2) = stream_buffer::new(0x10000, stream_buffer::Type::Socket);
+        (
+            Self {
+                remote_addr,
+                read_half: rx1,
+                write_half: tx2,
+            },
+            Self {
+                remote_addr: local_addr,
+                read_half: rx2,
+                write_half: tx1,
+            },
+        )
+    }
 }

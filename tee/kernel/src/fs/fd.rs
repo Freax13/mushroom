@@ -497,6 +497,18 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
+    fn connect(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<()> {
+        let _ = virtual_memory;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(NotSock)
+    }
+
     fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
         let _ = vm;
         let _ = pointer;

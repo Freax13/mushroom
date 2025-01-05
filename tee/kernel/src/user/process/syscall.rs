@@ -1289,15 +1289,17 @@ fn socket(
     Ok(fd.get() as u64)
 }
 
-#[syscall(amd64 = 42)]
+#[syscall(i386 = 362, amd64 = 42)]
 fn connect(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    uservaddr: Pointer<c_void>,
+    addr: Pointer<SocketAddr>,
     addrlen: u32,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    fd.connect(&virtual_memory, addr, usize_from(addrlen))?;
+    Ok(0)
 }
 
 #[syscall(amd64 = 43)]
