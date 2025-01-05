@@ -2,7 +2,7 @@ use core::{
     net::{Ipv4Addr, SocketAddrV4},
     ops::Bound,
     pin::pin,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use alloc::{
@@ -38,29 +38,30 @@ use crate::{
 };
 
 // TODO: Periodically clean up closed TCP sockets.
-static TCP_SOCKETS: RwLock<BTreeMap<SocketAddrV4, Weak<TcpSocket>>> = RwLock::new(BTreeMap::new());
+static TCP_SOCKETS: RwLock<BTreeMap<SocketAddrV4, Weak<BoundSocket>>> =
+    RwLock::new(BTreeMap::new());
 
 pub struct TcpSocket {
-    this: Weak<Self>,
     flags: OpenFlags,
-    addr: Once<SocketAddrV4>,
-    mode: Once<Mode>,
+    reuse_addr: AtomicBool,
+    bound_socket: Once<Arc<BoundSocket>>,
 }
 
 impl TcpSocket {
-    pub fn new(r#type: SocketTypeWithFlags) -> Arc<Self> {
-        Arc::new_cyclic(|this| Self {
-            this: this.clone(),
+    pub fn new(r#type: SocketTypeWithFlags) -> Self {
+        Self {
             flags: r#type.flags,
-            addr: Once::new(),
-            mode: Once::new(),
-        })
+            reuse_addr: AtomicBool::new(false),
+            bound_socket: Once::new(),
+        }
     }
 
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
     fn try_bind(&self, addr: SocketAddrInet) -> Result<bool> {
+        let allow_reuse = self.reuse_addr.load(Ordering::Relaxed);
+
         let mut guard = TCP_SOCKETS.write();
         let ip = Ipv4Addr::new(addr.addr[0], addr.addr[1], addr.addr[2], addr.addr[3]);
 
@@ -93,38 +94,64 @@ impl TcpSocket {
             // Make sure that the port is not already in use.
             socket_addr = SocketAddrV4::new(ip, addr.port);
             cursor = guard.upper_bound_mut(Bound::Included(&socket_addr));
-            if let Some((prev, _)) = cursor.peek_prev() {
-                ensure!(*prev != socket_addr, AddrInUse);
+            if let Some((prev, socket)) = cursor.peek_prev() {
+                // If there's already a socket bound to the given address,
+                // check that the socket is still alive and whether reusing is
+                // allowed.
+                if *prev == socket_addr {
+                    if let Some(socket) = socket.upgrade() {
+                        ensure!(allow_reuse, AddrInUse);
+                        ensure!(socket.allow_reuse, AddrInUse);
+                        let mut initialized = false;
+                        self.bound_socket.call_once(|| {
+                            initialized = true;
+                            socket
+                        });
+                        return Ok(!initialized);
+                    } else {
+                        // The socket is no longer alive. Remove the weak
+                        // reference and pretend that it was never there.
+                        cursor.remove_prev();
+                    }
+                }
             }
         }
 
         let mut initialized = false;
-        self.addr.call_once(|| {
+        let bound = self.bound_socket.call_once(|| {
             initialized = true;
 
-            SocketAddrV4::new(
+            let addr = SocketAddrV4::new(
                 Ipv4Addr::new(addr.addr[0], addr.addr[1], addr.addr[2], addr.addr[3]),
                 addr.port,
-            )
+            );
+
+            Arc::new(BoundSocket {
+                allow_reuse,
+                addr,
+                mode: Once::new(),
+            })
         });
         if !initialized {
             return Ok(false);
         }
 
-        cursor.insert_after(socket_addr, self.this.clone()).unwrap();
+        cursor
+            .insert_after(socket_addr, Arc::downgrade(bound))
+            .unwrap();
 
         drop(guard);
 
         Ok(true)
     }
 
-    fn addr_or_bind_ephemeral(&self) -> Result<&SocketAddrV4> {
+    fn get_or_bind_ephemeral(&self) -> Result<&BoundSocket> {
         self.try_bind(SocketAddrInet {
             port: 0,
             addr: [0, 0, 0, 0],
             _pad: [0; 8],
         })?;
-        Ok(self.addr.get().unwrap())
+        Ok(self.bound_socket.get().unwrap())
     }
 }
 
@@ -152,8 +179,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn listen(&self, backlog: usize) -> Result<()> {
-        self.addr_or_bind_ephemeral()?;
-        let mode = self.mode.call_once(|| {
+        let bound = self.get_or_bind_ephemeral()?;
+        let mode = bound.mode.call_once(|| {
             Mode::Passive(PassiveTcpSocket {
                 backlog: AtomicUsize::new(backlog),
                 notify: Notify::new(),
@@ -169,8 +196,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
-        let local_addr = self.addr.get().ok_or_else(|| err!(Inval))?;
-        let mode = self.mode.get().ok_or_else(|| err!(Inval))?;
+        let bound = self.bound_socket.get().ok_or_else(|| err!(Inval))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(Inval))?;
         let Mode::Passive(passive) = mode else {
             bail!(Inval);
         };
@@ -181,12 +208,15 @@ impl OpenFileDescription for TcpSocket {
             .ok_or_else(|| err!(Again))?;
         let remote_addr = active.remote_addr;
 
-        let socket = Arc::new_cyclic(|this| Self {
-            this: this.clone(),
+        let socket = Self {
             flags: OpenFlags::from(flags),
-            addr: Once::with_value(*local_addr),
-            mode: Once::with_value(Mode::Active(active)),
-        });
+            reuse_addr: AtomicBool::new(self.reuse_addr.load(Ordering::Relaxed)),
+            bound_socket: Once::with_value(Arc::new(BoundSocket {
+                allow_reuse: false,
+                addr: bound.addr,
+                mode: Once::with_value(Mode::Active(active)),
+            })),
+        };
         let fd = FileDescriptor::from(socket);
 
         let socket_addr = SocketAddr::Inet(SocketAddrInet {
@@ -205,7 +235,7 @@ impl OpenFileDescription for TcpSocket {
         addr: Pointer<SocketAddr>,
         addrlen: usize,
     ) -> Result<()> {
-        let local_addr = self.addr_or_bind_ephemeral()?;
+        let bound = self.get_or_bind_ephemeral()?;
 
         ensure!(addrlen == size_of::<SocketAddr>(), Inval);
         let remote_addr = virtual_memory.read(addr)?;
@@ -237,10 +267,10 @@ impl OpenFileDescription for TcpSocket {
         ensure!(guard.len() <= backlog, ConnRefused);
 
         let mut initialized = false;
-        self.mode.call_once(|| {
+        bound.mode.call_once(|| {
             initialized = true;
 
-            let (socket1, socket2) = ActiveTcpSocket::new_pair(*local_addr, remote_addr);
+            let (socket1, socket2) = ActiveTcpSocket::new_pair(bound.addr, remote_addr);
             guard.push_back(socket2);
 
             Mode::Active(socket1)
@@ -270,15 +300,22 @@ impl OpenFileDescription for TcpSocket {
         optlen: i32,
     ) -> Result<()> {
         match (level, optname) {
-            (1, 2) => Ok(()), // SO_REUSEADDR
+            (1, 2) => {
+                // SO_REUSEADDR
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                self.reuse_addr.store(optval, Ordering::Relaxed);
+                Ok(())
+            }
             _ => bail!(Inval),
         }
     }
 
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
-        let mode = self.mode.get().ok_or_else(|| err!(Inval))?;
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
         let Mode::Active(active) = mode else {
-            bail!(Inval)
+            bail!(NotConn)
         };
         match how {
             ShutdownHow::Rd => active.read_half.shutdown(),
@@ -292,7 +329,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let mode = self.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -305,7 +343,8 @@ impl OpenFileDescription for TcpSocket {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let mode = self.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -313,7 +352,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
-        let mode = self.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -326,7 +366,8 @@ impl OpenFileDescription for TcpSocket {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let mode = self.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -354,7 +395,10 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn poll_ready(&self, events: Events) -> Events {
-        let Some(mode) = self.mode.get() else {
+        let Some(bound) = self.bound_socket.get() else {
+            return Events::empty();
+        };
+        let Some(mode) = bound.mode.get() else {
             return Events::empty();
         };
         match mode {
@@ -377,7 +421,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        let mode = self.mode.get().expect("TODO");
+        let bound = self.bound_socket.get().expect("TODO");
+        let mode = bound.mode.get().expect("TODO");
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 if !events.contains(Events::READ) {
@@ -427,6 +472,12 @@ impl OpenFileDescription for TcpSocket {
     fn file_lock(&self) -> Result<&FileLock> {
         todo!()
     }
+}
+
+struct BoundSocket {
+    allow_reuse: bool,
+    addr: SocketAddrV4,
+    mode: Once<Mode>,
 }
 
 enum Mode {
