@@ -988,21 +988,53 @@ enum_arg! {
     }
 }
 
-bitflags! {
-    pub struct SocketPairType {
-        const STREAM = 1;
-        const SEQPACKET = 5;
-
-        const NON_BLOCK = 0x800;
-        const CLOEXEC = 0x8_0000;
+enum_arg! {
+    pub enum SocketType {
+        Stream = 1,
+        Dgram = 2,
+        Raw	= 3,
+        Seqpacket = 5,
     }
 }
 
-impl From<SocketPairType> for FdFlags {
-    fn from(value: SocketPairType) -> Self {
-        let mut flags = Self::empty();
-        flags.set(Self::CLOEXEC, value.contains(SocketPairType::CLOEXEC));
-        flags
+#[derive(Debug, Clone, Copy)]
+pub struct SocketTypeWithFlags {
+    pub socket_type: SocketType,
+    pub flags: OpenFlags,
+}
+
+impl SocketTypeWithFlags {
+    const FLAGS_MASK: u64 = OpenFlags::NONBLOCK.bits() | OpenFlags::CLOEXEC.bits();
+}
+
+impl SyscallArg for SocketTypeWithFlags {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        let socket_type = SocketType::parse(value & !Self::FLAGS_MASK, abi)?;
+        let flags = OpenFlags::parse(value & Self::FLAGS_MASK, abi)?;
+        Ok(Self { socket_type, flags })
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        SocketType::display(f, value & !Self::FLAGS_MASK, abi, thread)?;
+
+        let value = value & Self::FLAGS_MASK;
+        if value != 0 {
+            write!(f, " | ")?;
+            OpenFlags::display(f, value, abi, thread)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl From<SocketTypeWithFlags> for FdFlags {
+    fn from(value: SocketTypeWithFlags) -> Self {
+        value.flags.into()
     }
 }
 

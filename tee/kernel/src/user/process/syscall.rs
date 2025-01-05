@@ -1340,7 +1340,7 @@ fn socketpair(
     #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     domain: Domain,
-    r#type: SocketPairType,
+    r#type: SocketTypeWithFlags,
     protocol: i32,
     sv: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
@@ -1351,24 +1351,26 @@ fn socketpair(
         Domain::Unix => {
             ensure!(protocol == 0, Inval);
 
-            if r#type.contains(SocketPairType::SEQPACKET) {
-                let (half1, half2) = SeqPacketUnixSocket::new_pair(
-                    r#type,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
-                );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-            } else if r#type.contains(SocketPairType::STREAM) {
-                let (half1, half2) = StreamUnixSocket::new_pair(
-                    r#type,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
-                );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-            } else {
-                todo!()
+            match r#type.socket_type {
+                SocketType::Seqpacket => {
+                    let (half1, half2) = SeqPacketUnixSocket::new_pair(
+                        r#type.flags,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    );
+                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+                }
+                SocketType::Stream => {
+                    let (half1, half2) = StreamUnixSocket::new_pair(
+                        r#type.flags,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    );
+                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+                }
+                _ => bail!(Inval),
             }
         }
     }
