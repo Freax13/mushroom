@@ -1,6 +1,7 @@
 use core::{
     net::{Ipv4Addr, SocketAddrV4},
     ops::Bound,
+    pin::pin,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -235,16 +236,75 @@ impl OpenFileDescription for TcpSocket {
         todo!()
     }
 
-    fn poll_ready(&self, _: Events) -> Events {
-        todo!()
+    fn poll_ready(&self, events: Events) -> Events {
+        let Some(mode) = self.mode.get() else {
+            return Events::empty();
+        };
+        match mode {
+            Mode::Passive(passive_tcp_socket) => {
+                let mut events = events & Events::READ;
+                if events.contains(Events::READ) && passive_tcp_socket.queue.lock().is_empty() {
+                    events.remove(Events::READ);
+                }
+                events
+            }
+            Mode::Active(active_tcp_socket) => {
+                active_tcp_socket.read_half.poll_ready(events)
+                    | active_tcp_socket.write_half.poll_ready(events)
+            }
+        }
     }
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, _: Events) -> Result<Events> {
-        todo!()
+    async fn ready(&self, events: Events) -> Result<Events> {
+        let mode = self.mode.get().expect("TODO");
+        match mode {
+            Mode::Passive(passive_tcp_socket) => {
+                if !events.contains(Events::READ) {
+                    return core::future::pending().await;
+                }
+                loop {
+                    let wait = passive_tcp_socket.notify.wait();
+                    let guard = passive_tcp_socket.queue.lock();
+                    if !guard.is_empty() {
+                        return Ok(Events::READ);
+                    }
+                    drop(guard);
+                    wait.await;
+                }
+            }
+            Mode::Active(active_tcp_socket) => loop {
+                let wait_read = async {
+                    loop {
+                        let wait = active_tcp_socket.read_half.wait();
+                        if !active_tcp_socket.read_half.poll_ready(events).is_empty() {
+                            break;
+                        }
+                        wait.await;
+                    }
+                };
+                let wait_write = async {
+                    loop {
+                        let wait = active_tcp_socket.write_half.wait();
+                        if !active_tcp_socket.write_half.poll_ready(events).is_empty() {
+                            break;
+                        }
+                        wait.await;
+                    }
+                };
+                let wait_read = pin!(wait_read);
+                let wait_write = pin!(wait_write);
+                futures::future::select(wait_read, wait_write).await;
+                let events = active_tcp_socket.read_half.poll_ready(events)
+                    | active_tcp_socket.write_half.poll_ready(events);
+                if !events.is_empty() {
+                    return Ok(events);
+                }
+            },
+        }
     }
 
     fn file_lock(&self) -> Result<&FileLock> {
