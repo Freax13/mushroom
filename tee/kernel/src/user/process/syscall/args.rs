@@ -1543,3 +1543,30 @@ impl Rusage {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C, u16)]
+pub enum SocketAddr {
+    Inet(SocketAddrInet) = 2,
+    #[expect(dead_code)]
+    Netlink(SocketAddrNetlink) = 16,
+}
+
+#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed(2))]
+pub struct SocketAddrInet {
+    /// port in network byte order
+    pub port: u16,
+    /// internet address
+    pub addr: [u8; 4],
+    pub _pad: [u8; 8],
+}
+
+#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed(2))]
+pub struct SocketAddrNetlink {
+    _pad: u16,
+    pub pid: u32,
+    pub groups: u32,
+    _pad2: [u8; 4],
+}

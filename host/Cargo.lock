@@ -144,7 +144,7 @@ checksum = "79296716171880943b8470b5f8d03aa55eb2e645a4874bdbb28adb49162e012c"
 [[package]]
 name = "bytemuck"
 version = "1.21.0"
-source = "git+https://github.com/Freax13/bytemuck.git?rev=be10405#be10405b1de5db8441209c3570e7a5dfd4092214"
+source = "git+https://github.com/Freax13/bytemuck.git?rev=91faa12#91faa127ec0710983baaedd0b71de92424abc36c"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -152,7 +152,7 @@ dependencies = [
 [[package]]
 name = "bytemuck_derive"
 version = "1.8.1"
-source = "git+https://github.com/Freax13/bytemuck.git?rev=be10405#be10405b1de5db8441209c3570e7a5dfd4092214"
+source = "git+https://github.com/Freax13/bytemuck.git?rev=91faa12#91faa127ec0710983baaedd0b71de92424abc36c"
 dependencies = [
  "proc-macro2",
  "quote",

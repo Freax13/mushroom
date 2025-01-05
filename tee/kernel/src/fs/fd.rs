@@ -23,7 +23,8 @@ use crate::{
         limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::args::{
-            EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
+            EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, SocketAddr, Stat, Timespec,
+            Whence,
         },
         thread::{Gid, Uid},
     },
@@ -361,13 +362,6 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Ok(count)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
-        let _ = vm;
-        let _ = pointer;
-        let _ = len;
-        bail!(Inval)
-    }
-
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
         bail!(Inval)
@@ -484,6 +478,25 @@ pub trait OpenFileDescription: Send + Sync + 'static {
             buf = &buf[len..];
         }
         Ok(())
+    }
+
+    fn bind(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<()> {
+        let _ = virtual_memory;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(NotSock)
+    }
+
+    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+        let _ = vm;
+        let _ = pointer;
+        let _ = len;
+        bail!(Inval)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;

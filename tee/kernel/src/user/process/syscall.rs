@@ -1338,15 +1338,17 @@ async fn recv_from(
     Ok(len)
 }
 
-#[syscall(amd64 = 49)]
+#[syscall(i386 = 361, amd64 = 49)]
 fn bind(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    umyaddr: Pointer<c_void>,
+    addr: Pointer<SocketAddr>,
     addrlen: u32,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    fd.bind(&virtual_memory, addr, usize_from(addrlen))?;
+    Ok(0)
 }
 
 #[syscall(amd64 = 50)]
