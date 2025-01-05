@@ -22,7 +22,7 @@ use crate::{
         path::Path,
         FileSystem,
     },
-    rt::notify::Notify,
+    rt::notify::{Notify, NotifyOnDrop},
     spin::{mutex::Mutex, once::Once, rwlock::RwLock},
     user::process::{
         memory::VirtualMemory,
@@ -183,15 +183,18 @@ impl OpenFileDescription for TcpSocket {
         let mode = bound.mode.call_once(|| {
             Mode::Passive(PassiveTcpSocket {
                 backlog: AtomicUsize::new(backlog),
-                notify: Notify::new(),
+                notify: NotifyOnDrop(Arc::new(Notify::new())),
                 queue: Mutex::new(VecDeque::new()),
             })
         });
         let Mode::Passive(passive) = mode else {
             bail!(IsConn);
         };
-        // TODO: Is this correct?
-        passive.backlog.fetch_max(backlog, Ordering::Relaxed);
+        // TODO: Is the max op correct?
+        let old_backlock = passive.backlog.fetch_max(backlog, Ordering::Relaxed);
+        if old_backlock < backlog {
+            passive.notify.notify();
+        }
         Ok(())
     }
 
@@ -206,6 +209,7 @@ impl OpenFileDescription for TcpSocket {
             .lock()
             .pop_front()
             .ok_or_else(|| err!(Again))?;
+        passive.notify.notify();
         let remote_addr = active.remote_addr;
 
         let socket = Self {
@@ -229,7 +233,7 @@ impl OpenFileDescription for TcpSocket {
         Ok((fd, socket_addr))
     }
 
-    fn connect(
+    async fn connect(
         &self,
         virtual_memory: &VirtualMemory,
         addr: Pointer<SocketAddr>,
@@ -252,35 +256,51 @@ impl OpenFileDescription for TcpSocket {
             remote_addr.port,
         );
 
-        let guard = TCP_SOCKETS.read();
-        let remote_socket = guard
-            .get(&remote_addr)
-            .and_then(Weak::upgrade)
-            .ok_or_else(|| err!(ConnRefused))?;
-        let mode = remote_socket.mode.get().ok_or_else(|| err!(ConnRefused))?;
-        let Mode::Passive(passive) = mode else {
-            bail!(ConnRefused);
-        };
-        let mut guard = passive.queue.lock();
+        loop {
+            let sockets_guard = TCP_SOCKETS.read();
+            let remote_socket = sockets_guard
+                .get(&remote_addr)
+                .and_then(Weak::upgrade)
+                .ok_or_else(|| err!(ConnRefused))?;
+            let mode = remote_socket.mode.get().ok_or_else(|| err!(ConnRefused))?;
+            let Mode::Passive(passive) = mode else {
+                bail!(ConnRefused);
+            };
+            let mut queue_guard = passive.queue.lock();
 
-        let backlog = passive.backlog.load(Ordering::Relaxed);
-        ensure!(guard.len() <= backlog, ConnRefused);
+            // Check if the socket is ready to acept a new connection.
+            let backlog = passive.backlog.load(Ordering::Relaxed);
+            if queue_guard.len() >= backlog {
+                // If not, drop all logs and wait for a notification.
 
-        let mut initialized = false;
-        bound.mode.call_once(|| {
-            initialized = true;
+                drop(queue_guard);
 
-            let (socket1, socket2) = ActiveTcpSocket::new_pair(bound.addr, remote_addr);
-            guard.push_back(socket2);
+                let notify = passive.notify.0.clone();
+                let wait = notify.wait();
 
-            Mode::Active(socket1)
-        });
-        drop(guard);
-        ensure!(initialized, IsConn);
+                drop(remote_socket);
+                drop(sockets_guard);
 
-        passive.notify.notify();
+                wait.await;
+                continue;
+            }
 
-        Ok(())
+            let mut initialized = false;
+            bound.mode.call_once(|| {
+                initialized = true;
+
+                let (socket1, socket2) = ActiveTcpSocket::new_pair(bound.addr, remote_addr);
+                queue_guard.push_back(socket2);
+
+                Mode::Active(socket1)
+            });
+            drop(queue_guard);
+            ensure!(initialized, IsConn);
+
+            passive.notify.notify();
+
+            return Ok(());
+        }
     }
 
     fn get_socket_option(&self, abi: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
@@ -487,7 +507,7 @@ enum Mode {
 
 struct PassiveTcpSocket {
     backlog: AtomicUsize,
-    notify: Notify,
+    notify: NotifyOnDrop,
     queue: Mutex<VecDeque<ActiveTcpSocket>>,
 }
 

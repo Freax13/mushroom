@@ -505,7 +505,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn connect(
+    async fn connect(
         &self,
         virtual_memory: &VirtualMemory,
         addr: Pointer<SocketAddr>,

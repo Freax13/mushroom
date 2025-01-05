@@ -1291,8 +1291,8 @@ fn socket(
     Ok(fd.get() as u64)
 }
 
-#[syscall(i386 = 362, amd64 = 42)]
-fn connect(
+#[syscall(i386 = 362, amd64 = 42, interruptable, restartable)]
+async fn connect(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -1300,7 +1300,8 @@ fn connect(
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.connect(&virtual_memory, addr, usize_from(addrlen))?;
+    fd.connect(&virtual_memory, addr, usize_from(addrlen))
+        .await?;
     Ok(0)
 }
 
