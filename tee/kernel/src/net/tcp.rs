@@ -9,13 +9,15 @@ use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
     sync::{Arc, Weak},
+    vec::Vec,
 };
 use async_trait::async_trait;
+use bytemuck::bytes_of;
 
 use crate::{
     error::{bail, ensure, err, Result},
     fs::{
-        fd::{stream_buffer, Events, FileLock, OpenFileDescription},
+        fd::{stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
         node::FileAccessContext,
         path::Path,
         FileSystem,
@@ -25,7 +27,8 @@ use crate::{
     user::process::{
         memory::VirtualMemory,
         syscall::args::{
-            FileMode, OpenFlags, Pointer, SocketAddr, SocketAddrInet, SocketTypeWithFlags, Stat,
+            Accept4Flags, FileMode, OpenFlags, Pointer, SocketAddr, SocketAddrInet,
+            SocketTypeWithFlags, Stat,
         },
         thread::{Gid, Uid},
     },
@@ -160,6 +163,37 @@ impl OpenFileDescription for TcpSocket {
         // TODO: Is this correct?
         passive.backlog.fetch_max(backlog, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+        let local_addr = self.addr.get().ok_or_else(|| err!(Inval))?;
+        let mode = self.mode.get().ok_or_else(|| err!(Inval))?;
+        let Mode::Passive(passive) = mode else {
+            bail!(Inval);
+        };
+        let active = passive
+            .queue
+            .lock()
+            .pop_front()
+            .ok_or_else(|| err!(Again))?;
+        let remote_addr = active.remote_addr;
+
+        let socket = Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            flags: OpenFlags::from(flags),
+            addr: Once::with_value(*local_addr),
+            mode: Once::with_value(Mode::Active(active)),
+        });
+        let fd = FileDescriptor::from(socket);
+
+        let socket_addr = SocketAddr::Inet(SocketAddrInet {
+            port: remote_addr.port(),
+            addr: remote_addr.ip().octets(),
+            _pad: [0; 8],
+        });
+        let socket_addr = bytes_of(&socket_addr).to_vec();
+
+        Ok((fd, socket_addr))
     }
 
     fn connect(

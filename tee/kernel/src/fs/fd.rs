@@ -23,8 +23,8 @@ use crate::{
         limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::args::{
-            EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, SocketAddr, Stat, Timespec,
-            Whence,
+            Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, SocketAddr,
+            Stat, Timespec, Whence,
         },
         thread::{Gid, Uid},
     },
@@ -494,6 +494,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn listen(&self, backlog: usize) -> Result<()> {
         let _ = backlog;
+        bail!(NotSock)
+    }
+
+    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+        let _ = flags;
         bail!(NotSock)
     }
 

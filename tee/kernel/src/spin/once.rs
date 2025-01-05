@@ -27,6 +27,13 @@ impl<T> Once<T> {
         }
     }
 
+    pub fn with_value(value: T) -> Self {
+        Self {
+            state: AtomicU8::new(STATE_INITIALIZED),
+            cell: UnsafeCell::new(MaybeUninit::new(value)),
+        }
+    }
+
     /// Try to initialize the value.
     ///
     /// `init` will only be called once per `Once<T>` instance.
