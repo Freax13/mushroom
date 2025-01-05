@@ -152,7 +152,6 @@ impl ReadHalf {
 
         let strong_count = Arc::strong_count(&self.data);
         ready_events.set(Events::READ, !guard.bytes.is_empty() || strong_count == 1);
-        ready_events.set(Events::HUP, strong_count == 1);
 
         ready_events &= events;
         ready_events
@@ -306,10 +305,11 @@ impl WriteHalf {
             Events::WRITE,
             guard.bytes.len() < guard.capacity || strong_count == 1,
         );
+        ready_events &= events;
+        ready_events.set(Events::HUP, strong_count == 1);
         ready_events.set(Events::ERR, guard.ty.is_pipe() && strong_count == 1);
         drop(guard);
 
-        ready_events &= events;
         ready_events
     }
 
