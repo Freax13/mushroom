@@ -140,6 +140,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysConnect);
     handlers.register(SysAccept);
     handlers.register(SysRecvFrom);
+    handlers.register(SysShutdown);
     handlers.register(SysBind);
     handlers.register(SysListen);
     handlers.register(SysSocketpair);
@@ -1349,6 +1350,17 @@ async fn recv_from(
 
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(i386 = 373, amd64 = 48)]
+fn shutdown(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    how: ShutdownHow,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    fd.shutdown(how)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 361, amd64 = 49)]

@@ -18,6 +18,7 @@ pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
             ty,
             bytes: VecDeque::new(),
             capacity,
+            shutdown: false,
         }),
     });
     let notify = Arc::new(Notify::new());
@@ -41,6 +42,9 @@ struct PipeDataBuffer {
     ty: Type,
     bytes: VecDeque<u8>,
     capacity: usize,
+    /// For sockets: Whether the socket-half has been shut down. This is not
+    /// used for pipes.
+    shutdown: bool,
 }
 
 pub enum Type {
@@ -77,7 +81,7 @@ impl ReadHalf {
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.data) == 1 {
+            if Arc::strong_count(&self.data) == 1 || guard.shutdown {
                 return Ok(0);
             }
 
@@ -114,7 +118,7 @@ impl ReadHalf {
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.data) == 1 {
+            if Arc::strong_count(&self.data) == 1 || guard.shutdown {
                 return Ok(0);
             }
 
@@ -151,7 +155,11 @@ impl ReadHalf {
         let mut ready_events = Events::empty();
 
         let strong_count = Arc::strong_count(&self.data);
-        ready_events.set(Events::READ, !guard.bytes.is_empty() || strong_count == 1);
+        ready_events.set(
+            Events::READ,
+            !guard.bytes.is_empty() || strong_count == 1 || guard.shutdown,
+        );
+        ready_events.set(Events::RDHUP, strong_count == 1 || guard.shutdown);
 
         ready_events &= events;
         ready_events
@@ -183,7 +191,7 @@ impl ReadHalf {
         // Bail out early if there are no bytes to be copied.
         if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.data) == 1 {
+            if Arc::strong_count(&self.data) == 1 || guard.shutdown {
                 return Ok(Ok(0));
             }
             return Ok(Err(PipeBlocked));
@@ -204,6 +212,18 @@ impl ReadHalf {
 
         Ok(Ok(len))
     }
+
+    pub fn shutdown(&self) {
+        let mut guard = self.data.buffer.lock();
+
+        // Don't do anything if the stream buffer is already shutdown.
+        if guard.shutdown {
+            return;
+        }
+
+        guard.shutdown = true;
+        self.notify();
+    }
 }
 
 pub struct WriteHalf {
@@ -221,6 +241,7 @@ impl WriteHalf {
         }
 
         let mut guard = self.data.buffer.lock();
+        ensure!(!guard.shutdown, Pipe);
 
         let atomic_write = buf.len() <= guard.ty.atomic_write_size();
         let remaining_capacity = guard.capacity - guard.bytes.len();
@@ -254,6 +275,7 @@ impl WriteHalf {
         }
 
         let mut guard = self.data.buffer.lock();
+        ensure!(!guard.shutdown, Pipe);
 
         let atomic_write = len <= guard.ty.atomic_write_size();
         let remaining_capacity = guard.capacity - guard.bytes.len();
@@ -326,7 +348,7 @@ impl WriteHalf {
                 } else {
                     0 < remaining_capacity
                 };
-                if can_write || Arc::strong_count(&self.data) == 1 {
+                if can_write || Arc::strong_count(&self.data) == 1 || guard.shutdown {
                     break;
                 }
             }
@@ -381,6 +403,18 @@ impl WriteHalf {
         self.notify();
 
         Ok(Ok(len))
+    }
+
+    pub fn shutdown(&self) {
+        let mut guard = self.data.buffer.lock();
+
+        // Don't do anything if the stream buffer is already shutdown.
+        if guard.shutdown {
+            return;
+        }
+
+        guard.shutdown = true;
+        self.notify();
     }
 }
 

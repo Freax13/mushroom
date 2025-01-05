@@ -1099,6 +1099,7 @@ impl From<EpollEvents> for Events {
         let mut events = Events::empty();
         events.set(Events::READ, value.contains(EpollEvents::IN));
         events.set(Events::WRITE, value.contains(EpollEvents::OUT));
+        events.set(Events::RDHUP, value.contains(EpollEvents::RDHUP));
         events
     }
 }
@@ -1108,6 +1109,9 @@ impl From<Events> for EpollEvents {
         let mut events = EpollEvents::empty();
         events.set(EpollEvents::IN, value.contains(Events::READ));
         events.set(EpollEvents::OUT, value.contains(Events::WRITE));
+        events.set(EpollEvents::ERR, value.contains(Events::ERR));
+        events.set(EpollEvents::RDHUP, value.contains(Events::RDHUP));
+        events.set(EpollEvents::HUP, value.contains(Events::HUP));
         events
     }
 }
@@ -1589,5 +1593,13 @@ impl From<Accept4Flags> for FdFlags {
 impl From<Accept4Flags> for OpenFlags {
     fn from(value: Accept4Flags) -> Self {
         OpenFlags::from_bits_truncate(value.bits())
+    }
+}
+
+enum_arg! {
+    pub enum ShutdownHow {
+        Rd = 0,
+        Wr = 1,
+        RdWr = 2,
     }
 }
