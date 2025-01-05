@@ -239,6 +239,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysAccept4);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
@@ -1302,15 +1303,25 @@ fn connect(
     Ok(0)
 }
 
-#[syscall(amd64 = 43)]
-fn accept(
+#[syscall(amd64 = 43, interruptable, restartable)]
+async fn accept(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
     fd: FdNum,
-    upeer_sockaddr: Pointer<c_void>,
+    upeer_sockaddr: Pointer<SocketAddr>,
     upeer_addrlen: Pointer<u32>,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    accept4(
+        virtual_memory,
+        fdtable,
+        no_file_limit,
+        fd,
+        upeer_sockaddr,
+        upeer_addrlen,
+        Accept4Flags::empty(),
+    )
+    .await
 }
 
 #[syscall(i386 = 371, amd64 = 45, interruptable)]
@@ -3969,6 +3980,34 @@ async fn epoll_pwait(
     }
 
     res
+}
+
+#[syscall(i386 = 364, amd64 = 288, interruptable, restartable)]
+async fn accept4(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fd: FdNum,
+    upeer_sockaddr: Pointer<SocketAddr>,
+    upeer_addrlen: Pointer<u32>,
+    flags: Accept4Flags,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let (socket, mut addr) = do_io(&*fd, Events::READ, || fd.accept(flags)).await?;
+    let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
+
+    if !upeer_sockaddr.is_null() {
+        let addr_len = virtual_memory.read(upeer_addrlen)?;
+        let addr_len = usize_from(addr_len);
+        if addr_len != addr.len() {
+            virtual_memory.write(upeer_addrlen, addr_len as u32)?;
+        }
+
+        addr.truncate(addr_len);
+        virtual_memory.write_bytes(upeer_sockaddr.get(), &addr)?;
+    }
+
+    Ok(fd_num.get() as u64)
 }
 
 #[syscall(i386 = 323, amd64 = 290)]

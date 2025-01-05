@@ -1570,3 +1570,24 @@ pub struct SocketAddrNetlink {
     pub groups: u32,
     _pad2: [u8; 4],
 }
+
+bitflags! {
+    pub struct Accept4Flags {
+        const CLOEXEC = OpenFlags::CLOEXEC.bits();
+        const NONBLOCK = OpenFlags::NONBLOCK.bits();
+    }
+}
+
+impl From<Accept4Flags> for FdFlags {
+    fn from(value: Accept4Flags) -> Self {
+        let mut flags = FdFlags::empty();
+        flags.set(FdFlags::CLOEXEC, value.contains(Accept4Flags::CLOEXEC));
+        flags
+    }
+}
+
+impl From<Accept4Flags> for OpenFlags {
+    fn from(value: Accept4Flags) -> Self {
+        OpenFlags::from_bits_truncate(value.bits())
+    }
+}
