@@ -146,6 +146,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysSetsockopt);
+    handlers.register(SysGetsockopt);
     handlers.register(SysFork);
     handlers.register(SysVfork);
     handlers.register(SysExecve);
@@ -1442,8 +1443,10 @@ fn socketpair(
     Ok(0)
 }
 
-#[syscall(amd64 = 54)]
+#[syscall(i386 = 366, amd64 = 54)]
 fn setsockopt(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     level: i32,
@@ -1451,8 +1454,35 @@ fn setsockopt(
     optval: Pointer<[u8]>,
     optlen: i32,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    fd.set_socket_option(virtual_memory, abi, level, optname, optval, optlen)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 365, amd64 = 55)]
+fn getsockopt(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    level: i32,
+    optname: i32,
+    optval: Pointer<[u8]>,
+    optlen: Pointer<i32>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let mut value = fd.get_socket_option(abi, level, optname)?;
+
+    let opt_len_value = virtual_memory.read(optlen)?;
+    let opt_len_value = usize::try_from(opt_len_value)?;
+    if opt_len_value != value.len() {
+        let opt_len_value = i32::try_from(value.len())?;
+        virtual_memory.write(optlen, opt_len_value)?;
+    }
+    value.truncate(opt_len_value);
+    virtual_memory.write_bytes(optval.get(), &value)?;
+
+    Ok(0)
 }
 
 #[syscall(i386 = 120, amd64 = 56)]

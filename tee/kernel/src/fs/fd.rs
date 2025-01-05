@@ -22,9 +22,12 @@ use crate::{
     user::process::{
         limits::CurrentNoFileLimit,
         memory::VirtualMemory,
-        syscall::args::{
-            Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, ShutdownHow,
-            SocketAddr, Stat, Timespec, Whence,
+        syscall::{
+            args::{
+                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer,
+                ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
@@ -511,6 +514,31 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = virtual_memory;
         let _ = addr;
         let _ = addrlen;
+        bail!(NotSock)
+    }
+
+    fn get_socket_option(&self, abi: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        let _ = abi;
+        let _ = level;
+        let _ = optname;
+        bail!(NotSock)
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        abi: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        let _ = virtual_memory;
+        let _ = abi;
+        let _ = level;
+        let _ = optname;
+        let _ = optval;
+        let _ = optlen;
         bail!(NotSock)
     }
 

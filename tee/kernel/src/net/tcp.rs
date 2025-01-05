@@ -26,9 +26,12 @@ use crate::{
     spin::{mutex::Mutex, once::Once, rwlock::RwLock},
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{
-            Accept4Flags, FileMode, OpenFlags, Pointer, ShutdownHow, SocketAddr, SocketAddrInet,
-            SocketTypeWithFlags, Stat,
+        syscall::{
+            args::{
+                Accept4Flags, FileMode, OpenFlags, Pointer, ShutdownHow, SocketAddr,
+                SocketAddrInet, SocketTypeWithFlags, Stat,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
@@ -248,6 +251,28 @@ impl OpenFileDescription for TcpSocket {
         passive.notify.notify();
 
         Ok(())
+    }
+
+    fn get_socket_option(&self, abi: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        match (level, optname) {
+            (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            _ => bail!(Inval),
+        }
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        abi: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        match (level, optname) {
+            (1, 2) => Ok(()), // SO_REUSEADDR
+            _ => bail!(Inval),
+        }
     }
 
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
