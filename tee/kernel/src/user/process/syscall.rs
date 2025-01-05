@@ -42,6 +42,7 @@ use crate::{
         path::Path,
         StatFs,
     },
+    net::tcp::TcpSocket,
     rt::oneshot,
     time::{self, now, sleep_until},
     user::process::{memory::MemoryPermissions, syscall::args::*, ProcessGroup},
@@ -135,6 +136,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysSocket);
     handlers.register(SysConnect);
     handlers.register(SysAccept);
     handlers.register(SysRecvFrom);
@@ -1267,6 +1269,26 @@ async fn sendfile64(
     Ok(len)
 }
 
+#[syscall(i386 = 359, amd64 = 41)]
+fn socket(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    domain: Domain,
+    r#type: SocketTypeWithFlags,
+    protocol: i32,
+) -> SyscallResult {
+    let fd = match domain {
+        Domain::Unix => bail!(NoSys),
+        Domain::Inet => match r#type.socket_type {
+            SocketType::Stream => fdtable.insert(TcpSocket::new(r#type), r#type, no_file_limit)?,
+            SocketType::Dgram => todo!(),
+            SocketType::Raw => todo!(),
+            SocketType::Seqpacket => todo!(),
+        },
+    };
+    Ok(fd.get() as u64)
+}
+
 #[syscall(amd64 = 42)]
 fn connect(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1373,6 +1395,7 @@ fn socketpair(
                 _ => bail!(Inval),
             }
         }
+        Domain::Inet => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.

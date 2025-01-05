@@ -985,6 +985,7 @@ impl From<Timespec> for Timeval {
 enum_arg! {
     pub enum Domain {
         Unix = 1,
+        Inet = 2,
     }
 }
 
