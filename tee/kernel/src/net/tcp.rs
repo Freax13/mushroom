@@ -59,7 +59,11 @@ impl TcpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, addr: SocketAddrInet) -> Result<bool> {
+    fn try_bind(&self, mut addr: SocketAddrInet) -> Result<bool> {
+        if addr.addr == [0; 4] {
+            addr.addr = [127, 0, 0, 1];
+        }
+
         let allow_reuse = self.reuse_addr.load(Ordering::Relaxed);
 
         let mut guard = TCP_SOCKETS.write();
