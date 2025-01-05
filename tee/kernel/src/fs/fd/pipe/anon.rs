@@ -1,5 +1,3 @@
-use core::num::NonZeroUsize;
-
 use crate::{
     fs::{
         node::{new_ino, FileAccessContext},
@@ -259,7 +257,12 @@ pub fn new(flags: Pipe2Flags, uid: Uid, gid: Gid) -> (ReadHalf, WriteHalf) {
     let internal = Arc::new(Mutex::new(Internal {
         ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
     }));
-    let (read_half, write_half) = stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
+    let (read_half, write_half) = stream_buffer::new(
+        CAPACITY,
+        stream_buffer::Type::Pipe {
+            atomic_write_size: PIPE_BUF,
+        },
+    );
     let flags = flags.into();
 
     (

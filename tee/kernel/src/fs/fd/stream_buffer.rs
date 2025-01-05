@@ -12,10 +12,10 @@ use crate::{
 
 use super::{Events, PipeBlocked};
 
-pub fn new(capacity: usize, atomic_write_size: Option<NonZeroUsize>) -> (ReadHalf, WriteHalf) {
+pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
-        atomic_write_size: atomic_write_size.unwrap_or_else(|| NonZeroUsize::new(1).unwrap()),
         buffer: Mutex::new(PipeDataBuffer {
+            ty,
             bytes: VecDeque::new(),
             capacity,
         }),
@@ -34,13 +34,31 @@ pub fn new(capacity: usize, atomic_write_size: Option<NonZeroUsize>) -> (ReadHal
 }
 
 struct PipeData {
-    atomic_write_size: NonZeroUsize,
     buffer: Mutex<PipeDataBuffer>,
 }
 
 struct PipeDataBuffer {
+    ty: Type,
     bytes: VecDeque<u8>,
     capacity: usize,
+}
+
+pub enum Type {
+    Pipe { atomic_write_size: NonZeroUsize },
+    Socket,
+}
+
+impl Type {
+    fn atomic_write_size(&self) -> usize {
+        match self {
+            Type::Pipe { atomic_write_size } => atomic_write_size.get(),
+            Type::Socket => 1,
+        }
+    }
+
+    pub fn is_pipe(&self) -> bool {
+        matches!(self, Self::Pipe { .. })
+    }
 }
 
 pub struct ReadHalf {
@@ -66,7 +84,7 @@ impl ReadHalf {
             bail!(Again);
         }
 
-        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
         let mut read = 0;
         for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.bytes.pop_front())) {
@@ -102,7 +120,7 @@ impl ReadHalf {
 
             bail!(Again);
         }
-        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let (slice1, slice2) = guard.bytes.as_slices();
@@ -172,7 +190,7 @@ impl ReadHalf {
             return Ok(Err(PipeBlocked));
         }
 
-        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let prev_len = guard.bytes.len();
@@ -205,7 +223,7 @@ impl WriteHalf {
 
         let mut guard = self.data.buffer.lock();
 
-        let atomic_write = buf.len() <= self.data.atomic_write_size.get();
+        let atomic_write = buf.len() <= guard.ty.atomic_write_size();
         let remaining_capacity = guard.capacity - guard.bytes.len();
         if atomic_write {
             ensure!(remaining_capacity >= buf.len(), Again);
@@ -238,7 +256,7 @@ impl WriteHalf {
 
         let mut guard = self.data.buffer.lock();
 
-        let atomic_write = len <= self.data.atomic_write_size.get();
+        let atomic_write = len <= guard.ty.atomic_write_size();
         let remaining_capacity = guard.capacity - guard.bytes.len();
         if atomic_write {
             ensure!(remaining_capacity >= len, Again);
@@ -288,7 +306,7 @@ impl WriteHalf {
             Events::WRITE,
             guard.bytes.len() < guard.capacity || strong_count == 1,
         );
-        ready_events.set(Events::ERR, strong_count == 1);
+        ready_events.set(Events::ERR, guard.ty.is_pipe() && strong_count == 1);
         drop(guard);
 
         ready_events &= events;
@@ -296,13 +314,12 @@ impl WriteHalf {
     }
 
     pub async fn ready_for_write(&self, count: usize) -> Result<()> {
-        let is_atomic = count <= self.data.atomic_write_size.get();
-
         loop {
             let wait = self.notify.wait();
 
             {
                 let guard = self.data.buffer.lock();
+                let is_atomic = count <= guard.ty.atomic_write_size();
                 let remaining_capacity = guard.capacity - guard.bytes.len();
                 let can_write = if is_atomic {
                     count <= remaining_capacity
@@ -386,8 +403,7 @@ pub fn splice(
         return Err(SpliceBlockedError::Read);
     }
 
-    let was_full =
-        read_guard.capacity - read_guard.bytes.len() < read_half.data.atomic_write_size.get();
+    let was_full = read_guard.capacity - read_guard.bytes.len() < read_guard.ty.atomic_write_size();
 
     // Make sure that the write half can receive at least one byte.
     let remaining_capacity = write_guard.capacity - write_guard.bytes.len();
