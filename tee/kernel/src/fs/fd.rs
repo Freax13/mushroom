@@ -542,6 +542,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
+    fn get_socket_name(&self) -> Result<Vec<u8>> {
+        bail!(NotSock)
+    }
+
+    fn get_peer_name(&self) -> Result<Vec<u8>> {
+        bail!(NotSock)
+    }
+
     fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
         let _ = vm;
         let _ = pointer;

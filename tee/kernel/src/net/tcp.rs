@@ -293,6 +293,37 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
+    fn get_socket_name(&self) -> Result<Vec<u8>> {
+        let addr = self
+            .bound_socket
+            .get()
+            .map(|bound| {
+                // The address of a socket might change when it's connected. If
+                // the socket is connected, prefer the address stored with that
+                // connection.
+                if let Some(Mode::Active(active)) = bound.mode.get() {
+                    active.local_addr
+                } else {
+                    bound.bind_addr
+                }
+            })
+            .map(SocketAddrInet::from)
+            .unwrap_or_default();
+        let addr = SocketAddr::Inet(addr);
+        Ok(bytes_of(&addr).to_vec())
+    }
+
+    fn get_peer_name(&self) -> Result<Vec<u8>> {
+        let socket = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = socket.mode.get().ok_or_else(|| err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        let addr = SocketAddrInet::from(active.remote_addr);
+        let addr = SocketAddr::Inet(addr);
+        Ok(bytes_of(&addr).to_vec())
+    }
+
     fn listen(&self, backlog: usize) -> Result<()> {
         // Make sure that the backlog is never empty.
         let backlog = cmp::max(backlog, 1);
