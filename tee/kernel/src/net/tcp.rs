@@ -424,6 +424,10 @@ impl OpenFileDescription for TcpSocket {
         let remote_ip = *remote_addr.ip();
         let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
 
+        if let Some(remote_ip) = remote_ip {
+            ensure!(remote_ip.is_loopback(), NetUnreach);
+        }
+
         'outer: loop {
             let mut guard = PORTS.lock();
 

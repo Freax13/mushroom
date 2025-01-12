@@ -101,6 +101,7 @@ pub enum ErrorKind {
     OpNotSupp = 95,
     AddrInUse = 98,
     AddrNotAvail = 99,
+    NetUnreach = 101,
     IsConn = 106,
     NotConn = 107,
     TimedOut = 110,
