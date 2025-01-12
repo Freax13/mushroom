@@ -193,6 +193,7 @@ pub struct TcpSocket {
     flags: OpenFlags,
     reuse_addr: AtomicBool,
     reuse_port: AtomicBool,
+    activate_notify: Notify,
     bound_socket: Once<BoundSocket>,
 }
 
@@ -202,6 +203,7 @@ impl TcpSocket {
             flags: r#type.flags,
             reuse_addr: AtomicBool::new(false),
             reuse_port: AtomicBool::new(false),
+            activate_notify: Notify::new(),
             bound_socket: Once::new(),
         }
     }
@@ -256,6 +258,7 @@ impl TcpSocket {
         let Ok(bound) = res else {
             return Ok(false);
         };
+        self.activate_notify.notify();
 
         // Complete the bind operation.
         bind_guard.bind(Arc::downgrade(&bound.mode));
@@ -386,6 +389,7 @@ impl OpenFileDescription for TcpSocket {
             flags: OpenFlags::from(flags),
             reuse_addr: AtomicBool::new(self.reuse_addr.load(Ordering::Relaxed)),
             reuse_port: AtomicBool::new(self.reuse_port.load(Ordering::Relaxed)),
+            activate_notify: Notify::new(),
             bound_socket: Once::with_value(BoundSocket {
                 bind_addr: bound.bind_addr,
                 reuse_addr: bound.reuse_addr,
@@ -536,6 +540,7 @@ impl OpenFileDescription for TcpSocket {
                         Mode::Active(socket1)
                     })
                     .map_err(|_| err!(IsConn))?;
+                self.activate_notify.notify();
 
                 // Update the entry for this socket to reflect the IPs.
                 let this_entry = ports
@@ -698,8 +703,15 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        let bound = self.bound_socket.get().expect("TODO");
-        let mode = bound.mode.get().expect("TODO");
+        let mode = loop {
+            let wait = self.activate_notify.wait();
+            if let Some(bound) = self.bound_socket.get() {
+                if let Some(mode) = bound.mode.get() {
+                    break mode;
+                }
+            }
+            wait.await;
+        };
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 if !events.contains(Events::READ) {
