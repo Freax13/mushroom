@@ -143,6 +143,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysShutdown);
     handlers.register(SysBind);
     handlers.register(SysListen);
+    handlers.register(SysGetsockname);
+    handlers.register(SysGetpeername);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysSetsockopt);
@@ -1383,6 +1385,46 @@ fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -
     let fd = fdtable.get(fd)?;
     let backlog = cmp::max(0, backlog) as usize;
     fd.listen(backlog)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 367, amd64 = 51)]
+fn getsockname(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    addr: Pointer<SocketAddr>,
+    addrlen: Pointer<u32>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let max_len = virtual_memory.read(addrlen)?;
+    let mut socket_name = fd.get_socket_name()?;
+    let actual_len = socket_name.len() as u32;
+    if max_len != actual_len {
+        virtual_memory.write(addrlen, actual_len)?;
+    }
+    socket_name.truncate(max_len as usize);
+    virtual_memory.write_bytes(addr.get(), &socket_name)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 368, amd64 = 52)]
+fn getpeername(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    addr: Pointer<SocketAddr>,
+    addrlen: Pointer<u32>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let max_len = virtual_memory.read(addrlen)?;
+    let mut socket_name = fd.get_peer_name()?;
+    let actual_len = socket_name.len() as u32;
+    if max_len != actual_len {
+        virtual_memory.write(addrlen, actual_len)?;
+    }
+    socket_name.truncate(max_len as usize);
+    virtual_memory.write_bytes(addr.get(), &socket_name)?;
     Ok(0)
 }
 
