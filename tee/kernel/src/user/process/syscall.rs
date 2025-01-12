@@ -1381,7 +1381,7 @@ fn bind(
 #[syscall(i386 = 363, amd64 = 50)]
 fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let backlog = usize::try_from(backlog)?;
+    let backlog = cmp::max(0, backlog) as usize;
     fd.listen(backlog)?;
     Ok(0)
 }

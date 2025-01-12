@@ -142,6 +142,7 @@ impl Default for Notify {
 }
 
 /// A wrapper around `Arc<Notify>` that sends a notification when it's dropped.
+#[derive(Clone)]
 pub struct NotifyOnDrop(pub Arc<Notify>);
 
 impl Deref for NotifyOnDrop {
