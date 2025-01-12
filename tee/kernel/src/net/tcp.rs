@@ -1,8 +1,9 @@
 use core::{
+    cmp,
     net::{Ipv4Addr, SocketAddrV4},
-    ops::Bound,
+    ops::Not,
     pin::pin,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use alloc::{
@@ -23,7 +24,10 @@ use crate::{
         FileSystem,
     },
     rt::notify::{Notify, NotifyOnDrop},
-    spin::{mutex::Mutex, once::Once, rwlock::RwLock},
+    spin::{
+        mutex::{Mutex, MutexGuard},
+        once::Once,
+    },
     user::process::{
         memory::VirtualMemory,
         syscall::{
@@ -38,13 +42,158 @@ use crate::{
 };
 
 // TODO: Periodically clean up closed TCP sockets.
-static TCP_SOCKETS: RwLock<BTreeMap<SocketAddrV4, Weak<BoundSocket>>> =
-    RwLock::new(BTreeMap::new());
+static PORTS: Mutex<BTreeMap<u16, PortData>> = Mutex::new(BTreeMap::new());
+
+#[derive(Default)]
+struct PortData {
+    round_robin_counter: usize,
+    entries: Vec<PortDataEntry>,
+    /// This notify is signaled when a passive socket is ready to accept more
+    /// clients again i.e. that a slot in its backlog just became available.
+    /// This notify is also signaled when a passive socket is closed.
+    connect_notify: Arc<Notify>,
+}
+
+impl PortData {
+    /// Check all the pre-conditions required for binding a port, but don't
+    /// actually bind it just yet. Instead return a [`BindGuard`] that can be
+    /// used to bind a port at a later time.
+    pub fn prepare_bind(
+        &mut self,
+        ip: Ipv4Addr,
+        reuse_addr: bool,
+        reuse_port: bool,
+        effective_uid: Uid,
+    ) -> Result<BindGuard<'_>> {
+        let local_ip = ip.is_unspecified().not().then_some(ip);
+
+        if let Some(local_ip) = local_ip {
+            // We only support binding to localhost -> make sure that the
+            // address is a loopback address.
+            ensure!(local_ip.is_loopback(), AddrNotAvail);
+        }
+
+        let mut i = 0;
+        while let Some(entry) = self.entries.get(i) {
+            i += 1;
+            // Skip (and remove) entries whose sockets are no longer live.
+            let Some(mode) = entry.mode.upgrade() else {
+                i -= 1;
+                self.entries.swap_remove(i);
+                continue;
+            };
+
+            // Skip entries that don't overlap with `ip`.
+            if entry
+                .local_ip
+                .zip(local_ip)
+                .is_some_and(|(entry_ip, ip)| entry_ip != ip)
+            {
+                continue;
+            }
+
+            // Skip entries that are allowed to overlap according to SO_REUSEPORT.
+            if reuse_port && entry.reuse_port && entry.effective_uid == effective_uid {
+                continue;
+            }
+
+            // Unless when SO_REUSE_ADDR is set, make sure that there's no
+            // overlap between an specified and an unspecified address.
+            if !reuse_addr || !entry.reuse_addr {
+                ensure!(
+                    Option::zip(entry.local_ip, local_ip)
+                        .is_some_and(|(entry_ip, ip)| entry_ip != ip),
+                    AddrInUse
+                );
+            }
+
+            // Fail if there's already a listening socket.
+            let is_listening = mode
+                .get()
+                .is_some_and(|mode| matches!(mode, Mode::Passive(..)));
+            ensure!(!is_listening, AddrInUse);
+        }
+
+        Ok(BindGuard {
+            port_data: self,
+            local_ip,
+            reuse_addr,
+            reuse_port,
+            effective_uid,
+        })
+    }
+
+    /// Check if the socket with the given mode pointer can be made into a
+    /// listening socket.
+    fn can_listen(&self, mode: &Arc<Once<Mode>>) -> bool {
+        // Find the entry for the socket.
+        let socket_entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.mode.as_ptr() == &**mode)
+            .expect("socket can't listen before it's bound");
+
+        // Check if there are any conflicting sockets.
+        !self
+            .entries
+            .iter()
+            // Ignore the socket itself.
+            .filter(|entry| entry.mode.as_ptr() != &**mode)
+            // Ignore if both sockets have the reuse_port option enabled.
+            .filter(|entry| !(entry.reuse_port && socket_entry.reuse_port))
+            // Ignore sockets that don't have an overlap in the bound address.
+            .filter(|entry| {
+                Option::zip(entry.local_ip, socket_entry.local_ip)
+                    .is_none_or(|(entry_ip, ip)| entry_ip == ip)
+            })
+            // Only consider sockets which are still active.
+            .filter_map(|entry| entry.mode.upgrade())
+            // See if there are any listening sockets.
+            .any(|port| {
+                port.get()
+                    .is_some_and(|mode| matches!(mode, Mode::Passive(_)))
+            })
+    }
+}
+
+struct BindGuard<'a> {
+    port_data: &'a mut PortData,
+    local_ip: Option<Ipv4Addr>,
+    reuse_addr: bool,
+    reuse_port: bool,
+    effective_uid: Uid,
+}
+
+impl BindGuard<'_> {
+    pub fn bind(self, mode: Weak<Once<Mode>>) {
+        self.port_data.entries.push(PortDataEntry {
+            local_ip: self.local_ip,
+            remote_addr: None,
+            reuse_addr: self.reuse_addr,
+            reuse_port: self.reuse_port,
+            effective_uid: self.effective_uid,
+            mode,
+        });
+    }
+}
+
+struct PortDataEntry {
+    local_ip: Option<Ipv4Addr>,
+    remote_addr: Option<SocketAddrV4>,
+    reuse_addr: bool,
+    reuse_port: bool,
+    effective_uid: Uid,
+    mode: Weak<Once<Mode>>,
+}
+
+const EPHEMERAL_PORT_START: u16 = 32768;
+const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct TcpSocket {
     flags: OpenFlags,
     reuse_addr: AtomicBool,
-    bound_socket: Once<Arc<BoundSocket>>,
+    reuse_port: AtomicBool,
+    bound_socket: Once<BoundSocket>,
 }
 
 impl TcpSocket {
@@ -52,6 +201,7 @@ impl TcpSocket {
         Self {
             flags: r#type.flags,
             reuse_addr: AtomicBool::new(false),
+            reuse_port: AtomicBool::new(false),
             bound_socket: Once::new(),
         }
     }
@@ -59,102 +209,65 @@ impl TcpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, mut addr: SocketAddrInet) -> Result<bool> {
-        if addr.addr == [0; 4] {
-            addr.addr = [127, 0, 0, 1];
-        }
+    fn try_bind(&self, addr: SocketAddrInet) -> Result<bool> {
+        let reuse_addr = self.reuse_addr.load(Ordering::Relaxed);
+        let reuse_port = self.reuse_port.load(Ordering::Relaxed);
 
-        let allow_reuse = self.reuse_addr.load(Ordering::Relaxed);
+        let mut socket_addr = SocketAddrV4::from(addr);
+        let effective_uid = Uid::SUPER_USER; // TODO
 
-        let mut guard = TCP_SOCKETS.write();
-        let ip = Ipv4Addr::new(addr.addr[0], addr.addr[1], addr.addr[2], addr.addr[3]);
+        let mut guard = PORTS.lock();
 
-        let socket_addr;
-        let mut cursor;
-
-        if addr.port == 0 {
-            // Pick a port.
-            const EPHEMERAL_PORT_START: u16 = 32768;
-            const EPHEMERAL_PORT_END: u16 = 60999;
-
-            cursor =
-                guard.upper_bound_mut(Bound::Included(&SocketAddrV4::new(ip, EPHEMERAL_PORT_END)));
-            if let Some((prev, _)) = cursor.peek_prev().filter(|(prev, _)| *prev.ip() == ip) {
-                // A port has already been bound on IP. Pick the highest
-                // available port and make sure that it doesn't exceed the end
-                // of the range.
-                let port = prev
-                    .port()
-                    .checked_add(1)
-                    .filter(|port| *port <= EPHEMERAL_PORT_END)
-                    .ok_or_else(|| err!(AddrInUse))?;
-                socket_addr = SocketAddrV4::new(ip, port);
-            } else {
-                // No ports <DYNAMIC_PORT_START have been bound on IP. Pick the
-                // first one.
-                socket_addr = SocketAddrV4::new(ip, EPHEMERAL_PORT_START);
-            }
-        } else {
-            // Make sure that the port is not already in use.
-            socket_addr = SocketAddrV4::new(ip, addr.port);
-            cursor = guard.upper_bound_mut(Bound::Included(&socket_addr));
-            if let Some((prev, socket)) = cursor.peek_prev() {
-                // If there's already a socket bound to the given address,
-                // check that the socket is still alive and whether reusing is
-                // allowed.
-                if *prev == socket_addr {
-                    if let Some(socket) = socket.upgrade() {
-                        ensure!(allow_reuse, AddrInUse);
-                        ensure!(socket.allow_reuse, AddrInUse);
-                        let mut initialized = false;
-                        self.bound_socket.call_once(|| {
-                            initialized = true;
-                            socket
-                        });
-                        return Ok(!initialized);
-                    } else {
-                        // The socket is no longer alive. Remove the weak
-                        // reference and pretend that it was never there.
-                        cursor.remove_prev();
+        // Prepare a bind guard.
+        let bind_guard = if socket_addr.port() == 0 {
+            'port: {
+                // If no port has been specified, try to find one that can be
+                // bound to.
+                for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
+                    let entry = guard.entry(port).or_default();
+                    if let Ok(bind_guard) =
+                        entry.prepare_bind(*socket_addr.ip(), false, false, effective_uid)
+                    {
+                        socket_addr.set_port(port);
+                        break 'port bind_guard;
                     }
                 }
+                // If we can't find a port, fail.
+                bail!(AddrInUse)
             }
-        }
+        } else {
+            guard.entry(socket_addr.port()).or_default().prepare_bind(
+                *socket_addr.ip(),
+                reuse_addr,
+                reuse_port,
+                effective_uid,
+            )?
+        };
 
-        let mut initialized = false;
-        let bound = self.bound_socket.call_once(|| {
-            initialized = true;
-
-            let addr = SocketAddrV4::new(
-                Ipv4Addr::new(addr.addr[0], addr.addr[1], addr.addr[2], addr.addr[3]),
-                addr.port,
-            );
-
-            Arc::new(BoundSocket {
-                allow_reuse,
-                addr,
-                mode: Once::new(),
-            })
+        // Try to initialize the socket.
+        let res = self.bound_socket.init(|| BoundSocket {
+            bind_addr: socket_addr,
+            reuse_port,
+            reuse_addr,
+            connect_notify: NotifyOnDrop(bind_guard.port_data.connect_notify.clone()),
+            mode: Arc::new(Once::new()),
         });
-        if !initialized {
+        // Return false if the socket was already bound.
+        let Ok(bound) = res else {
             return Ok(false);
-        }
+        };
 
-        cursor
-            .insert_after(socket_addr, Arc::downgrade(bound))
-            .unwrap();
-
-        drop(guard);
+        // Complete the bind operation.
+        bind_guard.bind(Arc::downgrade(&bound.mode));
 
         Ok(true)
     }
 
     fn get_or_bind_ephemeral(&self) -> Result<&BoundSocket> {
-        self.try_bind(SocketAddrInet {
-            port: 0,
-            addr: [0, 0, 0, 0],
-            _pad: [0; 8],
-        })?;
+        self.try_bind(SocketAddrInet::from(SocketAddrV4::new(
+            Ipv4Addr::UNSPECIFIED,
+            0,
+        )))?;
         Ok(self.bound_socket.get().unwrap())
     }
 }
@@ -176,29 +289,51 @@ impl OpenFileDescription for TcpSocket {
         let SocketAddr::Inet(addr) = addr else {
             bail!(Inval);
         };
-
         ensure!(self.try_bind(addr)?, Inval);
-
         Ok(())
     }
 
     fn listen(&self, backlog: usize) -> Result<()> {
+        // Make sure that the backlog is never empty.
+        let backlog = cmp::max(backlog, 1);
+
         let bound = self.get_or_bind_ephemeral()?;
+
+        let guard = PORTS.lock();
+        // Check if the socket is allowed to listen on the given port.
+        let entries = &guard[&bound.bind_addr.port()];
+        ensure!(entries.can_listen(&bound.mode), AddrInUse);
+
+        // If uninitialized, initialize the socket as a passive socket.
         let mode = bound.mode.call_once(|| {
             Mode::Passive(PassiveTcpSocket {
-                backlog: AtomicUsize::new(backlog),
-                notify: NotifyOnDrop(Arc::new(Notify::new())),
-                queue: Mutex::new(VecDeque::new()),
+                notify: Arc::new(Notify::new()),
+                internal: Mutex::new(PassiveTcpSocketInternal {
+                    backlog: 0,
+                    queue: VecDeque::new(),
+                }),
             })
         });
+        drop(guard);
+
+        // Fail if the socket was previously an active socket.
         let Mode::Passive(passive) = mode else {
             bail!(IsConn);
         };
-        // TODO: Is the max op correct?
-        let old_backlock = passive.backlog.fetch_max(backlog, Ordering::Relaxed);
-        if old_backlock < backlog {
-            passive.notify.notify();
+
+        // Update the backlog capacity.
+        let mut guard = passive.internal.lock();
+        let was_full = guard.queue.len() >= guard.backlog;
+        guard.backlog = backlog;
+        let is_full = guard.queue.len() >= guard.backlog;
+        drop(guard);
+
+        // If the socket is now ready to accept a socket, notify any sockets
+        // that are trying to connect.
+        if was_full && !is_full {
+            bound.connect_notify.notify();
         }
+
         Ok(())
     }
 
@@ -209,29 +344,28 @@ impl OpenFileDescription for TcpSocket {
             bail!(Inval);
         };
         let active = passive
-            .queue
+            .internal
             .lock()
+            .queue
             .pop_front()
             .ok_or_else(|| err!(Again))?;
-        passive.notify.notify();
         let remote_addr = active.remote_addr;
 
         let socket = Self {
             flags: OpenFlags::from(flags),
             reuse_addr: AtomicBool::new(self.reuse_addr.load(Ordering::Relaxed)),
-            bound_socket: Once::with_value(Arc::new(BoundSocket {
-                allow_reuse: false,
-                addr: bound.addr,
-                mode: Once::with_value(Mode::Active(active)),
-            })),
+            reuse_port: AtomicBool::new(self.reuse_port.load(Ordering::Relaxed)),
+            bound_socket: Once::with_value(BoundSocket {
+                bind_addr: bound.bind_addr,
+                reuse_addr: bound.reuse_addr,
+                reuse_port: bound.reuse_port,
+                connect_notify: bound.connect_notify.clone(),
+                mode: Arc::new(Once::with_value(Mode::Active(active))),
+            }),
         };
         let fd = FileDescriptor::from(socket);
 
-        let socket_addr = SocketAddr::Inet(SocketAddrInet {
-            port: remote_addr.port(),
-            addr: remote_addr.ip().octets(),
-            _pad: [0; 8],
-        });
+        let socket_addr = SocketAddr::Inet(SocketAddrInet::from(remote_addr));
         let socket_addr = bytes_of(&socket_addr).to_vec();
 
         Ok((fd, socket_addr))
@@ -250,64 +384,143 @@ impl OpenFileDescription for TcpSocket {
         let SocketAddr::Inet(remote_addr) = remote_addr else {
             bail!(Inval);
         };
-        let remote_addr = SocketAddrV4::new(
-            Ipv4Addr::new(
-                remote_addr.addr[0],
-                remote_addr.addr[1],
-                remote_addr.addr[2],
-                remote_addr.addr[3],
-            ),
-            remote_addr.port,
-        );
+        let remote_addr = SocketAddrV4::from(remote_addr);
 
-        loop {
-            let sockets_guard = TCP_SOCKETS.read();
-            let remote_socket = sockets_guard
-                .get(&remote_addr)
-                .and_then(Weak::upgrade)
+        let remote_ip = *remote_addr.ip();
+        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
+
+        'outer: loop {
+            let mut guard = PORTS.lock();
+
+            let ports = guard
+                .get_mut(&remote_addr.port())
                 .ok_or_else(|| err!(ConnRefused))?;
-            let mode = remote_socket.mode.get().ok_or_else(|| err!(ConnRefused))?;
-            let Mode::Passive(passive) = mode else {
-                bail!(ConnRefused);
-            };
-            let mut queue_guard = passive.queue.lock();
+            let connect_notify = ports.connect_notify.clone();
+            let wait = connect_notify.wait();
 
-            // Check if the socket is ready to acept a new connection.
-            let backlog = passive.backlog.load(Ordering::Relaxed);
-            if queue_guard.len() >= backlog {
-                // If not, drop all logs and wait for a notification.
+            let mut i = 0;
+            let mut found_passive_socket = false;
+            loop {
+                // If there are no more sockets that could accept a new socket
+                // drop the locks, wait, and try again.
+                if i >= ports.entries.len() {
+                    // Bail out if there are no sockets.
+                    ensure!(found_passive_socket, ConnRefused);
+                    drop(guard);
+                    wait.await;
+                    continue 'outer;
+                }
 
-                drop(queue_guard);
+                // Add a round robin offset and get the entry.
+                let offset_index =
+                    (i + ports.round_robin_counter.wrapping_add(i)) % ports.entries.len();
+                i += 1;
+                let entry = &ports.entries[offset_index];
 
-                let notify = passive.notify.0.clone();
-                let wait = notify.wait();
+                // Skip over entries that don't have a matching IP.
+                if Option::zip(entry.local_ip, remote_ip)
+                    .is_some_and(|(entry_ip, remote_ip)| entry_ip != remote_ip)
+                {
+                    continue;
+                }
 
-                drop(remote_socket);
-                drop(sockets_guard);
+                // Remove entries if the port is no longer alive.
+                let Some(mode) = entry.mode.upgrade() else {
+                    ports.entries.remove(offset_index);
+                    i -= 1;
+                    continue;
+                };
 
-                wait.await;
-                continue;
+                // Skip any non-active or non-passive sockets.
+                let Some(mode) = mode.get() else {
+                    continue;
+                };
+                let Mode::Passive(passive) = mode else {
+                    continue;
+                };
+
+                // This is a socket that we could connect to.
+                found_passive_socket = true;
+
+                // Determine the peer address.
+                // If possible use the address bound to by the listening
+                // socket.
+                let peer_ip = entry.local_ip;
+                // Otherwise, fall back to the address in the connect call.
+                let peer_ip = peer_ip.or(remote_ip);
+                // Otherwise, fall back to the address bound by the connecting
+                // socket.
+                let peer_ip = peer_ip.or_else(|| {
+                    let ip = bound.bind_addr.ip();
+                    ip.is_unspecified().not().then_some(*ip)
+                });
+                // If all of that fails, use localhost.
+                let peer_ip = peer_ip.unwrap_or(Ipv4Addr::LOCALHOST);
+                let mut remote_addr = remote_addr;
+                remote_addr.set_ip(peer_ip);
+
+                // Determine the local address.
+                // If possible use the address bound to by the listening
+                // socket.
+                let local_ip = bound
+                    .bind_addr
+                    .ip()
+                    .is_unspecified()
+                    .not()
+                    .then_some(*bound.bind_addr.ip());
+                // Otherwise use localhost.
+                let local_ip = local_ip.unwrap_or(Ipv4Addr::LOCALHOST);
+
+                // Try to reserve a slot in the backlog.
+                let Some(connect_guard) = passive.prepare_connect() else {
+                    continue;
+                };
+
+                // We've found a socket that's willing to connect :)
+
+                // Increase the round robin counter.
+                ports.round_robin_counter += i;
+
+                // Make sure that the (src,dst) pair does not already exist for
+                // this port.
+                let ports = if remote_addr.port() == bound.bind_addr.port() {
+                    ports
+                } else {
+                    guard.get_mut(&bound.bind_addr.port()).unwrap()
+                };
+                let duplicate_pair = ports.entries.iter().any(|entry| {
+                    entry.local_ip == Some(local_ip) && entry.remote_addr == Some(remote_addr)
+                });
+                ensure!(!duplicate_pair, AddrInUse);
+
+                // Initialize an active socket.
+                bound
+                    .mode
+                    .init(|| {
+                        let (socket1, socket2) = ActiveTcpSocket::new_pair(
+                            SocketAddrV4::new(local_ip, bound.bind_addr.port()),
+                            remote_addr,
+                        );
+                        connect_guard.connect(socket2);
+                        Mode::Active(socket1)
+                    })
+                    .map_err(|_| err!(IsConn))?;
+
+                // Update the entry for this socket to reflect the IPs.
+                let this_entry = ports
+                    .entries
+                    .iter_mut()
+                    .find(|e| e.mode.as_ptr() == Arc::as_ptr(&bound.mode))
+                    .unwrap();
+                this_entry.local_ip = Some(local_ip);
+                this_entry.remote_addr = Some(remote_addr);
+
+                return Ok(());
             }
-
-            let mut initialized = false;
-            bound.mode.call_once(|| {
-                initialized = true;
-
-                let (socket1, socket2) = ActiveTcpSocket::new_pair(bound.addr, remote_addr);
-                queue_guard.push_back(socket2);
-
-                Mode::Active(socket1)
-            });
-            drop(queue_guard);
-            ensure!(initialized, IsConn);
-
-            passive.notify.notify();
-
-            return Ok(());
         }
     }
 
-    fn get_socket_option(&self, abi: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+    fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
         match (level, optname) {
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
             _ => bail!(Inval),
@@ -317,7 +530,7 @@ impl OpenFileDescription for TcpSocket {
     fn set_socket_option(
         &self,
         virtual_memory: Arc<VirtualMemory>,
-        abi: Abi,
+        _: Abi,
         level: i32,
         optname: i32,
         optval: Pointer<[u8]>,
@@ -329,6 +542,13 @@ impl OpenFileDescription for TcpSocket {
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
                 self.reuse_addr.store(optval, Ordering::Relaxed);
+                Ok(())
+            }
+            (1, 15) => {
+                // SO_REUSEPORT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                self.reuse_port.store(optval, Ordering::Relaxed);
                 Ok(())
             }
             _ => bail!(Inval),
@@ -428,7 +648,9 @@ impl OpenFileDescription for TcpSocket {
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 let mut events = events & Events::READ;
-                if events.contains(Events::READ) && passive_tcp_socket.queue.lock().is_empty() {
+                if events.contains(Events::READ)
+                    && passive_tcp_socket.internal.lock().queue.is_empty()
+                {
                     events.remove(Events::READ);
                 }
                 events
@@ -454,8 +676,8 @@ impl OpenFileDescription for TcpSocket {
                 }
                 loop {
                     let wait = passive_tcp_socket.notify.wait();
-                    let guard = passive_tcp_socket.queue.lock();
-                    if !guard.is_empty() {
+                    let guard = passive_tcp_socket.internal.lock();
+                    if !guard.queue.is_empty() {
                         return Ok(Events::READ);
                     }
                     drop(guard);
@@ -499,9 +721,11 @@ impl OpenFileDescription for TcpSocket {
 }
 
 struct BoundSocket {
-    allow_reuse: bool,
-    addr: SocketAddrV4,
-    mode: Once<Mode>,
+    bind_addr: SocketAddrV4,
+    reuse_addr: bool,
+    reuse_port: bool,
+    connect_notify: NotifyOnDrop,
+    mode: Arc<Once<Mode>>,
 }
 
 enum Mode {
@@ -510,12 +734,41 @@ enum Mode {
 }
 
 struct PassiveTcpSocket {
-    backlog: AtomicUsize,
-    notify: NotifyOnDrop,
-    queue: Mutex<VecDeque<ActiveTcpSocket>>,
+    notify: Arc<Notify>,
+    internal: Mutex<PassiveTcpSocketInternal>,
+}
+
+struct PassiveTcpSocketInternal {
+    backlog: usize,
+    queue: VecDeque<ActiveTcpSocket>,
+}
+
+impl PassiveTcpSocket {
+    pub fn prepare_connect(&self) -> Option<ConnectGuard> {
+        let guard = self.internal.lock();
+        (guard.queue.len() < guard.backlog).then(|| ConnectGuard {
+            passive_socket: self,
+            guard,
+        })
+    }
+}
+
+struct ConnectGuard<'a> {
+    passive_socket: &'a PassiveTcpSocket,
+    guard: MutexGuard<'a, PassiveTcpSocketInternal>,
+}
+
+impl ConnectGuard<'_> {
+    pub fn connect(mut self, socket: ActiveTcpSocket) {
+        if self.guard.queue.is_empty() {
+            self.passive_socket.notify.notify();
+        }
+        self.guard.queue.push_back(socket);
+    }
 }
 
 struct ActiveTcpSocket {
+    local_addr: SocketAddrV4,
     remote_addr: SocketAddrV4,
     read_half: stream_buffer::ReadHalf,
     write_half: stream_buffer::WriteHalf,
@@ -527,11 +780,13 @@ impl ActiveTcpSocket {
         let (rx2, tx2) = stream_buffer::new(0x10000, stream_buffer::Type::Socket);
         (
             Self {
+                local_addr,
                 remote_addr,
                 read_half: rx1,
                 write_half: tx2,
             },
             Self {
+                local_addr: remote_addr,
                 remote_addr: local_addr,
                 read_half: rx2,
                 write_half: tx1,

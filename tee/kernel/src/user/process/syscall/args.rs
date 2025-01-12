@@ -2,6 +2,7 @@ use core::{
     cmp,
     fmt::{self, Display},
     marker::PhantomData,
+    net::{Ipv4Addr, SocketAddrV4},
     ops::Add,
 };
 
@@ -1556,14 +1557,42 @@ pub enum SocketAddr {
     Netlink(SocketAddrNetlink) = 16,
 }
 
-#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C, packed(2))]
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
 pub struct SocketAddrInet {
     /// port in network byte order
-    pub port: u16,
+    port: u16,
     /// internet address
     pub addr: [u8; 4],
-    pub _pad: [u8; 8],
+    _pad: [u8; 8],
+}
+
+impl fmt::Debug for SocketAddrInet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SocketAddrInet")
+            .field("addr", &self.addr)
+            .field("port", &u16::from_be(self.port))
+            .finish_non_exhaustive()
+    }
+}
+
+impl From<SocketAddrInet> for SocketAddrV4 {
+    fn from(value: SocketAddrInet) -> Self {
+        Self::new(
+            Ipv4Addr::new(value.addr[0], value.addr[1], value.addr[2], value.addr[3]),
+            u16::from_be(value.port),
+        )
+    }
+}
+
+impl From<SocketAddrV4> for SocketAddrInet {
+    fn from(value: SocketAddrV4) -> Self {
+        Self {
+            port: value.port().to_be(),
+            addr: value.ip().octets(),
+            _pad: [0; 8],
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
