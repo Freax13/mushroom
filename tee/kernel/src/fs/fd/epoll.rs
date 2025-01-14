@@ -15,7 +15,7 @@ use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
+use super::{ensure, err, Events, FileDescriptor, FileLock, OpenFileDescription};
 
 pub struct Epoll {
     ino: u64,
@@ -56,12 +56,25 @@ impl OpenFileDescription for Epoll {
         let mut events = guard
             .interest_list
             .iter()
-            .map(|e| async move {
-                let events = e.fd.ready(Events::from(e.event.events)).await?;
-                Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), e.event.data))
+            .map(|e| {
+                let fd = e.fd.clone();
+                let events = e.event.events;
+                let requested_events = e.event.events;
+                let data = e.event.data;
+                async move {
+                    let events = fd.ready(Events::from(events)).await?;
+                    log::debug!(" {requested_events:?} => {events:?}");
+                    Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), data))
+                }
             })
             .collect::<FuturesUnordered<_>>();
+        drop(guard);
         let event = events.next().await.unwrap()?;
+
+        let guard = self.internal.lock();
+        for entry in guard.interest_list.iter() {
+            log::debug!("{:?}", entry.event);
+        }
 
         Ok(vec![event])
     }
@@ -69,9 +82,37 @@ impl OpenFileDescription for Epoll {
     fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
         let mut guard = self.internal.lock();
 
+        // Make sure that the file descriptor is not already registered.
+        ensure!(
+            !guard.interest_list.iter().any(|entry| entry.fd == fd),
+            Exist
+        );
+
         // Register the file descriptor.
         guard.interest_list.push(InterestListEntry { fd, event });
 
+        Ok(())
+    }
+
+    fn epoll_del(&self, fd: &dyn OpenFileDescription) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let idx = guard
+            .interest_list
+            .iter()
+            .position(|entry| entry.fd == *fd)
+            .ok_or_else(|| err!(NoEnt))?;
+        guard.interest_list.swap_remove(idx);
+        Ok(())
+    }
+
+    fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let entry = guard
+            .interest_list
+            .iter_mut()
+            .find(|entry| entry.fd == *fd)
+            .ok_or_else(|| err!(NoEnt))?;
+        entry.event = event;
         Ok(())
     }
 

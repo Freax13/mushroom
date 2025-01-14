@@ -219,6 +219,11 @@ impl OpenFileDescription for ReadHalf {
         self.read_half.notify();
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
+        self.read_half.notify();
+    }
+
     fn path(&self) -> Result<Path> {
         Ok(self.path.clone())
     }
@@ -298,6 +303,11 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         *self.flags.lock() = flags;
+        self.write_half.notify();
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
         self.write_half.notify();
     }
 
@@ -385,6 +395,12 @@ impl OpenFileDescription for FullReadWrite {
 
     fn set_flags(&self, flags: OpenFlags) {
         *self.flags.lock() = flags;
+        self.read_half.notify();
+        self.write_half.notify();
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
         self.read_half.notify();
         self.write_half.notify();
     }

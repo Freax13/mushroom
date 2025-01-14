@@ -8,6 +8,7 @@ use x86_64::addr::VirtAddrNotValid;
 macro_rules! err {
     ($err:ident) => {
         crate::error::Error::from_kind(crate::error::ErrorKind::$err)
+        // const { crate::error::Error::from_kind(crate::error::ErrorKind::$err) }
     };
 }
 
@@ -44,6 +45,7 @@ impl Error {
 
     #[doc(hidden)]
     #[cfg_attr(not(feature = "harden"), track_caller)]
+    // pub const fn from_kind(kind: ErrorKind) -> Self {
     pub fn from_kind(kind: ErrorKind) -> Self {
         Self {
             kind,
@@ -102,6 +104,7 @@ pub enum ErrorKind {
     AddrInUse = 98,
     AddrNotAvail = 99,
     NetUnreach = 101,
+    ConnReset = 104,
     IsConn = 106,
     NotConn = 107,
     TimedOut = 110,

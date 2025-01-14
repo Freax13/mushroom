@@ -28,6 +28,9 @@ use nix::{
 fn it_works() {
     let result = 2 + 2;
     assert_eq!(result, 4);
+
+    // let a = vec![1u8; 4096 * 256 * 1024 * 8];
+    // println!("{:p}", a.as_ptr());
 }
 
 #[test]
@@ -351,4 +354,23 @@ fn mkdir() {
     // Create directory with trailing slash.
     let src = &base.join("dir-2");
     create_dir(src.join("")).unwrap();
+}
+
+// #[test]
+fn threads() {
+    let threads = (0..128)
+        .map(|i| {
+            std::thread::spawn(move || {
+                let threads = (0..128)
+                    .map(|j| std::thread::spawn(move || {}))
+                    .collect::<Vec<_>>();
+                for thread in threads {
+                    thread.join();
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for thread in threads {
+        thread.join();
+    }
 }

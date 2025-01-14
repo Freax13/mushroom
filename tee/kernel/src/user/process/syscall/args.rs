@@ -1,5 +1,6 @@
 use core::{
     cmp,
+    ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
     net::{Ipv4Addr, SocketAddrV4},
@@ -199,6 +200,13 @@ where
             value: self.value,
             _marker: PhantomData,
         }
+    }
+
+    pub fn add(self, count: usize) -> Self
+    where
+        T: Sized,
+    {
+        self.bytes_offset(count * size_of::<T>())
     }
 
     pub fn bytes_offset(self, len: usize) -> Self {
@@ -458,6 +466,7 @@ impl From<PollEvents> for Events {
         events.set(Events::WRITE, value.contains(PollEvents::OUT));
         events.set(Events::ERR, value.contains(PollEvents::ERR));
         events.set(Events::HUP, value.contains(PollEvents::HUP));
+        events.set(Events::PRI, value.contains(PollEvents::PRI));
         events
     }
 }
@@ -469,6 +478,7 @@ impl From<Events> for PollEvents {
         events.set(PollEvents::OUT, value.contains(Events::WRITE));
         events.set(PollEvents::ERR, value.contains(Events::ERR));
         events.set(PollEvents::HUP, value.contains(Events::HUP));
+        events.set(PollEvents::PRI, value.contains(Events::PRI));
         events
     }
 }
@@ -987,6 +997,7 @@ enum_arg! {
     pub enum Domain {
         Unix = 1,
         Inet = 2,
+        Netlink = 16,
     }
 }
 
@@ -1043,6 +1054,8 @@ impl From<SocketTypeWithFlags> for FdFlags {
 enum_arg! {
     pub enum EpollCtlOp {
         Add = 1,
+        Del = 2,
+        Mod = 3,
     }
 }
 
@@ -1097,6 +1110,8 @@ unsafe impl CheckedBitPattern for EpollEvents {
 
 impl From<EpollEvents> for Events {
     fn from(value: EpollEvents) -> Self {
+        log::debug!("{value:?}");
+
         let mut events = Events::empty();
         events.set(Events::READ, value.contains(EpollEvents::IN));
         events.set(Events::WRITE, value.contains(EpollEvents::OUT));
@@ -1107,12 +1122,15 @@ impl From<EpollEvents> for Events {
 
 impl From<Events> for EpollEvents {
     fn from(value: Events) -> Self {
+        log::debug!("{value:?}");
+
         let mut events = EpollEvents::empty();
         events.set(EpollEvents::IN, value.contains(Events::READ));
         events.set(EpollEvents::OUT, value.contains(Events::WRITE));
         events.set(EpollEvents::ERR, value.contains(Events::ERR));
         events.set(EpollEvents::RDHUP, value.contains(Events::RDHUP));
         events.set(EpollEvents::HUP, value.contains(Events::HUP));
+        events.set(EpollEvents::PRI, value.contains(Events::PRI));
         events
     }
 }
@@ -1605,6 +1623,37 @@ pub struct SocketAddrNetlink {
 }
 
 bitflags! {
+    pub struct SentToFlags {
+        const OOB = 1 << 0;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MsgHdr {
+    /// Address to send to/receive from.
+    pub msg_name: Pointer<SocketAddr>,
+    /// Length of address data.
+    pub msg_namelen: u32,
+
+    /// Vector of data to send/receive into.
+    pub msg_iov: Pointer<Iovec>,
+    /// Number of elements in the vector.
+    pub msg_iovlen: u64,
+
+    /// Ancillary data (eg BSD filedesc passing).
+    pub msg_control: Pointer<c_void>,
+    /// Ancillary data buffer length.
+    pub msg_controllen: u64,
+
+    /// Flags on received message.
+    pub msg_flags: u32,
+}
+
+bitflags! {
+    pub struct RecvMsgFlags {}
+}
+
+bitflags! {
     pub struct Accept4Flags {
         const CLOEXEC = OpenFlags::CLOEXEC.bits();
         const NONBLOCK = OpenFlags::NONBLOCK.bits();
@@ -1630,5 +1679,11 @@ enum_arg! {
         Rd = 0,
         Wr = 1,
         RdWr = 2,
+    }
+}
+
+bitflags! {
+    pub struct RecvFromFlags {
+        const OOB = 1 << 0;
     }
 }

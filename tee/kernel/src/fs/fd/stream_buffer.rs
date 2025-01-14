@@ -19,6 +19,7 @@ pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
             bytes: VecDeque::new(),
             capacity,
             shutdown: false,
+            oob_mark_state: OobMarkState::None,
         }),
     });
     let notify = Arc::new(Notify::new());
@@ -42,9 +43,10 @@ struct PipeDataBuffer {
     ty: Type,
     bytes: VecDeque<u8>,
     capacity: usize,
-    /// For sockets: Whether the socket-half has been shut down. This is not
-    /// used for pipes.
+    /// For sockets (not used for pipes):
+    /// Whether the socket-half has been shut down.
     shutdown: bool,
+    oob_mark_state: OobMarkState,
 }
 
 pub enum Type {
@@ -62,6 +64,45 @@ impl Type {
 
     pub fn is_pipe(&self) -> bool {
         matches!(self, Self::Pipe { .. })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OobMarkState {
+    None,
+    Pending { remaining_length: usize },
+}
+
+impl OobMarkState {
+    pub fn clamp_read_length(&mut self, len: &mut usize) {
+        match *self {
+            OobMarkState::None => {}
+            OobMarkState::Pending {
+                remaining_length: 0,
+            } => *self = OobMarkState::None,
+            OobMarkState::Pending { remaining_length } => *len = cmp::min(*len, remaining_length),
+        }
+    }
+
+    pub fn update(&mut self, read: usize) {
+        match self {
+            OobMarkState::None => {}
+            OobMarkState::Pending { remaining_length } => *remaining_length -= read,
+        }
+    }
+
+    pub fn at_mark(&self) -> bool {
+        match *self {
+            Self::None => false,
+            Self::Pending { remaining_length } => remaining_length == 0,
+        }
+    }
+
+    pub fn pri_event(&self) -> bool {
+        match self {
+            Self::None => false,
+            Self::Pending { .. } => true,
+        }
     }
 }
 
@@ -90,11 +131,20 @@ impl ReadHalf {
 
         let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
+        let mut len = cmp::min(buf.len(), guard.bytes.len());
+        guard.oob_mark_state.clamp_read_length(&mut len);
         let mut read = 0;
-        for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.bytes.pop_front())) {
+        for (dest, src) in buf
+            .iter_mut()
+            .zip(from_fn(|| guard.bytes.pop_front()))
+            .take(len)
+        {
             *dest = src;
             read += 1;
         }
+
+        // Update the OOB mark.
+        guard.oob_mark_state.update(len);
 
         if was_full {
             self.notify.notify();
@@ -126,7 +176,8 @@ impl ReadHalf {
         }
         let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
-        let len = cmp::min(len, guard.bytes.len());
+        let mut len = cmp::min(len, guard.bytes.len());
+        guard.oob_mark_state.clamp_read_length(&mut len);
         let (slice1, slice2) = guard.bytes.as_slices();
         let len1 = cmp::min(len, slice1.len());
         let len2 = len - len1;
@@ -141,6 +192,9 @@ impl ReadHalf {
 
         // Remove the bytes from the VecDeque.
         guard.bytes.drain(..len);
+
+        // Update the OOB mark.
+        guard.oob_mark_state.update(len);
 
         if was_full {
             self.notify.notify();
@@ -160,6 +214,7 @@ impl ReadHalf {
             !guard.bytes.is_empty() || strong_count == 1 || guard.shutdown,
         );
         ready_events.set(Events::RDHUP, strong_count == 1 || guard.shutdown);
+        ready_events.set(Events::PRI, guard.oob_mark_state.pri_event());
 
         ready_events &= events;
         ready_events
@@ -199,10 +254,14 @@ impl ReadHalf {
 
         let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
-        let len = cmp::min(len, guard.bytes.len());
+        let mut len = cmp::min(len, guard.bytes.len());
+        guard.oob_mark_state.clamp_read_length(&mut len);
         let prev_len = guard.bytes.len();
         write(&mut guard.bytes, len);
         assert_eq!(guard.bytes.len(), prev_len - len);
+
+        // Update the OOB mark.
+        guard.oob_mark_state.update(len);
 
         drop(guard);
 
@@ -223,6 +282,11 @@ impl ReadHalf {
 
         guard.shutdown = true;
         self.notify();
+    }
+
+    pub fn at_mark(&self) -> bool {
+        let guard = self.data.buffer.lock();
+        guard.oob_mark_state.at_mark()
     }
 }
 
@@ -267,6 +331,16 @@ impl WriteHalf {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
+        self.send_from_user(vm, pointer, len, false)
+    }
+
+    pub fn send_from_user(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        oob: bool,
+    ) -> Result<usize> {
         // Check if the write half has been closed.
         ensure!(Arc::strong_count(&self.data) > 1, Pipe);
 
@@ -307,6 +381,12 @@ impl WriteHalf {
         // FIXME: We should not roll back all bytes.
         if res.is_err() {
             guard.bytes.truncate(start_idx);
+        }
+
+        if oob && !guard.bytes.is_empty() {
+            if let Some(remaining_length) = guard.bytes.len().checked_sub(1) {
+                guard.oob_mark_state = OobMarkState::Pending { remaining_length };
+            }
         }
 
         drop(guard);

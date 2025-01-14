@@ -1,5 +1,14 @@
 [workspace]
-members = ["constants", "io", "loader", "log-types", "profiler-types", "snp-types", "supervisor-services", "tdx-types"]
+members = [
+    "constants",
+    "io",
+    "loader",
+    "log-types",
+    "profiler-types",
+    "snp-types",
+    "supervisor-services",
+    "tdx-types",
+]
 resolver = "2"
 
 [workspace.dependencies]

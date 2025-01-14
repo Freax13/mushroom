@@ -33,8 +33,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Rusage,
-    SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
+    FdNum, Iovec, LinuxDirent64, LongOffset, MsgHdr, Offset, PSelectSigsetArg, Pointer, RLimit,
+    Rusage, SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1857,3 +1857,64 @@ impl From<Rusage> for Rusage64 {
 
 impl Pointee for SocketAddr {}
 impl PrimitivePointee for SocketAddr {}
+
+impl Pointee for MsgHdr {}
+
+impl AbiDependentPointee for MsgHdr {
+    type I386 = MsgHdr32;
+    type Amd64 = MsgHdr64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MsgHdr32 {
+    msg_name: Pointer32<SocketAddr>,
+    msg_namelen: u32,
+    msg_iov: Pointer32<Iovec>,
+    msg_iovlen: u32,
+    msg_control: Pointer32<c_void>,
+    msg_controllen: u32,
+    msg_flags: u32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MsgHdr64 {
+    msg_name: Pointer64<SocketAddr>,
+    msg_namelen: u32,
+    _padding1: u32,
+    msg_iov: Pointer64<Iovec>,
+    msg_iovlen: u64,
+    msg_control: Pointer64<c_void>,
+    msg_controllen: u64,
+    msg_flags: u32,
+    _padding2: u32,
+}
+
+impl From<MsgHdr32> for MsgHdr {
+    fn from(value: MsgHdr32) -> Self {
+        Self {
+            msg_name: value.msg_name.into(),
+            msg_namelen: value.msg_namelen,
+            msg_iov: value.msg_iov.into(),
+            msg_iovlen: value.msg_iovlen.into(),
+            msg_control: value.msg_control.into(),
+            msg_controllen: value.msg_controllen.into(),
+            msg_flags: value.msg_flags,
+        }
+    }
+}
+
+impl From<MsgHdr64> for MsgHdr {
+    fn from(value: MsgHdr64) -> Self {
+        Self {
+            msg_name: value.msg_name.into(),
+            msg_namelen: value.msg_namelen,
+            msg_iov: value.msg_iov.into(),
+            msg_iovlen: value.msg_iovlen,
+            msg_control: value.msg_control.into(),
+            msg_controllen: value.msg_controllen,
+            msg_flags: value.msg_flags,
+        }
+    }
+}

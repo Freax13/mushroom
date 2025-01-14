@@ -1,7 +1,15 @@
 cargo-features = ["profile-rustflags"]
 
 [workspace]
-members = ["example", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "tests"]
+members = [
+    "example",
+    "kernel",
+    "kernel-macros",
+    "static-page-tables",
+    "supervisor-snp",
+    "supervisor-tdx",
+    "tests",
+]
 resolver = "2"
 
 [workspace.dependencies]
@@ -17,6 +25,7 @@ supervisor-services = { path = "../common/supervisor-services" }
 
 [profile.kernel]
 inherits = "release"
+debug = "full"
 opt-level = 3
 debug-assertions = true
 overflow-checks = true

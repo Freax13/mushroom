@@ -155,6 +155,8 @@ impl<T> Shared<T> {
         PhysFrame::from_start_address(pa).unwrap()
     }
 
+    // FIXME: Is this racy? Do we care?
+
     pub fn as_read_only_ptr(&self) -> VolatilePtr<'_, T, ReadOnly>
     where
         T: AnyBitPattern,
@@ -163,10 +165,14 @@ impl<T> Shared<T> {
         unsafe { VolatilePtr::new_read_only(ptr) }
     }
 
+    // FIXME: Is this racy? Do we care?
+
     pub fn as_write_only_ptr(&self) -> VolatilePtr<'_, T, WriteOnly> {
         let ptr = NonNull::from(&self.0).cast();
         unsafe { VolatilePtr::new_restricted(WriteOnly, ptr) }
     }
+
+    // FIXME: Is this racy? Do we care?
 
     pub fn as_ptr(&self) -> VolatilePtr<'_, T, ReadWrite> {
         let ptr = NonNull::from(&self.0).cast();

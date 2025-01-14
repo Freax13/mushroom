@@ -121,7 +121,13 @@ impl OpenFileDescription for Stdout {
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let chunk = core::str::from_utf8(buf);
-        debug!("{chunk:02x?}");
+        if let Ok(chunk) = chunk {
+            for line in chunk.lines() {
+                debug!("{line}");
+            }
+        } else {
+            debug!("{chunk:02x?}");
+        }
         Ok(buf.len())
     }
 

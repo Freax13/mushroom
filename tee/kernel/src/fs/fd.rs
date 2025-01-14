@@ -3,6 +3,7 @@ use core::fmt;
 use core::{
     any::type_name,
     cmp,
+    ffi::c_void,
     ops::Deref,
     sync::atomic::{AtomicI64, Ordering},
 };
@@ -24,8 +25,8 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer,
-                ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, MsgHdr, OpenFlags, Pointer,
+                RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -55,7 +56,7 @@ pub mod eventfd;
 pub mod file;
 pub mod path;
 pub mod pipe;
-mod std;
+pub mod std;
 pub mod stream_buffer;
 pub mod unix_socket;
 
@@ -85,6 +86,20 @@ impl Deref for FileDescriptor {
 
     fn deref(&self) -> &Self::Target {
         &*self.0
+    }
+}
+
+impl PartialEq for FileDescriptor {
+    fn eq(&self, other: &FileDescriptor) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for FileDescriptor {}
+
+impl PartialEq<dyn OpenFileDescription> for FileDescriptor {
+    fn eq(&self, other: &dyn OpenFileDescription) -> bool {
+        core::ptr::eq(&*self.0, other)
     }
 }
 
@@ -335,6 +350,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        let _ = non_blocking;
+    }
+
     fn path(&self) -> Result<Path>;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -550,10 +569,42 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+    fn send_to(
+        &self,
+        vm: &VirtualMemory,
+        buf: Pointer<[u8]>,
+        len: usize,
+        flags: SentToFlags,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<usize> {
+        let _ = vm;
+        let _ = buf;
+        let _ = len;
+        let _ = flags;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(Inval)
+    }
+
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        flags: RecvFromFlags,
+    ) -> Result<usize> {
         let _ = vm;
         let _ = pointer;
         let _ = len;
+        let _ = flags;
+        bail!(Inval)
+    }
+
+    fn recv_msg(&self, vm: &VirtualMemory, abi: Abi, msg_hdr: MsgHdr) -> Result<usize> {
+        let _ = vm;
+        let _ = abi;
+        let _ = msg_hdr;
         bail!(Inval)
     }
 
@@ -611,6 +662,17 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn epoll_del(&self, fd: &dyn OpenFileDescription) -> Result<()> {
+        let _ = fd;
+        bail!(Inval)
+    }
+
+    fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        let _ = fd;
+        let _ = event;
+        bail!(Inval)
+    }
+
     fn poll_ready(&self, events: Events) -> Events;
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
@@ -639,20 +701,46 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         None
     }
 
+    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
+        common_ioctl(self, virtual_memory, cmd, arg)
+    }
+
     #[cfg(not(feature = "harden"))]
     fn type_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }
 }
 
+pub fn common_ioctl<O>(
+    fd: &O,
+    virtual_memory: &VirtualMemory,
+    cmd: u32,
+    arg: Pointer<c_void>,
+) -> Result<u64>
+where
+    O: OpenFileDescription + ?Sized,
+{
+    match cmd {
+        0x5421 => {
+            // FIONBIO
+            let addr = arg.cast::<u32>();
+            let val = virtual_memory.read(addr)? != 0;
+            fd.set_non_blocking(val);
+            Ok(0)
+        }
+        _ => bail!(NoTty),
+    }
+}
+
 bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Events: u8 {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
         const ERR = 1 << 2;
         const RDHUP = 1 << 3;
         const HUP = 1 << 4;
+        const PRI = 1 << 5;
     }
 }
 

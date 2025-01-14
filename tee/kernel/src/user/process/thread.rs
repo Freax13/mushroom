@@ -22,6 +22,7 @@ use crate::{
     time,
     user::process::{
         memory::PageFaultError,
+        syscall::DEBUG_PID,
         thread::running_state::{ExitAction, ThreadRunningState},
     },
 };
@@ -173,6 +174,7 @@ impl Thread {
                 ProcessGroup::new(tid, Arc::new(Session::new(tid))),
                 Limits::default(),
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
+                false,
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
@@ -223,6 +225,12 @@ impl Thread {
 
                         let clone = self.clone();
                         let exit = clone.run_userspace().unwrap();
+
+                        let enable_log = self.process().pid()
+                            == DEBUG_PID.load(core::sync::atomic::Ordering::Relaxed);
+                        if enable_log {
+                            log::debug!("{exit:?}");
+                        }
 
                         match exit {
                             Exit::DivideError => {

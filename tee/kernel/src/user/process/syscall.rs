@@ -1,4 +1,7 @@
-use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
+use core::{
+    cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin,
+    sync::atomic::AtomicU32,
+};
 
 use alloc::{
     ffi::CString,
@@ -29,6 +32,7 @@ use crate::{
             eventfd::EventFd,
             path::PathFd,
             pipe,
+            std::Stdout,
             stream_buffer::{self, SpliceBlockedError},
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
             Events, FdFlags, FileDescriptor, FileDescriptorTable,
@@ -42,7 +46,7 @@ use crate::{
         path::Path,
         StatFs,
     },
-    net::tcp::TcpSocket,
+    net::{netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::oneshot,
     time::{self, now, sleep_until},
     user::process::{memory::MemoryPermissions, syscall::args::*, ProcessGroup},
@@ -139,7 +143,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSocket);
     handlers.register(SysConnect);
     handlers.register(SysAccept);
+    handlers.register(SysSendto);
     handlers.register(SysRecvFrom);
+    handlers.register(SysRecvmsg);
     handlers.register(SysShutdown);
     handlers.register(SysBind);
     handlers.register(SysListen);
@@ -221,6 +227,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
+    handlers.register(SysClockGetres);
     handlers.register(SysClockNanosleep);
     handlers.register(SysTgkill);
     handlers.register(SysOpenat);
@@ -243,6 +250,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysAccept4);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
@@ -791,13 +799,14 @@ fn rt_sigreturn(
 
 #[syscall(i386 = 54, amd64 = 16)]
 fn ioctl(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     cmd: u32,
-    arg: u64,
+    arg: Pointer<c_void>,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    bail!(NoTty)
+    let fd = fdtable.get(fd)?;
+    fd.ioctl(&virtual_memory, cmd, arg)
 }
 
 #[syscall(i386 = 180, amd64 = 17)]
@@ -1285,10 +1294,13 @@ fn socket(
         Domain::Unix => bail!(NoSys),
         Domain::Inet => match r#type.socket_type {
             SocketType::Stream => fdtable.insert(TcpSocket::new(r#type), r#type, no_file_limit)?,
-            SocketType::Dgram => todo!(),
+            SocketType::Dgram => fdtable.insert(UdpSocket::new(r#type), r#type, no_file_limit)?,
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
+        Domain::Netlink => {
+            fdtable.insert(NetlinkSocket::new(r#type, protocol)?, r#type, no_file_limit)?
+        }
     };
     Ok(fd.get() as u64)
 }
@@ -1328,6 +1340,24 @@ async fn accept(
     .await
 }
 
+#[syscall(i386 = 369, amd64 = 44)]
+fn sendto(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    len: u64,
+    flags: SentToFlags,
+    dest_addr: Pointer<SocketAddr>,
+    addrlen: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let len = usize::try_from(len)?;
+    let addrlen = usize::try_from(addrlen)?;
+    let sent = fd.send_to(&virtual_memory, buf, len, flags, dest_addr, addrlen)?;
+    Ok(u64::try_from(sent)?)
+}
+
 #[syscall(i386 = 371, amd64 = 45, interruptable)]
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1335,7 +1365,7 @@ async fn recv_from(
     sockfd: FdNum,
     buf: Pointer<[u8]>,
     len: u64,
-    flags: u32,
+    flags: RecvFromFlags,
     src_addr: Pointer<c_void>,
     addrlen: Pointer<c_void>,
 ) -> SyscallResult {
@@ -1346,13 +1376,36 @@ async fn recv_from(
 
     let count = usize_from(len);
 
-    let len = do_io(&*fd.clone(), Events::READ, || {
-        fd.recv_from(&virtual_memory, buf, count)
+    let events = if flags.contains(RecvFromFlags::OOB) {
+        Events::PRI
+    } else {
+        Events::READ
+    };
+    let len = do_io(&*fd.clone(), events, || {
+        fd.recv_from(&virtual_memory, buf, count, flags)
     })
     .await?;
 
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(i386 = 372, amd64 = 47)]
+async fn recvmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    msg: Pointer<MsgHdr>,
+    flags: RecvMsgFlags,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.recv_msg(&virtual_memory, abi, msg_hdr)
+    })
+    .await?;
+    Ok(u64::from_usize(len))
 }
 
 #[syscall(i386 = 373, amd64 = 48)]
@@ -1467,7 +1520,7 @@ fn socketpair(
                 _ => bail!(Inval),
             }
         }
-        Domain::Inet => bail!(OpNotSupp),
+        Domain::Inet | Domain::Netlink => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.
@@ -1566,6 +1619,10 @@ async fn clone(
             process.process_group.lock().clone(),
             *process.limits.read(),
             *process.umask.lock(),
+            thread
+                .process()
+                .debug
+                .load(core::sync::atomic::Ordering::Relaxed),
         ))
     };
 
@@ -1690,6 +1747,8 @@ async fn vfork(
     .await
 }
 
+pub static DEBUG_PID: AtomicU32 = AtomicU32::new(0);
+
 #[syscall(i386 = 11, amd64 = 59)]
 async fn execve(
     thread: Arc<Thread>,
@@ -1729,7 +1788,27 @@ async fn execve(
         envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
     }
 
-    log::info!("execve({pathname:?}, {args:?}, {envs:?})");
+    // log::info!("execve({pathname:?}, {args:?}, {envs:?})");
+    log::info!("execve({pathname:?}, {args:?}, ...)");
+
+    if pathname.as_bytes().ends_with(b"lt-run-tests")
+        && args.get(1).is_some_and(|a| **a == *c"tcp_oob")
+    {
+        thread
+            .process()
+            .debug
+            .store(true, core::sync::atomic::Ordering::Relaxed);
+        // DEBUG_PID.store(
+        // thread.process().pid(),
+        // core::sync::atomic::Ordering::Relaxed,
+        // );
+        fdtable.replace(
+            FdNum::new(2),
+            Stdout::new(Uid::SUPER_USER, Gid::SUPER_USER),
+            FdFlags::empty(),
+            Default::default(),
+        );
+    }
 
     // Open the executable.
     let cwd = thread.process().cwd();
@@ -3189,6 +3268,26 @@ fn clock_gettime(
     Ok(0)
 }
 
+#[syscall(i386 = 406, amd64 = 229)]
+fn clock_getres(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    res: Pointer<Timespec>,
+) -> SyscallResult {
+    if !res.is_null() {
+        virtual_memory.write_with_abi(
+            res,
+            Timespec {
+                tv_sec: 0,
+                tv_nsec: 1,
+            },
+            abi,
+        )?;
+    }
+    Ok(0)
+}
+
 #[syscall(i386 = 407, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
@@ -3300,6 +3399,11 @@ fn epoll_ctl(
 
             let event = event.ok_or(err!(Inval))?;
             epoll.epoll_add(fd, event)?
+        }
+        EpollCtlOp::Del => epoll.epoll_del(&*fd)?,
+        EpollCtlOp::Mod => {
+            let event = event.ok_or(err!(Inval))?;
+            epoll.epoll_mod(&*fd, event)?
         }
     }
 

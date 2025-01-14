@@ -89,6 +89,8 @@ pub struct Process {
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
+
+    pub debug: AtomicBool,
 }
 
 impl Process {
@@ -103,6 +105,7 @@ impl Process {
         process_group: Arc<ProcessGroup>,
         limits: Limits,
         umask: FileMode,
+        debug: bool,
     ) -> Arc<Self> {
         let PathSegment::FileName(last_path_segment) = exe.segments().last().unwrap() else {
             unreachable!()
@@ -139,6 +142,7 @@ impl Process {
             umask: Mutex::new(umask),
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
+            debug: AtomicBool::new(debug),
         };
         let arc = Arc::new(this);
 

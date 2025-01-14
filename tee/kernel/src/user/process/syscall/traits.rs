@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use alloc::sync::Arc;
 #[cfg(not(feature = "harden"))]
 use core::fmt::Write;
@@ -20,7 +22,7 @@ use crate::{
     user::process::thread::{Thread, ThreadGuard},
 };
 
-use super::{args::SyscallArg, SYSCALL_HANDLERS};
+use super::{args::SyscallArg, SysSetsockopt, DEBUG_PID, SYSCALL_HANDLERS};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SyscallArgs {
@@ -177,6 +179,28 @@ impl SyscallHandlers {
 
         // Whether the syscall should occur in the debug logs.
         let enable_log = !matches!(syscall_no, 0 | 1 | 202 | 228) && thread.tid() != 1;
+        let enable_log = false;
+        let enable_log = thread
+            .process()
+            .debug
+            .load(core::sync::atomic::Ordering::Relaxed)
+            || true;
+
+        if enable_log {
+            let guard = thread.lock();
+            let formatted_syscall = FormattedSyscall {
+                handler,
+                args,
+                thread: &guard,
+            };
+
+            trace!(
+                "core={} tid={} abi={:?} @ {formatted_syscall} = ...",
+                PerCpu::get().idx,
+                guard.tid(),
+                args.abi,
+            );
+        }
 
         let mut slot = SyscallHandlerSlot::new();
         let slot = pin!(slot);
