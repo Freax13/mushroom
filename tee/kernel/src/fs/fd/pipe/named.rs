@@ -1,5 +1,3 @@
-use core::num::NonZeroUsize;
-
 use alloc::{
     boxed::Box,
     sync::{Arc, Weak},
@@ -65,8 +63,12 @@ impl NamedPipe {
 
                 write_half
             } else {
-                let (read_half, write_half) =
-                    stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
+                let (read_half, write_half) = stream_buffer::new(
+                    CAPACITY,
+                    stream_buffer::Type::Pipe {
+                        atomic_write_size: PIPE_BUF,
+                    },
+                );
                 let read_half = Arc::new(read_half);
                 let write_half = Arc::new(write_half);
 
@@ -119,8 +121,12 @@ impl NamedPipe {
                         (read_half, write_half)
                     }
                     (None, None) => {
-                        let (read_half, write_half) =
-                            stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
+                        let (read_half, write_half) = stream_buffer::new(
+                            CAPACITY,
+                            stream_buffer::Type::Pipe {
+                                atomic_write_size: PIPE_BUF,
+                            },
+                        );
                         let read_half = Arc::new(read_half);
                         let write_half = Arc::new(write_half);
 
@@ -151,8 +157,12 @@ impl NamedPipe {
 
                 read_half
             } else {
-                let (read_half, write_half) =
-                    stream_buffer::new(CAPACITY, NonZeroUsize::new(PIPE_BUF));
+                let (read_half, write_half) = stream_buffer::new(
+                    CAPACITY,
+                    stream_buffer::Type::Pipe {
+                        atomic_write_size: PIPE_BUF,
+                    },
+                );
                 let read_half = Arc::new(read_half);
                 let write_half = Arc::new(write_half);
 

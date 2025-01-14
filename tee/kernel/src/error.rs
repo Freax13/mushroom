@@ -97,8 +97,15 @@ pub enum ErrorKind {
     NotEmpty = 39,
     Loop = 40,
     NameTooLong = 78,
+    NotSock = 88,
     OpNotSupp = 95,
+    AddrInUse = 98,
+    AddrNotAvail = 99,
+    NetUnreach = 101,
+    IsConn = 106,
+    NotConn = 107,
     TimedOut = 110,
+    ConnRefused = 111,
     RestartNoIntr = 512,
 }
 

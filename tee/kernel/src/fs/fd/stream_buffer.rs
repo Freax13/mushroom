@@ -12,12 +12,13 @@ use crate::{
 
 use super::{Events, PipeBlocked};
 
-pub fn new(capacity: usize, atomic_write_size: Option<NonZeroUsize>) -> (ReadHalf, WriteHalf) {
+pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
-        atomic_write_size: atomic_write_size.unwrap_or_else(|| NonZeroUsize::new(1).unwrap()),
         buffer: Mutex::new(PipeDataBuffer {
+            ty,
             bytes: VecDeque::new(),
             capacity,
+            shutdown: false,
         }),
     });
     let notify = Arc::new(Notify::new());
@@ -34,13 +35,34 @@ pub fn new(capacity: usize, atomic_write_size: Option<NonZeroUsize>) -> (ReadHal
 }
 
 struct PipeData {
-    atomic_write_size: NonZeroUsize,
     buffer: Mutex<PipeDataBuffer>,
 }
 
 struct PipeDataBuffer {
+    ty: Type,
     bytes: VecDeque<u8>,
     capacity: usize,
+    /// For sockets: Whether the socket-half has been shut down. This is not
+    /// used for pipes.
+    shutdown: bool,
+}
+
+pub enum Type {
+    Pipe { atomic_write_size: NonZeroUsize },
+    Socket,
+}
+
+impl Type {
+    fn atomic_write_size(&self) -> usize {
+        match self {
+            Type::Pipe { atomic_write_size } => atomic_write_size.get(),
+            Type::Socket => 1,
+        }
+    }
+
+    pub fn is_pipe(&self) -> bool {
+        matches!(self, Self::Pipe { .. })
+    }
 }
 
 pub struct ReadHalf {
@@ -59,14 +81,14 @@ impl ReadHalf {
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.data) == 1 {
+            if Arc::strong_count(&self.data) == 1 || guard.shutdown {
                 return Ok(0);
             }
 
             bail!(Again);
         }
 
-        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
         let mut read = 0;
         for (dest, src) in buf.iter_mut().zip(from_fn(|| guard.bytes.pop_front())) {
@@ -96,13 +118,13 @@ impl ReadHalf {
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.data) == 1 {
+            if Arc::strong_count(&self.data) == 1 || guard.shutdown {
                 return Ok(0);
             }
 
             bail!(Again);
         }
-        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let (slice1, slice2) = guard.bytes.as_slices();
@@ -133,8 +155,11 @@ impl ReadHalf {
         let mut ready_events = Events::empty();
 
         let strong_count = Arc::strong_count(&self.data);
-        ready_events.set(Events::READ, !guard.bytes.is_empty() || strong_count == 1);
-        ready_events.set(Events::HUP, strong_count == 1);
+        ready_events.set(
+            Events::READ,
+            !guard.bytes.is_empty() || strong_count == 1 || guard.shutdown,
+        );
+        ready_events.set(Events::RDHUP, strong_count == 1 || guard.shutdown);
 
         ready_events &= events;
         ready_events
@@ -166,13 +191,13 @@ impl ReadHalf {
         // Bail out early if there are no bytes to be copied.
         if guard.bytes.is_empty() {
             // Check if the write half has been closed.
-            if Arc::strong_count(&self.data) == 1 {
+            if Arc::strong_count(&self.data) == 1 || guard.shutdown {
                 return Ok(Ok(0));
             }
             return Ok(Err(PipeBlocked));
         }
 
-        let was_full = guard.capacity - guard.bytes.len() < self.data.atomic_write_size.get();
+        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let prev_len = guard.bytes.len();
@@ -186,6 +211,18 @@ impl ReadHalf {
         }
 
         Ok(Ok(len))
+    }
+
+    pub fn shutdown(&self) {
+        let mut guard = self.data.buffer.lock();
+
+        // Don't do anything if the stream buffer is already shutdown.
+        if guard.shutdown {
+            return;
+        }
+
+        guard.shutdown = true;
+        self.notify();
     }
 }
 
@@ -204,8 +241,9 @@ impl WriteHalf {
         }
 
         let mut guard = self.data.buffer.lock();
+        ensure!(!guard.shutdown, Pipe);
 
-        let atomic_write = buf.len() <= self.data.atomic_write_size.get();
+        let atomic_write = buf.len() <= guard.ty.atomic_write_size();
         let remaining_capacity = guard.capacity - guard.bytes.len();
         if atomic_write {
             ensure!(remaining_capacity >= buf.len(), Again);
@@ -237,8 +275,9 @@ impl WriteHalf {
         }
 
         let mut guard = self.data.buffer.lock();
+        ensure!(!guard.shutdown, Pipe);
 
-        let atomic_write = len <= self.data.atomic_write_size.get();
+        let atomic_write = len <= guard.ty.atomic_write_size();
         let remaining_capacity = guard.capacity - guard.bytes.len();
         if atomic_write {
             ensure!(remaining_capacity >= len, Again);
@@ -288,28 +327,28 @@ impl WriteHalf {
             Events::WRITE,
             guard.bytes.len() < guard.capacity || strong_count == 1,
         );
-        ready_events.set(Events::ERR, strong_count == 1);
+        ready_events &= events;
+        ready_events.set(Events::HUP, strong_count == 1);
+        ready_events.set(Events::ERR, guard.ty.is_pipe() && strong_count == 1);
         drop(guard);
 
-        ready_events &= events;
         ready_events
     }
 
     pub async fn ready_for_write(&self, count: usize) -> Result<()> {
-        let is_atomic = count <= self.data.atomic_write_size.get();
-
         loop {
             let wait = self.notify.wait();
 
             {
                 let guard = self.data.buffer.lock();
+                let is_atomic = count <= guard.ty.atomic_write_size();
                 let remaining_capacity = guard.capacity - guard.bytes.len();
                 let can_write = if is_atomic {
                     count <= remaining_capacity
                 } else {
                     0 < remaining_capacity
                 };
-                if can_write || Arc::strong_count(&self.data) == 1 {
+                if can_write || Arc::strong_count(&self.data) == 1 || guard.shutdown {
                     break;
                 }
             }
@@ -365,6 +404,18 @@ impl WriteHalf {
 
         Ok(Ok(len))
     }
+
+    pub fn shutdown(&self) {
+        let mut guard = self.data.buffer.lock();
+
+        // Don't do anything if the stream buffer is already shutdown.
+        if guard.shutdown {
+            return;
+        }
+
+        guard.shutdown = true;
+        self.notify();
+    }
 }
 
 pub fn splice(
@@ -386,8 +437,7 @@ pub fn splice(
         return Err(SpliceBlockedError::Read);
     }
 
-    let was_full =
-        read_guard.capacity - read_guard.bytes.len() < read_half.data.atomic_write_size.get();
+    let was_full = read_guard.capacity - read_guard.bytes.len() < read_guard.ty.atomic_write_size();
 
     // Make sure that the write half can receive at least one byte.
     let remaining_capacity = write_guard.capacity - write_guard.bytes.len();

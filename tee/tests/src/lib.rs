@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+mod net;
+
 use std::{
     alloc::{alloc, dealloc, Layout},
     arch::asm,

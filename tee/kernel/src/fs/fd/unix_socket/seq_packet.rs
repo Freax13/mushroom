@@ -17,9 +17,7 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, SocketPairType, Stat, Timespec,
-        },
+        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
         thread::{Gid, Uid},
     },
 };
@@ -38,14 +36,7 @@ struct SeqPacketUnixSocketInternal {
 }
 
 impl SeqPacketUnixSocket {
-    pub fn new_pair(r#type: SocketPairType, uid: Uid, gid: Gid) -> (Self, Self) {
-        let mut flags = OpenFlags::empty();
-        flags.set(
-            OpenFlags::NONBLOCK,
-            r#type.contains(SocketPairType::NON_BLOCK),
-        );
-        flags.set(OpenFlags::CLOEXEC, r#type.contains(SocketPairType::CLOEXEC));
-
+    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
         let state1 = Arc::new(State::new());
         let state2 = Arc::new(State::new());
 

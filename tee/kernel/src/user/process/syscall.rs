@@ -42,6 +42,7 @@ use crate::{
         path::Path,
         StatFs,
     },
+    net::tcp::TcpSocket,
     rt::oneshot,
     time::{self, now, sleep_until},
     user::process::{memory::MemoryPermissions, syscall::args::*, ProcessGroup},
@@ -135,14 +136,19 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysSocket);
     handlers.register(SysConnect);
     handlers.register(SysAccept);
     handlers.register(SysRecvFrom);
+    handlers.register(SysShutdown);
     handlers.register(SysBind);
     handlers.register(SysListen);
+    handlers.register(SysGetsockname);
+    handlers.register(SysGetpeername);
     handlers.register(SysSocketpair);
     handlers.register(SysClone);
     handlers.register(SysSetsockopt);
+    handlers.register(SysGetsockopt);
     handlers.register(SysFork);
     handlers.register(SysVfork);
     handlers.register(SysExecve);
@@ -237,6 +243,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysAccept4);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
@@ -1267,26 +1274,59 @@ async fn sendfile64(
     Ok(len)
 }
 
-#[syscall(amd64 = 42)]
-fn connect(
+#[syscall(i386 = 359, amd64 = 41)]
+fn socket(
     #[state] fdtable: Arc<FileDescriptorTable>,
-    fd: FdNum,
-    uservaddr: Pointer<c_void>,
-    addrlen: u32,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    domain: Domain,
+    r#type: SocketTypeWithFlags,
+    protocol: i32,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = match domain {
+        Domain::Unix => bail!(NoSys),
+        Domain::Inet => match r#type.socket_type {
+            SocketType::Stream => fdtable.insert(TcpSocket::new(r#type), r#type, no_file_limit)?,
+            SocketType::Dgram => todo!(),
+            SocketType::Raw => todo!(),
+            SocketType::Seqpacket => todo!(),
+        },
+    };
+    Ok(fd.get() as u64)
 }
 
-#[syscall(amd64 = 43)]
-fn accept(
+#[syscall(i386 = 362, amd64 = 42, interruptable, restartable)]
+async fn connect(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    upeer_sockaddr: Pointer<c_void>,
+    addr: Pointer<SocketAddr>,
+    addrlen: u32,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    fd.connect(&virtual_memory, addr, usize_from(addrlen))
+        .await?;
+    Ok(0)
+}
+
+#[syscall(amd64 = 43, interruptable, restartable)]
+async fn accept(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fd: FdNum,
+    upeer_sockaddr: Pointer<SocketAddr>,
     upeer_addrlen: Pointer<u32>,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    accept4(
+        virtual_memory,
+        fdtable,
+        no_file_limit,
+        fd,
+        upeer_sockaddr,
+        upeer_addrlen,
+        Accept4Flags::empty(),
+    )
+    .await
 }
 
 #[syscall(i386 = 371, amd64 = 45, interruptable)]
@@ -1316,21 +1356,76 @@ async fn recv_from(
     Ok(len)
 }
 
-#[syscall(amd64 = 49)]
-fn bind(
+#[syscall(i386 = 373, amd64 = 48)]
+fn shutdown(
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    umyaddr: Pointer<c_void>,
-    addrlen: u32,
+    how: ShutdownHow,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    fd.shutdown(how)?;
+    Ok(0)
 }
 
-#[syscall(amd64 = 50)]
+#[syscall(i386 = 361, amd64 = 49)]
+fn bind(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    addr: Pointer<SocketAddr>,
+    addrlen: u32,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    fd.bind(&virtual_memory, addr, usize_from(addrlen))?;
+    Ok(0)
+}
+
+#[syscall(i386 = 363, amd64 = 50)]
 fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    let backlog = cmp::max(0, backlog) as usize;
+    fd.listen(backlog)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 367, amd64 = 51)]
+fn getsockname(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    addr: Pointer<SocketAddr>,
+    addrlen: Pointer<u32>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let max_len = virtual_memory.read(addrlen)?;
+    let mut socket_name = fd.get_socket_name()?;
+    let actual_len = socket_name.len() as u32;
+    if max_len != actual_len {
+        virtual_memory.write(addrlen, actual_len)?;
+    }
+    socket_name.truncate(max_len as usize);
+    virtual_memory.write_bytes(addr.get(), &socket_name)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 368, amd64 = 52)]
+fn getpeername(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    addr: Pointer<SocketAddr>,
+    addrlen: Pointer<u32>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let max_len = virtual_memory.read(addrlen)?;
+    let mut socket_name = fd.get_peer_name()?;
+    let actual_len = socket_name.len() as u32;
+    if max_len != actual_len {
+        virtual_memory.write(addrlen, actual_len)?;
+    }
+    socket_name.truncate(max_len as usize);
+    virtual_memory.write_bytes(addr.get(), &socket_name)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 360, amd64 = 53)]
@@ -1340,7 +1435,7 @@ fn socketpair(
     #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     domain: Domain,
-    r#type: SocketPairType,
+    r#type: SocketTypeWithFlags,
     protocol: i32,
     sv: Pointer<[FdNum; 2]>,
 ) -> SyscallResult {
@@ -1351,26 +1446,29 @@ fn socketpair(
         Domain::Unix => {
             ensure!(protocol == 0, Inval);
 
-            if r#type.contains(SocketPairType::SEQPACKET) {
-                let (half1, half2) = SeqPacketUnixSocket::new_pair(
-                    r#type,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
-                );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-            } else if r#type.contains(SocketPairType::STREAM) {
-                let (half1, half2) = StreamUnixSocket::new_pair(
-                    r#type,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
-                );
-                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-            } else {
-                todo!()
+            match r#type.socket_type {
+                SocketType::Seqpacket => {
+                    let (half1, half2) = SeqPacketUnixSocket::new_pair(
+                        r#type.flags,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    );
+                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+                }
+                SocketType::Stream => {
+                    let (half1, half2) = StreamUnixSocket::new_pair(
+                        r#type.flags,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    );
+                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+                }
+                _ => bail!(Inval),
             }
         }
+        Domain::Inet => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.
@@ -1388,8 +1486,10 @@ fn socketpair(
     Ok(0)
 }
 
-#[syscall(amd64 = 54)]
+#[syscall(i386 = 366, amd64 = 54)]
 fn setsockopt(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     level: i32,
@@ -1397,8 +1497,35 @@ fn setsockopt(
     optval: Pointer<[u8]>,
     optlen: i32,
 ) -> SyscallResult {
-    fdtable.get(fd)?;
-    todo!()
+    let fd = fdtable.get(fd)?;
+    fd.set_socket_option(virtual_memory, abi, level, optname, optval, optlen)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 365, amd64 = 55)]
+fn getsockopt(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    level: i32,
+    optname: i32,
+    optval: Pointer<[u8]>,
+    optlen: Pointer<i32>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let mut value = fd.get_socket_option(abi, level, optname)?;
+
+    let opt_len_value = virtual_memory.read(optlen)?;
+    let opt_len_value = usize::try_from(opt_len_value)?;
+    if opt_len_value != value.len() {
+        let opt_len_value = i32::try_from(value.len())?;
+        virtual_memory.write(optlen, opt_len_value)?;
+    }
+    value.truncate(opt_len_value);
+    virtual_memory.write_bytes(optval.get(), &value)?;
+
+    Ok(0)
 }
 
 #[syscall(i386 = 120, amd64 = 56)]
@@ -3938,6 +4065,34 @@ async fn epoll_pwait(
     }
 
     res
+}
+
+#[syscall(i386 = 364, amd64 = 288, interruptable, restartable)]
+async fn accept4(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fd: FdNum,
+    upeer_sockaddr: Pointer<SocketAddr>,
+    upeer_addrlen: Pointer<u32>,
+    flags: Accept4Flags,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let (socket, mut addr) = do_io(&*fd, Events::READ, || fd.accept(flags)).await?;
+    let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
+
+    if !upeer_sockaddr.is_null() {
+        let addr_len = virtual_memory.read(upeer_addrlen)?;
+        let addr_len = usize_from(addr_len);
+        if addr_len != addr.len() {
+            virtual_memory.write(upeer_addrlen, addr_len as u32)?;
+        }
+
+        addr.truncate(addr_len);
+        virtual_memory.write_bytes(upeer_sockaddr.get(), &addr)?;
+    }
+
+    Ok(fd_num.get() as u64)
 }
 
 #[syscall(i386 = 323, amd64 = 290)]

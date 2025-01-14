@@ -18,9 +18,7 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, SocketPairType, Stat, Timespec,
-        },
+        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
         thread::{Gid, Uid},
     },
 };
@@ -41,17 +39,9 @@ struct StreamUnixSocketInternal {
 }
 
 impl StreamUnixSocket {
-    pub fn new_pair(r#type: SocketPairType, uid: Uid, gid: Gid) -> (Self, Self) {
-        let mut flags = OpenFlags::empty();
-        flags.set(
-            OpenFlags::NONBLOCK,
-            r#type.contains(SocketPairType::NON_BLOCK),
-        );
-        flags.set(OpenFlags::CLOEXEC, r#type.contains(SocketPairType::CLOEXEC));
-
-        let (read_half1, write_half1) = stream_buffer::new(CAPACITY, None);
-        let (read_half2, write_half2) = stream_buffer::new(CAPACITY, None);
-
+    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
+        let (read_half1, write_half1) = stream_buffer::new(CAPACITY, stream_buffer::Type::Socket);
+        let (read_half2, write_half2) = stream_buffer::new(CAPACITY, stream_buffer::Type::Socket);
         (
             Self {
                 ino: new_ino(),

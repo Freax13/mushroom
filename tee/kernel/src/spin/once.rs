@@ -27,6 +27,13 @@ impl<T> Once<T> {
         }
     }
 
+    pub fn with_value(value: T) -> Self {
+        Self {
+            state: AtomicU8::new(STATE_INITIALIZED),
+            cell: UnsafeCell::new(MaybeUninit::new(value)),
+        }
+    }
+
     /// Try to initialize the value.
     ///
     /// `init` will only be called once per `Once<T>` instance.
@@ -80,6 +87,44 @@ impl<T> Once<T> {
         }
     }
 
+    /// Try to set the value.
+    ///
+    /// `init` will only be called once per `Once<T>` instance.
+    #[track_caller]
+    pub fn init(&self, init: impl FnOnce() -> T) -> Result<&T, AlreadySet> {
+        // Start initialization.
+        let res = self.state.compare_exchange(
+            STATE_UNINITIALIZED,
+            STATE_INITIALIZING,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+        match res {
+            Ok(_) => {
+                // Initialize the value.
+                let value = init();
+                unsafe {
+                    // SAFETY: We just changed the state to
+                    // `STATE_INITIALIZING`. This guarantees unique access to
+                    // the value.
+                    (*self.cell.get()).write(value);
+                }
+
+                // Finish initialization
+                self.state.store(STATE_INITIALIZED, Ordering::Release);
+            }
+            Err(_) => {
+                return Err(AlreadySet);
+            }
+        }
+
+        Ok(unsafe {
+            // SAFETY: The value was initialized and no one is allowed unique
+            // access.
+            (*self.cell.get()).assume_init_ref()
+        })
+    }
+
     /// Try to get the value if it was initialized already.
     #[inline]
     pub fn get(&self) -> Option<&T> {
@@ -101,6 +146,9 @@ impl<T> Once<T> {
         unsafe { (*self.cell.get()).assume_init_ref() }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct AlreadySet;
 
 unsafe impl<T> Send for Once<T> where T: Send {}
 unsafe impl<T> Sync for Once<T> where T: Send + Sync {}

@@ -46,6 +46,7 @@ mod fs;
 mod limited_index;
 mod logging;
 mod memory;
+mod net;
 mod panic;
 mod per_cpu;
 #[cfg(feature = "profiling")]

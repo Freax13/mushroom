@@ -2,6 +2,7 @@ use core::{
     cmp,
     fmt::{self, Display},
     marker::PhantomData,
+    net::{Ipv4Addr, SocketAddrV4},
     ops::Add,
 };
 
@@ -985,24 +986,57 @@ impl From<Timespec> for Timeval {
 enum_arg! {
     pub enum Domain {
         Unix = 1,
+        Inet = 2,
     }
 }
 
-bitflags! {
-    pub struct SocketPairType {
-        const STREAM = 1;
-        const SEQPACKET = 5;
-
-        const NON_BLOCK = 0x800;
-        const CLOEXEC = 0x8_0000;
+enum_arg! {
+    pub enum SocketType {
+        Stream = 1,
+        Dgram = 2,
+        Raw	= 3,
+        Seqpacket = 5,
     }
 }
 
-impl From<SocketPairType> for FdFlags {
-    fn from(value: SocketPairType) -> Self {
-        let mut flags = Self::empty();
-        flags.set(Self::CLOEXEC, value.contains(SocketPairType::CLOEXEC));
-        flags
+#[derive(Debug, Clone, Copy)]
+pub struct SocketTypeWithFlags {
+    pub socket_type: SocketType,
+    pub flags: OpenFlags,
+}
+
+impl SocketTypeWithFlags {
+    const FLAGS_MASK: u64 = OpenFlags::NONBLOCK.bits() | OpenFlags::CLOEXEC.bits();
+}
+
+impl SyscallArg for SocketTypeWithFlags {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        let socket_type = SocketType::parse(value & !Self::FLAGS_MASK, abi)?;
+        let flags = OpenFlags::parse(value & Self::FLAGS_MASK, abi)?;
+        Ok(Self { socket_type, flags })
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        SocketType::display(f, value & !Self::FLAGS_MASK, abi, thread)?;
+
+        let value = value & Self::FLAGS_MASK;
+        if value != 0 {
+            write!(f, " | ")?;
+            OpenFlags::display(f, value, abi, thread)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl From<SocketTypeWithFlags> for FdFlags {
+    fn from(value: SocketTypeWithFlags) -> Self {
+        value.flags.into()
     }
 }
 
@@ -1066,6 +1100,7 @@ impl From<EpollEvents> for Events {
         let mut events = Events::empty();
         events.set(Events::READ, value.contains(EpollEvents::IN));
         events.set(Events::WRITE, value.contains(EpollEvents::OUT));
+        events.set(Events::RDHUP, value.contains(EpollEvents::RDHUP));
         events
     }
 }
@@ -1075,6 +1110,9 @@ impl From<Events> for EpollEvents {
         let mut events = EpollEvents::empty();
         events.set(EpollEvents::IN, value.contains(Events::READ));
         events.set(EpollEvents::OUT, value.contains(Events::WRITE));
+        events.set(EpollEvents::ERR, value.contains(Events::ERR));
+        events.set(EpollEvents::RDHUP, value.contains(Events::RDHUP));
+        events.set(EpollEvents::HUP, value.contains(Events::HUP));
         events
     }
 }
@@ -1508,5 +1546,89 @@ impl Rusage {
             nvcsw: self.nvcsw + rusage.nvcsw,
             nivcsw: self.nivcsw + rusage.nivcsw,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C, u16)]
+pub enum SocketAddr {
+    Inet(SocketAddrInet) = 2,
+    #[expect(dead_code)]
+    Netlink(SocketAddrNetlink) = 16,
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct SocketAddrInet {
+    /// port in network byte order
+    port: u16,
+    /// internet address
+    pub addr: [u8; 4],
+    _pad: [u8; 8],
+}
+
+impl fmt::Debug for SocketAddrInet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SocketAddrInet")
+            .field("addr", &self.addr)
+            .field("port", &u16::from_be(self.port))
+            .finish_non_exhaustive()
+    }
+}
+
+impl From<SocketAddrInet> for SocketAddrV4 {
+    fn from(value: SocketAddrInet) -> Self {
+        Self::new(
+            Ipv4Addr::new(value.addr[0], value.addr[1], value.addr[2], value.addr[3]),
+            u16::from_be(value.port),
+        )
+    }
+}
+
+impl From<SocketAddrV4> for SocketAddrInet {
+    fn from(value: SocketAddrV4) -> Self {
+        Self {
+            port: value.port().to_be(),
+            addr: value.ip().octets(),
+            _pad: [0; 8],
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed(2))]
+pub struct SocketAddrNetlink {
+    _pad: u16,
+    pub pid: u32,
+    pub groups: u32,
+    _pad2: [u8; 4],
+}
+
+bitflags! {
+    pub struct Accept4Flags {
+        const CLOEXEC = OpenFlags::CLOEXEC.bits();
+        const NONBLOCK = OpenFlags::NONBLOCK.bits();
+    }
+}
+
+impl From<Accept4Flags> for FdFlags {
+    fn from(value: Accept4Flags) -> Self {
+        let mut flags = FdFlags::empty();
+        flags.set(FdFlags::CLOEXEC, value.contains(Accept4Flags::CLOEXEC));
+        flags
+    }
+}
+
+impl From<Accept4Flags> for OpenFlags {
+    fn from(value: Accept4Flags) -> Self {
+        OpenFlags::from_bits_truncate(value.bits())
+    }
+}
+
+enum_arg! {
+    pub enum ShutdownHow {
+        Rd = 0,
+        Wr = 1,
+        RdWr = 2,
     }
 }

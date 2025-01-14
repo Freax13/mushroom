@@ -34,7 +34,7 @@ use crate::{
 
 use super::{
     FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Rusage,
-    Stat, SysInfo, Time, Timespec, Timeval, WStatus,
+    SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -293,6 +293,9 @@ impl PrimitivePointee for u8 {}
 
 impl Pointee for u32 {}
 impl PrimitivePointee for u32 {}
+
+impl Pointee for i32 {}
+impl PrimitivePointee for i32 {}
 
 impl Pointee for CStr {
     fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
@@ -1851,3 +1854,6 @@ impl From<Rusage> for Rusage64 {
         }
     }
 }
+
+impl Pointee for SocketAddr {}
+impl PrimitivePointee for SocketAddr {}

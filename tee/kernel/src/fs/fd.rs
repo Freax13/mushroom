@@ -22,8 +22,12 @@ use crate::{
     user::process::{
         limits::CurrentNoFileLimit,
         memory::VirtualMemory,
-        syscall::args::{
-            EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer, Stat, Timespec, Whence,
+        syscall::{
+            args::{
+                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer,
+                ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
@@ -361,13 +365,6 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Ok(count)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
-        let _ = vm;
-        let _ = pointer;
-        let _ = len;
-        bail!(Inval)
-    }
-
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let _ = buf;
         bail!(Inval)
@@ -486,6 +483,85 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         Ok(())
     }
 
+    fn bind(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<()> {
+        let _ = virtual_memory;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(NotSock)
+    }
+
+    fn listen(&self, backlog: usize) -> Result<()> {
+        let _ = backlog;
+        bail!(NotSock)
+    }
+
+    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+        let _ = flags;
+        bail!(NotSock)
+    }
+
+    async fn connect(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<()> {
+        let _ = virtual_memory;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(NotSock)
+    }
+
+    fn get_socket_option(&self, abi: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        let _ = abi;
+        let _ = level;
+        let _ = optname;
+        bail!(NotSock)
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        abi: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        let _ = virtual_memory;
+        let _ = abi;
+        let _ = level;
+        let _ = optname;
+        let _ = optval;
+        let _ = optlen;
+        bail!(NotSock)
+    }
+
+    fn get_socket_name(&self) -> Result<Vec<u8>> {
+        bail!(NotSock)
+    }
+
+    fn get_peer_name(&self) -> Result<Vec<u8>> {
+        bail!(NotSock)
+    }
+
+    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+        let _ = vm;
+        let _ = pointer;
+        let _ = len;
+        bail!(Inval)
+    }
+
+    fn shutdown(&self, how: ShutdownHow) -> Result<()> {
+        let _ = how;
+        bail!(NotSock)
+    }
+
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()>;
@@ -575,7 +651,8 @@ bitflags! {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
         const ERR = 1 << 2;
-        const HUP = 1 << 3;
+        const RDHUP = 1 << 3;
+        const HUP = 1 << 4;
     }
 }
 
