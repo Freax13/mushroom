@@ -9,7 +9,7 @@ use nix::{
     libc::{ioctl, Ioctl},
     poll::{poll, PollFd, PollFlags, PollTimeout},
     sys::socket::{
-        self, getpeername, getsockname, setsockopt,
+        self, getpeername, getsockname, setsockopt, shutdown,
         sockopt::{ReuseAddr, ReusePort},
         AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn,
     },
@@ -557,6 +557,58 @@ fn test_oob() -> Result<()> {
     assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
     assert_eq!(buffer[0..1], *b"8");
     assert!(sockatmark(&sock2)?);
+
+    Ok(())
+}
+
+#[test]
+fn socket_shutdown_both() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+
+    socket::connect(fd1, &sockname).unwrap();
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+
+    // Writes should usually work.
+    assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
+    assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
+
+    shutdown(fd2, socket::Shutdown::Both).unwrap();
+
+    // Writes to the other half should continue to work after shutdown.
+    assert_eq!(nix::unistd::write(&sock1, b"90ab"), Ok(4));
+    // Write to the shutdown socket should fail.
+    assert_eq!(nix::unistd::write(&sock2, b"cdef"), Err(Errno::ECONNRESET));
+
+    let mut buffer = [0; 16];
+    // Reads from the other half should yield the data written before the
+    // shutdown and then return 0.
+    assert_eq!(nix::unistd::read(fd1, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"5678");
+    assert_eq!(nix::unistd::read(fd1, &mut buffer), Ok(0));
+    // Reads from the shutdown half should yield the data written before the
+    // shutdown and then return 0. They should not yield the data written after
+    // the shutdown.
+    assert_eq!(nix::unistd::read(fd2, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"1234");
+    assert_eq!(nix::unistd::read(fd2, &mut buffer), Ok(0));
 
     Ok(())
 }

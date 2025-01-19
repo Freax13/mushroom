@@ -33,8 +33,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit, Rusage,
-    SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
+    FdNum, Iovec, Linger, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit,
+    Rusage, SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1857,3 +1857,6 @@ impl From<Rusage> for Rusage64 {
 
 impl Pointee for SocketAddr {}
 impl PrimitivePointee for SocketAddr {}
+
+impl Pointee for Linger {}
+impl PrimitivePointee for Linger {}

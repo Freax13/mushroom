@@ -1649,3 +1649,10 @@ bitflags! {
         const DONTWAIT = 1 << 6;
     }
 }
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Linger {
+    pub onoff: i32,
+    pub linger: i32,
+}
