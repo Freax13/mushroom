@@ -139,6 +139,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSocket);
     handlers.register(SysConnect);
     handlers.register(SysAccept);
+    handlers.register(SysSendto);
     handlers.register(SysRecvFrom);
     handlers.register(SysShutdown);
     handlers.register(SysBind);
@@ -1329,6 +1330,24 @@ async fn accept(
     .await
 }
 
+#[syscall(i386 = 369, amd64 = 44)]
+fn sendto(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    len: u64,
+    flags: SentToFlags,
+    dest_addr: Pointer<SocketAddr>,
+    addrlen: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let len = usize::try_from(len)?;
+    let addrlen = usize::try_from(addrlen)?;
+    let sent = fd.send_to(&virtual_memory, buf, len, flags, dest_addr, addrlen)?;
+    Ok(u64::try_from(sent)?)
+}
+
 #[syscall(i386 = 371, amd64 = 45, interruptable)]
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1336,7 +1355,7 @@ async fn recv_from(
     sockfd: FdNum,
     buf: Pointer<[u8]>,
     len: u64,
-    flags: u32,
+    flags: RecvFromFlags,
     src_addr: Pointer<c_void>,
     addrlen: Pointer<c_void>,
 ) -> SyscallResult {
@@ -1347,10 +1366,19 @@ async fn recv_from(
 
     let count = usize_from(len);
 
-    let len = do_io(&*fd.clone(), Events::READ, || {
-        fd.recv_from(&virtual_memory, buf, count)
-    })
-    .await?;
+    let events = if flags.contains(RecvFromFlags::OOB) {
+        Events::PRI
+    } else {
+        Events::READ
+    };
+    let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
+        do_io(&*fd.clone(), events, || {
+            fd.recv_from(&virtual_memory, buf, count, flags)
+        })
+        .await?
+    } else {
+        fd.recv_from(&virtual_memory, buf, count, flags)?
+    };
 
     let len = u64::from_usize(len);
     Ok(len)

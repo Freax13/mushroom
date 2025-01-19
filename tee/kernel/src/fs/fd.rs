@@ -25,7 +25,7 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer,
-                ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+                RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -550,10 +550,35 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+    fn send_to(
+        &self,
+        vm: &VirtualMemory,
+        buf: Pointer<[u8]>,
+        len: usize,
+        flags: SentToFlags,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<usize> {
+        let _ = vm;
+        let _ = buf;
+        let _ = len;
+        let _ = flags;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(Inval)
+    }
+
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        flags: RecvFromFlags,
+    ) -> Result<usize> {
         let _ = vm;
         let _ = pointer;
         let _ = len;
+        let _ = flags;
         bail!(Inval)
     }
 
@@ -653,6 +678,7 @@ bitflags! {
         const ERR = 1 << 2;
         const RDHUP = 1 << 3;
         const HUP = 1 << 4;
+        const PRI = 1 << 5;
     }
 }
 

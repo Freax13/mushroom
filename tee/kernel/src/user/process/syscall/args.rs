@@ -458,6 +458,7 @@ impl From<PollEvents> for Events {
         events.set(Events::WRITE, value.contains(PollEvents::OUT));
         events.set(Events::ERR, value.contains(PollEvents::ERR));
         events.set(Events::HUP, value.contains(PollEvents::HUP));
+        events.set(Events::PRI, value.contains(PollEvents::PRI));
         events
     }
 }
@@ -469,6 +470,7 @@ impl From<Events> for PollEvents {
         events.set(PollEvents::OUT, value.contains(Events::WRITE));
         events.set(PollEvents::ERR, value.contains(Events::ERR));
         events.set(PollEvents::HUP, value.contains(Events::HUP));
+        events.set(PollEvents::PRI, value.contains(Events::PRI));
         events
     }
 }
@@ -1101,6 +1103,7 @@ impl From<EpollEvents> for Events {
         events.set(Events::READ, value.contains(EpollEvents::IN));
         events.set(Events::WRITE, value.contains(EpollEvents::OUT));
         events.set(Events::RDHUP, value.contains(EpollEvents::RDHUP));
+        events.set(Events::PRI, value.contains(EpollEvents::PRI));
         events
     }
 }
@@ -1113,6 +1116,7 @@ impl From<Events> for EpollEvents {
         events.set(EpollEvents::ERR, value.contains(Events::ERR));
         events.set(EpollEvents::RDHUP, value.contains(Events::RDHUP));
         events.set(EpollEvents::HUP, value.contains(Events::HUP));
+        events.set(EpollEvents::PRI, value.contains(Events::PRI));
         events
     }
 }
@@ -1605,6 +1609,12 @@ pub struct SocketAddrNetlink {
 }
 
 bitflags! {
+    pub struct SentToFlags {
+        const OOB = 1 << 0;
+    }
+}
+
+bitflags! {
     pub struct Accept4Flags {
         const CLOEXEC = OpenFlags::CLOEXEC.bits();
         const NONBLOCK = OpenFlags::NONBLOCK.bits();
@@ -1630,5 +1640,12 @@ enum_arg! {
         Rd = 0,
         Wr = 1,
         RdWr = 2,
+    }
+}
+
+bitflags! {
+    pub struct RecvFromFlags {
+        const OOB = 1 << 0;
+        const DONTWAIT = 1 << 6;
     }
 }

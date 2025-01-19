@@ -32,8 +32,8 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, FileMode, OpenFlags, Pointer, ShutdownHow, SocketAddr,
-                SocketAddrInet, SocketTypeWithFlags, Stat,
+                Accept4Flags, FileMode, OpenFlags, Pointer, RecvFromFlags, SentToFlags,
+                ShutdownHow, SocketAddr, SocketAddrInet, SocketTypeWithFlags, Stat,
             },
             traits::Abi,
         },
@@ -635,6 +635,31 @@ impl OpenFileDescription for TcpSocket {
         active.read_half.read_to_user(vm, pointer, len)
     }
 
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        flags: RecvFromFlags,
+    ) -> Result<usize> {
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        if flags.contains(RecvFromFlags::OOB) {
+            let oob_data = active.read_half.read_oob()?;
+            if len != 0 {
+                vm.write(pointer.cast(), oob_data)?;
+                Ok(1)
+            } else {
+                Ok(0)
+            }
+        } else {
+            active.read_half.read_to_user(vm, pointer, len)
+        }
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
         let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
@@ -656,6 +681,27 @@ impl OpenFileDescription for TcpSocket {
             bail!(NotConn);
         };
         active.write_half.write_from_user(vm, pointer, len)
+    }
+
+    fn send_to(
+        &self,
+        vm: &VirtualMemory,
+        buf: Pointer<[u8]>,
+        len: usize,
+        flags: SentToFlags,
+        addr: Pointer<SocketAddr>,
+        _addrlen: usize,
+    ) -> Result<usize> {
+        ensure!(addr.is_null(), IsConn);
+
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active
+            .write_half
+            .send_from_user(vm, buf, len, flags.contains(SentToFlags::OOB))
     }
 
     fn path(&self) -> Result<Path> {

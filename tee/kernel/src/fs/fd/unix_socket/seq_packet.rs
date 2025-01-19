@@ -17,7 +17,9 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
+        syscall::args::{
+            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, RecvFromFlags, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
 };
@@ -131,7 +133,13 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok(len)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _flags: RecvFromFlags,
+    ) -> Result<usize> {
         self.read_to_user(vm, pointer, len)
     }
 
