@@ -1,5 +1,6 @@
 use core::{
     cmp,
+    ffi::c_void,
     net::{Ipv4Addr, SocketAddrV4},
     ops::Not,
     pin::pin,
@@ -18,7 +19,7 @@ use bytemuck::bytes_of;
 use crate::{
     error::{bail, ensure, err, Result},
     fs::{
-        fd::{stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
+        fd::{common_ioctl, stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
         node::FileAccessContext,
         path::Path,
         FileSystem,
@@ -813,6 +814,29 @@ impl OpenFileDescription for TcpSocket {
                     return Ok(events);
                 }
             },
+        }
+    }
+
+    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
+        match cmd {
+            0x8905 => {
+                // SIOCATMARK
+                let at_mark = self
+                    .bound_socket
+                    .get()
+                    .and_then(|socket| socket.mode.get())
+                    .map(|mode| {
+                        if let Mode::Active(active) = mode {
+                            active.read_half.at_mark()
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or_default();
+                virtual_memory.write(arg.cast(), u32::from(at_mark))?;
+                Ok(0)
+            }
+            _ => common_ioctl(self, virtual_memory, cmd, arg),
         }
     }
 
