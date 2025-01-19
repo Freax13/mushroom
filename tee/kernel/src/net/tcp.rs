@@ -190,7 +190,7 @@ const EPHEMERAL_PORT_START: u16 = 32768;
 const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct TcpSocket {
-    flags: OpenFlags,
+    flags: Mutex<OpenFlags>,
     reuse_addr: AtomicBool,
     reuse_port: AtomicBool,
     activate_notify: Notify,
@@ -200,7 +200,7 @@ pub struct TcpSocket {
 impl TcpSocket {
     pub fn new(r#type: SocketTypeWithFlags) -> Self {
         Self {
-            flags: r#type.flags,
+            flags: Mutex::new(r#type.flags),
             reuse_addr: AtomicBool::new(false),
             reuse_port: AtomicBool::new(false),
             activate_notify: Notify::new(),
@@ -278,7 +278,15 @@ impl TcpSocket {
 #[async_trait]
 impl OpenFileDescription for TcpSocket {
     fn flags(&self) -> OpenFlags {
-        self.flags
+        *self.flags.lock()
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        *self.flags.lock() = flags;
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
     }
 
     fn bind(
@@ -386,7 +394,7 @@ impl OpenFileDescription for TcpSocket {
         let remote_addr = active.remote_addr;
 
         let socket = Self {
-            flags: OpenFlags::from(flags),
+            flags: Mutex::new(OpenFlags::from(flags)),
             reuse_addr: AtomicBool::new(self.reuse_addr.load(Ordering::Relaxed)),
             reuse_port: AtomicBool::new(self.reuse_port.load(Ordering::Relaxed)),
             activate_notify: Notify::new(),

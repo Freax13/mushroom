@@ -3,6 +3,7 @@ use core::fmt;
 use core::{
     any::type_name,
     cmp,
+    ffi::c_void,
     ops::Deref,
     sync::atomic::{AtomicI64, Ordering},
 };
@@ -335,6 +336,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        let _ = non_blocking;
+    }
+
     fn path(&self) -> Result<Path>;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -664,9 +669,34 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         None
     }
 
+    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
+        common_ioctl(self, virtual_memory, cmd, arg)
+    }
+
     #[cfg(not(feature = "harden"))]
     fn type_name(&self) -> &'static str {
         core::any::type_name::<Self>()
+    }
+}
+
+pub fn common_ioctl<O>(
+    fd: &O,
+    virtual_memory: &VirtualMemory,
+    cmd: u32,
+    arg: Pointer<c_void>,
+) -> Result<u64>
+where
+    O: OpenFileDescription + ?Sized,
+{
+    match cmd {
+        0x5421 => {
+            // FIONBIO
+            let addr = arg.cast::<u32>();
+            let val = virtual_memory.read(addr)? != 0;
+            fd.set_non_blocking(val);
+            Ok(0)
+        }
+        _ => bail!(NoTty),
     }
 }
 

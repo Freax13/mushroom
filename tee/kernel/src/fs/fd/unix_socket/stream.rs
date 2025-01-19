@@ -92,6 +92,13 @@ impl OpenFileDescription for StreamUnixSocket {
         self.internal.lock().flags = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         self.read_half.read(buf)
     }

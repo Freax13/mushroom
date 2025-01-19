@@ -110,6 +110,13 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         self.internal.lock().flags = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let Some(data) = self.read_half.read()? else {
             return Ok(0);
