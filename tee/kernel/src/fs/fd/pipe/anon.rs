@@ -73,6 +73,11 @@ impl OpenFileDescription for ReadHalf {
         self.stream_buffer.notify();
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
+        self.stream_buffer.notify();
+    }
+
     fn path(&self) -> Result<Path> {
         path(self.ino)
     }
@@ -167,6 +172,11 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
+        self.stream_buffer.notify();
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
         self.stream_buffer.notify();
     }
 

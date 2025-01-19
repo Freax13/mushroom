@@ -18,7 +18,10 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
+        syscall::args::{
+            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, RecvFromFlags, SentToFlags,
+            SocketAddr, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
 };
@@ -89,6 +92,13 @@ impl OpenFileDescription for StreamUnixSocket {
         self.internal.lock().flags = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         self.read_half.read(buf)
     }
@@ -102,7 +112,13 @@ impl OpenFileDescription for StreamUnixSocket {
         self.read_half.read_to_user(vm, pointer, len)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _flags: RecvFromFlags,
+    ) -> Result<usize> {
         self.read_half.read_to_user(vm, pointer, len)
     }
 
@@ -117,6 +133,19 @@ impl OpenFileDescription for StreamUnixSocket {
         len: usize,
     ) -> Result<usize> {
         self.write_half.write_from_user(vm, pointer, len)
+    }
+
+    fn send_to(
+        &self,
+        vm: &VirtualMemory,
+        buf: Pointer<[u8]>,
+        len: usize,
+        _: SentToFlags,
+        addr: Pointer<SocketAddr>,
+        _addrlen: usize,
+    ) -> Result<usize> {
+        ensure!(addr.is_null(), IsConn);
+        self.write_half.write_from_user(vm, buf, len)
     }
 
     fn splice_from(

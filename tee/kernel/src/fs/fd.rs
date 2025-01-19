@@ -3,6 +3,7 @@ use core::fmt;
 use core::{
     any::type_name,
     cmp,
+    ffi::c_void,
     ops::Deref,
     sync::atomic::{AtomicI64, Ordering},
 };
@@ -25,7 +26,7 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer,
-                ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+                RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -335,6 +336,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        let _ = non_blocking;
+    }
+
     fn path(&self) -> Result<Path>;
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
@@ -550,10 +555,35 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+    fn send_to(
+        &self,
+        vm: &VirtualMemory,
+        buf: Pointer<[u8]>,
+        len: usize,
+        flags: SentToFlags,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+    ) -> Result<usize> {
+        let _ = vm;
+        let _ = buf;
+        let _ = len;
+        let _ = flags;
+        let _ = addr;
+        let _ = addrlen;
+        bail!(Inval)
+    }
+
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        flags: RecvFromFlags,
+    ) -> Result<usize> {
         let _ = vm;
         let _ = pointer;
         let _ = len;
+        let _ = flags;
         bail!(Inval)
     }
 
@@ -639,9 +669,34 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         None
     }
 
+    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
+        common_ioctl(self, virtual_memory, cmd, arg)
+    }
+
     #[cfg(not(feature = "harden"))]
     fn type_name(&self) -> &'static str {
         core::any::type_name::<Self>()
+    }
+}
+
+pub fn common_ioctl<O>(
+    fd: &O,
+    virtual_memory: &VirtualMemory,
+    cmd: u32,
+    arg: Pointer<c_void>,
+) -> Result<u64>
+where
+    O: OpenFileDescription + ?Sized,
+{
+    match cmd {
+        0x5421 => {
+            // FIONBIO
+            let addr = arg.cast::<u32>();
+            let val = virtual_memory.read(addr)? != 0;
+            fd.set_non_blocking(val);
+            Ok(0)
+        }
+        _ => bail!(NoTty),
     }
 }
 
@@ -653,6 +708,7 @@ bitflags! {
         const ERR = 1 << 2;
         const RDHUP = 1 << 3;
         const HUP = 1 << 4;
+        const PRI = 1 << 5;
     }
 }
 

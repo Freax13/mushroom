@@ -1,14 +1,17 @@
 use std::{
     net::Ipv4Addr,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
     sync::atomic::{AtomicU16, Ordering},
 };
 
 use nix::{
+    errno::Errno,
+    libc::{ioctl, Ioctl},
+    poll::{poll, PollFd, PollFlags, PollTimeout},
     sys::socket::{
         self, getpeername, getsockname, setsockopt,
         sockopt::{ReuseAddr, ReusePort},
-        AddressFamily, Backlog, SockFlag, SockType, SockaddrIn,
+        AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn,
     },
     unistd::close,
     Result,
@@ -298,4 +301,262 @@ fn test_bind() {
             }
         }
     }
+}
+
+fn sockatmark(a: &impl AsFd) -> Result<bool> {
+    const SIOCATMARK: Ioctl = 0x8905;
+    let mut value = 0u32;
+    let res = unsafe { ioctl(a.as_fd().as_raw_fd(), SIOCATMARK, &mut value) };
+    Errno::result(res)?;
+    Ok(value != 0)
+}
+
+#[test]
+fn test_oob() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )?;
+
+    // The socket is not at the mark if the socket is not yet bound.
+    assert!(!sockatmark(&listener)?);
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+
+    // The socket is not at the mark if the socket is not yet connected.
+    assert!(!sockatmark(&sock1)?);
+    // The same goes for all listening sockets.
+    assert!(!sockatmark(&listener)?);
+
+    let _ = socket::connect(fd1, &sockname);
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+
+    assert!(!sockatmark(&sock1)?);
+    assert!(!sockatmark(&sock2)?);
+
+    let mut buffer = [0u8; 16];
+
+    // Send some OOB data.
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 3);
+    assert_eq!(buffer[0..3], *b"123");
+
+    // After reading the normal data, we expect to be able to read the OOB
+    // data.
+    assert!(sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"4");
+    assert!(sockatmark(&sock2)?);
+
+    // This should also work if we read the normal data in multiple chunks:
+
+    // Send some OOB data.
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer[..2], MsgFlags::empty())?, 2);
+    assert_eq!(buffer[0..2], *b"12");
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 1);
+    assert_eq!(buffer[0..1], *b"3");
+
+    // After reading the normal data, we expect to be able to read the OOB
+    // data.
+    assert!(sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"4");
+    assert!(sockatmark(&sock2)?);
+
+    // Sending OOB data multiple times results in only the earlier OOB data
+    // being treated as normal data:
+
+    // Send some OOB data.
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+    socket::send(fd1, b"5678", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 7);
+    assert_eq!(buffer[0..7], *b"1234567");
+
+    // After reading the normal data, we expect to be able to read the OOB
+    // data.
+    assert!(sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"8");
+    assert!(sockatmark(&sock2)?);
+
+    // Sending OOB data resets the marker flag and silently consumes a pending
+    // OOB byte when it's the next byte.
+
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 3);
+    assert_eq!(buffer[0..3], *b"123");
+
+    // We're now at the OOB mark.
+    assert!(sockatmark(&sock2)?);
+
+    // Sending more data resets this.
+    socket::send(fd1, b"5678", MsgFlags::MSG_OOB)?;
+    assert!(!sockatmark(&sock2)?);
+
+    // We can now read more normal data, but skip over the previous OOB data.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 3);
+    assert_eq!(buffer[0..3], *b"567");
+
+    // After reading the normal data, we expect to be able to read the OOB
+    // data.
+    assert!(sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"8");
+    assert!(sockatmark(&sock2)?);
+
+    // Reset the mark flag.
+    socket::send(fd1, b"1234", MsgFlags::empty())?;
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 4);
+    assert_eq!(buffer[0..4], *b"1234");
+
+    // Sending 0 bytes of OOB data does nothing:
+
+    assert!(!sockatmark(&sock2)?);
+    socket::send(fd1, b"", MsgFlags::MSG_OOB)?;
+    assert!(!sockatmark(&sock2)?);
+
+    // We can read the OOB data in between reading normal data.
+
+    // Send some OOB data.
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // Read part of the data.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer[..2], MsgFlags::empty())?, 2);
+    assert_eq!(buffer[0..2], *b"12");
+
+    // Read the OOB data even though we're not yet at the mark.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"4");
+    assert!(!sockatmark(&sock2)?);
+
+    // Reading the remaining data should set the mark flag.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 1);
+    assert_eq!(buffer[0..1], *b"3");
+    assert!(sockatmark(&sock2)?);
+
+    // Receiving OOB doesn't skip over the OOB mark even when there's more
+    // normal data available.
+
+    // Send some OOB data and some more normal data.
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+    socket::send(fd1, b"5678", MsgFlags::empty())?;
+
+    // Reading normal data should stop early.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 3);
+    assert_eq!(buffer[0..3], *b"123");
+    assert!(sockatmark(&sock2)?);
+
+    // We don't need to read the OOB data, it will just be skipped over.
+
+    // Only after this can we read the rest of the data.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 4);
+    assert_eq!(buffer[0..4], *b"5678");
+    assert!(!sockatmark(&sock2)?);
+
+    // Check that poll returns the PRI flag correctly.
+
+    // If not at the there's no OOB data, PRI is not set.
+    let mut fd = PollFd::new(sock2.as_fd(), PollFlags::POLLPRI);
+    poll(core::slice::from_mut(&mut fd), PollTimeout::ZERO).unwrap();
+    assert!(!fd.revents().unwrap().contains(PollFlags::POLLPRI));
+
+    // Send some OOB data and some more normal data.
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // The PRI flag is now set.
+    poll(core::slice::from_mut(&mut fd), PollTimeout::ZERO).unwrap();
+    assert!(fd.revents().unwrap().contains(PollFlags::POLLPRI));
+
+    // Read the normal data.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 3);
+    assert_eq!(buffer[0..3], *b"123");
+    assert!(sockatmark(&sock2)?);
+
+    // The PRI flag is still set.
+    poll(core::slice::from_mut(&mut fd), PollTimeout::ZERO).unwrap();
+    assert!(fd.revents().unwrap().contains(PollFlags::POLLPRI));
+
+    // Reading the OOB data resets the PRI flag.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    poll(core::slice::from_mut(&mut fd), PollTimeout::ZERO).unwrap();
+    assert!(!fd.revents().unwrap().contains(PollFlags::POLLPRI));
+    // Even though the OOB mark is still set.
+    assert!(sockatmark(&sock2)?);
+
+    // Starting a read resets the OOB mark even if no data is read.
+
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty())?, 3);
+    assert_eq!(buffer[0..3], *b"123");
+
+    // We're now at the OOB mark.
+    assert!(sockatmark(&sock2)?);
+
+    // Read no data.
+    assert_eq!(
+        socket::recv(fd2, &mut buffer, MsgFlags::MSG_DONTWAIT),
+        Err(Errno::EAGAIN)
+    );
+
+    // The OOB mark is reset.
+    assert!(!sockatmark(&sock2)?);
+
+    // Reading data doesn't remove it from the buffer. If another OOB message
+    // comes in, we'll read the data again.
+
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"4");
+
+    // We're now at the OOB mark.
+    assert!(!sockatmark(&sock2)?);
+
+    socket::send(fd1, b"5678", MsgFlags::MSG_OOB)?;
+
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty()), Ok(7));
+    assert_eq!(buffer[0..7], *b"1234567");
+
+    // The OOB mark is reset.
+    assert!(sockatmark(&sock2)?);
+
+    // Read the OOB data.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"8");
+    assert!(sockatmark(&sock2)?);
+
+    Ok(())
 }

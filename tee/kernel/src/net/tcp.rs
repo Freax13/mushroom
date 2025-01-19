@@ -1,5 +1,6 @@
 use core::{
     cmp,
+    ffi::c_void,
     net::{Ipv4Addr, SocketAddrV4},
     ops::Not,
     pin::pin,
@@ -18,7 +19,7 @@ use bytemuck::bytes_of;
 use crate::{
     error::{bail, ensure, err, Result},
     fs::{
-        fd::{stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
+        fd::{common_ioctl, stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
         node::FileAccessContext,
         path::Path,
         FileSystem,
@@ -32,8 +33,8 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, FileMode, OpenFlags, Pointer, ShutdownHow, SocketAddr,
-                SocketAddrInet, SocketTypeWithFlags, Stat,
+                Accept4Flags, FileMode, OpenFlags, Pointer, RecvFromFlags, SentToFlags,
+                ShutdownHow, SocketAddr, SocketAddrInet, SocketTypeWithFlags, Stat,
             },
             traits::Abi,
         },
@@ -190,7 +191,7 @@ const EPHEMERAL_PORT_START: u16 = 32768;
 const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct TcpSocket {
-    flags: OpenFlags,
+    flags: Mutex<OpenFlags>,
     reuse_addr: AtomicBool,
     reuse_port: AtomicBool,
     activate_notify: Notify,
@@ -200,7 +201,7 @@ pub struct TcpSocket {
 impl TcpSocket {
     pub fn new(r#type: SocketTypeWithFlags) -> Self {
         Self {
-            flags: r#type.flags,
+            flags: Mutex::new(r#type.flags),
             reuse_addr: AtomicBool::new(false),
             reuse_port: AtomicBool::new(false),
             activate_notify: Notify::new(),
@@ -278,7 +279,15 @@ impl TcpSocket {
 #[async_trait]
 impl OpenFileDescription for TcpSocket {
     fn flags(&self) -> OpenFlags {
-        self.flags
+        *self.flags.lock()
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        *self.flags.lock() = flags;
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
     }
 
     fn bind(
@@ -386,7 +395,7 @@ impl OpenFileDescription for TcpSocket {
         let remote_addr = active.remote_addr;
 
         let socket = Self {
-            flags: OpenFlags::from(flags),
+            flags: Mutex::new(OpenFlags::from(flags)),
             reuse_addr: AtomicBool::new(self.reuse_addr.load(Ordering::Relaxed)),
             reuse_port: AtomicBool::new(self.reuse_port.load(Ordering::Relaxed)),
             activate_notify: Notify::new(),
@@ -635,6 +644,31 @@ impl OpenFileDescription for TcpSocket {
         active.read_half.read_to_user(vm, pointer, len)
     }
 
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        flags: RecvFromFlags,
+    ) -> Result<usize> {
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        if flags.contains(RecvFromFlags::OOB) {
+            let oob_data = active.read_half.read_oob()?;
+            if len != 0 {
+                vm.write(pointer.cast(), oob_data)?;
+                Ok(1)
+            } else {
+                Ok(0)
+            }
+        } else {
+            active.read_half.read_to_user(vm, pointer, len)
+        }
+    }
+
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
         let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
@@ -656,6 +690,27 @@ impl OpenFileDescription for TcpSocket {
             bail!(NotConn);
         };
         active.write_half.write_from_user(vm, pointer, len)
+    }
+
+    fn send_to(
+        &self,
+        vm: &VirtualMemory,
+        buf: Pointer<[u8]>,
+        len: usize,
+        flags: SentToFlags,
+        addr: Pointer<SocketAddr>,
+        _addrlen: usize,
+    ) -> Result<usize> {
+        ensure!(addr.is_null(), IsConn);
+
+        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
+        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active
+            .write_half
+            .send_from_user(vm, buf, len, flags.contains(SentToFlags::OOB))
     }
 
     fn path(&self) -> Result<Path> {
@@ -759,6 +814,29 @@ impl OpenFileDescription for TcpSocket {
                     return Ok(events);
                 }
             },
+        }
+    }
+
+    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
+        match cmd {
+            0x8905 => {
+                // SIOCATMARK
+                let at_mark = self
+                    .bound_socket
+                    .get()
+                    .and_then(|socket| socket.mode.get())
+                    .map(|mode| {
+                        if let Mode::Active(active) = mode {
+                            active.read_half.at_mark()
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or_default();
+                virtual_memory.write(arg.cast(), u32::from(at_mark))?;
+                Ok(0)
+            }
+            _ => common_ioctl(self, virtual_memory, cmd, arg),
         }
     }
 

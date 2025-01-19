@@ -17,7 +17,9 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
+        syscall::args::{
+            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, RecvFromFlags, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
 };
@@ -108,6 +110,13 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         self.internal.lock().flags = flags;
     }
 
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
+    }
+
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let Some(data) = self.read_half.read()? else {
             return Ok(0);
@@ -131,7 +140,13 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok(len)
     }
 
-    fn recv_from(&self, vm: &VirtualMemory, pointer: Pointer<[u8]>, len: usize) -> Result<usize> {
+    fn recv_from(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+        _flags: RecvFromFlags,
+    ) -> Result<usize> {
         self.read_to_user(vm, pointer, len)
     }
 
