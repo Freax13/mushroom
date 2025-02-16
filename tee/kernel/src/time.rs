@@ -5,7 +5,7 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex},
     user::process::syscall::args::ClockId,
 };
-use alloc::collections::BinaryHeap;
+use alloc::collections::{binary_heap::PeekMut, BinaryHeap};
 use log::debug;
 
 use crate::{rt::oneshot, user::process::syscall::args::Timespec};
@@ -97,20 +97,30 @@ impl State {
         // Calculate the duration to the next timeout relative to the monotonic
         // clock.
         let current = self.combine();
-        let next_monotonic_offset = self
-            .monotonic_timeouts
-            .iter()
-            .find(|t| t.valid())
-            .map(|timeout| timeout.time.saturating_sub(current));
+        let next_monotonic_offset = loop {
+            let Some(first) = self.monotonic_timeouts.peek_mut() else {
+                break None;
+            };
+            if !first.valid() {
+                PeekMut::pop(first);
+                continue;
+            }
+            break Some(first.time.saturating_sub(current));
+        };
 
         // Calculate the duration to the next timeout relative to the realtime
         // clock.
         let current = self.realtime_offset.into_ns() + current;
-        let next_realtime_offset = self
-            .realtime_timeouts
-            .iter()
-            .find(|t| t.valid())
-            .map(|timeout| timeout.time.saturating_sub(current));
+        let next_realtime_offset = loop {
+            let Some(first) = self.realtime_timeouts.peek_mut() else {
+                break None;
+            };
+            if !first.valid() {
+                PeekMut::pop(first);
+                continue;
+            }
+            break Some(first.time.saturating_sub(current));
+        };
 
         // Skip to the next timeout.
         let next_offset = [next_monotonic_offset, next_realtime_offset]
