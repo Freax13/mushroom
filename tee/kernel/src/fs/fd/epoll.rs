@@ -9,8 +9,9 @@ use alloc::sync::Arc;
 use alloc::{vec, vec::Vec};
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
+use futures::FutureExt;
 
-use crate::error::{bail, Result};
+use crate::error::{bail, ensure, err, Result};
 use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
@@ -53,25 +54,71 @@ impl OpenFileDescription for Epoll {
 
     async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {
         let guard = self.internal.lock();
-        let mut events = guard
+        let mut futures = guard
             .interest_list
             .iter()
-            .map(|e| async move {
-                let events = e.fd.ready(Events::from(e.event.events)).await?;
-                Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), e.event.data))
+            .map(|e| {
+                let fd = e.fd.clone();
+                let events = e.event.events;
+                let data = e.event.data;
+                async move {
+                    let events = fd.ready(Events::from(events)).await?;
+                    Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), data))
+                }
             })
             .collect::<FuturesUnordered<_>>();
-        let event = events.next().await.unwrap()?;
+        drop(guard);
 
-        Ok(vec![event])
+        if futures.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Wait for the first event.
+        let event = futures.next().await.unwrap()?;
+        let mut events = vec![event];
+
+        // Check if any more futures are ready, but don't wait.
+        while let Some(event) = futures.next().now_or_never().flatten().and_then(Result::ok) {
+            events.push(event);
+        }
+
+        Ok(events)
     }
 
     fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
         let mut guard = self.internal.lock();
 
+        // Make sure that the file descriptor is not already registered.
+        ensure!(
+            !guard.interest_list.iter().any(|entry| entry.fd == fd),
+            Exist
+        );
+
         // Register the file descriptor.
         guard.interest_list.push(InterestListEntry { fd, event });
 
+        Ok(())
+    }
+
+    fn epoll_del(&self, fd: &dyn OpenFileDescription) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let idx = guard
+            .interest_list
+            .iter()
+            .position(|entry| entry.fd == *fd)
+            .ok_or(err!(NoEnt))?;
+        guard.interest_list.swap_remove(idx);
+        Ok(())
+    }
+
+    fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let entry = guard
+            .interest_list
+            .iter_mut()
+            .find(|entry| entry.fd == *fd)
+            .ok_or(err!(NoEnt))?;
+        entry.event = event;
         Ok(())
     }
 
