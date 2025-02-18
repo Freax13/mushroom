@@ -59,7 +59,7 @@ impl OpenFileDescription for EventFd {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        ensure!(buf.len() == 8, Inval);
+        let buf = buf.get_mut(0..8).ok_or(err!(Inval))?;
 
         let value = self.counter.swap(0, Ordering::SeqCst);
         ensure!(value != 0, Again);
@@ -69,9 +69,9 @@ impl OpenFileDescription for EventFd {
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
-        ensure!(buf.len() == 8, Inval);
-
+        let buf = buf.get(0..8).ok_or(err!(Inval))?;
         let add = pod_read_unaligned::<u64>(buf);
+        ensure!(add != !0, Inval);
         if add != 0 {
             let mut old_value = self.counter.load(Ordering::SeqCst);
             loop {
@@ -103,7 +103,7 @@ impl OpenFileDescription for EventFd {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        ensure!(len == 8, Inval);
+        ensure!(len >= 8, Inval);
 
         let mut buf = [0; 8];
         vm.read_bytes(pointer.get(), &mut buf)?;
