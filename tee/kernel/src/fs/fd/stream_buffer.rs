@@ -61,6 +61,17 @@ struct PipeDataBuffer {
     oob_mark_state: OobMarkState,
 }
 
+impl PipeDataBuffer {
+    fn total_capacity(&self) -> usize {
+        // For sockets allow writing a little more than the capacity.
+        let extra_capacity = match self.ty {
+            Type::Pipe { .. } => 0,
+            Type::Socket => 0x1000,
+        };
+        self.capacity.saturating_add(extra_capacity)
+    }
+}
+
 pub enum Type {
     Pipe { atomic_write_size: NonZeroUsize },
     Socket,
@@ -181,7 +192,8 @@ impl ReadHalf {
             bail!(Again);
         }
 
-        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
+        let was_full =
+            guard.capacity.saturating_sub(guard.bytes.len()) < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let mut read = 0;
@@ -237,7 +249,8 @@ impl ReadHalf {
 
             bail!(Again);
         }
-        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
+        let was_full =
+            guard.capacity.saturating_sub(guard.bytes.len()) < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let (slice1, slice2) = guard.bytes.as_slices();
@@ -333,7 +346,8 @@ impl ReadHalf {
             return Ok(Err(PipeBlocked));
         }
 
-        let was_full = guard.capacity - guard.bytes.len() < guard.ty.atomic_write_size();
+        let was_full =
+            guard.capacity.saturating_sub(guard.bytes.len()) < guard.ty.atomic_write_size();
 
         let len = cmp::min(len, guard.bytes.len());
         let prev_len = guard.bytes.len();
@@ -420,7 +434,7 @@ impl WriteHalf {
         }
 
         let atomic_write = buf.len() <= guard.ty.atomic_write_size();
-        let remaining_capacity = guard.capacity - guard.bytes.len();
+        let remaining_capacity = guard.total_capacity().saturating_sub(guard.bytes.len());
         if atomic_write {
             ensure!(remaining_capacity >= buf.len(), Again);
         } else {
@@ -487,7 +501,7 @@ impl WriteHalf {
         }
 
         let atomic_write = len <= guard.ty.atomic_write_size();
-        let remaining_capacity = guard.capacity - guard.bytes.len();
+        let remaining_capacity = guard.total_capacity().saturating_sub(guard.bytes.len());
         if atomic_write {
             ensure!(remaining_capacity >= len, Again);
         } else {
@@ -557,7 +571,7 @@ impl WriteHalf {
             {
                 let guard = self.data.buffer.lock();
                 let is_atomic = count <= guard.ty.atomic_write_size();
-                let remaining_capacity = guard.capacity - guard.bytes.len();
+                let remaining_capacity = guard.capacity.saturating_sub(guard.bytes.len());
                 let can_write = if is_atomic {
                     count <= remaining_capacity
                 } else {
@@ -632,7 +646,7 @@ impl WriteHalf {
             guard.bytes.pop_front();
         }
 
-        let remaining_capacity = guard.capacity - guard.bytes.len();
+        let remaining_capacity = guard.total_capacity().saturating_sub(guard.bytes.len());
         if remaining_capacity == 0 {
             return Ok(Err(PipeBlocked));
         }
@@ -650,6 +664,11 @@ impl WriteHalf {
         self.notify();
 
         Ok(Ok(len))
+    }
+
+    pub fn set_buffer_capacity(&self, capacity: usize) {
+        let mut guard = self.data.buffer.lock();
+        guard.capacity = capacity;
     }
 
     pub fn shutdown(&self) {
@@ -684,10 +703,13 @@ pub fn splice(
         return Err(SpliceBlockedError::Read);
     }
 
-    let was_full = read_guard.capacity - read_guard.bytes.len() < read_guard.ty.atomic_write_size();
+    let was_full = read_guard.capacity.saturating_sub(read_guard.bytes.len())
+        < read_guard.ty.atomic_write_size();
 
     // Make sure that the write half can receive at least one byte.
-    let remaining_capacity = write_guard.capacity - write_guard.bytes.len();
+    let remaining_capacity = write_guard
+        .total_capacity()
+        .saturating_sub(write_guard.bytes.len());
     if remaining_capacity == 0 {
         return Err(SpliceBlockedError::Write);
     }

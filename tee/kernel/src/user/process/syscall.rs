@@ -1279,6 +1279,7 @@ async fn sendfile64(
 #[syscall(i386 = 359, amd64 = 41)]
 fn socket(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     domain: Domain,
     r#type: SocketTypeWithFlags,
@@ -1287,7 +1288,11 @@ fn socket(
     let fd = match domain {
         Domain::Unix => bail!(NoSys),
         Domain::Inet => match r#type.socket_type {
-            SocketType::Stream => fdtable.insert(TcpSocket::new(r#type), r#type, no_file_limit)?,
+            SocketType::Stream => fdtable.insert(
+                TcpSocket::new(r#type, ctx.filesystem_user_id, ctx.filesystem_group_id),
+                r#type,
+                no_file_limit,
+            )?,
             SocketType::Dgram => todo!(),
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),

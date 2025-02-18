@@ -4,7 +4,6 @@ use core::{
     net::{Ipv4Addr, SocketAddrV4},
     ops::Not,
     pin::pin,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use alloc::{
@@ -20,21 +19,27 @@ use crate::{
     error::{bail, ensure, err, Result},
     fs::{
         fd::{common_ioctl, stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
-        node::FileAccessContext,
+        node::{new_ino, FileAccessContext},
+        ownership::Ownership,
         path::Path,
         FileSystem,
     },
-    rt::notify::{Notify, NotifyOnDrop},
+    rt::{
+        self,
+        notify::{Notify, NotifyOnDrop},
+    },
     spin::{
         mutex::{Mutex, MutexGuard},
         once::Once,
     },
+    time::{now, sleep_until},
     user::process::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, FileMode, OpenFlags, Pointer, RecvFromFlags, SentToFlags,
-                ShutdownHow, SocketAddr, SocketAddrInet, SocketTypeWithFlags, Stat,
+                Accept4Flags, ClockId, FileMode, FileType, FileTypeAndMode, Linger, OpenFlags,
+                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketAddrInet,
+                SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -191,19 +196,36 @@ const EPHEMERAL_PORT_START: u16 = 32768;
 const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct TcpSocket {
-    flags: Mutex<OpenFlags>,
-    reuse_addr: AtomicBool,
-    reuse_port: AtomicBool,
+    ino: u64,
+    internal: Mutex<TcpSocketInternal>,
     activate_notify: Notify,
     bound_socket: Once<BoundSocket>,
 }
 
+#[derive(Clone)]
+struct TcpSocketInternal {
+    flags: OpenFlags,
+    ownership: Ownership,
+    reuse_addr: bool,
+    reuse_port: bool,
+    send_buffer_size: usize,
+    no_delay: bool,
+    linger: Option<i32>,
+}
+
 impl TcpSocket {
-    pub fn new(r#type: SocketTypeWithFlags) -> Self {
+    pub fn new(r#type: SocketTypeWithFlags, uid: Uid, gid: Gid) -> Self {
         Self {
-            flags: Mutex::new(r#type.flags),
-            reuse_addr: AtomicBool::new(false),
-            reuse_port: AtomicBool::new(false),
+            ino: new_ino(),
+            internal: Mutex::new(TcpSocketInternal {
+                flags: r#type.flags,
+                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                reuse_addr: false,
+                reuse_port: false,
+                send_buffer_size: 1024 * 1024,
+                no_delay: false,
+                linger: None,
+            }),
             activate_notify: Notify::new(),
             bound_socket: Once::new(),
         }
@@ -213,8 +235,10 @@ impl TcpSocket {
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
     fn try_bind(&self, addr: SocketAddrInet) -> Result<bool> {
-        let reuse_addr = self.reuse_addr.load(Ordering::Relaxed);
-        let reuse_port = self.reuse_port.load(Ordering::Relaxed);
+        let guard = self.internal.lock();
+        let reuse_addr = guard.reuse_addr;
+        let reuse_port = guard.reuse_port;
+        drop(guard);
 
         let mut socket_addr = SocketAddrV4::from(addr);
         let effective_uid = Uid::SUPER_USER; // TODO
@@ -279,15 +303,18 @@ impl TcpSocket {
 #[async_trait]
 impl OpenFileDescription for TcpSocket {
     fn flags(&self) -> OpenFlags {
-        *self.flags.lock()
+        self.internal.lock().flags
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        *self.flags.lock() = flags;
+        self.internal.lock().flags = flags;
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
-        self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
     fn bind(
@@ -394,10 +421,17 @@ impl OpenFileDescription for TcpSocket {
             .ok_or_else(|| err!(Again))?;
         let remote_addr = active.remote_addr;
 
+        let mut internal = self.internal.lock().clone();
+        internal
+            .flags
+            .set(OpenFlags::NONBLOCK, flags.contains(Accept4Flags::NONBLOCK));
+        internal
+            .flags
+            .set(OpenFlags::CLOEXEC, flags.contains(Accept4Flags::CLOEXEC));
+
         let socket = Self {
-            flags: Mutex::new(OpenFlags::from(flags)),
-            reuse_addr: AtomicBool::new(self.reuse_addr.load(Ordering::Relaxed)),
-            reuse_port: AtomicBool::new(self.reuse_port.load(Ordering::Relaxed)),
+            ino: new_ino(),
+            internal: Mutex::new(internal),
             activate_notify: Notify::new(),
             bound_socket: Once::with_value(BoundSocket {
                 bind_addr: bound.bind_addr,
@@ -571,6 +605,11 @@ impl OpenFileDescription for TcpSocket {
 
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
         match (level, optname) {
+            (1, 3) => {
+                // SO_TYPE
+                let ty = SocketType::Stream as u32;
+                Ok(ty.to_le_bytes().to_vec())
+            }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
             _ => bail!(Inval),
         }
@@ -585,19 +624,64 @@ impl OpenFileDescription for TcpSocket {
         optval: Pointer<[u8]>,
         optlen: i32,
     ) -> Result<()> {
+        let mut guard = self.internal.lock();
         match (level, optname) {
             (1, 2) => {
                 // SO_REUSEADDR
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
-                self.reuse_addr.store(optval, Ordering::Relaxed);
+                guard.reuse_addr = optval;
+                Ok(())
+            }
+            (1, 7) => {
+                // SO_SNDBUF
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())?;
+                let new_send_buffer_size = optval as usize * 2;
+                let new_send_buffer_size = cmp::min(new_send_buffer_size, 2048); // 2048 is the minimum
+                guard.send_buffer_size = new_send_buffer_size;
+                if let Some(bound) = self.bound_socket.get() {
+                    if let Some(Mode::Active(active)) = bound.mode.get() {
+                        active.write_half.set_buffer_capacity(new_send_buffer_size);
+                    }
+                }
+                Ok(())
+            }
+            (1, 9) => {
+                // SO_KEEPALIVE
+                Ok(())
+            }
+            (1, 13) => {
+                // SO_LINGER
+                ensure!(optlen == 8, Inval);
+                let optval = virtual_memory.read(optval.cast::<Linger>())?;
+                guard.linger = (optval.onoff != 0).then_some(optval.linger);
                 Ok(())
             }
             (1, 15) => {
                 // SO_REUSEPORT
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
-                self.reuse_port.store(optval, Ordering::Relaxed);
+                guard.reuse_port = optval;
+                Ok(())
+            }
+            (6, 1) => {
+                // TCP_NODELAY
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.no_delay = optval;
+                Ok(())
+            }
+            (6, 4) => {
+                // TCP_KEEPIDLE
+                Ok(())
+            }
+            (6, 5) => {
+                // TCP_KEEPINTVL
+                Ok(())
+            }
+            (6, 6) => {
+                // TCP_KEEPCNT
                 Ok(())
             }
             _ => bail!(Inval),
@@ -726,7 +810,22 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn stat(&self) -> Result<Stat> {
-        todo!()
+        let guard = self.internal.lock();
+        Ok(Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Socket, guard.ownership.mode()),
+            uid: guard.ownership.uid(),
+            gid: guard.ownership.gid(),
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
@@ -845,6 +944,39 @@ impl OpenFileDescription for TcpSocket {
     }
 }
 
+impl Drop for TcpSocket {
+    fn drop(&mut self) {
+        let Some(bound) = self.bound_socket.get() else {
+            return;
+        };
+        let linger = self.internal.get_mut().linger.unwrap_or(60);
+
+        let now = now(ClockId::Monotonic);
+        let deadline = now.saturating_add(Timespec {
+            tv_sec: linger as u32,
+            tv_nsec: 0,
+        });
+
+        let Some(mode) = bound.mode.get() else {
+            return;
+        };
+
+        let Mode::Active(active_tcp_socket) = mode else {
+            return;
+        };
+
+        active_tcp_socket.read_half.shutdown();
+        active_tcp_socket.write_half.shutdown();
+
+        // Keep the socket alive until the deadline.
+        let mode = bound.mode.clone();
+        rt::spawn(async move {
+            sleep_until(deadline, ClockId::Monotonic).await;
+            drop(mode);
+        });
+    }
+}
+
 struct BoundSocket {
     bind_addr: SocketAddrV4,
     reuse_addr: bool,
@@ -901,8 +1033,8 @@ struct ActiveTcpSocket {
 
 impl ActiveTcpSocket {
     fn new_pair(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> (Self, Self) {
-        let (rx1, tx1) = stream_buffer::new(0x10000, stream_buffer::Type::Socket);
-        let (rx2, tx2) = stream_buffer::new(0x10000, stream_buffer::Type::Socket);
+        let (rx1, tx1) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
+        let (rx2, tx2) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
         (
             Self {
                 local_addr,
