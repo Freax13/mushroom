@@ -21,7 +21,6 @@
     slice_ptr_get,
     step_trait,
     sync_unsafe_cell,
-    trait_upcasting,
     try_trait_v2
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
