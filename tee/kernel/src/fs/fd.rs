@@ -89,6 +89,20 @@ impl Deref for FileDescriptor {
     }
 }
 
+impl PartialEq for FileDescriptor {
+    fn eq(&self, other: &FileDescriptor) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for FileDescriptor {}
+
+impl PartialEq<dyn OpenFileDescription> for FileDescriptor {
+    fn eq(&self, other: &dyn OpenFileDescription) -> bool {
+        core::ptr::eq(&*self.0, other)
+    }
+}
+
 pub struct FileDescriptorTable {
     table: Mutex<BTreeMap<i32, FileDescriptorTableEntry>>,
 }
