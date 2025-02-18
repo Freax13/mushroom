@@ -574,11 +574,7 @@ impl Directory for TmpFsDir {
                 let mut guard = self.internal.lock();
 
                 // Do the exchange.
-                let entry = guard
-                    .items
-                    .get(&oldname)
-                    .ok_or_else(|| err!(NoEnt))?
-                    .clone();
+                let entry = guard.items.get(&oldname).ok_or(err!(NoEnt))?.clone();
                 let Entry::Occupied(mut map_entry) = guard.items.entry(newname.clone()) else {
                     bail!(NoEnt);
                 };
@@ -598,7 +594,7 @@ impl Directory for TmpFsDir {
             let (mut old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
 
             // Do the exchange.
-            let entry = old_guard.items.get(&oldname).ok_or_else(|| err!(NoEnt))?;
+            let entry = old_guard.items.get(&oldname).ok_or(err!(NoEnt))?;
             let Entry::Occupied(mut map_entry) = new_guard.items.entry(newname.clone()) else {
                 bail!(NoEnt);
             };

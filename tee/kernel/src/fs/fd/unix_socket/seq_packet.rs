@@ -258,7 +258,7 @@ impl ReadHalf {
         }
 
         let mut guard = self.state.buffer.lock();
-        guard.pop_front().map(Some).ok_or_else(|| err!(Again))
+        guard.pop_front().map(Some).ok_or(err!(Again))
     }
 }
 

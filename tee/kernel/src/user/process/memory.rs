@@ -714,7 +714,7 @@ impl VirtualMemoryWriteGuard<'_> {
         cursor.prev();
 
         while start_page != end_page {
-            let (&page, mapping) = cursor.next().ok_or_else(|| err!(NoMem))?;
+            let (&page, mapping) = cursor.next().ok_or(err!(NoMem))?;
             let mapping = mapping.get_mut();
 
             ensure!(page <= start_page, NoMem);
