@@ -9,6 +9,7 @@ use alloc::sync::Arc;
 use alloc::{vec, vec::Vec};
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
+use futures::FutureExt;
 
 use crate::error::{bail, Result};
 use crate::user::process::syscall::args::{
@@ -53,17 +54,35 @@ impl OpenFileDescription for Epoll {
 
     async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {
         let guard = self.internal.lock();
-        let mut events = guard
+        let mut futures = guard
             .interest_list
             .iter()
-            .map(|e| async move {
-                let events = e.fd.ready(Events::from(e.event.events)).await?;
-                Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), e.event.data))
+            .map(|e| {
+                let fd = e.fd.clone();
+                let events = e.event.events;
+                let data = e.event.data;
+                async move {
+                    let events = fd.ready(Events::from(events)).await?;
+                    Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), data))
+                }
             })
             .collect::<FuturesUnordered<_>>();
-        let event = events.next().await.unwrap()?;
+        drop(guard);
 
-        Ok(vec![event])
+        if futures.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Wait for the first event.
+        let event = futures.next().await.unwrap()?;
+        let mut events = vec![event];
+
+        // Check if any more futures are ready, but don't wait.
+        while let Some(event) = futures.next().now_or_never().flatten().and_then(Result::ok) {
+            events.push(event);
+        }
+
+        Ok(events)
     }
 
     fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
