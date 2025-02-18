@@ -380,10 +380,7 @@ impl ReadHalf {
 
     pub fn read_oob(&self) -> Result<u8> {
         let mut guard = self.data.buffer.lock();
-        let index = guard
-            .oob_mark_state
-            .take_oob_index()
-            .ok_or_else(|| err!(Again))?;
+        let index = guard.oob_mark_state.take_oob_index().ok_or(err!(Again))?;
         Ok(guard.bytes[index])
     }
 
@@ -424,7 +421,7 @@ impl WriteHalf {
             let next = guard
                 .closed_socket_write_counter
                 .checked_sub(1)
-                .ok_or_else(|| err!(Pipe))?;
+                .ok_or(err!(Pipe))?;
             guard.closed_socket_write_counter = next;
             return Ok(buf.len());
         }
@@ -491,7 +488,7 @@ impl WriteHalf {
             let next = guard
                 .closed_socket_write_counter
                 .checked_sub(1)
-                .ok_or_else(|| err!(Pipe))?;
+                .ok_or(err!(Pipe))?;
             guard.closed_socket_write_counter = next;
             return Ok(len);
         }
@@ -637,7 +634,7 @@ impl WriteHalf {
             let next = guard
                 .closed_socket_write_counter
                 .checked_sub(1)
-                .ok_or_else(|| err!(Pipe))?;
+                .ok_or(err!(Pipe))?;
             guard.closed_socket_write_counter = next;
             return Ok(Ok(len));
         }

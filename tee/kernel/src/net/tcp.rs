@@ -353,8 +353,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn get_peer_name(&self) -> Result<Vec<u8>> {
-        let socket = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = socket.mode.get().ok_or_else(|| err!(NotConn))?;
+        let socket = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = socket.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -408,8 +408,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(Inval))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(Inval))?;
+        let bound = self.bound_socket.get().ok_or(err!(Inval))?;
+        let mode = bound.mode.get().ok_or(err!(Inval))?;
         let Mode::Passive(passive) = mode else {
             bail!(Inval);
         };
@@ -418,7 +418,7 @@ impl OpenFileDescription for TcpSocket {
             .lock()
             .queue
             .pop_front()
-            .ok_or_else(|| err!(Again))?;
+            .ok_or(err!(Again))?;
         let remote_addr = active.remote_addr;
 
         let mut internal = self.internal.lock().clone();
@@ -476,7 +476,7 @@ impl OpenFileDescription for TcpSocket {
 
             let ports = guard
                 .get_mut(&remote_addr.port())
-                .ok_or_else(|| err!(ConnRefused))?;
+                .ok_or(err!(ConnRefused))?;
             let connect_notify = ports.connect_notify.clone();
             let wait = connect_notify.wait();
 
@@ -689,8 +689,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn)
         };
@@ -706,8 +706,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -720,8 +720,8 @@ impl OpenFileDescription for TcpSocket {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -735,8 +735,8 @@ impl OpenFileDescription for TcpSocket {
         len: usize,
         flags: RecvFromFlags,
     ) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -754,8 +754,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -768,8 +768,8 @@ impl OpenFileDescription for TcpSocket {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
@@ -787,8 +787,8 @@ impl OpenFileDescription for TcpSocket {
     ) -> Result<usize> {
         ensure!(addr.is_null(), IsConn);
 
-        let bound = self.bound_socket.get().ok_or_else(|| err!(NotConn))?;
-        let mode = bound.mode.get().ok_or_else(|| err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };

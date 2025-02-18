@@ -2962,7 +2962,7 @@ fn find_priority_targets(
             let process = if who == 0 {
                 thread.process().clone()
             } else {
-                Process::find_by_pid(who).ok_or_else(|| err!(Srch))?
+                Process::find_by_pid(who).ok_or(err!(Srch))?
             };
             find_targets(&mut core::iter::once(process))
         }
@@ -4211,7 +4211,7 @@ fn prlimit64(
     old_rlim: Pointer<RLimit64>,
 ) -> SyscallResult {
     let process = if pid != 0 {
-        Process::find_by_pid(pid).ok_or_else(|| err!(Srch))?
+        Process::find_by_pid(pid).ok_or(err!(Srch))?
     } else {
         thread.process().clone()
     };

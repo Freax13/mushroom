@@ -336,7 +336,7 @@ impl INode for SelfLink {
         Path::new(
             ctx.process
                 .as_ref()
-                .ok_or_else(|| err!(Srch))?
+                .ok_or(err!(Srch))?
                 .pid()
                 .to_string()
                 .into_bytes(),
@@ -349,7 +349,7 @@ impl INode for SelfLink {
         ctx: &mut FileAccessContext,
     ) -> Result<Option<(DynINode, DynINode)>> {
         ctx.follow_symlink()?;
-        let process = ctx.process.as_ref().ok_or_else(|| err!(Srch))?;
+        let process = ctx.process.as_ref().ok_or(err!(Srch))?;
         let file_name = FileName::new(process.pid().to_string().as_bytes())
             .unwrap()
             .into_owned();

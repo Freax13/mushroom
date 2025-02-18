@@ -830,7 +830,7 @@ impl FileLock {
             }
             drop(guard);
 
-            wait.ok_or_else(|| err!(Again))?.await;
+            wait.ok_or(err!(Again))?.await;
         }
     }
 
@@ -850,7 +850,7 @@ impl FileLock {
             }
             drop(guard);
 
-            wait.ok_or_else(|| err!(Again))?.await;
+            wait.ok_or(err!(Again))?.await;
         }
     }
 

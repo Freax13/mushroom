@@ -7,7 +7,7 @@ use x86_64::addr::VirtAddrNotValid;
 /// Construct an error of the given kind.
 macro_rules! err {
     ($err:ident) => {
-        crate::error::Error::from_kind(crate::error::ErrorKind::$err)
+        const { crate::error::Error::from_kind(crate::error::ErrorKind::$err) }
     };
 }
 
@@ -38,13 +38,13 @@ pub struct Error {
 }
 
 impl Error {
-    pub fn kind(&self) -> ErrorKind {
+    pub const fn kind(&self) -> ErrorKind {
         self.kind
     }
 
     #[doc(hidden)]
     #[cfg_attr(not(feature = "harden"), track_caller)]
-    pub fn from_kind(kind: ErrorKind) -> Self {
+    pub const fn from_kind(kind: ErrorKind) -> Self {
         Self {
             kind,
             #[cfg(not(feature = "harden"))]
