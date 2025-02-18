@@ -1045,6 +1045,8 @@ impl From<SocketTypeWithFlags> for FdFlags {
 enum_arg! {
     pub enum EpollCtlOp {
         Add = 1,
+        Del = 2,
+        Mod = 3,
     }
 }
 

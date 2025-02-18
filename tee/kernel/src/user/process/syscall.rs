@@ -3336,6 +3336,11 @@ fn epoll_ctl(
             let event = event.ok_or(err!(Inval))?;
             epoll.epoll_add(fd, event)?
         }
+        EpollCtlOp::Del => epoll.epoll_del(&*fd)?,
+        EpollCtlOp::Mod => {
+            let event = event.ok_or(err!(Inval))?;
+            epoll.epoll_mod(&*fd, event)?
+        }
     }
 
     Ok(0)

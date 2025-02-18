@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 
-use crate::error::{bail, ensure, Result};
+use crate::error::{bail, ensure, err, Result};
 use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
@@ -97,6 +97,28 @@ impl OpenFileDescription for Epoll {
         // Register the file descriptor.
         guard.interest_list.push(InterestListEntry { fd, event });
 
+        Ok(())
+    }
+
+    fn epoll_del(&self, fd: &dyn OpenFileDescription) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let idx = guard
+            .interest_list
+            .iter()
+            .position(|entry| entry.fd == *fd)
+            .ok_or(err!(NoEnt))?;
+        guard.interest_list.swap_remove(idx);
+        Ok(())
+    }
+
+    fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let entry = guard
+            .interest_list
+            .iter_mut()
+            .find(|entry| entry.fd == *fd)
+            .ok_or(err!(NoEnt))?;
+        entry.event = event;
         Ok(())
     }
 

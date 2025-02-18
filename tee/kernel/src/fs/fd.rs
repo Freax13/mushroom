@@ -655,6 +655,17 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn epoll_del(&self, fd: &dyn OpenFileDescription) -> Result<()> {
+        let _ = fd;
+        bail!(Inval)
+    }
+
+    fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        let _ = fd;
+        let _ = event;
+        bail!(Inval)
+    }
+
     fn poll_ready(&self, events: Events) -> Events;
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
