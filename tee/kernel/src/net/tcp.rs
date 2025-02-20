@@ -951,6 +951,12 @@ impl Drop for TcpSocket {
         };
         let linger = self.internal.get_mut().linger.unwrap_or(60);
 
+        // When linger is 0, we skip the normal shutdown procedure and
+        // immediately disconnect the socket.
+        if linger == 0 {
+            return;
+        }
+
         let now = now(ClockId::Monotonic);
         let deadline = now.saturating_add(Timespec {
             tv_sec: linger as u32,
