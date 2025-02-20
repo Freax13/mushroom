@@ -236,3 +236,10 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(&self.file_lock)
     }
 }
+
+impl Drop for StreamUnixSocket {
+    fn drop(&mut self) {
+        self.read_half.shutdown();
+        self.write_half.shutdown();
+    }
+}

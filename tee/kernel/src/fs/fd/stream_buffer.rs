@@ -177,16 +177,16 @@ impl ReadHalf {
 
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
+            // Check if the write half has been closed.
+            if guard.read_shutdown || guard.write_shutdown {
+                return Ok(0);
+            }
+
             if Arc::strong_count(&self.data) == 1 {
                 match guard.ty {
                     Type::Pipe { .. } => return Ok(0),
                     Type::Socket => bail!(ConnReset),
                 }
-            }
-
-            // Check if the write half has been closed.
-            if guard.read_shutdown || guard.write_shutdown {
-                return Ok(0);
             }
 
             bail!(Again);
@@ -235,16 +235,16 @@ impl ReadHalf {
 
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
+            // Check if the write half has been closed.
+            if guard.read_shutdown || guard.write_shutdown {
+                return Ok(0);
+            }
+
             if Arc::strong_count(&self.data) == 1 {
                 match guard.ty {
                     Type::Pipe { .. } => return Ok(0),
                     Type::Socket => bail!(ConnReset),
                 }
-            }
-
-            // Check if the write half has been closed.
-            if guard.read_shutdown || guard.write_shutdown {
-                return Ok(0);
             }
 
             bail!(Again);
@@ -331,16 +331,16 @@ impl ReadHalf {
 
         // Bail out early if there are no bytes to be copied.
         if guard.bytes.is_empty() {
+            // Check if the write half has been closed.
+            if guard.read_shutdown || guard.write_shutdown {
+                return Ok(Ok(0));
+            }
+
             if Arc::strong_count(&self.data) == 1 {
                 match guard.ty {
                     Type::Pipe { .. } => return Ok(Ok(0)),
                     Type::Socket => bail!(ConnReset),
                 }
-            }
-
-            // Check if the write half has been closed.
-            if guard.read_shutdown || guard.write_shutdown {
-                return Ok(Ok(0));
             }
 
             return Ok(Err(PipeBlocked));
