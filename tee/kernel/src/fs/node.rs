@@ -7,9 +7,9 @@ use crate::{
     error::{bail, ensure, err},
     spin::lazy::Lazy,
     user::process::{
+        Process,
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
         thread::{Gid, ThreadGuard, Uid},
-        Process,
     },
 };
 use alloc::boxed::Box;
@@ -28,9 +28,9 @@ use self::{
 };
 
 use super::{
+    FileSystem,
     fd::{FileDescriptor, FileLockRecord},
     path::{FileName, Path, PathSegment},
-    FileSystem,
 };
 
 pub mod directory;

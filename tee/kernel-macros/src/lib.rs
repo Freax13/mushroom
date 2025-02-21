@@ -3,11 +3,11 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
+    Attribute, Error, Expr, FnArg, Ident, ItemFn, ItemImpl, Meta, Pat, PatIdent, Result, Token,
+    Type,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    Attribute, Error, Expr, FnArg, Ident, ItemFn, ItemImpl, Meta, Pat, PatIdent, Result, Token,
-    Type,
 };
 
 #[proc_macro_attribute]

@@ -1,6 +1,6 @@
 use core::{
     arch::asm,
-    mem::{offset_of, MaybeUninit},
+    mem::{MaybeUninit, offset_of},
 };
 
 use bit_field::BitField;
@@ -10,8 +10,8 @@ use tdx_types::{
     tdcall::{GpaAttr, GuestState, InvdTranslations, MdFieldId, VmIndex},
 };
 use x86_64::structures::paging::{
-    frame::PhysFrameRange, page::NotGiantPageSize, PageSize, PhysFrame, Size1GiB, Size2MiB,
-    Size4KiB,
+    PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB, frame::PhysFrameRange,
+    page::NotGiantPageSize,
 };
 
 #[derive(Debug)]

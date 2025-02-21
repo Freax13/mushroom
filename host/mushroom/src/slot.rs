@@ -3,20 +3,20 @@ use std::{
     mem::size_of,
     num::NonZeroUsize,
     os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
-    ptr::{copy_nonoverlapping, NonNull},
+    ptr::{NonNull, copy_nonoverlapping},
     sync::Arc,
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use bytemuck::{CheckedBitPattern, Pod};
 use nix::{
-    fcntl::{fallocate, FallocateFlags},
-    sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags},
+    fcntl::{FallocateFlags, fallocate},
+    sys::mman::{MapFlags, ProtFlags, mmap_anonymous, munmap},
 };
 use volatile::VolatilePtr;
 use x86_64::{
-    structures::paging::{PhysFrame, Size2MiB},
     PhysAddr,
+    structures::paging::{PhysFrame, Size2MiB},
 };
 
 use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};

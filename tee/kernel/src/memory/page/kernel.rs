@@ -1,7 +1,7 @@
 use core::{
     alloc::Layout,
     ops::{Bound, RangeBounds},
-    ptr::{copy_nonoverlapping, slice_from_raw_parts_mut, NonNull},
+    ptr::{NonNull, copy_nonoverlapping, slice_from_raw_parts_mut},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -10,7 +10,7 @@ use constants::physical_address::DYNAMIC;
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    error::{err, Result},
+    error::{Result, err},
     spin::lazy::Lazy,
 };
 

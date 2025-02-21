@@ -1,7 +1,7 @@
 use core::{
     arch::{
         asm,
-        x86_64::{CpuidResult, __cpuid, __cpuid_count, _rdtsc},
+        x86_64::{__cpuid, __cpuid_count, _rdtsc, CpuidResult},
     },
     cmp,
     sync::atomic::{AtomicUsize, Ordering},
@@ -13,8 +13,8 @@ use spin::Lazy;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tdx_types::{
     tdcall::{
-        Apic, GuestState, InvdTranslations, MdFieldId, VmIndex, TDX_L2_EXIT_HOST_ROUTED_ASYNC,
-        TDX_L2_EXIT_PENDING_INTERRUPT, TDX_PENDING_INTERRUPT, TDX_SUCCESS,
+        Apic, GuestState, InvdTranslations, MdFieldId, TDX_L2_EXIT_HOST_ROUTED_ASYNC,
+        TDX_L2_EXIT_PENDING_INTERRUPT, TDX_PENDING_INTERRUPT, TDX_SUCCESS, VmIndex,
     },
     vmexit::{
         VMEXIT_REASON_CPUID_INSTRUCTION, VMEXIT_REASON_MSR_WRITE,
@@ -31,7 +31,7 @@ use x86_64::{
 
 use crate::{
     dynamic::{allocate_memory, deallocate_memory},
-    exception::{send_ipi, WAKEUP_TOKEN, WAKEUP_VECTOR},
+    exception::{WAKEUP_TOKEN, WAKEUP_VECTOR, send_ipi},
     output,
     per_cpu::PerCpu,
     tdcall::{Tdcall, Vmcall},

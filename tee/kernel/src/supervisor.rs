@@ -7,7 +7,7 @@ use core::arch::{asm, naked_asm, x86_64::__cpuid};
 
 use crate::spin::{lazy::Lazy, mutex::Mutex};
 use arrayvec::ArrayVec;
-use constants::{physical_address::DYNAMIC_2MIB, ApIndex, INSECURE_SUPERVISOR_CALL_PORT};
+use constants::{ApIndex, INSECURE_SUPERVISOR_CALL_PORT, physical_address::DYNAMIC_2MIB};
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
 

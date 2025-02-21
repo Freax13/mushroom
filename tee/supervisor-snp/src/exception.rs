@@ -2,16 +2,16 @@ use core::{
     arch::asm,
     num::NonZeroU8,
     ptr::addr_of,
-    sync::atomic::{AtomicU16, AtomicU8, Ordering},
+    sync::atomic::{AtomicU8, AtomicU16, Ordering},
 };
 
 use bit_field::BitField;
 use constants::MAX_APS_COUNT;
 use spin::Lazy;
 use x86_64::{
+    VirtAddr,
     registers::model_specific::Msr,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
-    VirtAddr,
 };
 
 use crate::{

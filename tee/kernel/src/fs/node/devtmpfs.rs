@@ -1,19 +1,19 @@
 use crate::{
     char_dev::{
+        CharDev,
         mem::{Null, Random, URandom, Zero},
         mushroom::Output,
-        CharDev,
     },
-    fs::{path::Path, StaticFile},
+    fs::{StaticFile, path::Path},
     user::process::thread::{Gid, Uid},
 };
 
 use crate::{error::Result, fs::path::FileName, user::process::syscall::args::FileMode};
 
 use super::{
+    DynINode, INode,
     directory::MountLocation,
     tmpfs::{TmpFs, TmpFsDir},
-    DynINode, INode,
 };
 
 pub fn new(location: MountLocation) -> Result<DynINode> {

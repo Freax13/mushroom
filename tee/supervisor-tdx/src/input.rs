@@ -7,8 +7,8 @@ use io::input::{Hasher, Header};
 use log::info;
 use tdx_types::tdcall::GpaAttr;
 use x86_64::{
-    structures::paging::{Page, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
+    structures::paging::{Page, PhysFrame, Size4KiB},
 };
 
 use crate::tdcall::{self, Tdcall};

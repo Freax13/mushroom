@@ -4,7 +4,7 @@
 #![allow(internal_features)]
 
 use exception::setup_idt;
-use log::{debug, LevelFilter};
+use log::{LevelFilter, debug};
 use per_cpu::PerCpu;
 use spin::Once;
 use vcpu::{init_vcpu, run_vcpu, wait_for_vcpu_start};

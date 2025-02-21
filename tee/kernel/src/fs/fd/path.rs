@@ -1,11 +1,11 @@
 use alloc::sync::Arc;
 
 use crate::{
-    error::{bail, Result},
+    error::{Result, bail},
     fs::{
+        FileSystem,
         node::{DynINode, FileAccessContext},
         path::Path,
-        FileSystem,
     },
     user::process::{
         syscall::args::{FileMode, OpenFlags, Stat},

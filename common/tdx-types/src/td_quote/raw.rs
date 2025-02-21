@@ -1,7 +1,7 @@
 use bytemuck::{CheckedBitPattern, NoUninit};
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
-use crate::{report::TeeTcbSvn, Reserved};
+use crate::{Reserved, report::TeeTcbSvn};
 
 const _: () = assert!(u32::to_le(1) == 1, "big endian targets are not supported");
 

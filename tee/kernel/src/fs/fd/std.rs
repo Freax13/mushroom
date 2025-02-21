@@ -1,14 +1,14 @@
 use alloc::{format, sync::Arc};
 use log::debug;
 
-use super::{pipe::anon::PIPE_FS, Events, FileLock, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription, pipe::anon::PIPE_FS};
 use crate::{
     error::Result,
     fs::{
-        node::{new_ino, FileAccessContext},
+        FileSystem,
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
-        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{

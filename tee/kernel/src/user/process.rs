@@ -15,22 +15,22 @@ use alloc::{
     vec::Vec,
 };
 use arrayvec::ArrayVec;
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 use limits::{CurrentStackLimit, Limits};
 use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
 use crate::{
-    error::{err, Result},
+    error::{Result, err},
     fs::{
+        StaticFile,
         fd::FileDescriptorTable,
         node::{
+            DynINode, FileAccessContext, INode,
             procfs::ProcessInos,
             tmpfs::{TmpFs, TmpFsFile},
-            DynINode, FileAccessContext, INode,
         },
         path::{Path, PathSegment},
-        StaticFile,
     },
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
@@ -47,8 +47,8 @@ use self::{
         cpu_state::CpuState,
     },
     thread::{
-        new_tid, running_state::ExecveValues, PendingSignals, SigChld, SigFields, SigInfo,
-        SigInfoCode, Sigset, Thread, WeakThread,
+        PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread, WeakThread,
+        new_tid, running_state::ExecveValues,
     },
 };
 

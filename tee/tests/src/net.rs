@@ -5,16 +5,16 @@ use std::{
 };
 
 use nix::{
+    Result,
     errno::Errno,
-    libc::{ioctl, Ioctl},
-    poll::{poll, PollFd, PollFlags, PollTimeout},
+    libc::{Ioctl, ioctl},
+    poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::socket::{
-        self, getpeername, getsockname, setsockopt, shutdown,
+        self, AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn, getpeername,
+        getsockname, setsockopt, shutdown,
         sockopt::{ReuseAddr, ReusePort},
-        AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn,
     },
     unistd::close,
-    Result,
 };
 
 fn bind(addr: Ipv4Addr, port: u16, reuse_addr: bool, reuse_port: bool) -> Result<OwnedFd> {
@@ -145,7 +145,9 @@ fn test_bind() {
         let reuse_port_both = reuse_port_a && reuse_port_b;
 
         // Bind the first socket.
-        println!("Binding socket A to {ip_a}:{port} with reuse_addr={reuse_addr_a} and reuse_port={reuse_port_a}");
+        println!(
+            "Binding socket A to {ip_a}:{port} with reuse_addr={reuse_addr_a} and reuse_port={reuse_port_a}"
+        );
         let a = bind(ip_a, port, reuse_addr_a, reuse_port_a).unwrap();
 
         // Optionally make the first socket into a passive socket before binding
@@ -194,7 +196,9 @@ fn test_bind() {
         let bind_expect_success = non_overlapping_ip
             || (socket_a_op != Some(SocketAOp::ListenEarly) && reuse_addr_a && reuse_addr_b)
             || reuse_port_both;
-        println!("Binding socket B to {ip_b}:{port} with reuse_addr={reuse_addr_b} and reuse_port={reuse_port_b}");
+        println!(
+            "Binding socket B to {ip_b}:{port} with reuse_addr={reuse_addr_b} and reuse_port={reuse_port_b}"
+        );
         let res = bind(ip_b, port, reuse_addr_b, reuse_port_b);
         assert_eq!(res.is_ok(), bind_expect_success);
 

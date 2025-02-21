@@ -5,12 +5,12 @@ use alloc::{
 use async_trait::async_trait;
 
 use crate::{
-    error::{ensure, Result},
+    error::{Result, ensure},
     fs::{
-        fd::{stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
+        FileSystem,
+        fd::{Events, FileDescriptor, FileLock, OpenFileDescription, stream_buffer},
         node::{DynINode, FileAccessContext},
         path::Path,
-        FileSystem,
     },
     rt::notify::Notify,
     spin::mutex::Mutex,

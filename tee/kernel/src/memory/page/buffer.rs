@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use usize_conversions::FromUsize;
 
 use crate::{
-    error::{ensure, Result},
+    error::{Result, ensure},
     user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 

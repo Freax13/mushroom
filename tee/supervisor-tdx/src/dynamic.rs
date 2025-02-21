@@ -1,5 +1,5 @@
 use bit_field::BitField;
-use constants::{physical_address::DYNAMIC_2MIB, MEMORY_PORT};
+use constants::{MEMORY_PORT, physical_address::DYNAMIC_2MIB};
 use spin::Mutex;
 use supervisor_services::SlotIndex;
 use tdx_types::tdcall::GpaAttr;

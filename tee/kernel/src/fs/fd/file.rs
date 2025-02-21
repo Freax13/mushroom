@@ -3,9 +3,9 @@ use core::any::type_name;
 use crate::{
     error::{bail, ensure, err},
     fs::{
+        FileSystem,
         node::{FileAccessContext, INode},
         path::Path,
-        FileSystem,
     },
     memory::page::KernelPage,
     spin::mutex::Mutex,
@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-use super::{stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked};
+use super::{Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked, stream_buffer};
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;

@@ -1,9 +1,9 @@
 use crate::{
     error::ensure,
     fs::{
-        node::{directory::Directory, DynINode, FileAccessContext},
-        path::Path,
         FileSystem,
+        node::{DynINode, FileAccessContext, directory::Directory},
+        path::Path,
     },
     spin::mutex::Mutex,
     user::process::{

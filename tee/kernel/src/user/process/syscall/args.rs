@@ -9,12 +9,12 @@ use core::{
 use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
-use bytemuck::{checked, CheckedBitPattern, NoUninit, Pod, Zeroable};
+use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
 use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{bail, ensure, err, Error, Result},
+    error::{Error, Result, bail, ensure, err},
     fs::fd::{Events, FdFlags, FileDescriptorTable},
     user::process::{
         memory::VirtualMemory,

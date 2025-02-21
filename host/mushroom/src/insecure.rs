@@ -3,20 +3,20 @@
 
 use core::{
     arch::x86_64::__cpuid_count,
-    iter::{repeat_with, Iterator},
+    iter::{Iterator, repeat_with},
 };
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     os::unix::thread::JoinHandleExt,
-    sync::{mpsc, Arc, Condvar, LazyLock, Mutex, OnceLock},
+    sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bit_field::BitField;
 use constants::{
-    physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     INSECURE_SUPERVISOR_CALL_PORT, MAX_APS_COUNT, TIMER_VECTOR,
+    physical_address::{DYNAMIC_2MIB, kernel, supervisor},
 };
 use loader::Input;
 use nix::{
@@ -40,11 +40,10 @@ use x86_64::registers::{
 };
 
 use crate::{
-    install_signal_handler, is_efault,
+    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, install_signal_handler, is_efault,
     kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VcpuHandle, VmHandle},
     logging::start_log_collection,
     slot::Slot,
-    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ,
 };
 
 static KVM_XSAVE_SIZE: OnceLock<usize> = OnceLock::new();

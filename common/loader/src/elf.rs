@@ -8,12 +8,12 @@ use bytemuck::Zeroable;
 use goblin::{elf::Elf, elf64::program_header::PT_LOAD};
 use raw_cpuid::cpuid;
 use snp_types::{
-    cpuid::{CpuidFunction, CpuidPage},
     VmplPermissions,
+    cpuid::{CpuidFunction, CpuidPage},
 };
 use x86_64::{
-    structures::paging::{Page, PhysFrame},
     PhysAddr, VirtAddr,
+    structures::paging::{Page, PhysFrame},
 };
 
 use crate::{LoadCommand, LoadCommandPayload};

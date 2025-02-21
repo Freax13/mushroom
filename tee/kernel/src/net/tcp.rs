@@ -16,13 +16,13 @@ use async_trait::async_trait;
 use bytemuck::bytes_of;
 
 use crate::{
-    error::{bail, ensure, err, Result},
+    error::{Result, bail, ensure, err},
     fs::{
-        fd::{common_ioctl, stream_buffer, Events, FileDescriptor, FileLock, OpenFileDescription},
-        node::{new_ino, FileAccessContext},
+        FileSystem,
+        fd::{Events, FileDescriptor, FileLock, OpenFileDescription, common_ioctl, stream_buffer},
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
-        FileSystem,
     },
     rt::{
         self,

@@ -6,12 +6,12 @@ use futures::future;
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{bail, err, Result},
+    error::{Result, bail, err},
     fs::{
-        node::{new_ino, FileAccessContext},
+        FileSystem,
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
-        FileSystem,
     },
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,

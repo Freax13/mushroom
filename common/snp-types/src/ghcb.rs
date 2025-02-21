@@ -2,7 +2,7 @@ use core::fmt;
 
 use bit_field::BitField;
 use bytemuck::{CheckedBitPattern, Pod, Zeroable};
-use x86_64::{structures::paging::PhysFrame, PhysAddr};
+use x86_64::{PhysAddr, structures::paging::PhysFrame};
 
 use crate::Reserved;
 

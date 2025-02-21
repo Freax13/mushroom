@@ -8,8 +8,8 @@ use core::{
 };
 
 use x86_64::{
-    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB},
     PhysAddr,
+    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB},
 };
 
 pub type StaticPml4 = StaticPageTable<Level4>;

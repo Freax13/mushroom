@@ -11,7 +11,7 @@ use core::{
 use bit_field::BitField;
 use constants::physical_address::DYNAMIC_2MIB;
 use crossbeam_utils::atomic::AtomicCell;
-use usize_conversions::{usize_from, FromUsize};
+use usize_conversions::{FromUsize, usize_from};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
 
 use crate::{limited_index::LimitedIndex, per_cpu::PerCpu, supervisor};

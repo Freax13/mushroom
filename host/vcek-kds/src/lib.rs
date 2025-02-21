@@ -4,13 +4,13 @@ use std::{
 };
 
 use p384::ecdsa::VerifyingKey;
-use rsa::{pkcs8::DecodePublicKey, pss, signature::Verifier, RsaPublicKey};
+use rsa::{RsaPublicKey, pkcs8::DecodePublicKey, pss, signature::Verifier};
 use sha2::Sha384;
 use snp_types::attestation::TcbVersion;
 use thiserror::Error;
 use x509_cert::{
-    der::{referenced::OwnedToRef, Decode, Encode},
     Certificate,
+    der::{Decode, Encode, referenced::OwnedToRef},
 };
 
 #[cfg(unix)]

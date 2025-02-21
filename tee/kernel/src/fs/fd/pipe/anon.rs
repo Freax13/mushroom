@@ -1,9 +1,9 @@
 use crate::{
     fs::{
-        node::{new_ino, FileAccessContext},
+        FileSystem, StatFs,
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
-        FileSystem, StatFs,
     },
     spin::{lazy::Lazy, mutex::Mutex},
     user::process::{
@@ -16,7 +16,7 @@ use alloc::{boxed::Box, format, sync::Arc};
 use async_trait::async_trait;
 
 use super::{
-    super::{stream_buffer, Events, FileLock, OpenFileDescription},
+    super::{Events, FileLock, OpenFileDescription, stream_buffer},
     CAPACITY, PIPE_BUF,
 };
 use crate::{

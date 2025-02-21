@@ -2,7 +2,7 @@ use core::{arch::global_asm, mem::MaybeUninit};
 
 use constants::{ApIndex, MAX_APS_COUNT};
 use snp_types::vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap};
-use x86_64::{registers::model_specific::FsBase, VirtAddr};
+use x86_64::{VirtAddr, registers::model_specific::FsBase};
 
 use crate::{main, per_cpu::PerCpu};
 

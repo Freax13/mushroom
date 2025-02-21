@@ -11,9 +11,9 @@ use std::{
     ptr::NonNull,
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use bitflags::bitflags;
-use bytemuck::{bytes_of, pod_read_unaligned, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, bytes_of, pod_read_unaligned};
 use nix::{
     errno::Errno,
     ioctl_none, ioctl_read, ioctl_readwrite, ioctl_write_int_bad, ioctl_write_ptr,
@@ -21,7 +21,7 @@ use nix::{
     sys::mman::{MapFlags, ProtFlags},
 };
 #[cfg(feature = "snp")]
-use snp_types::{guest_policy::GuestPolicy, vmsa::SevFeatures, PageType, VmplPermissions};
+use snp_types::{PageType, VmplPermissions, guest_policy::GuestPolicy, vmsa::SevFeatures};
 use tracing::debug;
 use volatile::VolatilePtr;
 

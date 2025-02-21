@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use bit_field::BitField;
 use kvm::KvmCap;
 use nix::sys::{
-    resource::{getrlimit, setrlimit, Resource},
-    signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal},
+    resource::{Resource, getrlimit, setrlimit},
+    signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction},
 };
 use slot::Slot;
 use x86_64::structures::paging::PhysFrame;

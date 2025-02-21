@@ -4,14 +4,15 @@ use crate::{
     char_dev,
     error::{bail, ensure, err},
     fs::{
+        FileSystem, StatFs,
         fd::{
+            FileDescriptor, FileLockRecord, LazyFileLockRecord, PipeBlocked,
             dir::open_dir,
-            file::{open_file, File},
+            file::{File, open_file},
             pipe::named::NamedPipe,
-            stream_buffer, FileDescriptor, FileLockRecord, LazyFileLockRecord, PipeBlocked,
+            stream_buffer,
         },
         ownership::Ownership,
-        FileSystem, StatFs,
     },
     memory::page::{Buffer, KernelPage},
     spin::{mutex::Mutex, rwlock::RwLock},
@@ -23,16 +24,16 @@ use crate::{
 };
 use alloc::{
     boxed::Box,
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     sync::{Arc, Weak},
     vec::Vec,
 };
 use async_trait::async_trait;
 
 use super::{
-    directory::{dir_impls, Directory, DirectoryLocation, Location},
-    lookup_node_with_parent, new_dev, new_ino, DirEntry, DirEntryName, DynINode, FileAccessContext,
-    INode,
+    DirEntry, DirEntryName, DynINode, FileAccessContext, INode,
+    directory::{Directory, DirectoryLocation, Location, dir_impls},
+    lookup_node_with_parent, new_dev, new_ino,
 };
 use crate::{
     error::Result,

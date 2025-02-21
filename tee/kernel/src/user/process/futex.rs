@@ -5,7 +5,7 @@ use crate::{
     spin::mutex::Mutex,
 };
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 
 use super::{
     memory::VirtualMemory,

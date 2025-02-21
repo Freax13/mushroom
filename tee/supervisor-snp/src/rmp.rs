@@ -2,7 +2,7 @@ use core::{arch::asm, num::NonZeroU32};
 
 use bit_field::BitField;
 use snp_types::VmplPermissions;
-use x86_64::structures::paging::{page::NotGiantPageSize, Page, Size2MiB, Size4KiB};
+use x86_64::structures::paging::{Page, Size2MiB, Size4KiB, page::NotGiantPageSize};
 
 /// Update the validation status of a frame.
 ///

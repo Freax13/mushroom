@@ -1,17 +1,17 @@
 use core::{cell::SyncUnsafeCell, ptr::NonNull};
 
 use constants::{
-    physical_address::{
-        supervisor::{tdx::*, LOG_BUFFER},
-        INIT_FILE, INPUT_FILE,
-    },
     MAX_APS_COUNT,
+    physical_address::{
+        INIT_FILE, INPUT_FILE,
+        supervisor::{LOG_BUFFER, tdx::*},
+    },
 };
-use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
-use volatile::{access::WriteOnly, VolatilePtr};
+use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt, flags};
+use volatile::{VolatilePtr, access::WriteOnly};
 use x86_64::{
-    structures::paging::{PageSize, PhysFrame, Size4KiB},
     PhysAddr,
+    structures::paging::{PageSize, PhysFrame, Size4KiB},
 };
 
 use crate::reset_vector::STACK_SIZE;

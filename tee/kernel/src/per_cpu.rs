@@ -9,9 +9,9 @@ use core::{
 use alloc::sync::Arc;
 use constants::{ApIndex, MAX_APS_COUNT};
 use x86_64::{
-    registers::segmentation::{Segment64, GS},
-    structures::{gdt::GlobalDescriptorTable, tss::TaskStateSegment},
     VirtAddr,
+    registers::segmentation::{GS, Segment64},
+    structures::{gdt::GlobalDescriptorTable, tss::TaskStateSegment},
 };
 
 use crate::{

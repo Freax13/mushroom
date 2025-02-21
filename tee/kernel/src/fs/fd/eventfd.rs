@@ -6,12 +6,12 @@ use bytemuck::pod_read_unaligned;
 
 use super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{ensure, err, Result},
+    error::{Result, ensure, err},
     fs::{
-        node::{new_ino, FileAccessContext},
+        ANON_INODE_FS, FileSystem,
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
-        FileSystem, ANON_INODE_FS,
     },
     rt::notify::Notify,
     spin::mutex::Mutex,

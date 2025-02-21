@@ -3,8 +3,8 @@ use core::mem::{offset_of, size_of};
 
 use constants::{AtomicApBitmap, MAX_APS_COUNT};
 use profiler_types::{
-    AllEntries, Entry, PerCpuEntries, PerCpuHeader, ProfilerControl, CALL_STACK_CAPACITY,
-    PROFILER_ENTRIES,
+    AllEntries, CALL_STACK_CAPACITY, Entry, PROFILER_ENTRIES, PerCpuEntries, PerCpuHeader,
+    ProfilerControl,
 };
 use x86_64::registers::model_specific::Msr;
 

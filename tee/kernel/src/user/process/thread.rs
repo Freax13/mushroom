@@ -1,7 +1,7 @@
 #[cfg(not(feature = "harden"))]
 use core::fmt;
 use core::{
-    ffi::{c_void, CStr},
+    ffi::{CStr, c_void},
     fmt::Debug,
     future::Future,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
@@ -35,9 +35,9 @@ use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use crossbeam_utils::atomic::AtomicCell;
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
-use x86_64::{instructions::interrupts, VirtAddr};
+use x86_64::{VirtAddr, instructions::interrupts};
 
 use crate::{
     error::Result,
@@ -46,6 +46,7 @@ use crate::{
 };
 
 use super::{
+    Process, ProcessGroup, Session,
     limits::{CurrentStackLimit, Limits},
     memory::{VirtualMemory, WriteToVec},
     syscall::{
@@ -53,7 +54,6 @@ use super::{
         cpu_state::{CpuState, Exit, PageFaultExit},
     },
     usage::{self, ThreadUsage},
-    Process, ProcessGroup, Session,
 };
 
 pub mod running_state;

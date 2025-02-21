@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::{create_dir_all, File},
+    fs::{File, create_dir_all},
     io::{BufRead, BufReader, BufWriter, Write},
     mem::size_of,
     path::Path,
@@ -8,11 +8,11 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-use anyhow::{ensure, Context, Error, Result};
+use anyhow::{Context, Error, Result, ensure};
 use bitflags::bitflags;
-use bytemuck::{bytes_of, cast_slice, zeroed_box, NoUninit};
+use bytemuck::{NoUninit, bytes_of, cast_slice, zeroed_box};
 use constants::{ApIndex, MAX_APS_COUNT};
-use profiler_types::{AllEntries, Entry, PerCpuEntries, ProfilerControl, CALL_STACK_CAPACITY};
+use profiler_types::{AllEntries, CALL_STACK_CAPACITY, Entry, PerCpuEntries, ProfilerControl};
 use rand::random;
 use tracing::warn;
 

@@ -5,9 +5,9 @@ use core::{
     fmt::{self, Display},
     future::Future,
     marker::PhantomPinned,
-    mem::{align_of, size_of, MaybeUninit},
+    mem::{MaybeUninit, align_of, size_of},
     ops::{Deref, DerefMut},
-    pin::{pin, Pin},
+    pin::{Pin, pin},
     ptr::Pointee,
 };
 use usize_conversions::usize_from;
@@ -15,12 +15,12 @@ use usize_conversions::usize_from;
 use log::{trace, warn};
 
 use crate::{
-    error::{err, Result},
+    error::{Result, err},
     per_cpu::PerCpu,
     user::process::thread::{Thread, ThreadGuard},
 };
 
-use super::{args::SyscallArg, SYSCALL_HANDLERS};
+use super::{SYSCALL_HANDLERS, args::SyscallArg};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SyscallArgs {

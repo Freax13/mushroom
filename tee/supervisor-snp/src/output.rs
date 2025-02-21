@@ -1,6 +1,6 @@
 use core::{
     cell::LazyCell,
-    mem::{size_of, MaybeUninit},
+    mem::{MaybeUninit, size_of},
 };
 
 use constants::{FINISH_OUTPUT_MSR, UPDATE_OUTPUT_MSR};

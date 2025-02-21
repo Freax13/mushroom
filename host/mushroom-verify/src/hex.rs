@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use serde::{de::Visitor, Deserializer, Serializer};
+use serde::{Deserializer, Serializer, de::Visitor};
 
 pub fn serialize<S, const N: usize>(value: &[u8; N], serializer: S) -> Result<S::Ok, S::Error>
 where

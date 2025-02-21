@@ -1,18 +1,18 @@
 use std::{cmp::Ordering, mem::size_of};
 
-use bytemuck::{bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned, NoUninit};
-use loader::{generate_base_load_commands, LoadCommand, LoadCommandPayload};
-use p384::ecdsa::{self, signature::Verifier, Signature};
+use bytemuck::{NoUninit, bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned};
+use loader::{LoadCommand, LoadCommandPayload, generate_base_load_commands};
+use p384::ecdsa::{self, Signature, signature::Verifier};
 use sha2::{Digest, Sha384};
 use snp_types::{
+    VmplPermissions,
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
     guest_policy::GuestPolicy,
-    VmplPermissions,
 };
 use thiserror::Error;
 use vcek_kds::Vcek;
 
-use crate::{hex, InputHash, OutputHash};
+use crate::{InputHash, OutputHash, hex};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {

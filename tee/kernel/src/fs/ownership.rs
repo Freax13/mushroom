@@ -1,5 +1,5 @@
 use crate::{
-    error::{ensure, Result},
+    error::{Result, ensure},
     user::process::{
         syscall::args::FileMode,
         thread::{Gid, Uid},

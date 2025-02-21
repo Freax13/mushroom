@@ -7,57 +7,56 @@ use alloc::{
     vec::Vec,
 };
 use bit_field::BitArray;
-use bytemuck::{bytes_of, bytes_of_mut, checked, Zeroable};
+use bytemuck::{Zeroable, bytes_of, bytes_of_mut, checked};
 use futures::{
+    FutureExt, StreamExt,
     future::{self, Either, Fuse},
     select_biased,
     stream::FuturesUnordered,
-    FutureExt, StreamExt,
 };
 use kernel_macros::syscall;
 use log::warn;
-use usize_conversions::{usize_from, FromUsize};
+use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
 use crate::{
     char_dev::mem::random_bytes,
-    error::{bail, ensure, err, ErrorKind, Result},
+    error::{ErrorKind, Result, bail, ensure, err},
     fs::{
+        StatFs,
         fd::{
-            do_io, do_write_io,
+            Events, FdFlags, FileDescriptor, FileDescriptorTable, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             path::PathFd,
             pipe,
             stream_buffer::{self, SpliceBlockedError},
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
-            Events, FdFlags, FileDescriptor, FileDescriptorTable,
         },
         node::{
-            self, create_char_dev, create_directory, create_fifo, create_file, create_link,
-            devtmpfs, hard_link, lookup_and_resolve_node, lookup_node, procfs, read_link,
-            unlink_dir, unlink_file, DirEntry, DynINode, FileAccessContext, OldDirEntry,
-            Permission, ROOT_NODE,
+            self, DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
+            create_char_dev, create_directory, create_fifo, create_file, create_link, devtmpfs,
+            hard_link, lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir,
+            unlink_file,
         },
         path::Path,
-        StatFs,
     },
     net::tcp::TcpSocket,
     rt::oneshot,
     time::{self, now, sleep_until},
-    user::process::{memory::MemoryPermissions, syscall::args::*, ProcessGroup},
+    user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
 };
 
 use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
 
 use super::{
+    Process, WaitFilter,
     limits::{CurrentNoFileLimit, CurrentStackLimit},
     memory::{Bias, VirtualMemory},
     thread::{
-        new_tid, Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack,
-        StackFlags, Thread, ThreadGuard, Uid,
+        Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags, Thread,
+        ThreadGuard, Uid, new_tid,
     },
-    Process, WaitFilter,
 };
 
 pub mod args;

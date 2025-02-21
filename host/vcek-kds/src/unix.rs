@@ -4,7 +4,7 @@ use std::{
     os::fd::AsRawFd,
 };
 
-use bytemuck::{checked::try_pod_read_unaligned, CheckedBitPattern};
+use bytemuck::{CheckedBitPattern, checked::try_pod_read_unaligned};
 use nix::ioctl_readwrite;
 use snp_types::attestation::TcbVersion;
 

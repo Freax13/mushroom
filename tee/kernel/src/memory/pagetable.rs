@@ -1,7 +1,7 @@
 //! Concurrent page tables.
 
 use crate::{
-    error::{ensure, err, Result},
+    error::{Result, ensure, err},
     per_cpu::PerCpu,
     spin::{mutex::Mutex, rwlock::RwLock},
     user::process::memory::without_smap,
@@ -24,17 +24,17 @@ use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use constants::{
-    physical_address::{kernel::*, *},
     ApBitmap,
+    physical_address::{kernel::*, *},
 };
 use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
-use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4};
+use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, flags};
 use x86_64::{
+    PhysAddr, VirtAddr,
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
     structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
-    PhysAddr, VirtAddr,
 };
 
 use super::{
@@ -261,11 +261,7 @@ fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
         );
     }
 
-    if failed == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    if failed == 0 { Ok(()) } else { Err(()) }
 }
 
 /// Try to copy memory from `src` into `dest`.
@@ -297,11 +293,7 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
             inout("rdx") 0u64 => failed,
         );
     }
-    if failed == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    if failed == 0 { Ok(()) } else { Err(()) }
 }
 
 /// Check that the page is in the lower half.

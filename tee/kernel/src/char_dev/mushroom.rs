@@ -5,14 +5,14 @@ use kernel_macros::register;
 use usize_conversions::FromUsize;
 
 use crate::{
-    error::{bail, Result},
+    error::{Result, bail},
     fs::{
+        FileSystem,
         fd::{
-            stream_buffer, Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked,
+            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
-        FileSystem,
     },
     supervisor,
     user::process::{

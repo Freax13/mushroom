@@ -6,13 +6,13 @@ use core::{
 
 use usize_conversions::FromUsize;
 use x86_64::{
-    structures::paging::{Page, Size4KiB},
     VirtAddr,
+    structures::paging::{Page, Size4KiB},
 };
 
 use crate::memory::{
     frame::{allocate_frame, deallocate_frame},
-    pagetable::{map_page, unmap_page_no_flush, PageTableFlags, PresentPageTableEntry},
+    pagetable::{PageTableFlags, PresentPageTableEntry, map_page, unmap_page_no_flush},
 };
 
 pub struct HugeAllocator {

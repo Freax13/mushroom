@@ -11,7 +11,7 @@
 )]
 #![allow(internal_features)]
 
-use log::{debug, LevelFilter};
+use log::{LevelFilter, debug};
 use per_cpu::PerCpu;
 use scheduler::wait_for_vcpu_start;
 

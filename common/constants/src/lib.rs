@@ -10,10 +10,10 @@ use core::{
 };
 
 use x86_64::{
-    structures::paging::{
-        frame::PhysFrameRangeInclusive, page::PageRangeInclusive, Page, PhysFrame,
-    },
     PhysAddr, VirtAddr,
+    structures::paging::{
+        Page, PhysFrame, frame::PhysFrameRangeInclusive, page::PageRangeInclusive,
+    },
 };
 
 pub const MAX_APS_COUNT: u8 = 32;
@@ -190,7 +190,7 @@ impl Iterator for ApBitmapIter {
     type Item = ApIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let idx = self.0 .0.trailing_zeros();
+        let idx = self.0.0.trailing_zeros();
         let idx = ApIndex::try_new(idx as u8)?;
         self.0.set(idx, false);
         Some(idx)
@@ -356,9 +356,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use x86_64::{structures::paging::Page, VirtAddr};
+    use x86_64::{VirtAddr, structures::paging::Page};
 
-    use crate::{check_ranges, ApBitmap, PageRange, MAX_APS_COUNT};
+    use crate::{ApBitmap, MAX_APS_COUNT, PageRange, check_ranges};
 
     #[test]
     fn test_address_range() {

@@ -4,13 +4,13 @@ use alloc::{collections::vec_deque::VecDeque, sync::Arc};
 use usize_conversions::FromUsize;
 
 use crate::{
-    error::{bail, ensure, Result},
+    error::{Result, bail, ensure},
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
-use super::{err, Events, PipeBlocked};
+use super::{Events, PipeBlocked, err};
 
 pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
