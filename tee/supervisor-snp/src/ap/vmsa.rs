@@ -24,7 +24,7 @@ use crate::{ghcb::vmsa_tweak_bitmap, per_cpu::PerCpu, rmp::rmpadjust};
 
 use super::SEV_FEATURES;
 
-#[link_section = ".vmsas"]
+#[unsafe(link_section = ".vmsas")]
 static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
     let tweak_bitmap = &VmsaTweakBitmap::ZERO;
     let mut vmsas = [const { SyncUnsafeCell::new(Vmsa::new()) }; MAX_APS_COUNT as usize];

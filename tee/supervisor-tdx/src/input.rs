@@ -133,7 +133,7 @@ struct KernelElfHeader {
 
 impl KernelElfHeader {
     fn get() -> &'static Self {
-        extern "C" {
+        unsafe extern "C" {
             #[link_name = "kernel_elf_header"]
             static KERNEL_ELF_HEADER: KernelElfHeader;
         }

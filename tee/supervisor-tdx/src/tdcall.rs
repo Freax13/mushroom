@@ -375,7 +375,9 @@ impl Vmcall {
         copy_reg_in!(r14, 14);
         copy_reg_in!(r15, 15);
 
-        tdcall.execute();
+        unsafe {
+            tdcall.execute();
+        }
 
         macro_rules! copy_reg_out {
             ($reg:ident, $bit:literal) => {

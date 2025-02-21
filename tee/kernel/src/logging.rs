@@ -5,7 +5,7 @@ use log_types::{LogBuffer, LogWriter};
 
 use crate::spin::mutex::Mutex;
 
-#[link_section = ".log_buffer"]
+#[unsafe(link_section = ".log_buffer")]
 static LOG_BUFFER: LogBuffer = LogBuffer::new();
 
 static WRITER: Mutex<LogWriter> = Mutex::new(LogWriter::new(&LOG_BUFFER));

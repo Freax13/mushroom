@@ -31,7 +31,7 @@ use x86_64::structures::paging::PhysFrame;
 use crate::{per_cpu::PerCpu, shared};
 
 fn secrets() -> &'static Secrets {
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "secrets"]
         static SECRETS: Secrets;
     }

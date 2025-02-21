@@ -13,7 +13,7 @@ global_asm!(
     STACK_SIZE = const STACK_SIZE * 0x1000,
 );
 
-#[export_name = "_start"]
+#[unsafe(export_name = "_start")]
 extern "sysv64" fn premain(vcpu_index: ApIndex) {
     // Setup a `PerCpu` instance for the current cpu.
     let mut per_cpu = MaybeUninit::uninit();

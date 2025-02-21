@@ -37,14 +37,16 @@ where
     let return_code: u64;
     let unchanged: u32;
 
-    asm!(
-        "pvalidate",
-        "setc cl",
-        inout("rax") page.start_address().as_u64() => return_code,
-        inout("ecx") u32::from(is_giant_page) => unchanged,
-        in("edx") u32::from(valid),
-        options(nostack),
-    );
+    unsafe {
+        asm!(
+            "pvalidate",
+            "setc cl",
+            inout("rax") page.start_address().as_u64() => return_code,
+            inout("ecx") u32::from(is_giant_page) => unchanged,
+            in("edx") u32::from(valid),
+            options(nostack),
+        );
+    }
 
     let return_code = return_code as u32;
     if let Some(return_code) = NonZeroU32::new(return_code) {
@@ -102,14 +104,16 @@ where
 
     let return_code: u64;
 
-    asm!(
-        "rmpadjust",
-        "setc cl",
-        inout("rax") page.start_address().as_u64() => return_code,
-        in("ecx") u32::from(is_giant_page),
-        in("rdx") rdx,
-        options(nostack),
-    );
+    unsafe {
+        asm!(
+            "rmpadjust",
+            "setc cl",
+            inout("rax") page.start_address().as_u64() => return_code,
+            in("ecx") u32::from(is_giant_page),
+            in("rdx") rdx,
+            options(nostack),
+        );
+    }
 
     let return_code = return_code as u32;
     if let Some(return_code) = NonZeroU32::new(return_code) {

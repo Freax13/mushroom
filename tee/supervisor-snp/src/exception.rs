@@ -61,7 +61,7 @@ extern "x86-interrupt" fn hv_handler(mut frame: InterruptStackFrame) {
     // exception, don't try to let the code finish, but jump directly to the
     // end.
 
-    extern "C" {
+    unsafe extern "C" {
         static __interruptable_start: [VirtAddr; 2];
         static __interruptable_end: [VirtAddr; 2];
     }

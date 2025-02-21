@@ -2,7 +2,7 @@
 
 use core::{arch::asm, ffi::c_void};
 
-#[export_name = "__asan_report_load_n"]
+#[unsafe(export_name = "__asan_report_load_n")]
 extern "C" fn report_load_n(addr: *const c_void, size: usize) -> ! {
     panic!("address sanitizer: invalid load of size {size} at {addr:p}");
 }
@@ -12,7 +12,7 @@ macro_rules! report_load_impl {
         $(
 
             const _: () = {
-                #[export_name = concat!("__asan_report_load", $size)]
+                #[unsafe(export_name = concat!("__asan_report_load", $size))]
                 extern "C" fn report_load(addr: *const c_void) -> ! {
                     report_load_n(addr, $size)
                 }
@@ -22,7 +22,7 @@ macro_rules! report_load_impl {
 }
 report_load_impl!(1, 2, 4, 8, 16);
 
-#[export_name = "__asan_report_store_n"]
+#[unsafe(export_name = "__asan_report_store_n")]
 extern "C" fn report_store_n(addr: *const c_void, size: usize) -> ! {
     panic!("address sanitizer: invalid store of size {size} at {addr:p}");
 }
@@ -32,7 +32,7 @@ macro_rules! report_store_impl {
         $(
 
             const _: () = {
-                #[export_name = concat!("__asan_report_store", $size)]
+                #[unsafe(export_name = concat!("__asan_report_store", $size))]
                 extern "C" fn report_store(addr: *const c_void) -> ! {
                     report_store_n(addr, $size)
                 }
@@ -42,7 +42,7 @@ macro_rules! report_store_impl {
 }
 report_store_impl!(1, 2, 4, 8, 16);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn __asan_handle_no_return() {}
 
 #[inline]
@@ -62,7 +62,7 @@ macro_rules! set_shadow_impl {
         $(
 
             const _: () = {
-                #[export_name = concat!("__asan_set_shadow_", $name)]
+                #[unsafe(export_name = concat!("__asan_set_shadow_", $name))]
                 unsafe extern "C" fn set_shadow(addr: *mut u8, size: usize) {
                     unsafe {
                         set_shadow_n(addr, size, $value)

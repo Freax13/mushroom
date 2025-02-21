@@ -12,7 +12,7 @@ pub mod node;
 pub mod ownership;
 pub mod path;
 
-extern "C" {
+unsafe extern "C" {
     #[link_name = "init_file"]
     static INIT_FILE: StaticFile;
     #[link_name = "input_file"]
