@@ -15,6 +15,9 @@ tdx-types = { path = "../common/tdx-types" }
 static-page-tables = { path = "static-page-tables" }
 supervisor-services = { path = "../common/supervisor-services" }
 
+[workspace.package]
+edition = "2024"
+
 [profile.kernel]
 inherits = "release"
 opt-level = 3
