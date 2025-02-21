@@ -1,4 +1,4 @@
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 
 use crate::{
     fs::fd::FileDescriptorTable,

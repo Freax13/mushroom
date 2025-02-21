@@ -1,8 +1,8 @@
 use snp_types::VmplPermissions;
 
 use crate::{
-    elf::{load, load_shadow_mapping},
     LoadCommand,
+    elf::{load, load_shadow_mapping},
 };
 
 pub fn load_kernel(

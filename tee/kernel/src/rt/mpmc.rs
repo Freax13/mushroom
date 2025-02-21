@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use core::{
-    future::Future,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -72,7 +71,7 @@ impl<T> Receiver<T> {
             type Output = T;
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let mut guard = self.0 .0.lock();
+                let mut guard = self.0.0.lock();
 
                 if let Some(value) = guard.values.pop_front() {
                     return Poll::Ready(value);

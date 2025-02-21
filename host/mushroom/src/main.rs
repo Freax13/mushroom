@@ -4,11 +4,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use loader::{HashType, Input};
-use mushroom::{profiler::ProfileFolder, KvmHandle, MushroomResult, Tee};
+use mushroom::{KvmHandle, MushroomResult, Tee, profiler::ProfileFolder};
 use mushroom_verify::{Configuration, HashedInput};
 use mushroom_verify::{InputHash, OutputHash};
 #[cfg(feature = "snp")]

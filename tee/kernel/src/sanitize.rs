@@ -2,14 +2,14 @@ use core::ffi::c_void;
 
 use bit_field::BitField;
 use x86_64::{
+    VirtAddr,
     registers::control::Cr2,
     structures::{idt::InterruptStackFrame, paging::Page},
-    VirtAddr,
 };
 
 use crate::memory::{
     frame::{allocate_frame, deallocate_frame},
-    pagetable::{map_page, unmap_page, PageTableFlags, PresentPageTableEntry},
+    pagetable::{PageTableFlags, PresentPageTableEntry, map_page, unmap_page},
 };
 
 mod interface;

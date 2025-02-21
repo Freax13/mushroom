@@ -3,24 +3,24 @@
 mod net;
 
 use std::{
-    alloc::{alloc, dealloc, Layout},
+    alloc::{Layout, alloc, dealloc},
     arch::asm,
-    ffi::{c_void, OsStr},
+    ffi::{OsStr, c_void},
     fs::create_dir,
     mem::size_of,
     path::{Path, PathBuf},
-    ptr::{null_mut, NonNull},
+    ptr::{NonNull, null_mut},
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
         Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
     },
 };
 
 use nix::{
-    libc::{sigaltstack, siginfo_t, stack_t, SYS_exit, SYS_vfork},
+    libc::{SYS_exit, SYS_vfork, sigaltstack, siginfo_t, stack_t},
     sys::{
-        mman::{mprotect, ProtFlags},
-        signal::{sigaction, SaFlags, SigAction, SigSet},
+        mman::{ProtFlags, mprotect},
+        signal::{SaFlags, SigAction, SigSet, sigaction},
     },
 };
 

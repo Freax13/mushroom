@@ -2,11 +2,11 @@ use alloc::sync::Arc;
 use linkme::distributed_slice;
 
 use crate::{
-    error::{ensure, err, Result},
+    error::{Result, ensure, err},
     fs::{
+        FileSystem,
         fd::{FileDescriptor, OpenFileDescription},
         path::Path,
-        FileSystem,
     },
     user::process::syscall::args::{OpenFlags, Stat},
 };

@@ -4,9 +4,9 @@ use loader::generate_base_load_commands;
 use sha2::{Digest, Sha384};
 use tdx_types::td_quote::{QeVendorId, Quote, TeeTcbSvn, TeeType, Version};
 use thiserror::Error;
-use x86_64::{structures::paging::PhysFrame, PhysAddr};
+use x86_64::{PhysAddr, structures::paging::PhysFrame};
 
-use crate::{hex, InputHash, OutputHash};
+use crate::{InputHash, OutputHash, hex};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {

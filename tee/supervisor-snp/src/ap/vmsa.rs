@@ -4,27 +4,27 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use constants::{physical_address::supervisor::snp::VMSAS, MAX_APS_COUNT};
+use constants::{MAX_APS_COUNT, physical_address::supervisor::snp::VMSAS};
 use snp_types::{
+    VmplPermissions,
     intercept::VMEXIT_INVALID,
     vmsa::{Segment, SevFeatures, Vmsa, VmsaTweakBitmap},
-    VmplPermissions,
 };
 use x86_64::{
+    VirtAddr,
     registers::{
         control::{Cr0Flags, Cr4Flags},
         model_specific::EferFlags,
         xcontrol::XCr0Flags,
     },
     structures::paging::{Page, PhysFrame, Size4KiB},
-    VirtAddr,
 };
 
 use crate::{ghcb::vmsa_tweak_bitmap, per_cpu::PerCpu, rmp::rmpadjust};
 
 use super::SEV_FEATURES;
 
-#[link_section = ".vmsas"]
+#[unsafe(link_section = ".vmsas")]
 static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {
     let tweak_bitmap = &VmsaTweakBitmap::ZERO;
     let mut vmsas = [const { SyncUnsafeCell::new(Vmsa::new()) }; MAX_APS_COUNT as usize];

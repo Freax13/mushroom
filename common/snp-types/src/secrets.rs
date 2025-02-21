@@ -1,6 +1,6 @@
 use bytemuck::CheckedBitPattern;
 
-use crate::{vmsa::VmsaTweakBitmap, Reserved};
+use crate::{Reserved, vmsa::VmsaTweakBitmap};
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern)]
 #[repr(u32, align(4096))]

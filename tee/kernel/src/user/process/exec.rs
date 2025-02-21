@@ -10,7 +10,7 @@ use crate::{
     user::process::memory::MemoryPermissions,
 };
 use alloc::{borrow::ToOwned, ffi::CString, vec};
-use bytemuck::{bytes_of_mut, Zeroable};
+use bytemuck::{Zeroable, bytes_of_mut};
 use usize_conversions::FromUsize;
 use x86_64::{
     align_up,

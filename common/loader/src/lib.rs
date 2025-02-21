@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bytemuck::cast;
-use snp_types::{cpuid::CpuidPage, PageType, VmplPermissions};
+use snp_types::{PageType, VmplPermissions, cpuid::CpuidPage};
 use x86_64::structures::paging::PhysFrame;
 
 mod elf;

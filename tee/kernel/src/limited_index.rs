@@ -43,11 +43,7 @@ impl<const N: usize> Step for LimitedIndex<N> {
     #[inline(always)]
     fn forward_checked(start: Self, count: usize) -> Option<Self> {
         let idx = start.get().checked_add(count)?;
-        if idx < N {
-            Some(Self::new(idx))
-        } else {
-            None
-        }
+        if idx < N { Some(Self::new(idx)) } else { None }
     }
 
     #[inline(always)]

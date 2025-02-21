@@ -1,26 +1,26 @@
 //! This module contains various traits for userspace pointers.
 
 use core::{
-    ffi::{c_void, CStr},
+    ffi::{CStr, c_void},
     fmt,
     marker::PhantomData,
-    mem::{size_of, MaybeUninit},
+    mem::{MaybeUninit, size_of},
 };
 
 use alloc::ffi::CString;
 use bytemuck::{
-    bytes_of, bytes_of_mut, cast, checked::try_pod_read_unaligned, CheckedBitPattern, NoUninit,
-    Pod, Zeroable,
+    CheckedBitPattern, NoUninit, Pod, Zeroable, bytes_of, bytes_of_mut, cast,
+    checked::try_pod_read_unaligned,
 };
-use usize_conversions::{usize_from, FromUsize};
+use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{ensure, Error, Result},
+    error::{Error, Result, ensure},
     fs::{
-        node::{DirEntry, OldDirEntry},
-        path::{Path, PATH_MAX},
         StatFs,
+        node::{DirEntry, OldDirEntry},
+        path::{PATH_MAX, Path},
     },
     user::process::{
         memory::VirtualMemory,

@@ -2,12 +2,12 @@ use core::{cmp, mem::size_of};
 
 use alloc::vec;
 use bit_field::BitField;
-use bytemuck::{bytes_of_mut, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, bytes_of_mut};
 use usize_conversions::usize_from;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{bail, ensure, Result},
+    error::{Result, bail, ensure},
     fs::{fd::FileDescriptor, path::Path},
     user::process::{
         memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},

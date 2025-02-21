@@ -2,26 +2,26 @@ use core::{cell::SyncUnsafeCell, ops::Deref, ptr::NonNull};
 
 use bytemuck::AnyBitPattern;
 use constants::{
-    physical_address::{
-        supervisor::{snp::*, LOG_BUFFER},
-        DYNAMIC, INPUT_FILE,
-    },
     MAX_APS_COUNT,
+    physical_address::{
+        DYNAMIC, INPUT_FILE,
+        supervisor::{LOG_BUFFER, snp::*},
+    },
 };
-use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt};
+use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, StaticPt, flags};
 use volatile::{
-    access::{ReadOnly, ReadWrite, WriteOnly},
     VolatilePtr,
+    access::{ReadOnly, ReadWrite, WriteOnly},
 };
 use x86_64::{
-    structures::paging::{PageSize, PhysFrame, Size4KiB},
     PhysAddr,
+    structures::paging::{PageSize, PhysFrame, Size4KiB},
 };
 
 use crate::reset_vector::STACK_SIZE;
 
-#[link_section = ".pagetables"]
-#[export_name = "pml4"]
+#[unsafe(link_section = ".pagetables")]
+#[unsafe(export_name = "pml4")]
 static PML4: StaticPml4 = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PDP_0, flags!(C | WRITE));
@@ -30,7 +30,7 @@ static PML4: StaticPml4 = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PDP_0: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(1, &PD_0_1, flags!(C | WRITE));
@@ -40,7 +40,7 @@ static PDP_0: StaticPdp = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_0_1: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page_range(0, TEXT, flags!(C));
@@ -57,7 +57,7 @@ static PD_0_1: StaticPd = {
 
 const NUM_STACK_PAGE_TABLES: usize = (STACK_SIZE * MAX_APS_COUNT as usize).div_ceil(512);
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PT_0_1_25: [StaticPt; NUM_STACK_PAGE_TABLES] = {
     let mut page_tables = [const { StaticPageTable::new() }; NUM_STACK_PAGE_TABLES];
 
@@ -87,7 +87,7 @@ static PT_0_1_25: [StaticPt; NUM_STACK_PAGE_TABLES] = {
     page_tables
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_0_3: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(509, CPUID_PAGE, flags!(C | EXECUTE_DISABLE));
@@ -96,28 +96,28 @@ static PD_0_3: StaticPd = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PDP_64: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page_range(0, DYNAMIC, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PDP_128: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_128_0, flags!(C | WRITE));
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_128_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PT_128_0_0, flags!(C | WRITE | EXECUTE_DISABLE));
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PT_128_0_0: StaticPt = StaticPageTable::new();
 
 /// Create static variables that are shared with the host.
@@ -125,7 +125,7 @@ static PT_128_0_0: StaticPt = StaticPageTable::new();
 macro_rules! shared {
     ($(static $name:ident : $ty:ty = $init:expr;)*) => {
         $(
-            #[link_section = ".shared"]
+            #[unsafe(link_section = ".shared")]
             static $name: $crate::pagetable::Shared<$ty> = {
                 let init: $ty = $init;
                 unsafe { $crate::pagetable::Shared::new(init) }

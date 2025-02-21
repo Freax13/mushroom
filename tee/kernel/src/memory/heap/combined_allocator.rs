@@ -1,7 +1,7 @@
 use core::{
     alloc::{Allocator, GlobalAlloc, Layout},
     cmp::Ordering,
-    ptr::{null_mut, NonNull},
+    ptr::{NonNull, null_mut},
 };
 
 use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSizeAllocator};

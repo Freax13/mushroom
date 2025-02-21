@@ -1,6 +1,5 @@
 use core::{
     fmt::{self, Debug},
-    future::Future,
     panic::Location,
     pin::Pin,
     task::{Context, Poll, Waker},

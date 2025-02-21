@@ -9,11 +9,11 @@ use core::{
 
 use alloc::{vec, vec::Vec};
 use bit_field::BitField;
-use bytemuck::{bytes_of, bytes_of_mut, from_bytes, from_bytes_mut, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, bytes_of, bytes_of_mut, from_bytes, from_bytes_mut};
 use constants::TIMER_VECTOR;
-use usize_conversions::{usize_from, FromUsize};
+use usize_conversions::{FromUsize, usize_from};
 use x86_64::{
-    align_down,
+    VirtAddr, align_down,
     instructions::tables::{lgdt, sgdt},
     registers::{
         control::Cr2,
@@ -21,16 +21,15 @@ use x86_64::{
         rflags::RFlags,
         xcontrol::XCr0Flags,
     },
-    structures::{gdt::Entry, idt::PageFaultErrorCode, DescriptorTablePointer},
-    VirtAddr,
+    structures::{DescriptorTablePointer, gdt::Entry, idt::PageFaultErrorCode},
 };
 
 use crate::{
-    error::{ensure, err, Result},
+    error::{Result, ensure, err},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
     user::process::{
-        memory::{VirtualMemory, SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386},
+        memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
         syscall::args::UserDescFlags,
         thread::{
             SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
@@ -39,7 +38,7 @@ use crate::{
 };
 
 use super::{
-    args::{pointee::SizedPointee, Pointer, UserDesc},
+    args::{Pointer, UserDesc, pointee::SizedPointee},
     traits::{Abi, SyscallArgs, SyscallResult},
 };
 
@@ -263,11 +262,7 @@ impl CpuState {
         let idx = usize::from(cs >> 3);
         let entry = self.gdt.get(idx).copied().unwrap_or_default();
         let l_bit = entry.get_bit(53);
-        if l_bit {
-            Abi::Amd64
-        } else {
-            Abi::I386
-        }
+        if l_bit { Abi::Amd64 } else { Abi::I386 }
     }
 
     pub fn create_sig_context(&self) -> SigContext {
@@ -762,14 +757,10 @@ unsafe extern "sysv64" {
 }
 
 macro_rules! kernel_reg_offset {
-    ($ident:ident) => {{
-        offset_of!(PerCpu, kernel_registers) + offset_of!(KernelRegisters, $ident)
-    }};
+    ($ident:ident) => {{ offset_of!(PerCpu, kernel_registers) + offset_of!(KernelRegisters, $ident) }};
 }
 macro_rules! userspace_reg_offset {
-    ($ident:ident) => {{
-        offset_of!(PerCpu, new_userspace_registers) + offset_of!(Registers, $ident)
-    }};
+    ($ident:ident) => {{ offset_of!(PerCpu, new_userspace_registers) + offset_of!(Registers, $ident) }};
 }
 
 global_asm!(

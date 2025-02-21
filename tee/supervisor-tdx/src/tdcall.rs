@@ -1,6 +1,6 @@
 use core::{
     arch::asm,
-    mem::{offset_of, MaybeUninit},
+    mem::{MaybeUninit, offset_of},
 };
 
 use bit_field::BitField;
@@ -10,8 +10,8 @@ use tdx_types::{
     tdcall::{GpaAttr, GuestState, InvdTranslations, MdFieldId, VmIndex},
 };
 use x86_64::structures::paging::{
-    frame::PhysFrameRange, page::NotGiantPageSize, PageSize, PhysFrame, Size1GiB, Size2MiB,
-    Size4KiB,
+    PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB, frame::PhysFrameRange,
+    page::NotGiantPageSize,
 };
 
 #[derive(Debug)]
@@ -375,7 +375,9 @@ impl Vmcall {
         copy_reg_in!(r14, 14);
         copy_reg_in!(r15, 15);
 
-        tdcall.execute();
+        unsafe {
+            tdcall.execute();
+        }
 
         macro_rules! copy_reg_out {
             ($reg:ident, $bit:literal) => {

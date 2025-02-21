@@ -1,4 +1,4 @@
-use bytemuck::{bytes_of, CheckedBitPattern, NoUninit};
+use bytemuck::{CheckedBitPattern, NoUninit, bytes_of};
 use sha2::{Digest, Sha256, Sha384};
 
 pub const MAX_HASH_SIZE: usize = 48;

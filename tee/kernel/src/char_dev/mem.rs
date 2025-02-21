@@ -6,14 +6,14 @@ use usize_conversions::FromUsize;
 use x86_64::instructions::random::RdRand;
 
 use crate::{
-    error::{bail, Result},
+    error::{Result, bail},
     fs::{
+        FileSystem,
         fd::{
-            stream_buffer, Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked,
+            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
-        FileSystem,
     },
     memory::page::KernelPage,
     spin::lazy::Lazy,

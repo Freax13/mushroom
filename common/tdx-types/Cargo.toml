@@ -1,7 +1,7 @@
 [package]
 name = "tdx-types"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
 bit_field = "0.10.2"

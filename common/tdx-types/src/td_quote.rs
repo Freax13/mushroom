@@ -5,21 +5,21 @@ use std::sync::LazyLock;
 
 use bytemuck::{
     bytes_of,
-    checked::{try_pod_read_unaligned, CheckedCastError},
-};
-use p256::ecdsa::{
-    signature::{DigestVerifier, Verifier},
-    DerSignature, Signature, VerifyingKey,
+    checked::{CheckedCastError, try_pod_read_unaligned},
 };
 use p256::EncodedPoint;
+use p256::ecdsa::{
+    DerSignature, Signature, VerifyingKey,
+    signature::{DigestVerifier, Verifier},
+};
 pub use raw::{
     AttestationType, Attributes, Body, EnclaveReportBody, Header, QeVendorId, TeeType, Version,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use x509_cert::{
-    der::{referenced::OwnedToRef, DecodePem, Encode},
     Certificate,
+    der::{DecodePem, Encode, referenced::OwnedToRef},
 };
 
 pub use crate::report::TeeTcbSvn;

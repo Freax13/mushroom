@@ -2,7 +2,7 @@
 
 use bit_field::BitArray;
 use bitflags::bitflags;
-use bytemuck::{bytes_of_mut, CheckedBitPattern, Pod, Zeroable};
+use bytemuck::{CheckedBitPattern, Pod, Zeroable, bytes_of_mut};
 use paste::paste;
 use x86_64::registers::{
     control::{Cr0Flags, Cr4Flags, EferFlags},

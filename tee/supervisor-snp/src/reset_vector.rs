@@ -2,7 +2,7 @@ use core::{arch::global_asm, mem::MaybeUninit};
 
 use constants::{ApIndex, MAX_APS_COUNT};
 use snp_types::vmsa::{SevFeatures, Vmsa, VmsaTweakBitmap};
-use x86_64::{registers::model_specific::FsBase, VirtAddr};
+use x86_64::{VirtAddr, registers::model_specific::FsBase};
 
 use crate::{main, per_cpu::PerCpu};
 
@@ -14,7 +14,7 @@ global_asm!(
     STACK_SIZE = const STACK_SIZE * 0x1000,
 );
 
-#[export_name = "_start"]
+#[unsafe(export_name = "_start")]
 extern "sysv64" fn premain(vcpu_index: ApIndex) {
     // Setup a `PerCpu` instance for the current cpu.
     let mut per_cpu = MaybeUninit::uninit();
@@ -25,7 +25,7 @@ extern "sysv64" fn premain(vcpu_index: ApIndex) {
     main();
 }
 
-#[link_section = ".supervisor_vmsas"]
+#[unsafe(link_section = ".supervisor_vmsas")]
 #[used]
 static VMSAS: [Vmsa; MAX_APS_COUNT as usize] = {
     let mut vmsas = [const { Vmsa::new() }; MAX_APS_COUNT as usize];

@@ -11,7 +11,7 @@ use core::{
 use crate::{
     error::{bail, ensure, err},
     fs::{
-        node::{new_ino, DirEntryName, DynINode, FileAccessContext},
+        node::{DirEntryName, DynINode, FileAccessContext, new_ino},
         path::FileName,
     },
     memory::page::KernelPage,
@@ -45,9 +45,9 @@ use crate::{
 };
 
 use super::{
+    FileSystem,
     node::procfs::{FdINode, ProcFs},
     path::Path,
-    FileSystem,
 };
 
 pub mod dir;

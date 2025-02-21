@@ -3,7 +3,6 @@
 //! notifications.
 
 use core::{
-    future::Future,
     ops::Deref,
     pin::Pin,
     task::{Context, Poll, Waker},

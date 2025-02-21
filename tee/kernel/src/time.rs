@@ -1,11 +1,11 @@
 use core::cmp;
 
 use crate::{
-    error::{bail, err, Result},
+    error::{Result, bail, err},
     spin::{lazy::Lazy, mutex::Mutex},
     user::process::syscall::args::ClockId,
 };
-use alloc::collections::{binary_heap::PeekMut, BinaryHeap};
+use alloc::collections::{BinaryHeap, binary_heap::PeekMut};
 use log::debug;
 
 use crate::{rt::oneshot, user::process::syscall::args::Timespec};

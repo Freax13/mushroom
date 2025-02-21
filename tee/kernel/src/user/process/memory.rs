@@ -5,9 +5,9 @@ use core::{
     cmp::{self, Ordering},
     fmt::{self, Display, Write},
     iter::Step,
-    mem::{needs_drop, MaybeUninit},
+    mem::{MaybeUninit, needs_drop},
     ops::Bound,
-    ptr::{drop_in_place, NonNull},
+    ptr::{NonNull, drop_in_place},
 };
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     fs::{fd::FileDescriptor, path::Path},
     memory::{
         page::{KernelPage, UserPage},
-        pagetable::{check_user_address, Pagetables},
+        pagetable::{Pagetables, check_user_address},
     },
     spin::{
         lazy::Lazy,
@@ -27,15 +27,14 @@ use crate::{
 use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
 use log::debug;
-use usize_conversions::{usize_from, FromUsize};
+use usize_conversions::{FromUsize, usize_from};
 use x86_64::{
-    align_up,
+    VirtAddr, align_up,
     registers::rflags::{self, RFlags},
     structures::{
         idt::PageFaultErrorCode,
         paging::{Page, PageOffset, PageSize, Size4KiB},
     },
-    VirtAddr,
 };
 
 use crate::{
@@ -46,8 +45,8 @@ use crate::{
 use super::{
     syscall::{
         args::{
-            pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
             Pointer, ProtFlags,
+            pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
         },
         traits::Abi,
     },

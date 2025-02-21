@@ -11,9 +11,9 @@ use std::{
     ptr::NonNull,
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use bitflags::bitflags;
-use bytemuck::{bytes_of, pod_read_unaligned, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, bytes_of, pod_read_unaligned};
 use nix::{
     errno::Errno,
     ioctl_none, ioctl_read, ioctl_readwrite, ioctl_write_int_bad, ioctl_write_ptr,
@@ -21,7 +21,7 @@ use nix::{
     sys::mman::{MapFlags, ProtFlags},
 };
 #[cfg(feature = "snp")]
-use snp_types::{guest_policy::GuestPolicy, vmsa::SevFeatures, PageType, VmplPermissions};
+use snp_types::{PageType, VmplPermissions, guest_policy::GuestPolicy, vmsa::SevFeatures};
 use tracing::debug;
 use volatile::VolatilePtr;
 
@@ -234,7 +234,9 @@ impl VmHandle {
         restricted_offset: u64,
     ) -> Result<()> {
         if restricted_fd.is_none() {
-            return self.set_user_memory_region(slot, guest_phys_addr, memory_size, userspace_addr);
+            return unsafe {
+                self.set_user_memory_region(slot, guest_phys_addr, memory_size, userspace_addr)
+            };
         }
 
         debug!("mapping private memory");
@@ -321,8 +323,9 @@ impl VmHandle {
         };
 
         ioctl_readwrite!(kvm_memory_encrypt_op, KVMIO, 0xba, u64);
-        let res =
-            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmSevCmd as *mut u64);
+        let res = unsafe {
+            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmSevCmd as *mut u64)
+        };
         ensure!(cmd.error == 0);
         res.context("failed to execute memory encryption operation")?;
 
@@ -440,8 +443,9 @@ impl VmHandle {
         let mut cmd = KvmTdxCmd { payload, error: 0 };
 
         ioctl_readwrite!(kvm_memory_encrypt_op, KVMIO, 0xba, u64);
-        let res =
-            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmTdxCmd as *mut u64);
+        let res = unsafe {
+            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmTdxCmd as *mut u64)
+        };
 
         ensure!(cmd.error == 0);
         res.context("failed to execute memory encryption operation")?;
@@ -813,8 +817,9 @@ impl VcpuHandle {
         let mut cmd = KvmTdxCmd { payload, error: 0 };
 
         ioctl_readwrite!(kvm_memory_encrypt_op, KVMIO, 0xba, u64);
-        let res =
-            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmTdxCmd as *mut u64);
+        let res = unsafe {
+            kvm_memory_encrypt_op(self.fd.as_raw_fd(), &mut cmd as *mut KvmTdxCmd as *mut u64)
+        };
 
         ensure!(cmd.error == 0);
         res.context("failed to execute memory encryption operation")?;

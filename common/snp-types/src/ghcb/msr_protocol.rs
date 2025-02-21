@@ -1,7 +1,7 @@
 use core::num::NonZeroU32;
 
 use bit_field::BitField;
-use x86_64::{registers::model_specific::Msr, structures::paging::PhysFrame, PhysAddr};
+use x86_64::{PhysAddr, registers::model_specific::Msr, structures::paging::PhysFrame};
 
 /// The Extended Feature Enable Register.
 #[derive(Debug)]

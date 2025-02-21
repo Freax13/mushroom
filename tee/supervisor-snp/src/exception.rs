@@ -2,16 +2,16 @@ use core::{
     arch::asm,
     num::NonZeroU8,
     ptr::addr_of,
-    sync::atomic::{AtomicU16, AtomicU8, Ordering},
+    sync::atomic::{AtomicU8, AtomicU16, Ordering},
 };
 
 use bit_field::BitField;
 use constants::MAX_APS_COUNT;
 use spin::Lazy;
 use x86_64::{
+    VirtAddr,
     registers::model_specific::Msr,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
-    VirtAddr,
 };
 
 use crate::{
@@ -61,7 +61,7 @@ extern "x86-interrupt" fn hv_handler(mut frame: InterruptStackFrame) {
     // exception, don't try to let the code finish, but jump directly to the
     // end.
 
-    extern "C" {
+    unsafe extern "C" {
         static __interruptable_start: [VirtAddr; 2];
         static __interruptable_end: [VirtAddr; 2];
     }

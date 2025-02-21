@@ -1,8 +1,8 @@
 use core::ops::Range;
 
 use x86_64::{
-    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB},
     PhysAddr,
+    structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB},
 };
 
 const fn addr<S>(addr: u64) -> PhysFrame<S>

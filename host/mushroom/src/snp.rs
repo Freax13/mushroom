@@ -1,41 +1,40 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     os::unix::thread::JoinHandleExt,
     sync::{
+        Arc, RwLock,
         atomic::{self, AtomicBool, Ordering},
         mpsc::{self, Sender},
-        Arc, RwLock,
     },
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bit_field::BitField;
 use bytemuck::{bytes_of, pod_read_unaligned};
 use constants::{
-    physical_address::{kernel, supervisor, DYNAMIC_2MIB},
     FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
+    physical_address::{DYNAMIC_2MIB, kernel, supervisor},
 };
 use loader::Input;
 use nix::sys::pthread::pthread_kill;
 use snp_types::PageType;
 use tracing::{debug, info};
 use x86_64::{
-    structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
     PhysAddr,
+    structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
 };
 
 use crate::{
-    find_slot, install_signal_handler,
+    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, find_slot, install_signal_handler,
     kvm::{
-        KvmCap, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle, KvmMemoryAttributes, MpState,
-        Page, SevHandle, VcpuHandle, VmHandle, KVM_HC_MAP_GPA_RANGE,
+        KVM_HC_MAP_GPA_RANGE, KvmCap, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
+        KvmMemoryAttributes, MpState, Page, SevHandle, VcpuHandle, VmHandle,
     },
     logging::start_log_collection,
-    profiler::{start_profile_collection, ProfileFolder},
+    profiler::{ProfileFolder, start_profile_collection},
     raise_file_no_limit,
     slot::Slot,
-    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ,
 };
 
 pub use snp_types::guest_policy::GuestPolicy;

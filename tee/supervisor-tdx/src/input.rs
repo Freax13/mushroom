@@ -7,8 +7,8 @@ use io::input::{Hasher, Header};
 use log::info;
 use tdx_types::tdcall::GpaAttr;
 use x86_64::{
-    structures::paging::{Page, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
+    structures::paging::{Page, PhysFrame, Size4KiB},
 };
 
 use crate::tdcall::{self, Tdcall};
@@ -133,7 +133,7 @@ struct KernelElfHeader {
 
 impl KernelElfHeader {
     fn get() -> &'static Self {
-        extern "C" {
+        unsafe extern "C" {
             #[link_name = "kernel_elf_header"]
             static KERNEL_ELF_HEADER: KernelElfHeader;
         }

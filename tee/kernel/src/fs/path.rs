@@ -5,7 +5,7 @@ use core::{
 
 use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
-use crate::error::{bail, ensure, Result};
+use crate::error::{Result, bail, ensure};
 
 pub const PATH_MAX: usize = 0x1000;
 

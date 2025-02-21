@@ -7,9 +7,8 @@ use core::{
 use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit, Nonce, Tag};
 use bit_field::BitField;
 use bytemuck::{
-    bytes_of, cast,
+    NoUninit, bytes_of, cast,
     checked::{self, pod_read_unaligned},
-    NoUninit,
 };
 use constants::MAX_APS_COUNT;
 use log::debug;
@@ -18,21 +17,21 @@ use snp_types::{
         AttestionReport, KeySelect, MsgReportReq, MsgReportRspHeader, MsgReportRspStatus,
     },
     ghcb::{
-        msr_protocol::{GhcbInfo, GhcbProtocolMsr, PageOperation, TerminateReasonCode},
         Ghcb, ProtocolVersion,
+        msr_protocol::{GhcbInfo, GhcbProtocolMsr, PageOperation, TerminateReasonCode},
     },
     guest_message::{Algo, Content, ContentV1, Message},
     intercept::{VMEXIT_IOIO, VMEXIT_MSR},
     secrets::Secrets,
     vmsa::{SevFeatures, VmsaTweakBitmap},
 };
-use volatile::{map_field, VolatilePtr};
+use volatile::{VolatilePtr, map_field};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{per_cpu::PerCpu, shared};
 
 fn secrets() -> &'static Secrets {
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "secrets"]
         static SECRETS: Secrets;
     }

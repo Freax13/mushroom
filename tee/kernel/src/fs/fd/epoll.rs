@@ -1,17 +1,17 @@
-use crate::fs::node::{new_ino, FileAccessContext};
+use crate::fs::FileSystem;
+use crate::fs::node::{FileAccessContext, new_ino};
 use crate::fs::ownership::Ownership;
 use crate::fs::path::Path;
-use crate::fs::FileSystem;
 use crate::spin::mutex::Mutex;
 use crate::user::process::thread::{Gid, Uid};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::{vec, vec::Vec};
 use async_trait::async_trait;
-use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 
-use crate::error::{bail, ensure, err, Result};
+use crate::error::{Result, bail, ensure, err};
 use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };

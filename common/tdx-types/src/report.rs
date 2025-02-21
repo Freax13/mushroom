@@ -1,6 +1,6 @@
 use core::{cmp::Ordering, fmt};
 
-use bytemuck::{bytes_of, CheckedBitPattern, NoUninit};
+use bytemuck::{CheckedBitPattern, NoUninit, bytes_of};
 
 use crate::Reserved;
 

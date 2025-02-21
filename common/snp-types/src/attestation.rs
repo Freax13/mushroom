@@ -2,7 +2,7 @@ use core::{cmp::Ordering, fmt};
 
 use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit};
 
-use crate::{guest_policy::GuestPolicy, Reserved};
+use crate::{Reserved, guest_policy::GuestPolicy};
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C)]

@@ -1,19 +1,19 @@
 use alloc::{boxed::Box, format, sync::Arc};
 use async_trait::async_trait;
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{bail, ensure, Result},
+    error::{Result, bail, ensure},
     fs::{
+        FileSystem,
         fd::{
-            stream_buffer::{self, SpliceBlockedError},
             PipeBlocked,
+            stream_buffer::{self, SpliceBlockedError},
         },
-        node::{new_ino, FileAccessContext},
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
-        FileSystem,
     },
     spin::mutex::Mutex,
     user::process::{

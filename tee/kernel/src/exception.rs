@@ -17,11 +17,12 @@ use log::{debug, error, trace};
 use x86_64::registers::model_specific::Msr;
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::{
+    PrivilegeLevel, VirtAddr,
     instructions::tables::load_tss,
     registers::{
         control::Cr2,
         model_specific::Star,
-        segmentation::{Segment, CS, DS, ES, SS},
+        segmentation::{CS, DS, ES, SS, Segment},
     },
     structures::{
         gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable},
@@ -29,7 +30,6 @@ use x86_64::{
         paging::Page,
         tss::TaskStateSegment,
     },
-    PrivilegeLevel, VirtAddr,
 };
 
 use crate::{memory::pagetable::entry_for_page, per_cpu::PerCpu};

@@ -1,4 +1,4 @@
-use core::mem::{size_of, MaybeUninit};
+use core::mem::{MaybeUninit, size_of};
 
 use constants::{FINISH_OUTPUT_MSR, UPDATE_OUTPUT_MSR};
 use sha2::{Digest, Sha256};

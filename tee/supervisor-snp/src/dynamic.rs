@@ -4,8 +4,8 @@ use snp_types::VmplPermissions;
 use spin::Mutex;
 use supervisor_services::SlotIndex;
 use x86_64::{
-    structures::paging::{Page, PageSize, Size2MiB},
     VirtAddr,
+    structures::paging::{Page, PageSize, Size2MiB},
 };
 
 use crate::{

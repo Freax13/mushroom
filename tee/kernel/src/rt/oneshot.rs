@@ -1,5 +1,4 @@
 use core::{
-    future::Future,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -92,7 +91,7 @@ impl<T> Receiver<T> {
             type Output = Result<T, RecvError>;
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let mut guard = self.0 .0.lock();
+                let mut guard = self.0.0.lock();
 
                 // Try to extract the value.
                 if matches!(&*guard, State::Sent(_)) {

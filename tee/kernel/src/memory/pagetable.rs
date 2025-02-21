@@ -1,7 +1,7 @@
 //! Concurrent page tables.
 
 use crate::{
-    error::{ensure, err, Result},
+    error::{Result, ensure, err},
     per_cpu::PerCpu,
     spin::{mutex::Mutex, rwlock::RwLock},
     user::process::memory::without_smap,
@@ -24,17 +24,17 @@ use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use constants::{
-    physical_address::{kernel::*, *},
     ApBitmap,
+    physical_address::{kernel::*, *},
 };
 use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
-use static_page_tables::{flags, StaticPageTable, StaticPd, StaticPdp, StaticPml4};
+use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, flags};
 use x86_64::{
+    PhysAddr, VirtAddr,
     instructions::tlb::Pcid,
     registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
     structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
-    PhysAddr, VirtAddr,
 };
 
 use super::{
@@ -47,7 +47,7 @@ pub mod flush;
 const RECURSIVE_INDEX: PageTableIndex = PageTableIndex::new(510);
 
 #[used]
-#[link_section = ".pagetables.pml4"]
+#[unsafe(link_section = ".pagetables.pml4")]
 static PML4: StaticPml4 = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(256, &PDP_256, flags!(WRITE));
@@ -57,7 +57,7 @@ static PML4: StaticPml4 = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PDP_256: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_256_0, flags!(WRITE));
@@ -65,7 +65,7 @@ static PDP_256: StaticPdp = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_256_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, RESET_VECTOR, flags!(GLOBAL));
@@ -82,7 +82,7 @@ static PD_256_0: StaticPd = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PDP_352: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_352_0, flags!(WRITE | EXECUTE_DISABLE));
@@ -91,7 +91,7 @@ static PDP_352: StaticPdp = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_352_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, TEXT_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
@@ -102,21 +102,21 @@ static PD_352_0: StaticPd = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_352_72: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, INIT_FILE_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PD_352_80: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, INPUT_FILE_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static PDP_257: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page_range(0, DYNAMIC, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
@@ -129,7 +129,7 @@ static PDP_257: StaticPdp = {
 // bit set for the log buffer.
 
 #[used]
-#[link_section = ".pagetables.tdx.pml4"]
+#[unsafe(link_section = ".pagetables.tdx.pml4")]
 static TDX_PML4: StaticPml4 = {
     let mut page_table = unsafe { PML4.clone() };
     page_table.clear_entry(256);
@@ -140,7 +140,7 @@ static TDX_PML4: StaticPml4 = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static TDX_PDP_256: StaticPdp = {
     let mut page_table = unsafe { PDP_256.clone() };
     page_table.clear_entry(0);
@@ -148,7 +148,7 @@ static TDX_PDP_256: StaticPdp = {
     page_table
 };
 
-#[link_section = ".pagetables"]
+#[unsafe(link_section = ".pagetables")]
 static TDX_PD_256_0: StaticPd = {
     let mut page_table = unsafe { PD_256_0.clone() };
     page_table.clear_entry(56);
@@ -261,11 +261,7 @@ fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
         );
     }
 
-    if failed == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    if failed == 0 { Ok(()) } else { Err(()) }
 }
 
 /// Try to copy memory from `src` into `dest`.
@@ -297,11 +293,7 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
             inout("rdx") 0u64 => failed,
         );
     }
-    if failed == 0 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    if failed == 0 { Ok(()) } else { Err(()) }
 }
 
 /// Check that the page is in the lower half.

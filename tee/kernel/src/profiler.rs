@@ -3,15 +3,15 @@ use core::mem::{offset_of, size_of};
 
 use constants::{AtomicApBitmap, MAX_APS_COUNT};
 use profiler_types::{
-    AllEntries, Entry, PerCpuEntries, PerCpuHeader, ProfilerControl, CALL_STACK_CAPACITY,
-    PROFILER_ENTRIES,
+    AllEntries, CALL_STACK_CAPACITY, Entry, PROFILER_ENTRIES, PerCpuEntries, PerCpuHeader,
+    ProfilerControl,
 };
 use x86_64::registers::model_specific::Msr;
 
 /// Flush profiler data.
 pub fn flush() {
     // Call the `flush` function declared in the `global_asm` block below.
-    extern "C" {
+    unsafe extern "C" {
         fn flush() -> u32;
     }
     unsafe {
@@ -19,7 +19,7 @@ pub fn flush() {
     }
 }
 
-#[link_section = ".profiler_control"]
+#[unsafe(link_section = ".profiler_control")]
 static mut PROFILER_CONTROL: ProfilerControl = ProfilerControl {
     notify_flags: AtomicApBitmap::empty(),
     headers: [PerCpuHeader {
@@ -56,7 +56,7 @@ pub unsafe fn init() {
     }
 }
 
-#[link_section = ".profiler_buffer"]
+#[unsafe(link_section = ".profiler_buffer")]
 static mut PROFILER_BUFFERS: AllEntries = [PerCpuEntries {
     entries: [Entry { time: 0, event: 0 }; PROFILER_ENTRIES],
 }; MAX_APS_COUNT as usize];

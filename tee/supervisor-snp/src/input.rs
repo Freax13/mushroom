@@ -4,10 +4,10 @@ use bytemuck::checked::pod_read_unaligned;
 use constants::physical_address::INPUT_FILE;
 use io::input::{Hasher, Header};
 use log::info;
-use snp_types::{ghcb::msr_protocol::PageOperation, VmplPermissions};
+use snp_types::{VmplPermissions, ghcb::msr_protocol::PageOperation};
 use x86_64::{
-    structures::paging::{Page, PhysFrame, Size4KiB},
     VirtAddr,
+    structures::paging::{Page, PhysFrame, Size4KiB},
 };
 
 use crate::{

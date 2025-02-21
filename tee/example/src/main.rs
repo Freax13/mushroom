@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use flate2::bufread::GzDecoder;
 use include_optional::include_bytes_optional;
-use nix::mount::{mount, MsFlags};
+use nix::mount::{MsFlags, mount};
 use tar::Archive;
 
 const BYTES: Option<&[u8]> = include_bytes_optional!("../gcc.tar.gz");
