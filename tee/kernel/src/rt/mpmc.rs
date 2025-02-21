@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use core::{
-    future::Future,
     pin::Pin,
     task::{Context, Poll, Waker},
 };

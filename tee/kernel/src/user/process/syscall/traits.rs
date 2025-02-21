@@ -3,7 +3,6 @@ use alloc::sync::Arc;
 use core::fmt::Write;
 use core::{
     fmt::{self, Display},
-    future::Future,
     marker::PhantomPinned,
     mem::{MaybeUninit, align_of, size_of},
     ops::{Deref, DerefMut},

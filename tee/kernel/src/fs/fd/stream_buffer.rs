@@ -1,4 +1,4 @@
-use core::{cmp, future::Future, iter::from_fn, num::NonZeroUsize, ops::Not};
+use core::{cmp, iter::from_fn, num::NonZeroUsize, ops::Not};
 
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
 use usize_conversions::FromUsize;

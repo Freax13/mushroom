@@ -3,7 +3,6 @@ use core::fmt;
 use core::{
     ffi::{CStr, c_void},
     fmt::Debug,
-    future::Future,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     pin::Pin,
     sync::atomic::{AtomicU32, Ordering},
