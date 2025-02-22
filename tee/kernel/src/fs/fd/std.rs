@@ -1,7 +1,7 @@
-use alloc::{format, sync::Arc};
+use alloc::{format, sync::Arc, vec};
 use log::debug;
 
-use super::{Events, FileLock, OpenFileDescription, pipe::anon::PIPE_FS};
+use super::{Events, FileLock, OpenFileDescription, WriteBuf, pipe::anon::PIPE_FS};
 use crate::{
     error::Result,
     fs::{
@@ -119,10 +119,18 @@ impl OpenFileDescription for Stdout {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        let chunk = core::str::from_utf8(buf);
-        debug!("{chunk:02x?}");
-        Ok(buf.len())
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        let mut raw = vec![0; buf.buffer_len()];
+        buf.read(0, &mut raw)?;
+        let chunk = core::str::from_utf8(&raw);
+        if let Ok(chunk) = chunk {
+            for line in chunk.lines() {
+                debug!("{line}");
+            }
+        } else {
+            debug!("{chunk:02x?}");
+        }
+        Ok(raw.len())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -196,10 +204,18 @@ impl OpenFileDescription for Stderr {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        let chunk = core::str::from_utf8(buf);
-        debug!("{chunk:02x?}");
-        Ok(buf.len())
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        let mut raw = vec![0; buf.buffer_len()];
+        buf.read(0, &mut raw)?;
+        let chunk = core::str::from_utf8(&raw);
+        if let Ok(chunk) = chunk {
+            for line in chunk.lines() {
+                debug!("{line}");
+            }
+        } else {
+            debug!("{chunk:02x?}");
+        }
+        Ok(raw.len())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

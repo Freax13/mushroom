@@ -1,6 +1,7 @@
 use core::cmp;
 
 use alloc::sync::Arc;
+use fd::KernelWriteBuf;
 use node::tmpfs::TmpFsFile;
 
 use crate::error::Result;
@@ -90,7 +91,7 @@ impl StaticFile {
                 }
                 offset += 0x1000;
 
-                dst.write(chunk_offset + i, buffer)?;
+                dst.write(chunk_offset + i, &KernelWriteBuf::new(buffer))?;
             }
         }
 

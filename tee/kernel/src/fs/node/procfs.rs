@@ -15,7 +15,7 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, LazyFileLockRecord,
+            FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
         },
@@ -26,9 +26,9 @@ use crate::{
     time::now,
     user::process::{
         Process,
-        memory::{VirtualMemory, WriteToVec},
+        memory::WriteToVec,
         syscall::args::{
-            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
+            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -1145,59 +1145,22 @@ impl File for MapsFile {
         bail!(NoDev)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let maps = thread.lock().virtual_memory().maps();
         let offset = cmp::min(offset, maps.len());
         let maps = &maps[offset..];
-        let len = cmp::min(maps.len(), buf.len());
-        buf[..len].copy_from_slice(&maps[..len]);
+        let len = cmp::min(maps.len(), buf.buffer_len());
+        buf.write(0, &maps[..len])?;
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _no_atime: bool,
-    ) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
-        let maps = thread.lock().virtual_memory().maps();
-        let offset = cmp::min(offset, maps.len());
-        let maps = &maps[offset..];
-        let len = cmp::min(maps.len(), len);
-        vm.write_bytes(pointer.get(), &maps[..len])?;
-        Ok(len)
-    }
-
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1276,59 +1239,22 @@ impl File for ProcessStatFile {
         bail!(NoDev)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let stat = thread.lock().stat();
         let offset = cmp::min(offset, stat.len());
         let stat = &stat[offset..];
-        let len = cmp::min(stat.len(), buf.len());
-        buf[..len].copy_from_slice(&stat[..len]);
+        let len = cmp::min(stat.len(), buf.buffer_len());
+        buf.write(0, &stat[..len])?;
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _no_atime: bool,
-    ) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
-        let stat = thread.lock().stat();
-        let offset = cmp::min(offset, stat.len());
-        let stat = &stat[offset..];
-        let len = cmp::min(stat.len(), len);
-        vm.write_bytes(pointer.get(), &stat[..len])?;
-        Ok(len)
-    }
-
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1419,55 +1345,20 @@ impl File for StatFile {
         bail!(NoDev)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
         let content = self.content();
         let offset = cmp::min(offset, content.len());
         let content = &content[offset..];
-        let len = cmp::min(content.len(), buf.len());
-        buf[..len].copy_from_slice(&content[..len]);
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _no_atime: bool,
-    ) -> Result<usize> {
-        let content = self.content();
-        let offset = cmp::min(offset, content.len());
-        let content = &content[offset..];
-        let len = cmp::min(content.len(), len);
-        vm.write_bytes(pointer.get(), &content[..len])?;
-        Ok(len)
-    }
-
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1567,55 +1458,20 @@ impl File for UptimeFile {
         bail!(NoDev)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8], _no_atime: bool) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
         let content = self.content();
         let offset = cmp::min(offset, content.len());
         let content = &content[offset..];
-        let len = cmp::min(content.len(), buf.len());
-        buf[..len].copy_from_slice(&content[..len]);
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _no_atime: bool,
-    ) -> Result<usize> {
-        let content = self.content();
-        let offset = cmp::min(offset, content.len());
-        let content = &content[offset..];
-        let len = cmp::min(content.len(), len);
-        vm.write_bytes(pointer.get(), &content[..len])?;
-        Ok(len)
-    }
-
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 

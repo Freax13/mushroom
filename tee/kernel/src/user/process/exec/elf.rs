@@ -8,7 +8,10 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{Result, bail, ensure},
-    fs::{fd::FileDescriptor, path::Path},
+    fs::{
+        fd::{FileDescriptor, KernelReadBuf},
+        path::Path,
+    },
     user::process::{
         memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
         syscall::traits::Abi,
@@ -104,7 +107,7 @@ where
     E: ElfLoaderParams,
 {
     let mut header = <E::Header>::zeroed();
-    file.pread(0, bytes_of_mut(&mut header))?;
+    file.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
 
     header.e_ident().verify()?;
 
@@ -135,7 +138,10 @@ where
     for i in 0..e_phnum {
         let offset = usize_from(e_phoff) + usize::from(i) * usize::from(e_phentsize);
         let mut program_header_entry = <E::ProgramHeaderEntry>::zeroed();
-        file.pread(offset, bytes_of_mut(&mut program_header_entry))?;
+        file.pread(
+            offset,
+            &mut KernelReadBuf::new(bytes_of_mut(&mut program_header_entry)),
+        )?;
 
         let p_type = program_header_entry.p_type();
         let p_offset = program_header_entry.p_offset();
@@ -174,7 +180,10 @@ where
             }
             PT_INTERP => {
                 let mut raw_interpreter_path = vec![0; usize_from(p_memsz.saturating_sub(1))];
-                file.pread(usize_from(p_offset), &mut raw_interpreter_path)?;
+                file.pread(
+                    usize_from(p_offset),
+                    &mut KernelReadBuf::new(&mut raw_interpreter_path),
+                )?;
                 interpreter_path = Some(Path::new(raw_interpreter_path)?);
             }
             _ => {}

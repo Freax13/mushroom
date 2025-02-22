@@ -9,6 +9,7 @@ use crate::{
     error::{Result, bail, err},
     fs::{
         FileSystem,
+        fd::{ReadBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -16,9 +17,8 @@ use crate::{
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::process::{
-        memory::VirtualMemory,
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, RecvFromFlags, Stat, Timespec,
+            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -117,52 +117,23 @@ impl OpenFileDescription for SeqPacketUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let Some(data) = self.read_half.read()? else {
             return Ok(0);
         };
-        let len = cmp::min(data.len(), buf.len());
-        buf[..len].copy_from_slice(&data[..len]);
+        let len = cmp::min(data.len(), buf.buffer_len());
+        buf.write(0, &data[..len])?;
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let Some(data) = self.read_half.read()? else {
-            return Ok(0);
-        };
-        let len = cmp::min(data.len(), len);
-        vm.write_bytes(pointer.get(), &data[..len])?;
-        Ok(len)
+    fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
+        self.read(buf)
     }
 
-    fn recv_from(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _flags: RecvFromFlags,
-    ) -> Result<usize> {
-        self.read_to_user(vm, pointer, len)
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        self.write_half.write(Box::from(buf));
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        let len = buf.buffer_len();
         let mut bytes = vec![0; len];
-        vm.read_bytes(pointer.get(), &mut bytes)?;
+        buf.read(0, &mut bytes)?;
         self.write_half.write(Box::from(bytes));
         Ok(len)
     }

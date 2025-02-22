@@ -2,7 +2,6 @@ use core::iter::{from_fn, repeat_n};
 
 use alloc::sync::Arc;
 use kernel_macros::register;
-use usize_conversions::FromUsize;
 use x86_64::instructions::random::RdRand;
 
 use crate::{
@@ -10,7 +9,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, stream_buffer,
+            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, ReadBuf,
+            WriteBuf, stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
@@ -18,8 +18,7 @@ use crate::{
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, OpenFlags, Pointer, Stat},
+        syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
@@ -82,38 +81,20 @@ impl OpenFileDescription for Null {
         events & (Events::READ | Events::WRITE)
     }
 
-    fn read(&self, _buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, _buf: &mut dyn ReadBuf) -> Result<usize> {
         Ok(0)
     }
 
-    fn read_to_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
+    fn pread(&self, _pos: usize, _buf: &mut dyn ReadBuf) -> Result<usize> {
         Ok(0)
     }
 
-    fn pread(&self, _pos: usize, _buf: &mut [u8]) -> Result<usize> {
-        Ok(0)
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
-    }
-
-    fn pwrite(&self, _pos: usize, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(
@@ -203,43 +184,22 @@ impl OpenFileDescription for Zero {
         events & (Events::READ | Events::WRITE)
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        buf.fill(0);
-        Ok(buf.len())
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        buf.fill(0)?;
+        Ok(buf.buffer_len())
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        for i in 0..len {
-            vm.write(pointer.cast::<u8>().bytes_offset(i), 0u8)?;
-        }
-        Ok(len)
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+        buf.fill(0)?;
+        Ok(buf.buffer_len())
     }
 
-    fn pread(&self, _pos: usize, buf: &mut [u8]) -> Result<usize> {
-        buf.fill(0);
-        Ok(buf.len())
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
-    }
-
-    fn pwrite(&self, _pos: usize, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(
@@ -336,38 +296,16 @@ impl OpenFileDescription for Random {
         events & (Events::READ | Events::WRITE)
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let mut len = 0;
-        for (buf, random) in buf.iter_mut().zip(random_bytes()) {
-            *buf = random;
-            len += 1;
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        let len = buf.buffer_len();
+        for (offset, random) in (0..len).zip(random_bytes()) {
+            buf.write(offset, &[random])?;
         }
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        for (offset, b) in (0..len).zip(random_bytes()) {
-            vm.write_bytes(pointer.get() + u64::from_usize(offset), &[b])?;
-        }
-        Ok(len)
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(
@@ -459,38 +397,16 @@ impl OpenFileDescription for URandom {
         events & (Events::READ | Events::WRITE)
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let mut len = 0;
-        for (buf, random) in buf.iter_mut().zip(random_bytes()) {
-            *buf = random;
-            len += 1;
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        let len = buf.buffer_len();
+        for (offset, random) in (0..len).zip(random_bytes()) {
+            buf.write(offset, &[random])?;
         }
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        for (offset, b) in (0..len).zip(random_bytes()) {
-            vm.write_bytes(pointer.get() + u64::from_usize(offset), &[b])?;
-        }
-        Ok(len)
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(

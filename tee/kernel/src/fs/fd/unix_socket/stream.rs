@@ -8,7 +8,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            PipeBlocked,
+            PipeBlocked, ReadBuf, WriteBuf,
             stream_buffer::{self, SpliceBlockedError},
         },
         node::{FileAccessContext, new_ino},
@@ -99,53 +99,28 @@ impl OpenFileDescription for StreamUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         self.read_half.read(buf)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.read_half.read_to_user(vm, pointer, len)
+    fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
+        self.read_half.read(buf)
     }
 
-    fn recv_from(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _flags: RecvFromFlags,
-    ) -> Result<usize> {
-        self.read_half.read_to_user(vm, pointer, len)
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         self.write_half.write(buf)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.write_half.write_from_user(vm, pointer, len)
     }
 
     fn send_to(
         &self,
-        vm: &VirtualMemory,
-        buf: Pointer<[u8]>,
-        len: usize,
+        _vm: &VirtualMemory,
+        buf: &dyn WriteBuf,
         _: SentToFlags,
         addr: Pointer<SocketAddr>,
         _addrlen: usize,
     ) -> Result<usize> {
         ensure!(addr.is_null(), IsConn);
-        self.write_half.write_from_user(vm, buf, len)
+        self.write_half.write(buf)
     }
 
     fn splice_from(

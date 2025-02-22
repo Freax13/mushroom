@@ -25,7 +25,8 @@ use crate::{
     fs::{
         StatFs,
         fd::{
-            Events, FdFlags, FileDescriptor, FileDescriptorTable, do_io, do_write_io,
+            Events, FdFlags, FileDescriptor, FileDescriptorTable, KernelReadBuf, KernelWriteBuf,
+            UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             path::PathFd,
@@ -248,6 +249,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
     handlers.register(SysPipe2);
+    handlers.register(SysPreadv);
+    handlers.register(SysPwritev);
     handlers.register(SysPrlimit64);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
@@ -266,14 +269,9 @@ async fn read(
     count: u64,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-
     let count = usize_from(count);
-
-    let len = do_io(&*fd.clone(), Events::READ, || {
-        fd.read_to_user(&virtual_memory, buf, count)
-    })
-    .await?;
-
+    let mut buf = UserBuf::new(&virtual_memory, buf, count);
+    let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -297,7 +295,8 @@ async fn write(
     let res = thread
         .interruptable(
             do_write_io(&*fd.clone(), count, || {
-                fd.write_from_user(&virtual_memory, buf, count)
+                let buf = UserBuf::new(&virtual_memory, buf, count);
+                fd.write(&buf)
             }),
             true,
         )
@@ -320,7 +319,9 @@ async fn write(
         let res = thread
             .interruptable(
                 do_write_io(&*fd.clone(), count - written, || {
-                    fd.write_from_user(&virtual_memory, buf.bytes_offset(written), count - written)
+                    let buf =
+                        UserBuf::new(&virtual_memory, buf.bytes_offset(written), count - written);
+                    fd.write(&buf)
                 }),
                 false,
             )
@@ -807,28 +808,16 @@ fn pread64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    buf: Pointer<c_void>,
+    buf: Pointer<[u8]>,
     count: u64,
     pos: u64,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-
-    let buf = buf.get();
     let count = usize_from(count);
     let pos = usize_from(pos);
-
-    let mut chunk = [0u8; 8192];
-    let max_chunk_len = chunk.len();
-    let len = cmp::min(max_chunk_len, count);
-    let chunk = &mut chunk[..len];
-
-    let len = fd.pread(pos, chunk)?;
-    let chunk = &mut chunk[..len];
-
-    virtual_memory.write_bytes(buf, chunk)?;
-
+    let mut buf = UserBuf::new(&virtual_memory, buf, count);
+    let len = fd.pread(pos, &mut buf)?;
     let len = u64::from_usize(len);
-
     Ok(len)
 }
 
@@ -837,23 +826,16 @@ fn pwrite64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    buf: Pointer<c_void>,
+    buf: Pointer<[u8]>,
     count: u64,
     pos: u64,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let buf = buf.get();
     let count = usize_from(count);
     let pos = usize_from(pos);
-
-    let mut chunk = [0u8; 8192];
-    let max_chunk_len = chunk.len();
-    let len = cmp::min(max_chunk_len, count);
-    let chunk = &mut chunk[..len];
-    virtual_memory.read_bytes(buf, chunk)?;
-
-    let len = fd.pwrite(pos, chunk)?;
+    let buf = UserBuf::new(&virtual_memory, buf, count);
+    let len = fd.pwrite(pos, &buf)?;
 
     let len = u64::from_usize(len);
     Ok(len)
@@ -868,24 +850,19 @@ async fn readv(
     vec: Pointer<Iovec>,
     vlen: u64,
 ) -> SyscallResult {
-    if vlen == 0 {
-        return SyscallResult::Ok(0);
-    }
-    let vlen = usize_from(vlen);
+    let fd = fdtable.get(fd)?;
 
-    let mut iovec = Iovec { base: 0, len: 0 };
     let mut vec = vec;
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
     for _ in 0..vlen {
         let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
+        vectored_buf.push(iovec_value);
         vec = vec.bytes_offset(len);
-        if iovec_value.len != 0 {
-            iovec = iovec_value;
-            break;
-        }
     }
 
-    let addr = Pointer::parse(iovec.base, abi)?;
-    read(virtual_memory, fdtable, fd, addr, iovec.len).await
+    let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut vectored_buf)).await?;
+    let len = u64::from_usize(len);
+    Ok(len)
 }
 
 #[syscall(i386 = 146, amd64 = 20)]
@@ -1219,20 +1196,30 @@ async fn sendfile(
         todo!();
     }
 
-    let buffer = &mut [0; 8192];
+    let mut buffer = [0; 8192];
     let mut total_len = 0;
     while total_len < count {
         let chunk_len = cmp::min(count - total_len, buffer.len());
         let buffer = &mut buffer[..chunk_len];
 
-        let len = do_io(&*r#in, Events::READ, || r#in.read(buffer)).await?;
+        let len = do_io(&*r#in, Events::READ, || {
+            r#in.read(&mut KernelReadBuf::new(buffer))
+        })
+        .await?;
         let buffer = &buffer[..len];
         if buffer.is_empty() {
             break;
         }
         total_len += buffer.len();
 
-        out.write_all(buffer).await?;
+        let mut buffer = buffer;
+        while !buffer.is_empty() {
+            let n = do_write_io(&*r#in, buffer.len(), || {
+                out.write(&KernelWriteBuf::new(buffer))
+            })
+            .await?;
+            buffer = &buffer[n..];
+        }
     }
 
     let len = u64::from_usize(total_len);
@@ -1255,20 +1242,30 @@ async fn sendfile64(
         todo!();
     }
 
-    let buffer = &mut [0; 8192];
+    let mut buffer = [0; 8192];
     let mut total_len = 0;
     while total_len < count {
         let chunk_len = cmp::min(count - total_len, buffer.len());
         let buffer = &mut buffer[..chunk_len];
 
-        let len = do_io(&*r#in, Events::READ, || r#in.read(buffer)).await?;
+        let len = do_io(&*r#in, Events::READ, || {
+            r#in.read(&mut KernelReadBuf::new(buffer))
+        })
+        .await?;
         let buffer = &buffer[..len];
         if buffer.is_empty() {
             break;
         }
         total_len += buffer.len();
 
-        out.write_all(buffer).await?;
+        let mut buffer = buffer;
+        while !buffer.is_empty() {
+            let n = do_write_io(&*r#in, buffer.len(), || {
+                out.write(&KernelWriteBuf::new(buffer))
+            })
+            .await?;
+            buffer = &buffer[n..];
+        }
     }
 
     let len = u64::from_usize(total_len);
@@ -1347,9 +1344,10 @@ fn sendto(
     addrlen: u64,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let len = usize::try_from(len)?;
-    let addrlen = usize::try_from(addrlen)?;
-    let sent = fd.send_to(&virtual_memory, buf, len, flags, dest_addr, addrlen)?;
+    let len = usize_from(len);
+    let addrlen = usize_from(addrlen);
+    let buf = UserBuf::new(&virtual_memory, buf, len);
+    let sent = fd.send_to(&virtual_memory, &buf, flags, dest_addr, addrlen)?;
     Ok(u64::try_from(sent)?)
 }
 
@@ -1370,6 +1368,7 @@ async fn recv_from(
     let fd = fdtable.get(sockfd)?;
 
     let count = usize_from(len);
+    let mut buf = UserBuf::new(&virtual_memory, buf, count);
 
     let events = if flags.contains(RecvFromFlags::OOB) {
         Events::PRI
@@ -1377,12 +1376,9 @@ async fn recv_from(
         Events::READ
     };
     let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&*fd.clone(), events, || {
-            fd.recv_from(&virtual_memory, buf, count, flags)
-        })
-        .await?
+        do_io(&*fd.clone(), events, || fd.recv_from(&mut buf, flags)).await?
     } else {
-        fd.recv_from(&virtual_memory, buf, count, flags)?
+        fd.recv_from(&mut buf, flags)?
     };
 
     let len = u64::from_usize(len);
@@ -4203,6 +4199,68 @@ fn pipe2(
     virtual_memory.write(pipefd, [read_half, write_half])?;
 
     Ok(0)
+}
+
+#[syscall(i386 = 333, amd64 = 295)]
+async fn preadv(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    vec: Pointer<Iovec>,
+    vlen: u64,
+    pos_l: u32,
+    pos_h: u32,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+
+    let mut vec = vec;
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
+    for _ in 0..vlen {
+        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
+        vectored_buf.push(iovec_value);
+        vec = vec.bytes_offset(len);
+    }
+
+    let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
+
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.pread(pos, &mut vectored_buf)
+    })
+    .await?;
+    let len = u64::from_usize(len);
+    Ok(len)
+}
+
+#[syscall(i386 = 334, amd64 = 296)]
+async fn pwritev(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    vec: Pointer<Iovec>,
+    vlen: u64,
+    pos_l: u32,
+    pos_h: u32,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+
+    let mut vec = vec;
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
+    for _ in 0..vlen {
+        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
+        vectored_buf.push(iovec_value);
+        vec = vec.bytes_offset(len);
+    }
+
+    let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
+
+    let len = do_write_io(&*fd.clone(), vectored_buf.buffer_len(), || {
+        fd.pwrite(pos, &vectored_buf)
+    })
+    .await?;
+    let len = u64::from_usize(len);
+    Ok(len)
 }
 
 #[syscall(i386 = 340, amd64 = 302)]

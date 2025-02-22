@@ -2,9 +2,8 @@ use alloc::{boxed::Box, sync::Arc};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use bytemuck::pod_read_unaligned;
 
-use super::{Events, FileLock, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription, ReadBuf, WriteBuf};
 use crate::{
     error::{Result, ensure, err},
     fs::{
@@ -16,8 +15,7 @@ use crate::{
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec},
+        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
         thread::{Gid, Uid},
     },
 };
@@ -58,19 +56,20 @@ impl OpenFileDescription for EventFd {
         Path::new(b"anon_inode:[eventfd]".to_vec())
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let buf = buf.get_mut(0..8).ok_or(err!(Inval))?;
-
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        ensure!(buf.buffer_len() >= 8, Inval);
         let value = self.counter.swap(0, Ordering::SeqCst);
         ensure!(value != 0, Again);
-
-        buf.copy_from_slice(&value.to_ne_bytes());
+        buf.write(0, &value.to_ne_bytes())?;
         Ok(8)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        let buf = buf.get(0..8).ok_or(err!(Inval))?;
-        let add = pod_read_unaligned::<u64>(buf);
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        ensure!(buf.buffer_len() >= 8, Inval);
+
+        let mut bytes = [0; 8];
+        buf.read(0, &mut bytes)?;
+        let add = u64::from_ne_bytes(bytes);
         ensure!(add != !0, Inval);
         if add != 0 {
             let mut old_value = self.counter.load(Ordering::SeqCst);
@@ -95,19 +94,6 @@ impl OpenFileDescription for EventFd {
         }
 
         Ok(8)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        ensure!(len >= 8, Inval);
-
-        let mut buf = [0; 8];
-        vm.read_bytes(pointer.get(), &mut buf)?;
-        self.write(&buf)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

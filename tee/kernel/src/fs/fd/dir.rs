@@ -1,5 +1,5 @@
 use crate::{
-    error::ensure,
+    error::{bail, ensure},
     fs::{
         FileSystem,
         node::{DynINode, FileAccessContext, directory::Directory},
@@ -15,7 +15,7 @@ use alloc::{sync::Arc, vec::Vec};
 
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
+use super::{Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, WriteBuf};
 
 pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
     ensure!(!flags.contains(OpenFlags::WRONLY), IsDir);
@@ -43,6 +43,22 @@ impl OpenFileDescription for DirectoryFileDescription {
 
     fn path(&self) -> Result<Path> {
         Directory::path(&*self.dir, &mut FileAccessContext::root())
+    }
+
+    fn read(&self, _: &mut dyn ReadBuf) -> Result<usize> {
+        bail!(IsDir)
+    }
+
+    fn write(&self, _: &dyn WriteBuf) -> Result<usize> {
+        bail!(IsDir)
+    }
+
+    fn pread(&self, _pos: usize, _: &mut dyn ReadBuf) -> Result<usize> {
+        bail!(IsDir)
+    }
+
+    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf) -> Result<usize> {
+        bail!(IsDir)
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
