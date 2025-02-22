@@ -1,7 +1,6 @@
 #[cfg(not(feature = "harden"))]
 use core::fmt;
 use core::{
-    any::type_name,
     cmp,
     ffi::c_void,
     ops::Deref,
@@ -37,7 +36,6 @@ use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use file::File;
-use log::debug;
 
 use crate::{
     error::{ErrorKind, Result},
@@ -61,7 +59,7 @@ mod std;
 pub mod stream_buffer;
 pub mod unix_socket;
 
-pub use buf::{KernelReadBuf, ReadBuf, UserBuf, VectoredUserBuf};
+pub use buf::{KernelReadBuf, KernelWriteBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf};
 
 #[derive(Clone)]
 pub struct FileDescriptor(Arc<dyn OpenFileDescription>);
@@ -364,29 +362,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         let _ = buf;
         bail!(Inval)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        mut len: usize,
-    ) -> Result<usize> {
-        const MAX_BUFFER_LEN: usize = 8192;
-        if len > MAX_BUFFER_LEN {
-            len = MAX_BUFFER_LEN;
-            debug!("unoptimized write to {} truncated", type_name::<Self>());
-        }
-
-        let mut buf = [0; MAX_BUFFER_LEN];
-        let buf = &mut buf[..len];
-
-        vm.read_bytes(pointer.get(), buf)?;
-
-        self.write(buf)
     }
 
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
@@ -401,7 +379,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
         let _ = pos;
         let _ = buf;
         bail!(Inval)
@@ -474,14 +452,6 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    async fn write_all(&self, mut buf: &[u8]) -> Result<()> {
-        while !buf.is_empty() {
-            let len = do_io(self, Events::WRITE, || self.write(buf)).await?;
-            buf = &buf[len..];
-        }
-        Ok(())
-    }
-
     fn bind(
         &self,
         virtual_memory: &VirtualMemory,
@@ -552,15 +522,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn send_to(
         &self,
         vm: &VirtualMemory,
-        buf: Pointer<[u8]>,
-        len: usize,
+        buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Pointer<SocketAddr>,
         addrlen: usize,
     ) -> Result<usize> {
         let _ = vm;
         let _ = buf;
-        let _ = len;
         let _ = flags;
         let _ = addr;
         let _ = addrlen;

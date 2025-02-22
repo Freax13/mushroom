@@ -10,7 +10,7 @@ use crate::{
         FileSystem,
         fd::{
             Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, ReadBuf,
-            stream_buffer,
+            WriteBuf, stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
@@ -18,8 +18,7 @@ use crate::{
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, OpenFlags, Pointer, Stat},
+        syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
@@ -90,21 +89,12 @@ impl OpenFileDescription for Null {
         Ok(0)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
-    }
-
-    fn pwrite(&self, _pos: usize, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(
@@ -204,21 +194,12 @@ impl OpenFileDescription for Zero {
         Ok(buf.buffer_len())
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
-    }
-
-    fn pwrite(&self, _pos: usize, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(
@@ -323,17 +304,8 @@ impl OpenFileDescription for Random {
         Ok(len)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(
@@ -433,17 +405,8 @@ impl OpenFileDescription for URandom {
         Ok(len)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> crate::error::Result<usize> {
-        Ok(len)
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        Ok(buf.buffer_len())
     }
 
     fn splice_from(

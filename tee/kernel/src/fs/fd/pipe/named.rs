@@ -8,15 +8,16 @@ use crate::{
     error::{Result, ensure},
     fs::{
         FileSystem,
-        fd::{Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, stream_buffer},
+        fd::{
+            Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, WriteBuf, stream_buffer,
+        },
         node::{DynINode, FileAccessContext},
         path::Path,
     },
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, OpenFlags, Pointer, Stat},
+        syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
@@ -306,17 +307,8 @@ impl OpenFileDescription for WriteHalf {
         Ok(self.path.clone())
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         self.write_half.write(buf)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.write_half.write_from_user(vm, pointer, len)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -404,17 +396,8 @@ impl OpenFileDescription for FullReadWrite {
         self.read_half.read(buf)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         self.write_half.write(buf)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.write_half.write_from_user(vm, pointer, len)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

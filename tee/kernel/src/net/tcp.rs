@@ -20,7 +20,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, common_ioctl,
+            Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, WriteBuf, common_ioctl,
             stream_buffer,
         },
         node::{FileAccessContext, new_ino},
@@ -736,7 +736,7 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -745,25 +745,10 @@ impl OpenFileDescription for TcpSocket {
         active.write_half.write(buf)
     }
 
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
-        let Mode::Active(active) = mode else {
-            bail!(NotConn);
-        };
-        active.write_half.write_from_user(vm, pointer, len)
-    }
-
     fn send_to(
         &self,
-        vm: &VirtualMemory,
-        buf: Pointer<[u8]>,
-        len: usize,
+        _vm: &VirtualMemory,
+        buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Pointer<SocketAddr>,
         _addrlen: usize,
@@ -777,7 +762,7 @@ impl OpenFileDescription for TcpSocket {
         };
         active
             .write_half
-            .send_from_user(vm, buf, len, flags.contains(SentToFlags::OOB))
+            .send(buf, flags.contains(SentToFlags::OOB))
     }
 
     fn path(&self) -> Result<Path> {

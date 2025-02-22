@@ -15,7 +15,7 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf,
+            FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
         },
@@ -26,9 +26,9 @@ use crate::{
     time::now,
     user::process::{
         Process,
-        memory::{VirtualMemory, WriteToVec},
+        memory::WriteToVec,
         syscall::args::{
-            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, Stat, Timespec,
+            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -1156,30 +1156,11 @@ impl File for MapsFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1269,30 +1250,11 @@ impl File for ProcessStatFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1392,30 +1354,11 @@ impl File for StatFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1524,30 +1467,11 @@ impl File for UptimeFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn write_from_user(
-        &self,
-        _offset: usize,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn append_from_user(
-        &self,
-        _vm: &VirtualMemory,
-        _pointer: Pointer<[u8]>,
-        _len: usize,
-    ) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 

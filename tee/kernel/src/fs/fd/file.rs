@@ -1,5 +1,3 @@
-use core::any::type_name;
-
 use crate::{
     error::{bail, ensure, err},
     fs::{
@@ -15,65 +13,23 @@ use crate::{
     },
 };
 use alloc::sync::Arc;
-use log::debug;
 
 use crate::{
     error::Result,
-    user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, Pointer, Stat, Whence},
-    },
+    user::process::syscall::args::{FileMode, Stat, Whence},
 };
 
 use super::{
-    Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked, ReadBuf, stream_buffer,
+    Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked, ReadBuf, WriteBuf,
+    stream_buffer,
 };
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize>;
-    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
-    fn write_from_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        mut len: usize,
-    ) -> Result<usize> {
-        const MAX_BUFFER_LEN: usize = 8192;
-        if len > MAX_BUFFER_LEN {
-            len = MAX_BUFFER_LEN;
-            debug!("unoptimized write to {} truncated", type_name::<Self>());
-        }
-
-        let mut buf = [0; MAX_BUFFER_LEN];
-        let buf = &mut buf[..len];
-
-        vm.read_bytes(pointer.get(), buf)?;
-
-        self.write(offset, buf)
-    }
+    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize>;
     /// Returns a tuple of `(bytes_written, file_length)`.
-    fn append(&self, buf: &[u8]) -> Result<(usize, usize)>;
-    fn append_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        mut len: usize,
-    ) -> Result<(usize, usize)> {
-        const MAX_BUFFER_LEN: usize = 8192;
-        if len > MAX_BUFFER_LEN {
-            len = MAX_BUFFER_LEN;
-            debug!("unoptimized write to {} truncated", type_name::<Self>());
-        }
-
-        let mut buf = [0; MAX_BUFFER_LEN];
-        let buf = &mut buf[..len];
-
-        vm.read_bytes(pointer.get(), buf)?;
-
-        self.append(buf)
-    }
+    fn append(&self, buf: &dyn WriteBuf) -> Result<(usize, usize)>;
     fn splice_from(
         &self,
         read_half: &stream_buffer::ReadHalf,
@@ -179,7 +135,7 @@ impl OpenFileDescription for FileFileDescription {
         self.file.read(pos, buf, no_atime)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
@@ -196,31 +152,7 @@ impl OpenFileDescription for FileFileDescription {
         }
     }
 
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let mut guard = self.internal.lock();
-        ensure!(
-            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
-            BadF
-        );
-        if !guard.flags.contains(OpenFlags::APPEND) {
-            let len = self
-                .file
-                .write_from_user(guard.cursor_idx, vm, pointer, len)?;
-            guard.cursor_idx += len;
-            Ok(len)
-        } else {
-            let (len, cursor_idx) = self.file.append_from_user(vm, pointer, len)?;
-            guard.cursor_idx = cursor_idx;
-            Ok(len)
-        }
-    }
-
-    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),

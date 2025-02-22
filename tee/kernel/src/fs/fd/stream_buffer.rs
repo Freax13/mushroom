@@ -1,16 +1,14 @@
 use core::{cmp, num::NonZeroUsize, ops::Not};
 
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
-use usize_conversions::FromUsize;
 
 use crate::{
     error::{Result, bail, ensure},
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
-    user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
-use super::{Events, PipeBlocked, ReadBuf, err};
+use super::{Events, PipeBlocked, ReadBuf, WriteBuf, err};
 
 pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
@@ -338,7 +336,11 @@ pub struct WriteHalf {
 }
 
 impl WriteHalf {
-    pub fn write(&self, buf: &[u8]) -> Result<usize> {
+    pub fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        self.send(buf, false)
+    }
+
+    pub fn send(&self, buf: &dyn WriteBuf, oob: bool) -> Result<usize> {
         let mut guard = self.data.buffer.lock();
 
         ensure!(!guard.reset, ConnReset);
@@ -350,78 +352,12 @@ impl WriteHalf {
                 ensure!(!guard.write_shutdown, ConnReset);
                 if Arc::strong_count(&self.data) == 1 {
                     guard.reset = true;
-                    return Ok(buf.len());
+                    return Ok(buf.buffer_len());
                 }
             }
         }
 
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        if guard.read_shutdown {
-            let next = guard
-                .closed_socket_write_counter
-                .checked_sub(1)
-                .ok_or(err!(Pipe))?;
-            guard.closed_socket_write_counter = next;
-            return Ok(buf.len());
-        }
-
-        if guard.oob_mark_state.should_skip() {
-            guard.bytes.pop_front();
-        }
-
-        let atomic_write = buf.len() <= guard.ty.atomic_write_size();
-        let remaining_capacity = guard.total_capacity().saturating_sub(guard.bytes.len());
-        if atomic_write {
-            ensure!(remaining_capacity >= buf.len(), Again);
-        } else {
-            ensure!(remaining_capacity > 0, Again);
-        }
-        let len = cmp::min(buf.len(), remaining_capacity);
-        let buf = &buf[..len];
-
-        guard.bytes.extend(buf.iter().copied());
-        drop(guard);
-
-        self.notify.notify();
-
-        Ok(buf.len())
-    }
-
-    pub fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.send_from_user(vm, pointer, len, false)
-    }
-
-    pub fn send_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        oob: bool,
-    ) -> Result<usize> {
-        let mut guard = self.data.buffer.lock();
-
-        ensure!(!guard.reset, ConnReset);
-
-        // Check if the write half has been closed.
-        match guard.ty {
-            Type::Pipe { .. } => ensure!(Arc::strong_count(&self.data) > 1, Pipe),
-            Type::Socket => {
-                ensure!(!guard.write_shutdown, ConnReset);
-                if Arc::strong_count(&self.data) == 1 {
-                    guard.reset = true;
-                    return Ok(len);
-                }
-            }
-        }
-
+        let len = buf.buffer_len();
         if len == 0 {
             return Ok(0);
         }
@@ -455,14 +391,12 @@ impl WriteHalf {
         let (first, second) = guard.bytes.as_mut_slices();
         let res = if second.len() >= len {
             let second_len = second.len();
-            vm.read_bytes(pointer.get(), &mut second[second_len - len..])
+            buf.read(0, &mut second[second_len - len..])
         } else {
             let first_write_len = len - second.len();
             let first_len = first.len();
-            vm.read_bytes(pointer.get(), &mut first[first_len - first_write_len..])
-                .and_then(|_| {
-                    vm.read_bytes(pointer.get() + u64::from_usize(first_write_len), second)
-                })
+            buf.read(0, &mut first[first_len - first_write_len..])
+                .and_then(|_| buf.read(first_write_len, second))
         };
 
         // Rollback all bytes if an error occured.

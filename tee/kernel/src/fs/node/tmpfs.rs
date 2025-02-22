@@ -6,8 +6,8 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, KernelReadBuf, LazyFileLockRecord, PipeBlocked,
-            ReadBuf,
+            FileDescriptor, FileLockRecord, KernelReadBuf, KernelWriteBuf, LazyFileLockRecord,
+            PipeBlocked, ReadBuf, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
             pipe::named::NamedPipe,
@@ -39,10 +39,7 @@ use super::{
 use crate::{
     error::Result,
     fs::path::{FileName, Path},
-    user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, FileType, FileTypeAndMode, Pointer, Stat, Timespec},
-    },
+    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
 
 pub struct TmpFs {
@@ -863,7 +860,7 @@ impl File for TmpFsFile {
         guard.buffer.read(offset, buf)
     }
 
-    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
+    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
@@ -871,42 +868,13 @@ impl File for TmpFsFile {
         guard.buffer.write(offset, buf)
     }
 
-    fn write_from_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let mut guard = self.internal.write();
-        let now = now(ClockId::Realtime);
-        guard.ctime = now;
-        guard.mtime = now;
-        guard.buffer.write_from_user(offset, vm, pointer, len)
-    }
-
-    fn append(&self, buf: &[u8]) -> Result<(usize, usize)> {
+    fn append(&self, buf: &dyn WriteBuf) -> Result<(usize, usize)> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
         let len = guard.buffer.write(offset, buf)?;
-        Ok((len, offset + len))
-    }
-
-    fn append_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<(usize, usize)> {
-        let mut guard = self.internal.write();
-        let now = now(ClockId::Realtime);
-        guard.ctime = now;
-        guard.mtime = now;
-        let offset = guard.buffer.len();
-        let len = guard.buffer.write_from_user(offset, vm, pointer, len)?;
         Ok((len, offset + len))
     }
 
@@ -927,8 +895,14 @@ impl File for TmpFsFile {
             let now = now(ClockId::Realtime);
             guard.ctime = now;
             guard.mtime = now;
-            guard.buffer.write(offset, slice1).unwrap();
-            guard.buffer.write(offset + slice1.len(), slice2).unwrap();
+            guard
+                .buffer
+                .write(offset, &KernelWriteBuf::new(slice1))
+                .unwrap();
+            guard
+                .buffer
+                .write(offset + slice1.len(), &KernelWriteBuf::new(slice2))
+                .unwrap();
 
             buffer.drain(..len);
         })
@@ -1013,7 +987,9 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = guard.buffer.write(offset_out, &chunk[..n]);
+                let res = guard
+                    .buffer
+                    .write(offset_out, &KernelWriteBuf::new(&chunk[..n]));
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {
@@ -1055,7 +1031,9 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = out_guard.buffer.write(offset_out, &chunk[..n]);
+                let res = out_guard
+                    .buffer
+                    .write(offset_out, &KernelWriteBuf::new(&chunk[..n]));
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {

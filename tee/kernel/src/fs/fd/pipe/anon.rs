@@ -1,15 +1,14 @@
 use crate::{
     fs::{
         FileSystem, StatFs,
-        fd::ReadBuf,
+        fd::{ReadBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
     },
     spin::{lazy::Lazy, mutex::Mutex},
     user::process::{
-        memory::VirtualMemory,
-        syscall::args::{OpenFlags, Pipe2Flags, Pointer},
+        syscall::args::{OpenFlags, Pipe2Flags},
         thread::{Gid, Uid},
     },
 };
@@ -176,17 +175,8 @@ impl OpenFileDescription for WriteHalf {
         path(self.ino)
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         self.stream_buffer.write(buf)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.stream_buffer.write_from_user(vm, pointer, len)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

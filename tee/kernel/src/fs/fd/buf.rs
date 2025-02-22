@@ -19,6 +19,12 @@ pub trait ReadBuf {
     fn fill(&mut self, byte: u8) -> Result<()>;
 }
 
+pub trait WriteBuf {
+    fn buffer_len(&self) -> usize;
+    fn read(&self, offset: usize, bytes: &mut [u8]) -> Result<()>;
+    unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()>;
+}
+
 pub struct KernelReadBuf<'a>(&'a mut [u8]);
 
 impl<'a> KernelReadBuf<'a> {
@@ -51,6 +57,37 @@ impl ReadBuf for KernelReadBuf<'_> {
 
     fn fill(&mut self, byte: u8) -> Result<()> {
         self.0.fill(byte);
+        Ok(())
+    }
+}
+
+pub struct KernelWriteBuf<'a>(&'a [u8]);
+
+impl<'a> KernelWriteBuf<'a> {
+    pub fn new(buf: &'a [u8]) -> Self {
+        Self(buf)
+    }
+}
+
+impl WriteBuf for KernelWriteBuf<'_> {
+    fn buffer_len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn read(&self, offset: usize, bytes: &mut [u8]) -> Result<()> {
+        bytes.copy_from_slice(&self.0[offset..][..bytes.len()]);
+        Ok(())
+    }
+
+    unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()> {
+        assert!(self.0.len() >= offset + bytes.len());
+        unsafe {
+            core::intrinsics::copy_nonoverlapping(
+                self.0.as_ptr().byte_add(offset),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
         Ok(())
     }
 }
@@ -90,6 +127,24 @@ impl ReadBuf for UserBuf<'_> {
                 .write_bytes(self.pointer.bytes_offset(i).get(), &[byte])?;
         }
         Ok(())
+    }
+}
+
+impl WriteBuf for UserBuf<'_> {
+    fn buffer_len(&self) -> usize {
+        self.len
+    }
+
+    fn read(&self, offset: usize, bytes: &mut [u8]) -> Result<()> {
+        assert!(self.len >= offset + bytes.len());
+        self.vm
+            .read_bytes(self.pointer.bytes_offset(offset).get(), bytes)
+    }
+
+    unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()> {
+        assert!(self.len >= offset + bytes.len());
+        let addr = self.pointer.bytes_offset(offset).get();
+        unsafe { self.vm.read_bytes_volatile(addr, bytes) }
     }
 }
 
@@ -174,5 +229,62 @@ impl ReadBuf for VectoredUserBuf<'_> {
             }
         }
         Ok(())
+    }
+}
+
+impl WriteBuf for VectoredUserBuf<'_> {
+    fn buffer_len(&self) -> usize {
+        self.iovec.iter().map(|iv| usize_from(iv.len)).sum()
+    }
+
+    fn read(&self, mut offset: usize, mut bytes: &mut [u8]) -> Result<()> {
+        for iv in self.iovec.iter() {
+            if let Some(new_offset) = offset.checked_sub(usize_from(iv.len)) {
+                offset = new_offset;
+                continue;
+            }
+
+            let chunk_len = cmp::min(usize_from(iv.len) - offset, bytes.len());
+            let chunk;
+            (chunk, bytes) = bytes.split_at_mut(chunk_len);
+            self.vm
+                .read_bytes(VirtAddr::new(iv.base + u64::from_usize(offset)), chunk)?;
+            offset = 0;
+            if bytes.is_empty() {
+                return Ok(());
+            }
+        }
+        if offset == 0 && bytes.is_empty() {
+            return Ok(());
+        }
+        unreachable!("read too many bytes from buffer")
+    }
+
+    unsafe fn read_volatile(&self, mut offset: usize, mut bytes: NonNull<[u8]>) -> Result<()> {
+        for iv in self.iovec.iter() {
+            if let Some(new_offset) = offset.checked_sub(usize_from(iv.len)) {
+                offset = new_offset;
+                continue;
+            }
+
+            let chunk_len = cmp::min(usize_from(iv.len) - offset, bytes.len());
+            let chunk = NonNull::from_raw_parts(bytes.cast::<u8>(), chunk_len);
+            let addr = VirtAddr::new(iv.base + u64::from_usize(offset));
+            unsafe {
+                self.vm.read_bytes_volatile(addr, chunk)?;
+            }
+            bytes = NonNull::from_raw_parts(
+                unsafe { bytes.cast::<u8>().add(chunk_len) },
+                bytes.len() - chunk_len,
+            );
+            offset = 0;
+            if bytes.is_empty() {
+                return Ok(());
+            }
+        }
+        if offset == 0 && bytes.is_empty() {
+            return Ok(());
+        }
+        unreachable!("read too many bytes from buffer")
     }
 }

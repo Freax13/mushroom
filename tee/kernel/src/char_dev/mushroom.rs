@@ -2,22 +2,21 @@ use core::cmp;
 
 use alloc::sync::Arc;
 use kernel_macros::register;
-use usize_conversions::FromUsize;
 
 use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, stream_buffer,
+            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, WriteBuf,
+            stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
     },
     supervisor,
     user::process::{
-        memory::VirtualMemory,
-        syscall::args::{FileMode, OpenFlags, Pointer, Stat},
+        syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
@@ -76,32 +75,17 @@ impl OpenFileDescription for Output {
         events & Events::WRITE
     }
 
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        supervisor::update_output(buf);
-        Ok(buf.len())
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let mut addr = pointer.get();
-        let mut remaining_len = len;
-        while remaining_len > 0 {
+    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+        let len = buf.buffer_len();
+        for chunk_offset in (0..buf.buffer_len()).step_by(supervisor::OUTPUT_BUFFER_CAPACITY) {
+            let remaining_len = len - chunk_offset;
             let buffer_len = cmp::min(remaining_len, supervisor::OUTPUT_BUFFER_CAPACITY);
-            let mut buf = [0; supervisor::OUTPUT_BUFFER_CAPACITY];
-            let buf = &mut buf[..buffer_len];
+            let mut chunk = [0; supervisor::OUTPUT_BUFFER_CAPACITY];
+            let chunk = &mut chunk[..buffer_len];
+            buf.read(chunk_offset, chunk)?;
 
-            vm.read_bytes(addr, buf)?;
-
-            supervisor::update_output(buf);
-
-            addr += u64::from_usize(buf.len());
-            remaining_len -= buf.len();
+            supervisor::update_output(chunk);
         }
-
         Ok(len)
     }
 
