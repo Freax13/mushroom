@@ -405,7 +405,7 @@ impl Process {
         let now = now(ClockId::Monotonic);
         let (cancel_tx, cancel_rx) = oneshot::new();
         let deadline = now.saturating_add(Timespec {
-            tv_sec: seconds,
+            tv_sec: i32::try_from(seconds).unwrap(),
             tv_nsec: 0,
         });
         let new_state = AlarmState {
@@ -500,7 +500,9 @@ impl AlarmState {
     fn remaining_seconds(state: Option<Self>, now: Timespec) -> u32 {
         if let Some(state) = state {
             let _ = state.cancel_tx.send(());
-            now.checked_sub(state.deadline).map_or(0, |tv| tv.tv_sec)
+            now.checked_sub(state.deadline)
+                .and_then(|time| u32::try_from(time.tv_sec).ok())
+                .unwrap_or_default()
         } else {
             0
         }

@@ -470,7 +470,7 @@ async fn poll(
         ..=-1 => Some(None),
         0 => None,
         1.. => Some(Some(
-            now(ClockId::Monotonic) + Timespec::from_ms(timeout as u64),
+            now(ClockId::Monotonic) + Timespec::from_ms(timeout.into()),
         )),
     };
 
@@ -3073,7 +3073,7 @@ fn time(
     tloc: Pointer<Time>,
 ) -> SyscallResult {
     let now = now(ClockId::Realtime);
-    let tv_sec = now.tv_sec;
+    let tv_sec = u32::try_from(now.tv_sec).unwrap();
 
     if !tloc.is_null() {
         let time = Time(tv_sec);
@@ -3292,8 +3292,8 @@ async fn epoll_wait(
     .fuse();
 
     let timeout_fut = if timeout != -1 {
-        let timeout = u64::try_from(timeout)?;
-        let timeout = Timespec::from_ms(timeout);
+        let timeout = u32::try_from(timeout)?;
+        let timeout = Timespec::from_ms(timeout.into());
         let deadline = now(ClockId::Monotonic) + timeout;
         sleep_until(deadline, ClockId::Monotonic).fuse()
     } else {

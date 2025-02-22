@@ -91,8 +91,8 @@ pub fn collect(memory: &MemoryUsage, thread: &ThreadUsage) -> Rusage {
     }
 
     let sys_time = total_ns - user_ns;
-    let utime = Timeval::from(Timespec::from_ns(user_ns));
-    let stime = Timeval::from(Timespec::from_ns(sys_time));
+    let utime = Timeval::from(Timespec::from_ns(user_ns as i64));
+    let stime = Timeval::from(Timespec::from_ns(sys_time as i64));
     let maxrss = memory.maxrss.load(Ordering::Relaxed) * 0x1000;
     let majflt = memory.majflt.load(Ordering::Relaxed);
     let minflt = memory.minflt.load(Ordering::Relaxed) - majflt;
