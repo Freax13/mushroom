@@ -1,4 +1,4 @@
-use core::{cmp, iter::from_fn, num::NonZeroUsize, ops::Not};
+use core::{cmp, num::NonZeroUsize, ops::Not};
 
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
 use usize_conversions::FromUsize;
@@ -10,7 +10,7 @@ use crate::{
     user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
-use super::{Events, PipeBlocked, err};
+use super::{Events, PipeBlocked, ReadBuf, err};
 
 pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
@@ -162,67 +162,8 @@ pub struct ReadHalf {
 }
 
 impl ReadHalf {
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        let mut guard = self.data.buffer.lock();
-
-        let mut len = buf.len();
-        if guard.oob_mark_state.should_skip() {
-            guard.bytes.pop_front().unwrap();
-        }
-        guard.oob_mark_state.clamp_read_length(&mut len);
-
-        // Check if there is data to receive.
-        if guard.bytes.is_empty() {
-            // Check if the write half has been closed.
-            if guard.read_shutdown || guard.write_shutdown {
-                return Ok(0);
-            }
-
-            if Arc::strong_count(&self.data) == 1 {
-                match guard.ty {
-                    Type::Pipe { .. } => return Ok(0),
-                    Type::Socket => bail!(ConnReset),
-                }
-            }
-
-            bail!(Again);
-        }
-
-        let was_full =
-            guard.capacity.saturating_sub(guard.bytes.len()) < guard.ty.atomic_write_size();
-
-        let len = cmp::min(len, guard.bytes.len());
-        let mut read = 0;
-        for (dest, src) in buf
-            .iter_mut()
-            .zip(from_fn(|| guard.bytes.pop_front()))
-            .take(len)
-        {
-            *dest = src;
-            read += 1;
-        }
-
-        // Update the OOB mark.
-        guard.oob_mark_state.update(len);
-
-        if was_full {
-            self.notify.notify();
-        }
-
-        Ok(read)
-    }
-
-    pub fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        mut len: usize,
-    ) -> Result<usize> {
-        if len == 0 {
+    pub fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        if buf.buffer_len() == 0 {
             return Ok(0);
         }
 
@@ -231,6 +172,7 @@ impl ReadHalf {
         if guard.oob_mark_state.should_skip() {
             guard.bytes.pop_front().unwrap();
         }
+        let mut len = buf.buffer_len();
         guard.oob_mark_state.clamp_read_length(&mut len);
 
         // Check if there is data to receive.
@@ -260,9 +202,9 @@ impl ReadHalf {
         let slice2 = &slice2[..len2];
 
         // Copy the bytes to userspace.
-        vm.write_bytes(pointer.get(), slice1)?;
+        buf.write(0, slice1)?;
         if !slice2.is_empty() {
-            vm.write_bytes(pointer.get() + u64::from_usize(len1), slice2)?;
+            buf.write(len1, slice2)?;
         }
 
         // Remove the bytes from the VecDeque.

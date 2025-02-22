@@ -5,6 +5,7 @@ use usize_conversions::FromUsize;
 
 use crate::{
     error::{Result, ensure},
+    fs::fd::ReadBuf,
     user::process::{memory::VirtualMemory, syscall::args::Pointer},
 };
 
@@ -67,61 +68,8 @@ impl Buffer {
         Ok(())
     }
 
-    pub fn read(&self, offset: usize, buf: &mut [u8]) -> usize {
-        let len = cmp::min(self.len.saturating_sub(offset), buf.len());
-        if len == 0 {
-            return 0;
-        }
-
-        let start = offset;
-        let end = offset + len - 1;
-
-        let start_page = start / 0x1000;
-        let end_page = (end + 1).div_ceil(0x1000);
-
-        for (i, page) in self
-            .pages
-            .iter()
-            .enumerate()
-            .take(end_page)
-            .skip(start_page)
-        {
-            // Calcuate the start and end indices of `page` in `self`.
-            let page_start = i * 0x1000;
-            let page_end = (i + 1) * 0x1000 - 1;
-
-            // Calculate the start and end indices in `self` for the copy operation.
-            let copy_start = cmp::max(page_start, start);
-            let copy_end = cmp::min(page_end, end);
-
-            let count = copy_end - copy_start + 1;
-
-            // Calculate the start and end indices in `page` for the copy operation.
-            let page_copy_start = copy_start - page_start;
-            let page_copy_end = copy_end - page_start;
-            let content = page.index(page_copy_start..=page_copy_end);
-            let src = content.as_ptr().as_mut_ptr().cast_const();
-
-            // Calculate the start and end indices in `buf` for the copy operation.
-            let buf_copy_start = copy_start - offset;
-            let dst = unsafe { buf.as_mut_ptr().byte_add(buf_copy_start) };
-
-            unsafe {
-                copy_nonoverlapping(src, dst, count);
-            }
-        }
-
-        len
-    }
-
-    pub fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let len = cmp::min(self.len.saturating_sub(offset), len);
+    pub fn read(&self, offset: usize, buf: &mut (impl ReadBuf + ?Sized)) -> Result<usize> {
+        let len = cmp::min(self.len.saturating_sub(offset), buf.buffer_len());
         if len == 0 {
             return Ok(0);
         }
@@ -152,12 +100,9 @@ impl Buffer {
             let page_copy_end = copy_end - page_start;
             let src = page.index(page_copy_start..=page_copy_end);
 
-            // Calculate the start and end indices in `buf` for the copy operation.
             let buf_copy_start = copy_start - offset;
-            let dst = pointer.get() + u64::from_usize(buf_copy_start);
-
             unsafe {
-                vm.write_bytes_volatile(dst, src)?;
+                buf.write_volatile(buf_copy_start, src)?;
             }
         }
 

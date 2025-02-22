@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use bytemuck::pod_read_unaligned;
 
-use super::{Events, FileLock, OpenFileDescription};
+use super::{Events, FileLock, OpenFileDescription, ReadBuf};
 use crate::{
     error::{Result, ensure, err},
     fs::{
@@ -58,13 +58,11 @@ impl OpenFileDescription for EventFd {
         Path::new(b"anon_inode:[eventfd]".to_vec())
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let buf = buf.get_mut(0..8).ok_or(err!(Inval))?;
-
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        ensure!(buf.buffer_len() >= 8, Inval);
         let value = self.counter.swap(0, Ordering::SeqCst);
         ensure!(value != 0, Again);
-
-        buf.copy_from_slice(&value.to_ne_bytes());
+        buf.write(0, &value.to_ne_bytes())?;
         Ok(8)
     }
 

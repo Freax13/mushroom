@@ -8,7 +8,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            PipeBlocked,
+            PipeBlocked, ReadBuf,
             stream_buffer::{self, SpliceBlockedError},
         },
         node::{FileAccessContext, new_ino},
@@ -99,27 +99,12 @@ impl OpenFileDescription for StreamUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         self.read_half.read(buf)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.read_half.read_to_user(vm, pointer, len)
-    }
-
-    fn recv_from(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        _flags: RecvFromFlags,
-    ) -> Result<usize> {
-        self.read_half.read_to_user(vm, pointer, len)
+    fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
+        self.read_half.read(buf)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {

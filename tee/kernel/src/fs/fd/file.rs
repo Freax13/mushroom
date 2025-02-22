@@ -25,35 +25,13 @@ use crate::{
     },
 };
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked, stream_buffer};
+use super::{
+    Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked, ReadBuf, stream_buffer,
+};
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;
-    fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize>;
-    fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        mut len: usize,
-        no_atime: bool,
-    ) -> Result<usize> {
-        const MAX_BUFFER_LEN: usize = 8192;
-        if len > MAX_BUFFER_LEN {
-            len = MAX_BUFFER_LEN;
-            debug!("unoptimized read from {} truncated", type_name::<Self>());
-        }
-
-        let mut buf = [0; MAX_BUFFER_LEN];
-        let buf = &mut buf[..len];
-
-        let count = self.read(offset, buf, no_atime)?;
-
-        let buf = &buf[..count];
-        vm.write_bytes(pointer.get(), buf)?;
-
-        Ok(count)
-    }
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize>;
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize>;
     fn write_from_user(
         &self,
@@ -184,7 +162,7 @@ impl OpenFileDescription for FileFileDescription {
         Ok(self.path.clone())
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
         let no_atime = guard.flags.contains(OpenFlags::NOATIME);
@@ -193,23 +171,7 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let mut guard = self.internal.lock();
-        ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
-        let no_atime = guard.flags.contains(OpenFlags::NOATIME);
-        let len = self
-            .file
-            .read_to_user(guard.cursor_idx, vm, pointer, len, no_atime)?;
-        guard.cursor_idx += len;
-        Ok(len)
-    }
-
-    fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
+    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
         let guard = self.internal.lock();
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
         let no_atime = guard.flags.contains(OpenFlags::NOATIME);

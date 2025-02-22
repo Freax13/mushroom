@@ -19,7 +19,10 @@ use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
-        fd::{Events, FileDescriptor, FileLock, OpenFileDescription, common_ioctl, stream_buffer},
+        fd::{
+            Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, common_ioctl,
+            stream_buffer,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -705,7 +708,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -714,27 +717,7 @@ impl OpenFileDescription for TcpSocket {
         active.read_half.read(buf)
     }
 
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
-        let Mode::Active(active) = mode else {
-            bail!(NotConn);
-        };
-        active.read_half.read_to_user(vm, pointer, len)
-    }
-
-    fn recv_from(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        flags: RecvFromFlags,
-    ) -> Result<usize> {
+    fn recv_from(&self, buf: &mut dyn ReadBuf, flags: RecvFromFlags) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -742,14 +725,14 @@ impl OpenFileDescription for TcpSocket {
         };
         if flags.contains(RecvFromFlags::OOB) {
             let oob_data = active.read_half.read_oob()?;
-            if len != 0 {
-                vm.write(pointer.cast(), oob_data)?;
+            if buf.buffer_len() != 0 {
+                buf.write(0, &[oob_data])?;
                 Ok(1)
             } else {
                 Ok(0)
             }
         } else {
-            active.read_half.read_to_user(vm, pointer, len)
+            active.read_half.read(buf)
         }
     }
 

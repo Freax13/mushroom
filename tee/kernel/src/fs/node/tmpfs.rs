@@ -6,7 +6,8 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, LazyFileLockRecord, PipeBlocked,
+            FileDescriptor, FileLockRecord, KernelReadBuf, LazyFileLockRecord, PipeBlocked,
+            ReadBuf,
             dir::open_dir,
             file::{File, open_file},
             pipe::named::NamedPipe,
@@ -854,27 +855,12 @@ impl File for TmpFsFile {
         guard.buffer.get_page(page_idx, shared)
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8], no_atime: bool) -> Result<usize> {
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize> {
         let mut guard = self.internal.write();
         if !no_atime {
             guard.atime = now(ClockId::Realtime);
         }
-        Ok(guard.buffer.read(offset, buf))
-    }
-
-    fn read_to_user(
-        &self,
-        offset: usize,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        no_atime: bool,
-    ) -> Result<usize> {
-        let mut guard = self.internal.write();
-        if !no_atime {
-            guard.atime = now(ClockId::Realtime);
-        }
-        guard.buffer.read_to_user(offset, vm, pointer, len)
+        guard.buffer.read(offset, buf)
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize> {
@@ -964,7 +950,10 @@ impl File for TmpFsFile {
                 let chunk_len = cmp::min(len, chunk.len());
                 let chunk = &mut chunk[..chunk_len];
 
-                let n = guard.buffer.read(offset, chunk);
+                let n = guard
+                    .buffer
+                    .read(offset, &mut KernelReadBuf::new(chunk))
+                    .unwrap();
                 debug_assert_eq!(n, chunk_len);
 
                 buffer.extend(chunk.iter().copied());
@@ -1013,7 +1002,10 @@ impl File for TmpFsFile {
                 let chunk = &mut chunk[..chunk_len];
 
                 // Copy bytes from the in file.
-                let n = guard.buffer.read(offset_in, chunk);
+                let n = guard
+                    .buffer
+                    .read(offset_in, &mut KernelReadBuf::new(chunk))
+                    .unwrap();
 
                 // Exit the loop if there are no more bytes to be copied.
                 if n == 0 {
@@ -1052,7 +1044,10 @@ impl File for TmpFsFile {
                 let chunk = &mut chunk[..chunk_len];
 
                 // Copy bytes from the in file.
-                let n = in_guard.buffer.read(offset_in, chunk);
+                let n = in_guard
+                    .buffer
+                    .read(offset_in, &mut KernelReadBuf::new(chunk))
+                    .unwrap();
 
                 // Exit the loop if there are no more bytes to be copied.
                 if n == 0 {

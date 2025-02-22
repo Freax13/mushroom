@@ -50,6 +50,7 @@ use super::{
     path::Path,
 };
 
+mod buf;
 pub mod dir;
 pub mod epoll;
 pub mod eventfd;
@@ -59,6 +60,8 @@ pub mod pipe;
 mod std;
 pub mod stream_buffer;
 pub mod unix_socket;
+
+pub use buf::{KernelReadBuf, ReadBuf, UserBuf, VectoredUserBuf};
 
 #[derive(Clone)]
 pub struct FileDescriptor(Arc<dyn OpenFileDescription>);
@@ -356,32 +359,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn path(&self) -> Result<Path>;
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let _ = buf;
         bail!(Inval)
-    }
-
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        mut len: usize,
-    ) -> Result<usize> {
-        const MAX_BUFFER_LEN: usize = 8192;
-        if len > MAX_BUFFER_LEN {
-            len = MAX_BUFFER_LEN;
-            debug!("unoptimized read from {} truncated", type_name::<Self>());
-        }
-
-        let mut buf = [0; MAX_BUFFER_LEN];
-        let buf = &mut buf[..len];
-
-        let count = self.read(buf)?;
-
-        let buf = &buf[..count];
-        vm.write_bytes(pointer.get(), buf)?;
-
-        Ok(count)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -415,7 +395,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(SPipe)
     }
 
-    fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
+    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
         let _ = pos;
         let _ = buf;
         bail!(Inval)
@@ -587,16 +567,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn recv_from(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-        flags: RecvFromFlags,
-    ) -> Result<usize> {
-        let _ = vm;
-        let _ = pointer;
-        let _ = len;
+    fn recv_from(&self, buf: &mut dyn ReadBuf, flags: RecvFromFlags) -> Result<usize> {
+        let _ = buf;
         let _ = flags;
         bail!(Inval)
     }

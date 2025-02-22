@@ -8,7 +8,7 @@ use crate::{
     error::{Result, ensure},
     fs::{
         FileSystem,
-        fd::{Events, FileDescriptor, FileLock, OpenFileDescription, stream_buffer},
+        fd::{Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, stream_buffer},
         node::{DynINode, FileAccessContext},
         path::Path,
     },
@@ -228,17 +228,8 @@ impl OpenFileDescription for ReadHalf {
         Ok(self.path.clone())
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         self.read_half.read(buf)
-    }
-
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.read_half.read_to_user(vm, pointer, len)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -409,17 +400,8 @@ impl OpenFileDescription for FullReadWrite {
         Ok(self.path.clone())
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         self.read_half.read(buf)
-    }
-
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.read_half.read_to_user(vm, pointer, len)
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {

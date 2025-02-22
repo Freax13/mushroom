@@ -1,6 +1,7 @@
 use crate::{
     fs::{
         FileSystem, StatFs,
+        fd::ReadBuf,
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -82,17 +83,8 @@ impl OpenFileDescription for ReadHalf {
         path(self.ino)
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         self.stream_buffer.read(buf)
-    }
-
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.stream_buffer.read_to_user(vm, pointer, len)
     }
 
     fn poll_ready(&self, events: Events) -> Events {

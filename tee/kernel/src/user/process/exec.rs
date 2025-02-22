@@ -3,7 +3,7 @@ use core::{cmp, ffi::CStr, iter::from_fn};
 use crate::{
     error::{bail, ensure, err},
     fs::{
-        fd::{FileDescriptor, OpenFileDescription},
+        fd::{FileDescriptor, KernelReadBuf, OpenFileDescription},
         node::{DynINode, FileAccessContext},
     },
     spin::lazy::Lazy,
@@ -51,12 +51,12 @@ impl VirtualMemory {
         self.modify().map_sigreturn_trampoline();
 
         let mut header = [0; 4];
-        file.pread(0, &mut header)?;
+        file.pread(0, &mut KernelReadBuf::new(&mut header))?;
 
         match header {
             elf::MAGIC => {
                 let mut header = ElfIdent::zeroed();
-                file.pread(0, bytes_of_mut(&mut header))?;
+                file.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
 
                 let state = match header.verify()? {
                     Abi::I386 => self.start_elf::<elf::ElfLoaderParams32>(
@@ -255,7 +255,7 @@ impl VirtualMemory {
         stack_limit: CurrentStackLimit,
     ) -> Result<(CpuState, Path)> {
         let mut bytes = [0; 128];
-        let len = file.pread(0, &mut bytes)?;
+        let len = file.pread(0, &mut KernelReadBuf::new(&mut bytes))?;
         let bytes = &bytes[..len];
 
         // Strip shebang.
