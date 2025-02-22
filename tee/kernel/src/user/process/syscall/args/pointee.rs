@@ -700,14 +700,14 @@ impl AbiDependentPointee for Timespec {
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Timespec32 {
-    pub tv_sec: u32,
+    pub tv_sec: i32,
     pub tv_nsec: u32,
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Timespec64 {
-    pub tv_sec: u64,
+    pub tv_sec: i64,
     pub tv_nsec: u64,
 }
 
@@ -723,7 +723,7 @@ impl From<Timespec> for Timespec32 {
 impl From<Timespec> for Timespec64 {
     fn from(value: Timespec) -> Self {
         Self {
-            tv_sec: u64::from(value.tv_sec),
+            tv_sec: i64::from(value.tv_sec),
             tv_nsec: u64::from(value.tv_nsec),
         }
     }
@@ -755,7 +755,7 @@ impl TryFrom<Timespec64> for Timespec {
         } else {
             ensure!(tv_nsec < 1_000_000_000, Inval);
             Ok(Self {
-                tv_sec: u32::try_from(value.tv_sec)?,
+                tv_sec: i32::try_from(value.tv_sec)?,
                 tv_nsec,
             })
         }
@@ -1119,14 +1119,14 @@ impl AbiDependentPointee for Timeval {
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Timeval32 {
-    tv_sec: u32,
+    tv_sec: i32,
     tv_usec: u32,
 }
 
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Timeval64 {
-    tv_sec: u64,
+    tv_sec: i64,
     tv_usec: u64,
 }
 
@@ -1142,7 +1142,7 @@ impl From<Timeval32> for Timeval {
 impl From<Timeval64> for Timeval {
     fn from(value: Timeval64) -> Self {
         Self {
-            tv_sec: value.tv_sec as u32,
+            tv_sec: value.tv_sec as i32,
             tv_usec: value.tv_usec as u32,
         }
     }
@@ -1160,7 +1160,7 @@ impl From<Timeval> for Timeval32 {
 impl From<Timeval> for Timeval64 {
     fn from(value: Timeval) -> Self {
         Self {
-            tv_sec: u64::from(value.tv_sec),
+            tv_sec: i64::from(value.tv_sec),
             tv_usec: u64::from(value.tv_usec),
         }
     }

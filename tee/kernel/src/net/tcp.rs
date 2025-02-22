@@ -959,7 +959,7 @@ impl Drop for TcpSocket {
 
         let now = now(ClockId::Monotonic);
         let deadline = now.saturating_add(Timespec {
-            tv_sec: linger as u32,
+            tv_sec: linger,
             tv_nsec: 0,
         });
 

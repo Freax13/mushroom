@@ -879,7 +879,7 @@ enum_arg! {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timespec {
-    pub tv_sec: u32,
+    pub tv_sec: i32,
     pub tv_nsec: u32,
 }
 
@@ -924,7 +924,7 @@ impl Timespec {
     }
 
     pub fn kernel_ticks(&self) -> u64 {
-        u64::from(self.tv_sec) * 1_000_000 + u64::from(self.tv_nsec).div_ceil(1000)
+        u64::try_from(self.tv_sec).unwrap() * 1_000_000 + u64::from(self.tv_nsec).div_ceil(1000)
     }
 }
 
@@ -944,7 +944,7 @@ impl Add for Timespec {
 
 #[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timeval {
-    pub tv_sec: u32,
+    pub tv_sec: i32,
     pub tv_usec: u32,
 }
 
@@ -963,7 +963,7 @@ impl Timeval {
     }
 
     pub fn kernel_ticks(&self) -> u64 {
-        u64::from(self.tv_sec) * 1_000_000 + u64::from(self.tv_usec)
+        u64::try_from(self.tv_sec).unwrap() * 1_000_000 + u64::from(self.tv_usec)
     }
 }
 

@@ -128,7 +128,9 @@ impl State {
             .flatten()
             .min()
             .ok_or(NoTimeoutScheduledError)?;
-        self.skip_offset += next_offset;
+        if let Ok(next_offset) = u64::try_from(next_offset) {
+            self.skip_offset += next_offset;
+        }
 
         self.fire_clocks();
         Ok(())
@@ -154,8 +156,8 @@ impl State {
         self.realtime_timeouts.push(timeout);
     }
 
-    fn combine(&self) -> u64 {
-        self.backend_offset + self.skip_offset
+    fn combine(&self) -> i64 {
+        i64::try_from(self.backend_offset + self.skip_offset).unwrap()
     }
 
     fn read_clock(&mut self, clock: ClockId) -> Timespec {
@@ -195,12 +197,12 @@ pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
 }
 
 struct Timeout {
-    time: u64,
+    time: i64,
     sender: oneshot::Sender<()>,
 }
 
 impl Timeout {
-    fn has_expired(&self, clock: u64) -> bool {
+    fn has_expired(&self, clock: i64) -> bool {
         self.time <= clock
     }
 
@@ -234,19 +236,19 @@ impl Ord for Timeout {
 }
 
 impl Timespec {
-    pub fn from_ms(ms: u64) -> Self {
+    pub fn from_ms(ms: i64) -> Self {
         Self::from_ns(ms * 1_000_000)
     }
 
-    pub fn from_ns(ns: u64) -> Self {
+    pub fn from_ns(ns: i64) -> Self {
         Timespec {
-            tv_sec: u32::try_from(ns / 1_000_000_000).unwrap(),
+            tv_sec: i32::try_from(ns / 1_000_000_000).unwrap(),
             tv_nsec: u32::try_from(ns % 1_000_000_000).unwrap(),
         }
     }
 
-    fn into_ns(self) -> u64 {
-        u64::from(self.tv_sec) * 1_000_000_000 + u64::from(self.tv_nsec)
+    fn into_ns(self) -> i64 {
+        i64::from(self.tv_sec) * 1_000_000_000 + i64::from(self.tv_nsec)
     }
 }
 
