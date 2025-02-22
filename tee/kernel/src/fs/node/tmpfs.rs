@@ -899,13 +899,14 @@ impl File for TmpFsFile {
         guard.buffer.write_from_user(offset, vm, pointer, len)
     }
 
-    fn append(&self, buf: &[u8]) -> Result<usize> {
+    fn append(&self, buf: &[u8]) -> Result<(usize, usize)> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
-        guard.buffer.write(offset, buf)
+        let len = guard.buffer.write(offset, buf)?;
+        Ok((len, offset + len))
     }
 
     fn append_from_user(
@@ -913,13 +914,14 @@ impl File for TmpFsFile {
         vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         len: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
-        guard.buffer.write_from_user(offset, vm, pointer, len)
+        let len = guard.buffer.write_from_user(offset, vm, pointer, len)?;
+        Ok((len, offset + len))
     }
 
     fn splice_from(

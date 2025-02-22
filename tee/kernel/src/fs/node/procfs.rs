@@ -1188,7 +1188,7 @@ impl File for MapsFile {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
+    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1197,7 +1197,7 @@ impl File for MapsFile {
         _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         _len: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1319,7 +1319,7 @@ impl File for ProcessStatFile {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
+    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1328,7 +1328,7 @@ impl File for ProcessStatFile {
         _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         _len: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1458,7 +1458,7 @@ impl File for StatFile {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
+    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1467,7 +1467,7 @@ impl File for StatFile {
         _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         _len: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1606,7 +1606,7 @@ impl File for UptimeFile {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &[u8]) -> Result<usize> {
+    fn append(&self, _buf: &[u8]) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1615,7 +1615,7 @@ impl File for UptimeFile {
         _vm: &VirtualMemory,
         _pointer: Pointer<[u8]>,
         _len: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 

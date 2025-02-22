@@ -75,13 +75,14 @@ pub trait File: INode {
 
         self.write(offset, buf)
     }
-    fn append(&self, buf: &[u8]) -> Result<usize>;
+    /// Returns a tuple of `(bytes_written, file_length)`.
+    fn append(&self, buf: &[u8]) -> Result<(usize, usize)>;
     fn append_from_user(
         &self,
         vm: &VirtualMemory,
         pointer: Pointer<[u8]>,
         mut len: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         const MAX_BUFFER_LEN: usize = 8192;
         if len > MAX_BUFFER_LEN {
             len = MAX_BUFFER_LEN;
@@ -137,50 +138,46 @@ pub trait File: INode {
 
 pub fn open_file(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), IsDir);
-
     if flags.contains(OpenFlags::TRUNC) {
         file.truncate(0)?;
     }
-
-    let fd = if flags.contains(OpenFlags::WRONLY) {
-        if flags.contains(OpenFlags::APPEND) {
-            FileDescriptor::from(AppendFileFileDescription::new(path, file, flags))
-        } else {
-            FileDescriptor::from(WriteonlyFileFileDescription::new(path, file, flags))
-        }
-    } else if flags.contains(OpenFlags::RDWR) {
-        FileDescriptor::from(ReadWriteFileFileDescription::new(path, file, flags))
-    } else {
-        FileDescriptor::from(ReadonlyFileFileDescription::new(path, file, flags))
-    };
-    Ok(fd)
+    Ok(FileFileDescription::new(path, file, flags).into())
 }
 
-/// A file description for files opened as read-only.
-pub struct ReadonlyFileFileDescription {
+struct InternalFileFileDescription {
+    flags: OpenFlags,
+    cursor_idx: usize,
+}
+
+pub struct FileFileDescription {
     path: Path,
     file: Arc<dyn File>,
-    flags: OpenFlags,
-    cursor_idx: Mutex<usize>,
     file_lock: FileLock,
+    internal: Mutex<InternalFileFileDescription>,
 }
 
-impl ReadonlyFileFileDescription {
+impl FileFileDescription {
     pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
         let file_lock = FileLock::new(file.file_lock_record().clone());
         Self {
             path,
             file,
-            flags,
-            cursor_idx: Mutex::new(0),
             file_lock,
+            internal: Mutex::new(InternalFileFileDescription {
+                flags,
+                cursor_idx: 0,
+            }),
         }
     }
 }
 
-impl OpenFileDescription for ReadonlyFileFileDescription {
+impl OpenFileDescription for FileFileDescription {
     fn flags(&self) -> OpenFlags {
-        self.flags
+        self.internal.lock().flags
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.internal.lock().flags = flags;
     }
 
     fn path(&self) -> Result<Path> {
@@ -188,10 +185,11 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
     }
 
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.read(*guard, buf, no_atime)?;
-        *guard += len;
+        let mut guard = self.internal.lock();
+        ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
+        let no_atime = guard.flags.contains(OpenFlags::NOATIME);
+        let len = self.file.read(guard.cursor_idx, buf, no_atime)?;
+        guard.cursor_idx += len;
         Ok(len)
     }
 
@@ -201,25 +199,98 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         pointer: Pointer<[u8]>,
         len: usize,
     ) -> Result<usize> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.read_to_user(*guard, vm, pointer, len, no_atime)?;
-        *guard += len;
+        let mut guard = self.internal.lock();
+        ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
+        let no_atime = guard.flags.contains(OpenFlags::NOATIME);
+        let len = self
+            .file
+            .read_to_user(guard.cursor_idx, vm, pointer, len, no_atime)?;
+        guard.cursor_idx += len;
         Ok(len)
     }
 
     fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
+        let guard = self.internal.lock();
+        ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
+        let no_atime = guard.flags.contains(OpenFlags::NOATIME);
+        drop(guard);
         self.file.read(pos, buf, no_atime)
+    }
+
+    fn write(&self, buf: &[u8]) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        if !guard.flags.contains(OpenFlags::APPEND) {
+            let len = self.file.write(guard.cursor_idx, buf)?;
+            guard.cursor_idx += len;
+            Ok(len)
+        } else {
+            let (len, cursor_idx) = self.file.append(buf)?;
+            guard.cursor_idx = cursor_idx;
+            Ok(len)
+        }
+    }
+
+    fn write_from_user(
+        &self,
+        vm: &VirtualMemory,
+        pointer: Pointer<[u8]>,
+        len: usize,
+    ) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        if !guard.flags.contains(OpenFlags::APPEND) {
+            let len = self
+                .file
+                .write_from_user(guard.cursor_idx, vm, pointer, len)?;
+            guard.cursor_idx += len;
+            Ok(len)
+        } else {
+            let (len, cursor_idx) = self.file.append_from_user(vm, pointer, len)?;
+            guard.cursor_idx = cursor_idx;
+            Ok(len)
+        }
+    }
+
+    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
+        let guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        self.file.write(pos, buf)
     }
 
     fn splice_from(
         &self,
-        _read_half: &stream_buffer::ReadHalf,
-        _offset: Option<usize>,
-        _len: usize,
+        read_half: &stream_buffer::ReadHalf,
+        offset: Option<usize>,
+        len: usize,
     ) -> Result<Result<usize, PipeBlocked>> {
-        bail!(BadF)
+        let mut guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        ensure!(!guard.flags.contains(OpenFlags::APPEND), Inval);
+
+        if let Some(offset) = offset {
+            self.file.splice_from(read_half, offset, len)
+        } else {
+            self.file
+                .splice_from(read_half, guard.cursor_idx, len)
+                .inspect(|res| {
+                    if let Ok(len) = res {
+                        guard.cursor_idx += len;
+                    }
+                })
+        }
     }
 
     fn splice_to(
@@ -228,16 +299,18 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         offset: Option<usize>,
         len: usize,
     ) -> Result<Result<usize, PipeBlocked>> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
+        let mut guard = self.internal.lock();
+        ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
+
+        let no_atime = guard.flags.contains(OpenFlags::NOATIME);
         if let Some(offset) = offset {
             self.file.splice_to(write_half, offset, len, no_atime)
         } else {
-            let mut guard = self.cursor_idx.lock();
             self.file
-                .splice_to(write_half, *guard, len, no_atime)
+                .splice_to(write_half, guard.cursor_idx, len, no_atime)
                 .inspect(|res| {
                     if let Ok(len) = res {
-                        *guard += len
+                        guard.cursor_idx += len
                     }
                 })
         }
@@ -250,38 +323,65 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
         offset_out: Option<usize>,
         len: usize,
     ) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
+
         if let Some(offset_in) = offset_in {
             fd_out.copy_range_from_file(offset_out, &*self.file, offset_in, len)
         } else {
-            let mut guard = self.cursor_idx.lock();
-            let len = fd_out.copy_range_from_file(offset_out, &*self.file, *guard, len)?;
-            *guard += len;
+            let len =
+                fd_out.copy_range_from_file(offset_out, &*self.file, guard.cursor_idx, len)?;
+            guard.cursor_idx += len;
             Ok(len)
         }
     }
 
     fn copy_range_from_file(
         &self,
-        _offset_out: Option<usize>,
-        _file_in: &dyn File,
-        _offset_in: usize,
-        _len: usize,
+        offset_out: Option<usize>,
+        file_in: &dyn File,
+        offset_in: usize,
+        len: usize,
     ) -> Result<usize> {
-        bail!(BadF)
+        let mut guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        ensure!(!guard.flags.contains(OpenFlags::APPEND), BadF);
+
+        if let Some(offset_out) = offset_out {
+            file_in.copy_file_range(offset_in, &*self.file, offset_out, len)
+        } else {
+            let len = file_in.copy_file_range(offset_in, &*self.file, guard.cursor_idx, len)?;
+            guard.cursor_idx += len;
+            Ok(len)
+        }
+    }
+
+    fn truncate(&self, length: usize) -> Result<()> {
+        let guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        self.file.truncate(length)
     }
 
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
+        let mut guard = self.internal.lock();
+
         match whence {
-            Whence::Set => *guard = offset,
+            Whence::Set => guard.cursor_idx = offset,
             Whence::Cur => {
-                *guard = guard
+                guard.cursor_idx = guard
+                    .cursor_idx
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
             Whence::End => {
                 let size = usize::try_from(self.file.stat()?.size)?;
-                *guard = size
+                guard.cursor_idx = size
                     .checked_add_signed(offset as isize)
                     .ok_or(err!(Inval))?
             }
@@ -290,7 +390,7 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
                 ensure!(offset < self.file.stat()?.size as usize, XIo);
 
                 // We don't support holes so we always jump to `offset`.
-                *guard = offset;
+                guard.cursor_idx = offset;
             }
             Whence::Hole => {
                 let size = usize::try_from(self.file.stat()?.size)?;
@@ -299,10 +399,10 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
                 ensure!(offset < size, XIo);
 
                 // We don't support holes so we always jump to the end of the file.
-                *guard = size;
+                guard.cursor_idx = size;
             }
         }
-        Ok(*guard)
+        Ok(guard.cursor_idx)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -331,530 +431,6 @@ impl OpenFileDescription for ReadonlyFileFileDescription {
 
     fn poll_ready(&self, events: Events) -> Events {
         events & Events::READ
-    }
-
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
-    }
-}
-
-/// A file description for files opened as write-only.
-pub struct WriteonlyFileFileDescription {
-    path: Path,
-    file: Arc<dyn File>,
-    flags: OpenFlags,
-    cursor_idx: Mutex<usize>,
-    file_lock: FileLock,
-}
-
-impl WriteonlyFileFileDescription {
-    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
-        let file_lock = FileLock::new(file.file_lock_record().clone());
-        Self {
-            path,
-            file,
-            flags,
-            cursor_idx: Mutex::new(0),
-            file_lock,
-        }
-    }
-}
-
-impl OpenFileDescription for WriteonlyFileFileDescription {
-    fn flags(&self) -> OpenFlags {
-        self.flags
-    }
-
-    fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.write(*guard, buf)?;
-        *guard += len;
-        Ok(len)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.write_from_user(*guard, vm, pointer, len)?;
-        *guard += len;
-        Ok(len)
-    }
-
-    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
-        self.file.write(pos, buf)
-    }
-
-    fn splice_from(
-        &self,
-        read_half: &stream_buffer::ReadHalf,
-        offset: Option<usize>,
-        len: usize,
-    ) -> Result<Result<usize, PipeBlocked>> {
-        if let Some(offset) = offset {
-            self.file.splice_from(read_half, offset, len)
-        } else {
-            let mut guard = self.cursor_idx.lock();
-            self.file
-                .splice_from(read_half, *guard, len)
-                .inspect(|res| {
-                    if let Ok(len) = res {
-                        *guard += len;
-                    }
-                })
-        }
-    }
-
-    fn splice_to(
-        &self,
-        _write_half: &stream_buffer::WriteHalf,
-        _offset: Option<usize>,
-        _len: usize,
-    ) -> Result<Result<usize, PipeBlocked>> {
-        bail!(BadF)
-    }
-
-    fn copy_file_range(
-        &self,
-        _offset_in: Option<usize>,
-        _fd_out: &dyn OpenFileDescription,
-        _offset_out: Option<usize>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(BadF)
-    }
-
-    fn copy_range_from_file(
-        &self,
-        offset_out: Option<usize>,
-        file_in: &dyn File,
-        offset_in: usize,
-        len: usize,
-    ) -> Result<usize> {
-        if let Some(offset_out) = offset_out {
-            file_in.copy_file_range(offset_in, &*self.file, offset_out, len)
-        } else {
-            let mut guard = self.cursor_idx.lock();
-            let len = file_in.copy_file_range(offset_in, &*self.file, *guard, len)?;
-            *guard += len;
-            Ok(len)
-        }
-    }
-
-    fn truncate(&self, length: usize) -> Result<()> {
-        self.file.truncate(length)
-    }
-
-    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
-        match whence {
-            Whence::Set => *guard = offset,
-            Whence::Cur => {
-                *guard = guard
-                    .checked_add_signed(offset as isize)
-                    .ok_or(err!(Inval))?
-            }
-            Whence::End => {
-                let size = usize::try_from(self.file.stat()?.size)?;
-                *guard = size
-                    .checked_add_signed(offset as isize)
-                    .ok_or(err!(Inval))?
-            }
-            Whence::Data => todo!(),
-            Whence::Hole => todo!(),
-        }
-        Ok(*guard)
-    }
-
-    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.file.chmod(mode, ctx)
-    }
-
-    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.file.chown(uid, gid, ctx)
-    }
-
-    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
-        self.file.update_times(ctime, atime, mtime);
-    }
-
-    fn stat(&self) -> Result<Stat> {
-        self.file.stat()
-    }
-
-    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.file.fs()
-    }
-
-    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
-        self.file.get_page(page_idx, shared)
-    }
-
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::WRITE
-    }
-
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
-    }
-}
-
-/// A file description for files opened as write-only.
-pub struct AppendFileFileDescription {
-    path: Path,
-    file: Arc<dyn File>,
-    flags: OpenFlags,
-    file_lock: FileLock,
-}
-
-impl AppendFileFileDescription {
-    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
-        let file_lock = FileLock::new(file.file_lock_record().clone());
-        Self {
-            path,
-            file,
-            flags,
-            file_lock,
-        }
-    }
-}
-
-impl OpenFileDescription for AppendFileFileDescription {
-    fn flags(&self) -> OpenFlags {
-        self.flags
-    }
-
-    fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        self.file.append(buf)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        self.file.append_from_user(vm, pointer, len)
-    }
-
-    fn splice_from(
-        &self,
-        _read_half: &stream_buffer::ReadHalf,
-        _offset: Option<usize>,
-        _len: usize,
-    ) -> Result<Result<usize, PipeBlocked>> {
-        bail!(Inval)
-    }
-
-    fn splice_to(
-        &self,
-        _write_half: &stream_buffer::WriteHalf,
-        _offset: Option<usize>,
-        _len: usize,
-    ) -> Result<Result<usize, PipeBlocked>> {
-        bail!(BadF)
-    }
-
-    fn copy_file_range(
-        &self,
-        _offset_in: Option<usize>,
-        _fd_out: &dyn OpenFileDescription,
-        _offset_out: Option<usize>,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(BadF)
-    }
-
-    fn copy_range_from_file(
-        &self,
-        _offset_out: Option<usize>,
-        _file_in: &dyn File,
-        _offset_in: usize,
-        _len: usize,
-    ) -> Result<usize> {
-        bail!(BadF)
-    }
-
-    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.file.chmod(mode, ctx)
-    }
-
-    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.file.chown(uid, gid, ctx)
-    }
-
-    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
-        self.file.update_times(ctime, atime, mtime);
-    }
-
-    fn stat(&self) -> Result<Stat> {
-        self.file.stat()
-    }
-
-    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.file.fs()
-    }
-
-    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
-        self.file.get_page(page_idx, shared)
-    }
-
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::WRITE
-    }
-
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
-    }
-}
-
-/// A file description for files opened as read and write.
-pub struct ReadWriteFileFileDescription {
-    path: Path,
-    file: Arc<dyn File>,
-    flags: OpenFlags,
-    cursor_idx: Mutex<usize>,
-    file_lock: FileLock,
-}
-
-impl ReadWriteFileFileDescription {
-    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
-        let file_lock = FileLock::new(file.file_lock_record().clone());
-        Self {
-            path,
-            file,
-            flags,
-            cursor_idx: Mutex::new(0),
-            file_lock,
-        }
-    }
-}
-
-impl OpenFileDescription for ReadWriteFileFileDescription {
-    fn flags(&self) -> OpenFlags {
-        self.flags
-    }
-
-    fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
-    }
-
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.read(*guard, buf, no_atime)?;
-        *guard += len;
-        Ok(len)
-    }
-
-    fn read_to_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.read_to_user(*guard, vm, pointer, len, no_atime)?;
-        *guard += len;
-        Ok(len)
-    }
-
-    fn write(&self, buf: &[u8]) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.write(*guard, buf)?;
-        *guard += len;
-        Ok(len)
-    }
-
-    fn write_from_user(
-        &self,
-        vm: &VirtualMemory,
-        pointer: Pointer<[u8]>,
-        len: usize,
-    ) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
-        let len = self.file.write_from_user(*guard, vm, pointer, len)?;
-        *guard += len;
-        Ok(len)
-    }
-
-    fn pread(&self, pos: usize, buf: &mut [u8]) -> Result<usize> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
-        self.file.read(pos, buf, no_atime)
-    }
-
-    fn pwrite(&self, pos: usize, buf: &[u8]) -> Result<usize> {
-        self.file.write(pos, buf)
-    }
-
-    fn splice_from(
-        &self,
-        read_half: &stream_buffer::ReadHalf,
-        offset: Option<usize>,
-        len: usize,
-    ) -> Result<Result<usize, PipeBlocked>> {
-        if let Some(offset) = offset {
-            self.file.splice_from(read_half, offset, len)
-        } else {
-            let mut guard = self.cursor_idx.lock();
-            self.file
-                .splice_from(read_half, *guard, len)
-                .inspect(|res| {
-                    if let Ok(len) = res {
-                        *guard += len;
-                    }
-                })
-        }
-    }
-
-    fn splice_to(
-        &self,
-        write_half: &stream_buffer::WriteHalf,
-        offset: Option<usize>,
-        len: usize,
-    ) -> Result<Result<usize, PipeBlocked>> {
-        let no_atime = self.flags.contains(OpenFlags::NOATIME);
-        if let Some(offset) = offset {
-            self.file.splice_to(write_half, offset, len, no_atime)
-        } else {
-            let mut guard = self.cursor_idx.lock();
-            self.file
-                .splice_to(write_half, *guard, len, no_atime)
-                .inspect(|res| {
-                    if let Ok(len) = res {
-                        *guard += len;
-                    }
-                })
-        }
-    }
-
-    fn copy_file_range(
-        &self,
-        offset_in: Option<usize>,
-        fd_out: &dyn OpenFileDescription,
-        offset_out: Option<usize>,
-        len: usize,
-    ) -> Result<usize> {
-        if core::ptr::addr_eq(self, fd_out) {
-            match (offset_in, offset_out) {
-                (Some(offset_in), Some(offset_out)) => {
-                    self.file
-                        .copy_file_range(offset_in, &*self.file, offset_out, len)
-                }
-                (Some(offset_in), None) => {
-                    let mut guard = self.cursor_idx.lock();
-                    let len = self
-                        .file
-                        .copy_file_range(offset_in, &*self.file, *guard, len)?;
-                    *guard += len;
-                    Ok(len)
-                }
-                (None, Some(offset_out)) => {
-                    let mut guard = self.cursor_idx.lock();
-                    let len = self
-                        .file
-                        .copy_file_range(*guard, &*self.file, offset_out, len)?;
-                    *guard += len;
-                    Ok(len)
-                }
-                (None, None) => {
-                    ensure!(len == 0, Inval);
-                    let offset = *self.cursor_idx.lock();
-                    self.file
-                        .copy_file_range(offset, &*self.file, offset, len)?;
-                    Ok(0)
-                }
-            }
-        } else if let Some(offset_in) = offset_in {
-            fd_out.copy_range_from_file(offset_out, &*self.file, offset_in, len)
-        } else {
-            let mut guard = self.cursor_idx.lock();
-            let len = fd_out.copy_range_from_file(offset_out, &*self.file, *guard, len)?;
-            *guard += len;
-            Ok(len)
-        }
-    }
-
-    fn copy_range_from_file(
-        &self,
-        offset_out: Option<usize>,
-        file_in: &dyn File,
-        offset_in: usize,
-        len: usize,
-    ) -> Result<usize> {
-        if let Some(offset_out) = offset_out {
-            file_in.copy_file_range(offset_in, &*self.file, offset_out, len)
-        } else {
-            let mut guard = self.cursor_idx.lock();
-            let len = file_in.copy_file_range(offset_in, &*self.file, *guard, len)?;
-            *guard += len;
-            Ok(len)
-        }
-    }
-
-    fn truncate(&self, length: usize) -> Result<()> {
-        self.file.truncate(length)
-    }
-
-    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
-        let mut guard = self.cursor_idx.lock();
-        match whence {
-            Whence::Set => *guard = offset,
-            Whence::Cur => {
-                *guard = guard
-                    .checked_add_signed(offset as isize)
-                    .ok_or(err!(Inval))?
-            }
-            Whence::End => {
-                let size = usize::try_from(self.file.stat()?.size)?;
-                *guard = size
-                    .checked_add_signed(offset as isize)
-                    .ok_or(err!(Inval))?
-            }
-            Whence::Data => todo!(),
-            Whence::Hole => todo!(),
-        }
-        Ok(*guard)
-    }
-
-    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.file.chmod(mode, ctx)
-    }
-
-    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.file.chown(uid, gid, ctx)
-    }
-
-    fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
-        self.file.update_times(ctime, atime, mtime);
-    }
-
-    fn stat(&self) -> Result<Stat> {
-        self.file.stat()
-    }
-
-    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.file.fs()
-    }
-
-    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
-        self.file.get_page(page_idx, shared)
-    }
-
-    fn poll_ready(&self, events: Events) -> Events {
-        events & (Events::READ | Events::WRITE)
     }
 
     fn file_lock(&self) -> Result<&FileLock> {
