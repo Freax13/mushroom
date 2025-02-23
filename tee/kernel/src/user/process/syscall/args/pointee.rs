@@ -811,6 +811,10 @@ pub struct Stat64 {
     pub _unused: [i64; 3],
 }
 
+impl Pointee for super::Stat64 {}
+
+impl PrimitivePointee for super::Stat64 {}
+
 impl TryFrom<Stat> for Stat32 {
     type Error = Error;
 

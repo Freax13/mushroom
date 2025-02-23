@@ -107,6 +107,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysStat);
     handlers.register(SysStat64);
     handlers.register(SysFstat);
+    handlers.register(SysFstat64);
     handlers.register(SysLstat);
     handlers.register(SysLstat64);
     handlers.register(SysPoll);
@@ -394,7 +395,7 @@ fn stat64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     filename: Pointer<Path>,
-    statbuf: Pointer<Stat>,
+    statbuf: Pointer<Stat64>,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
@@ -402,7 +403,7 @@ fn stat64(
     let stat = node.stat()?;
     let stat64 = Stat64::from(stat);
 
-    virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
+    virtual_memory.write(statbuf, stat64)?;
 
     Ok(0)
 }
@@ -419,6 +420,22 @@ fn fstat(
     let stat = fd.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 197)]
+fn fstat64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    statbuf: Pointer<Stat64>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let stat = fd.stat()?;
+    let stat64 = Stat64::from(stat);
+
+    virtual_memory.write(statbuf, stat64)?;
 
     Ok(0)
 }
@@ -448,15 +465,15 @@ fn lstat64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     filename: Pointer<Path>,
-    statbuf: Pointer<Stat>,
+    statbuf: Pointer<Stat64>,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_node(thread.process().cwd(), &filename, &mut ctx)?;
     let stat = node.stat()?;
-
     let stat64 = Stat64::from(stat);
-    virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
+
+    virtual_memory.write(statbuf, stat64)?;
 
     Ok(0)
 }
