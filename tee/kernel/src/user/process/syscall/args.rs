@@ -6,7 +6,7 @@ use core::{
     ops::Add,
 };
 
-use alloc::sync::Arc;
+use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
@@ -15,7 +15,10 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::{Error, Result, bail, ensure, err},
-    fs::fd::{Events, FdFlags, FileDescriptorTable},
+    fs::{
+        fd::{Events, FdFlags, FileDescriptorTable},
+        path::Path,
+    },
     user::process::{
         memory::VirtualMemory,
         thread::{Gid, Sigset, ThreadGuard, Uid},
@@ -199,6 +202,13 @@ where
             value: self.value,
             _marker: PhantomData,
         }
+    }
+
+    pub fn add(self, count: usize) -> Self
+    where
+        T: Sized,
+    {
+        self.bytes_offset(count * size_of::<T>())
     }
 
     pub fn bytes_offset(self, len: usize) -> Self {
@@ -1616,6 +1626,43 @@ bitflags! {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MsgHdr {
+    /// Address to send to/receive from.
+    pub name: Pointer<SocketAddr>,
+    /// Length of address data.
+    pub namelen: u32,
+
+    /// Vector of data to send/receive into.
+    pub iov: Pointer<Iovec>,
+    /// Number of elements in the vector.
+    pub iovlen: u64,
+
+    /// Ancillary data (eg BSD filedesc passing).
+    pub control: Pointer<CmsgHdr>,
+    /// Ancillary data buffer length.
+    pub controllen: u64,
+
+    /// Flags on received message.
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CmsgHdr {
+    /// data byte count, including hdr
+    pub len: u64,
+    /// originating protocol
+    pub level: i32,
+    /// protocol-specific type
+    pub r#type: i32,
+}
+
+bitflags! {
+    pub struct RecvMsgFlags {
+        const CMSG_CLOEXEC = 0x40000000;
+    }
+}
+
 bitflags! {
     pub struct Accept4Flags {
         const CLOEXEC = OpenFlags::CLOEXEC.bits();
@@ -1657,4 +1704,43 @@ bitflags! {
 pub struct Linger {
     pub onoff: i32,
     pub linger: i32,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UnixAddr {
+    Pathname(Path),
+    Unnamed,
+    Abstract(Vec<u8>),
+}
+
+impl UnixAddr {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        ensure!(bytes.len() >= 2, Inval);
+        let (family, path) = bytes.split_first_chunk::<2>().ok_or(err!(Inval))?;
+        let family = u16::from_ne_bytes(*family);
+        ensure!(family == Domain::Unix as u16, Inval);
+
+        Ok(match path {
+            [] => Self::Unnamed,
+            [0, name @ ..] => Self::Abstract(name.to_owned()),
+            mut path => {
+                // Truncate at the null-terminator (if there is one).
+                if let Some(idx) = path.iter().position(|&b| b == 0) {
+                    path = &path[..idx];
+                }
+                Self::Pathname(Path::new(path.to_owned())?)
+            }
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(Domain::Unix as u16).to_ne_bytes());
+        match self {
+            UnixAddr::Pathname(path) => bytes.extend_from_slice(path.as_bytes()),
+            UnixAddr::Unnamed => {}
+            UnixAddr::Abstract(name) => bytes.extend_from_slice(name),
+        }
+        bytes
+    }
 }

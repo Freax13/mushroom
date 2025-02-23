@@ -24,7 +24,7 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, OpenFlags, Pointer,
+                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, MsgHdr, OpenFlags, Pointer,
                 RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
             },
             traits::Abi,
@@ -457,10 +457,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         virtual_memory: &VirtualMemory,
         addr: Pointer<SocketAddr>,
         addrlen: usize,
+        ctx: &mut FileAccessContext,
     ) -> Result<()> {
         let _ = virtual_memory;
         let _ = addr;
         let _ = addrlen;
+        let _ = ctx;
         bail!(NotSock)
     }
 
@@ -479,6 +481,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         virtual_memory: &VirtualMemory,
         addr: Pointer<SocketAddr>,
         addrlen: usize,
+        _: &mut FileAccessContext,
     ) -> Result<()> {
         let _ = virtual_memory;
         let _ = addr;
@@ -535,9 +538,39 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        fdtable: &FileDescriptorTable,
+    ) -> Result<usize> {
+        let _ = vm;
+        let _ = abi;
+        let _ = msg_hdr;
+        let _ = fdtable;
+        bail!(Inval)
+    }
+
     fn recv_from(&self, buf: &mut dyn ReadBuf, flags: RecvFromFlags) -> Result<usize> {
         let _ = buf;
         let _ = flags;
+        bail!(Inval)
+    }
+
+    fn recv_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        fdtable: &FileDescriptorTable,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<usize> {
+        let _ = vm;
+        let _ = abi;
+        let _ = msg_hdr;
+        let _ = fdtable;
+        let _ = no_file_limit;
         bail!(Inval)
     }
 

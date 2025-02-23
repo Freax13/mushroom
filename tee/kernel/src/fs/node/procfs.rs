@@ -18,6 +18,7 @@ use crate::{
             FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
+            unix_socket::StreamUnixSocket,
         },
         node::DirEntryName,
         path::{FileName, Path},
@@ -206,6 +207,18 @@ impl Directory for ProcFsRoot {
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &StreamUnixSocket,
+        _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -548,6 +561,18 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn bind_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
     fn is_empty(&self) -> bool {
         false
     }
@@ -759,6 +784,18 @@ impl Directory for FdDir {
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &StreamUnixSocket,
+        _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
     }

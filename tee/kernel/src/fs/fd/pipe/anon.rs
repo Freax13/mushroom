@@ -158,7 +158,7 @@ pub struct WriteHalf {
 #[async_trait::async_trait]
 impl OpenFileDescription for WriteHalf {
     fn flags(&self) -> OpenFlags {
-        *self.flags.lock()
+        *self.flags.lock() | OpenFlags::WRONLY
     }
 
     fn set_flags(&self, flags: OpenFlags) {

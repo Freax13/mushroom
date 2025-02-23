@@ -29,7 +29,7 @@ use self::{
 
 use super::{
     FileSystem,
-    fd::{FileDescriptor, FileLockRecord},
+    fd::{FileDescriptor, FileLockRecord, unix_socket::StreamUnixSocket},
     path::{FileName, Path, PathSegment},
 };
 
@@ -178,6 +178,24 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn bind_socket(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+        socket: &StreamUnixSocket,
+        socketname: &Path,
+    ) -> Result<()> {
+        let _ = file_name;
+        let _ = mode;
+        let _ = uid;
+        let _ = gid;
+        let _ = socket;
+        let _ = socketname;
+        bail!(NotDir)
+    }
+
     fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
         let _ = file_name;
         let _ = node;
@@ -261,6 +279,10 @@ pub trait INode: Any + Send + Sync + 'static {
     }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord>;
+
+    fn get_socket(&self) -> Result<Arc<StreamUnixSocket>> {
+        bail!(ConnRefused)
+    }
 }
 
 /// Repeatedly follow symlinks until the end.
@@ -622,6 +644,32 @@ pub fn create_char_dev(
             Ok(())
         }
     }
+}
+
+pub fn bind_socket(
+    path: &Path,
+    mode: FileMode,
+    uid: Uid,
+    gid: Gid,
+    socket: &StreamUnixSocket,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (dir, last, _trailing_slash) = find_parent(ROOT_NODE.clone(), path, ctx)?;
+    ensure!(!_trailing_slash, IsDir);
+    let file_name = match last {
+        PathSegment::Root => todo!(),
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(file_name) => file_name,
+    };
+    dir.bind_socket(file_name.into_owned(), mode, uid, gid, socket, path)?;
+    Ok(())
+}
+
+pub fn get_socket(path: &Path, ctx: &mut FileAccessContext) -> Result<Arc<StreamUnixSocket>> {
+    let node = lookup_and_resolve_node(ROOT_NODE.clone(), path, ctx)?;
+    node.get_socket()
 }
 
 pub fn mount(

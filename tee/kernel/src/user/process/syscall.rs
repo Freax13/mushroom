@@ -107,6 +107,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysStat);
     handlers.register(SysStat64);
     handlers.register(SysFstat);
+    handlers.register(SysFstat64);
     handlers.register(SysLstat);
     handlers.register(SysLstat64);
     handlers.register(SysPoll);
@@ -141,6 +142,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysAccept);
     handlers.register(SysSendto);
     handlers.register(SysRecvFrom);
+    handlers.register(SysSendmsg);
+    handlers.register(SysRecvmsg);
     handlers.register(SysShutdown);
     handlers.register(SysBind);
     handlers.register(SysListen);
@@ -392,7 +395,7 @@ fn stat64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     filename: Pointer<Path>,
-    statbuf: Pointer<Stat>,
+    statbuf: Pointer<Stat64>,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
@@ -400,7 +403,7 @@ fn stat64(
     let stat = node.stat()?;
     let stat64 = Stat64::from(stat);
 
-    virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
+    virtual_memory.write(statbuf, stat64)?;
 
     Ok(0)
 }
@@ -417,6 +420,22 @@ fn fstat(
     let stat = fd.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
+
+    Ok(0)
+}
+
+#[syscall(i386 = 197)]
+fn fstat64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    statbuf: Pointer<Stat64>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let stat = fd.stat()?;
+    let stat64 = Stat64::from(stat);
+
+    virtual_memory.write(statbuf, stat64)?;
 
     Ok(0)
 }
@@ -446,15 +465,15 @@ fn lstat64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     filename: Pointer<Path>,
-    statbuf: Pointer<Stat>,
+    statbuf: Pointer<Stat64>,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
     let node = lookup_node(thread.process().cwd(), &filename, &mut ctx)?;
     let stat = node.stat()?;
-
     let stat64 = Stat64::from(stat);
-    virtual_memory.write_bytes(statbuf.get(), bytes_of(&stat64))?;
+
+    virtual_memory.write(statbuf, stat64)?;
 
     Ok(0)
 }
@@ -1282,7 +1301,20 @@ fn socket(
     protocol: i32,
 ) -> SyscallResult {
     let fd = match domain {
-        Domain::Unix => bail!(NoSys),
+        Domain::Unix => match r#type.socket_type {
+            SocketType::Stream => fdtable.insert(
+                StreamUnixSocket::new(
+                    r#type.flags,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                ),
+                r#type,
+                no_file_limit,
+            )?,
+            SocketType::Dgram => bail!(NoSys),
+            SocketType::Raw => todo!(),
+            SocketType::Seqpacket => todo!(),
+        },
         Domain::Inet => match r#type.socket_type {
             SocketType::Stream => fdtable.insert(
                 TcpSocket::new(r#type, ctx.filesystem_user_id, ctx.filesystem_group_id),
@@ -1301,12 +1333,13 @@ fn socket(
 async fn connect(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     fd: FdNum,
     addr: Pointer<SocketAddr>,
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.connect(&virtual_memory, addr, usize_from(addrlen))
+    fd.connect(&virtual_memory, addr, usize_from(addrlen), &mut ctx)
         .await?;
     Ok(0)
 }
@@ -1385,6 +1418,45 @@ async fn recv_from(
     Ok(len)
 }
 
+#[syscall(i386 = 370, amd64 = 46)]
+async fn sendmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    msg: Pointer<MsgHdr>,
+    flags: RecvMsgFlags,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
+    let len = do_io(&*fd.clone(), Events::WRITE, || {
+        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable)
+    })
+    .await?;
+    virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
+    Ok(u64::from_usize(len))
+}
+
+#[syscall(i386 = 372, amd64 = 47)]
+async fn recvmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fd: FdNum,
+    msg: Pointer<MsgHdr>,
+    flags: RecvMsgFlags,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
+    let len = do_io(&*fd.clone(), Events::READ, || {
+        fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
+    })
+    .await?;
+    virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
+    Ok(u64::from_usize(len))
+}
+
 #[syscall(i386 = 373, amd64 = 48)]
 fn shutdown(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1400,12 +1472,13 @@ fn shutdown(
 fn bind(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     fd: FdNum,
     addr: Pointer<SocketAddr>,
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.bind(&virtual_memory, addr, usize_from(addrlen))?;
+    fd.bind(&virtual_memory, addr, usize_from(addrlen), &mut ctx)?;
     Ok(0)
 }
 

@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 mod net;
+mod unix;
 
 use std::{
     alloc::{Layout, alloc, dealloc},
