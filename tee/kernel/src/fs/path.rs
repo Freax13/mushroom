@@ -9,7 +9,7 @@ use crate::error::{Result, bail, ensure};
 
 pub const PATH_MAX: usize = 0x1000;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Path {
     bytes: Arc<[u8]>,
 }

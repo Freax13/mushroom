@@ -21,7 +21,8 @@
     slice_ptr_get,
     step_trait,
     sync_unsafe_cell,
-    try_trait_v2
+    try_trait_v2,
+    vec_deque_pop_if
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![allow(incomplete_features, internal_features)]

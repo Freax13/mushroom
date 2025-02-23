@@ -33,8 +33,8 @@ use crate::{
 };
 
 use super::{
-    FdNum, Iovec, Linger, LinuxDirent64, LongOffset, Offset, PSelectSigsetArg, Pointer, RLimit,
-    Rusage, SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
+    CmsgHdr, FdNum, Iovec, Linger, LinuxDirent64, LongOffset, MsgHdr, Offset, PSelectSigsetArg,
+    Pointer, RLimit, Rusage, SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1860,3 +1860,161 @@ impl PrimitivePointee for SocketAddr {}
 
 impl Pointee for Linger {}
 impl PrimitivePointee for Linger {}
+
+impl Pointee for MsgHdr {}
+
+impl AbiDependentPointee for MsgHdr {
+    type I386 = MsgHdr32;
+    type Amd64 = MsgHdr64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MsgHdr32 {
+    name: Pointer32<SocketAddr>,
+    namelen: u32,
+    iov: Pointer32<Iovec>,
+    iovlen: u32,
+    control: Pointer32<CmsgHdr>,
+    controllen: u32,
+    flags: u32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MsgHdr64 {
+    name: Pointer64<SocketAddr>,
+    namelen: u32,
+    _padding1: u32,
+    iov: Pointer64<Iovec>,
+    iovlen: u64,
+    control: Pointer64<CmsgHdr>,
+    controllen: u64,
+    flags: u32,
+    _padding2: u32,
+}
+
+impl From<MsgHdr32> for MsgHdr {
+    fn from(value: MsgHdr32) -> Self {
+        Self {
+            name: value.name.into(),
+            namelen: value.namelen,
+            iov: value.iov.into(),
+            iovlen: value.iovlen.into(),
+            control: value.control.into(),
+            controllen: value.controllen.into(),
+            flags: value.flags,
+        }
+    }
+}
+
+impl From<MsgHdr64> for MsgHdr {
+    fn from(value: MsgHdr64) -> Self {
+        Self {
+            name: value.name.into(),
+            namelen: value.namelen,
+            iov: value.iov.into(),
+            iovlen: value.iovlen,
+            control: value.control.into(),
+            controllen: value.controllen,
+            flags: value.flags,
+        }
+    }
+}
+
+impl TryFrom<MsgHdr> for MsgHdr32 {
+    type Error = Error;
+
+    fn try_from(value: MsgHdr) -> Result<Self> {
+        Ok(Self {
+            name: value.name.try_into()?,
+            namelen: value.namelen,
+            iov: value.iov.try_into()?,
+            iovlen: value.iovlen.try_into()?,
+            control: value.control.try_into()?,
+            controllen: value.controllen.try_into()?,
+            flags: value.flags,
+        })
+    }
+}
+
+impl From<MsgHdr> for MsgHdr64 {
+    fn from(value: MsgHdr) -> Self {
+        Self {
+            name: value.name.into(),
+            namelen: value.namelen,
+            _padding1: 0,
+            iov: value.iov.into(),
+            iovlen: value.iovlen,
+            control: value.control.into(),
+            controllen: value.controllen,
+            flags: value.flags,
+            _padding2: 0,
+        }
+    }
+}
+
+impl Pointee for CmsgHdr {}
+
+impl AbiDependentPointee for CmsgHdr {
+    type I386 = CmsgHdr32;
+    type Amd64 = CmsgHdr64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct CmsgHdr32 {
+    pub len: u32,
+    pub level: i32,
+    pub r#type: i32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct CmsgHdr64 {
+    pub len: u64,
+    pub level: i32,
+    pub r#type: i32,
+}
+
+impl From<CmsgHdr32> for CmsgHdr {
+    fn from(value: CmsgHdr32) -> Self {
+        Self {
+            len: value.len.into(),
+            level: value.level,
+            r#type: value.r#type,
+        }
+    }
+}
+
+impl From<CmsgHdr64> for CmsgHdr {
+    fn from(value: CmsgHdr64) -> Self {
+        Self {
+            len: value.len,
+            level: value.level,
+            r#type: value.r#type,
+        }
+    }
+}
+
+impl TryFrom<CmsgHdr> for CmsgHdr32 {
+    type Error = Error;
+
+    fn try_from(value: CmsgHdr) -> Result<Self> {
+        Ok(Self {
+            len: value.len.try_into()?,
+            level: value.level,
+            r#type: value.r#type,
+        })
+    }
+}
+
+impl From<CmsgHdr> for CmsgHdr64 {
+    fn from(value: CmsgHdr) -> Self {
+        Self {
+            len: value.len,
+            level: value.level,
+            r#type: value.r#type,
+        }
+    }
+}

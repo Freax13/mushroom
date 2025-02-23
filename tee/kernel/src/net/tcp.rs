@@ -325,6 +325,7 @@ impl OpenFileDescription for TcpSocket {
         virtual_memory: &VirtualMemory,
         addr: Pointer<SocketAddr>,
         addrlen: usize,
+        _: &mut FileAccessContext,
     ) -> Result<()> {
         ensure!(addrlen == size_of::<SocketAddr>(), Inval);
         let addr = virtual_memory.read(addr)?;
@@ -457,6 +458,7 @@ impl OpenFileDescription for TcpSocket {
         virtual_memory: &VirtualMemory,
         addr: Pointer<SocketAddr>,
         addrlen: usize,
+        _: &mut FileAccessContext,
     ) -> Result<()> {
         let bound = self.get_or_bind_ephemeral()?;
 

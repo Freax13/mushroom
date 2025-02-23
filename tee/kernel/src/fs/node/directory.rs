@@ -2,6 +2,7 @@ use super::DirEntryName;
 use crate::{
     error::err,
     fs::{
+        fd::unix_socket::StreamUnixSocket,
         node::{DynINode, FileAccessContext, INode},
         path::{FileName, Path},
     },
@@ -87,6 +88,18 @@ macro_rules! dir_impls {
             gid: Gid,
         ) -> Result<()> {
             Directory::create_fifo(self, file_name, mode, uid, gid)
+        }
+
+        fn bind_socket(
+            &self,
+            file_name: FileName<'static>,
+            mode: FileMode,
+            uid: Uid,
+            gid: Gid,
+            socket: &crate::fs::fd::unix_socket::StreamUnixSocket,
+            socketname: &Path,
+        ) -> Result<()> {
+            Directory::bind_socket(self, file_name, mode, uid, gid, socket, socketname)
         }
 
         fn is_empty_dir(&self) -> bool {
@@ -184,6 +197,15 @@ pub trait Directory: INode {
         mode: FileMode,
         uid: Uid,
         gid: Gid,
+    ) -> Result<()>;
+    fn bind_socket(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+        socket: &StreamUnixSocket,
+        socketname: &Path,
     ) -> Result<()>;
     fn is_empty(&self) -> bool;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;

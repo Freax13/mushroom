@@ -1,26 +1,51 @@
-use alloc::{boxed::Box, format, sync::Arc};
+use core::{cmp, ops::Not, pin::pin};
+
+use alloc::{
+    borrow::ToOwned,
+    boxed::Box,
+    collections::{
+        btree_map::{BTreeMap, Entry},
+        vec_deque::VecDeque,
+    },
+    format,
+    sync::{Arc, Weak},
+    vec,
+    vec::Vec,
+};
 use async_trait::async_trait;
-use futures::{FutureExt, select_biased};
+use futures::future::select;
+use usize_conversions::{FromUsize, usize_from};
+use x86_64::{align_down, align_up};
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{Result, bail, ensure},
+    error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            PipeBlocked, ReadBuf, WriteBuf,
-            stream_buffer::{self, SpliceBlockedError},
+            FdFlags, FileDescriptor, FileDescriptorTable, PipeBlocked, ReadBuf, VectoredUserBuf,
+            WriteBuf,
+            stream_buffer::{self},
         },
-        node::{FileAccessContext, new_ino},
+        node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,
         path::Path,
     },
-    spin::mutex::Mutex,
+    rt::notify::{Notify, NotifyOnDrop},
+    spin::{
+        mutex::{Mutex, MutexGuard},
+        once::Once,
+    },
     user::process::{
+        limits::CurrentNoFileLimit,
         memory::VirtualMemory,
-        syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer, RecvFromFlags, SentToFlags,
-            SocketAddr, Stat, Timespec,
+        syscall::{
+            args::{
+                Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
+                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketType, Stat,
+                Timespec, UnixAddr, pointee::SizedPointee,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
@@ -28,25 +53,52 @@ use crate::{
 
 const CAPACITY: usize = 262144;
 
+static ABSTRACT_SOCKETS: Mutex<BTreeMap<Vec<u8>, Weak<StreamUnixSocket>>> =
+    Mutex::new(BTreeMap::new());
+
 pub struct StreamUnixSocket {
+    this: Weak<Self>,
     ino: u64,
     internal: Mutex<StreamUnixSocketInternal>,
-    write_half: stream_buffer::WriteHalf,
-    read_half: stream_buffer::ReadHalf,
+    socketname: Mutex<UnixAddr>,
+    activate_notify: Notify,
+    mode: Once<Mode>,
     file_lock: FileLock,
 }
 
+#[derive(Clone)]
 struct StreamUnixSocketInternal {
     flags: OpenFlags,
     ownership: Ownership,
 }
 
+enum Mode {
+    Active(Active),
+    Passive(Passive),
+}
+
 impl StreamUnixSocket {
-    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
-        let (read_half1, write_half1) = stream_buffer::new(CAPACITY, stream_buffer::Type::Socket);
-        let (read_half2, write_half2) = stream_buffer::new(CAPACITY, stream_buffer::Type::Socket);
+    pub fn new(flags: OpenFlags, uid: Uid, gid: Gid) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            ino: new_ino(),
+            internal: Mutex::new(StreamUnixSocketInternal {
+                flags,
+                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+            }),
+            socketname: Mutex::new(UnixAddr::Unnamed),
+            activate_notify: Notify::new(),
+            mode: Once::new(),
+            file_lock: FileLock::anonymous(),
+        })
+    }
+
+    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Arc<Self>, Arc<Self>) {
+        let (read_half1, write_half2) = LockedBuffer::new();
+        let (read_half2, write_half1) = LockedBuffer::new();
         (
-            Self {
+            Arc::new_cyclic(|this| Self {
+                this: this.clone(),
                 ino: new_ino(),
                 internal: Mutex::new(StreamUnixSocketInternal {
                     flags,
@@ -56,11 +108,17 @@ impl StreamUnixSocket {
                         gid,
                     ),
                 }),
-                write_half: write_half1,
-                read_half: read_half2,
+                socketname: Mutex::new(UnixAddr::Unnamed),
+                activate_notify: Notify::new(),
+                mode: Once::with_value(Mode::Active(Active {
+                    write_half: write_half1,
+                    read_half: read_half1,
+                    peername: UnixAddr::Unnamed,
+                })),
                 file_lock: FileLock::anonymous(),
-            },
-            Self {
+            }),
+            Arc::new_cyclic(|this| Self {
+                this: this.clone(),
                 ino: new_ino(),
                 internal: Mutex::new(StreamUnixSocketInternal {
                     flags,
@@ -70,18 +128,35 @@ impl StreamUnixSocket {
                         gid,
                     ),
                 }),
-                write_half: write_half2,
-                read_half: read_half1,
+                socketname: Mutex::new(UnixAddr::Unnamed),
+                activate_notify: Notify::new(),
+                mode: Once::with_value(Mode::Active(Active {
+                    write_half: write_half2,
+                    read_half: read_half2,
+                    peername: UnixAddr::Unnamed,
+                })),
                 file_lock: FileLock::anonymous(),
-            },
+            }),
         )
+    }
+
+    pub fn bind(&self, socketname: UnixAddr) -> Result<Weak<Self>> {
+        ensure!(!matches!(socketname, UnixAddr::Unnamed), Inval);
+
+        let mut guard = self.socketname.lock();
+        // Make sure that the socket is not already bound.
+        ensure!(matches!(*guard, UnixAddr::Unnamed), Inval);
+        *guard = socketname;
+        drop(guard);
+
+        Ok(self.this.clone())
     }
 }
 
 #[async_trait]
 impl OpenFileDescription for StreamUnixSocket {
     fn flags(&self) -> OpenFlags {
-        self.internal.lock().flags
+        self.internal.lock().flags | OpenFlags::RDWR
     }
 
     fn path(&self) -> Result<Path> {
@@ -100,15 +175,111 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        self.read_half.read(buf)
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active
+            .read_half
+            .lock()
+            .read(buf)
+            .map(|(len, _ancillary_data)| len)
     }
 
     fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
-        self.read_half.read(buf)
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active
+            .read_half
+            .lock()
+            .read(buf)
+            .map(|(len, _ancillary_data)| len)
+    }
+
+    fn recv_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        fdtable: &FileDescriptorTable,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<usize> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+
+        let mut vectored_buf = VectoredUserBuf::new(vm);
+        for i in 0..usize_from(msg_hdr.iovlen) {
+            let iov = vm.read_with_abi(msg_hdr.iov.add(i), abi)?;
+            vectored_buf.push(iov);
+        }
+
+        let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf)?;
+
+        if let Some(ancillary_data) = ancillary_data {
+            let align = match abi {
+                Abi::I386 => 4,
+                Abi::Amd64 => 8,
+            };
+            let mut control = msg_hdr.control;
+            let mut control_len = align_down(msg_hdr.controllen, align);
+
+            if let Some(fds) = ancillary_data.rights.filter(|fds| !fds.is_empty()) {
+                let mut cmsg_header = CmsgHdr {
+                    len: 0,
+                    level: 1,
+                    r#type: 1,
+                };
+                let header_len = cmsg_header.size(abi);
+                cmsg_header.len = u64::from_usize(header_len);
+                if let Some(mut payload_len) = control_len.checked_sub(u64::from_usize(header_len))
+                {
+                    for fd in fds {
+                        let Some(next_payload_len) = payload_len.checked_sub(4) else {
+                            break;
+                        };
+                        payload_len = next_payload_len;
+
+                        let flags = FdFlags::empty(); // TODO: Set CLOEXEC if requested
+                        let Ok(num) = fdtable.insert(fd, flags, no_file_limit) else {
+                            break;
+                        };
+
+                        vm.write(
+                            control.bytes_offset(usize_from(cmsg_header.len)).cast(),
+                            num,
+                        )?;
+
+                        cmsg_header.len += 4;
+                    }
+
+                    vm.write_with_abi(control, cmsg_header, abi)?;
+
+                    let offset = align_up(cmsg_header.len, align);
+                    control = control.bytes_offset(usize_from(offset));
+                    control_len -= offset;
+                }
+            }
+
+            _ = control;
+
+            msg_hdr.controllen -= control_len;
+        } else {
+            msg_hdr.controllen = 0;
+        }
+
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
-        self.write_half.write(buf)
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active.write_half.lock().write(buf, None)
     }
 
     fn send_to(
@@ -119,8 +290,78 @@ impl OpenFileDescription for StreamUnixSocket {
         addr: Pointer<SocketAddr>,
         _addrlen: usize,
     ) -> Result<usize> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
         ensure!(addr.is_null(), IsConn);
-        self.write_half.write(buf)
+        active.write_half.lock().write(buf, None)
+    }
+
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        fdtable: &FileDescriptorTable,
+    ) -> Result<usize> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+
+        let ancillary_data = if msg_hdr.controllen > 0 {
+            let mut ancillary_data = AncillaryData::default();
+
+            while msg_hdr.controllen > 0 {
+                let (len, header) = vm.read_sized_with_abi(msg_hdr.control, abi)?;
+                ensure!(msg_hdr.controllen >= header.len, Inval);
+                let buffer_len = usize_from(header.len).checked_sub(len).ok_or(err!(Inval))?;
+
+                match (header.level, header.r#type) {
+                    (1, 1) => {
+                        // SCM_RIGHTS
+                        ensure!(buffer_len % 4 == 0, Inval);
+                        let num_fds = buffer_len / 4;
+
+                        ensure!(ancillary_data.rights.is_none(), Inval);
+
+                        let fds = (0..num_fds)
+                            .map(|i| {
+                                let fd =
+                                    vm.read(msg_hdr.control.bytes_offset(len).cast().add(i))?;
+                                fdtable.get(fd)
+                            })
+                            .collect::<Result<_>>()?;
+                        ancillary_data.rights = Some(fds);
+                    }
+                    _ => bail!(Inval),
+                }
+
+                let align = match abi {
+                    Abi::I386 => 4,
+                    Abi::Amd64 => 8,
+                };
+                let offset = align_up(header.len, align);
+                msg_hdr.control = msg_hdr.control.bytes_offset(usize_from(offset));
+                msg_hdr.controllen -= offset;
+            }
+
+            Some(ancillary_data)
+        } else {
+            None
+        };
+
+        let mut vectored_buf = VectoredUserBuf::new(vm);
+        for i in 0..usize_from(msg_hdr.iovlen) {
+            let iov = vm.read_with_abi(msg_hdr.iov.add(i), abi)?;
+            vectored_buf.push(iov);
+        }
+
+        active
+            .write_half
+            .lock()
+            .write(&vectored_buf, ancillary_data)
     }
 
     fn splice_from(
@@ -129,12 +370,12 @@ impl OpenFileDescription for StreamUnixSocket {
         offset: Option<usize>,
         len: usize,
     ) -> Result<Result<usize, PipeBlocked>> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
         ensure!(offset.is_none(), Inval);
-        match stream_buffer::splice(read_half, &self.write_half, len) {
-            Ok(len) => Ok(Ok(len)),
-            Err(SpliceBlockedError::Read) => Ok(Err(PipeBlocked)),
-            Err(SpliceBlockedError::Write) => bail!(Again),
-        }
+        active.read_half.lock().splice_from(read_half, len)
     }
 
     fn splice_to(
@@ -143,16 +384,232 @@ impl OpenFileDescription for StreamUnixSocket {
         offset: Option<usize>,
         len: usize,
     ) -> Result<Result<usize, PipeBlocked>> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
         ensure!(offset.is_none(), Inval);
-        match stream_buffer::splice(&self.read_half, write_half, len) {
-            Ok(len) => Ok(Ok(len)),
-            Err(SpliceBlockedError::Read) => bail!(Again),
-            Err(SpliceBlockedError::Write) => Ok(Err(PipeBlocked)),
+        active.read_half.lock().splice_to(write_half, len)
+    }
+
+    fn shutdown(&self, how: ShutdownHow) -> Result<()> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        match how {
+            ShutdownHow::Rd => active.read_half.lock().shutdown(),
+            ShutdownHow::Wr => active.write_half.lock().shutdown(),
+            ShutdownHow::RdWr => {
+                active.read_half.lock().shutdown();
+                active.write_half.lock().shutdown();
+            }
+        }
+        Ok(())
+    }
+
+    fn bind(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+        ctx: &mut FileAccessContext,
+    ) -> Result<()> {
+        let mut raw = vec![0; addrlen];
+        virtual_memory.read_bytes(addr.get(), &mut raw)?;
+        let addr = UnixAddr::parse(&raw)?;
+
+        match addr {
+            UnixAddr::Pathname(path) => {
+                let guard = self.internal.lock();
+                bind_socket(
+                    &path,
+                    guard.ownership.mode(),
+                    guard.ownership.uid(),
+                    guard.ownership.gid(),
+                    self,
+                    ctx,
+                )
+            }
+            UnixAddr::Unnamed => bail!(Inval),
+            UnixAddr::Abstract(ref name) => {
+                let mut guard = ABSTRACT_SOCKETS.lock();
+                let entry = guard.entry(name.to_owned());
+                let Entry::Vacant(entry) = entry else {
+                    bail!(AddrInUse);
+                };
+                let weak = self.bind(addr)?;
+                entry.insert(weak);
+                Ok(())
+            }
         }
     }
 
+    fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        match (level, optname) {
+            (1, 3) => {
+                // SO_TYPE
+                let ty = SocketType::Stream as u32;
+                Ok(ty.to_le_bytes().to_vec())
+            }
+            (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            _ => bail!(Inval),
+        }
+    }
+
+    fn get_socket_name(&self) -> Result<Vec<u8>> {
+        Ok(self.socketname.lock().to_bytes())
+    }
+
+    fn get_peer_name(&self) -> Result<Vec<u8>> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        Ok(active.peername.to_bytes())
+    }
+
+    fn listen(&self, backlog: usize) -> Result<()> {
+        let mut initialized = false;
+        let mode = self.mode.call_once(|| {
+            initialized = true;
+            Mode::Passive(Passive {
+                connect_notify: Notify::new(),
+                internal: Mutex::new(PassiveInternal {
+                    queue: VecDeque::new(),
+                    backlog: 0,
+                }),
+            })
+        });
+        if initialized {
+            self.activate_notify.notify();
+        }
+        let Mode::Passive(passive) = mode else {
+            bail!(IsConn)
+        };
+
+        let mut guard = passive.internal.lock();
+        let was_full = guard.backlog >= guard.queue.len();
+        guard.backlog = cmp::max(backlog, 1);
+        let is_full = guard.backlog >= guard.queue.len();
+        drop(guard);
+
+        // If the backlog size was changed, notify sockets that are trying to connect.
+        if was_full && !is_full {
+            passive.connect_notify.notify();
+        }
+
+        Ok(())
+    }
+
+    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+        let mode = self.mode.get().ok_or(err!(Inval))?;
+        let Mode::Passive(passive) = mode else {
+            bail!(Inval)
+        };
+        let mut guard = passive.internal.lock();
+        let active = guard.queue.pop_front().ok_or(err!(Again))?;
+        drop(guard);
+
+        let addr = active.peername.to_bytes();
+
+        let mut internal = self.internal.lock().clone();
+        internal
+            .flags
+            .set(OpenFlags::NONBLOCK, flags.contains(Accept4Flags::NONBLOCK));
+        internal
+            .flags
+            .set(OpenFlags::CLOEXEC, flags.contains(Accept4Flags::CLOEXEC));
+        let socket = Arc::new_cyclic(|this| StreamUnixSocket {
+            this: this.clone(),
+            ino: new_ino(),
+            internal: Mutex::new(internal),
+            socketname: self.socketname.clone(),
+            activate_notify: Notify::new(),
+            mode: Once::with_value(Mode::Active(active)),
+            file_lock: FileLock::anonymous(),
+        });
+        Ok((FileDescriptor::from(socket), addr))
+    }
+
+    async fn connect(
+        &self,
+        virtual_memory: &VirtualMemory,
+        addr: Pointer<SocketAddr>,
+        addrlen: usize,
+        ctx: &mut FileAccessContext,
+    ) -> Result<()> {
+        let mut raw = vec![0; addrlen];
+        virtual_memory.read_bytes(addr.get(), &mut raw)?;
+        let addr = UnixAddr::parse(&raw)?;
+
+        let server = match addr {
+            UnixAddr::Pathname(path) => get_socket(&path, ctx)?,
+            UnixAddr::Unnamed => bail!(Inval),
+            UnixAddr::Abstract(name) => ABSTRACT_SOCKETS
+                .lock()
+                .get(&name)
+                .and_then(Weak::upgrade)
+                .ok_or(err!(ConnRefused))?,
+        };
+        let server_mode = server.mode.get().ok_or(err!(ConnRefused))?;
+        let Mode::Passive(passive) = server_mode else {
+            bail!(ConnRefused)
+        };
+
+        passive
+            .connect_notify
+            .wait_until(|| {
+                let mut guard = passive.internal.lock();
+                if guard.backlog <= guard.queue.len() {
+                    return None;
+                }
+
+                let res = self
+                    .mode
+                    .init(|| {
+                        let (read_half1, write_half2) = LockedBuffer::new();
+                        let (read_half2, write_half1) = LockedBuffer::new();
+
+                        guard.queue.push_back(Active {
+                            write_half: write_half2,
+                            read_half: read_half2,
+                            peername: self.socketname.lock().clone(),
+                        });
+                        passive.connect_notify.notify();
+
+                        self.activate_notify.notify();
+
+                        Mode::Active(Active {
+                            write_half: write_half1,
+                            read_half: read_half1,
+                            peername: server.socketname.lock().clone(),
+                        })
+                    })
+                    .map(drop)
+                    .map_err(|_| err!(IsConn));
+                Some(res)
+            })
+            .await?;
+        Ok(())
+    }
+
     fn poll_ready(&self, events: Events) -> Events {
-        self.write_half.poll_ready(events) | self.read_half.poll_ready(events)
+        let Some(mode) = self.mode.get() else {
+            return Events::empty();
+        };
+        match mode {
+            Mode::Active(active) => {
+                active.read_half.lock().poll_read(events)
+                    | active.write_half.lock().poll_write(events)
+            }
+            Mode::Passive(passive) => {
+                let guard = passive.internal.lock();
+                let mut ready_events = Events::empty();
+                ready_events.set(Events::READ, !guard.queue.is_empty());
+                ready_events & events
+            }
+        }
     }
 
     fn epoll_ready(&self, events: Events) -> Result<Events> {
@@ -160,20 +617,50 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 
     async fn ready(&self, events: Events) -> Result<Events> {
-        loop {
-            let write_wait = self.write_half.wait();
-            let read_wait = self.read_half.wait();
-
-            let events = self.write_half.poll_ready(events) | self.read_half.poll_ready(events);
-            if !events.is_empty() {
-                return Ok(events);
+        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
+        match mode {
+            Mode::Active(active) => {
+                let write_ready = active.write_half.notify.wait_until(|| {
+                    let events = active.write_half.lock().poll_write(events);
+                    events.is_empty().not().then_some(events)
+                });
+                let read_ready = active.read_half.notify.wait_until(|| {
+                    let events = active.read_half.lock().poll_read(events);
+                    events.is_empty().not().then_some(events)
+                });
+                let events = select(pin!(write_ready), pin!(read_ready))
+                    .await
+                    .factor_first()
+                    .0;
+                Ok(events)
             }
-
-            select_biased! {
-                _ = write_wait.fuse() => {}
-                _ = read_wait.fuse() => {}
+            Mode::Passive(passive) => {
+                let events = passive
+                    .connect_notify
+                    .wait_until(|| {
+                        let guard = passive.internal.lock();
+                        let mut ready_events = Events::empty();
+                        ready_events.set(Events::READ, !guard.queue.is_empty());
+                        ready_events &= events;
+                        ready_events.is_empty().not().then_some(ready_events)
+                    })
+                    .await;
+                Ok(events)
             }
         }
+    }
+
+    async fn ready_for_write(&self, count: usize) -> Result<()> {
+        let mode = self.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active
+            .write_half
+            .notify
+            .wait_until(|| active.write_half.lock().can_write(count).then_some(()))
+            .await;
+        Ok(())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -212,9 +699,282 @@ impl OpenFileDescription for StreamUnixSocket {
     }
 }
 
-impl Drop for StreamUnixSocket {
-    fn drop(&mut self) {
-        self.read_half.shutdown();
-        self.write_half.shutdown();
+struct Active {
+    write_half: LockedBuffer,
+    read_half: LockedBuffer,
+    peername: UnixAddr,
+}
+
+struct Buffer {
+    data: VecDeque<u8>,
+    capacity: usize,
+    boundaries: VecDeque<MessageBoundary>,
+    total_sent: usize,
+    total_received: usize,
+    shutdown: bool,
+}
+
+struct MessageBoundary {
+    boundary: usize,
+    data: AncillaryData,
+    len: usize,
+}
+
+#[derive(Default)]
+struct AncillaryData {
+    rights: Option<Vec<FileDescriptor>>,
+}
+
+impl Buffer {
+    pub fn new() -> Self {
+        Self {
+            data: VecDeque::new(),
+            capacity: CAPACITY,
+            boundaries: VecDeque::new(),
+            total_sent: 0,
+            total_received: 0,
+            shutdown: false,
+        }
     }
+}
+
+struct LockedBuffer {
+    buffer: Arc<Mutex<Buffer>>,
+    notify: NotifyOnDrop,
+}
+
+impl LockedBuffer {
+    pub fn new() -> (Self, Self) {
+        let arc = Arc::new(Mutex::new(Buffer::new()));
+        let notify = Arc::new(Notify::new());
+        (
+            Self {
+                buffer: arc.clone(),
+                notify: NotifyOnDrop(notify.clone()),
+            },
+            Self {
+                buffer: arc,
+                notify: NotifyOnDrop(notify),
+            },
+        )
+    }
+
+    pub fn lock(&self) -> BufferGuard {
+        BufferGuard {
+            buffer: self,
+            guard: self.buffer.lock(),
+        }
+    }
+}
+
+struct BufferGuard<'a> {
+    buffer: &'a LockedBuffer,
+    guard: MutexGuard<'a, Buffer>,
+}
+
+impl BufferGuard<'_> {
+    pub fn read(&mut self, buf: &mut dyn ReadBuf) -> Result<(usize, Option<AncillaryData>)> {
+        let buffer = &mut *self.guard;
+
+        let len = buf.buffer_len();
+        if len == 0 {
+            return Ok((0, None));
+        }
+
+        if buffer.data.is_empty() {
+            if buffer.shutdown {
+                return Ok((0, None));
+            }
+
+            if Arc::strong_count(&self.buffer.buffer) == 1 {
+                return Ok((0, None));
+            }
+
+            bail!(Again)
+        }
+
+        let mut len = cmp::min(len, buffer.data.len());
+
+        if let Some(front) = buffer.boundaries.front() {
+            let next_message_boundary = (front.boundary + front.len) - buffer.total_received;
+            len = cmp::min(len, next_message_boundary);
+        }
+
+        let (slice1, slice2) = buffer.data.as_slices();
+        if let Some(slice) = slice1.get(..len) {
+            buf.write(0, slice)?;
+        } else {
+            buf.write(0, slice1)?;
+            buf.write(slice1.len(), &slice2[..len - slice1.len()])?;
+        }
+        buffer.data.drain(..len);
+
+        buffer.total_received += len;
+
+        let ancillary_data = buffer
+            .boundaries
+            .pop_front_if(|b| b.boundary < buffer.total_received)
+            .map(|b| b.data);
+
+        self.buffer.notify.notify();
+
+        Ok((len, ancillary_data))
+    }
+
+    pub fn write(
+        &mut self,
+        buf: &dyn WriteBuf,
+        ancillary_data: Option<AncillaryData>,
+    ) -> Result<usize> {
+        let buffer = &mut *self.guard;
+
+        let len = buf.buffer_len();
+        if len == 0 {
+            // Yes, dropping `ancillary_data` is correct here.
+            return Ok(0);
+        }
+
+        ensure!(!buffer.shutdown, Pipe);
+        ensure!(Arc::strong_count(&self.buffer.buffer) > 1, Pipe);
+
+        let len = buf.buffer_len();
+        assert!(len <= buffer.capacity); // TODO
+        ensure!(len < buffer.capacity, Again);
+
+        buffer.data.resize(buffer.data.len() + len, 0);
+        let (slice1, slice2) = buffer.data.as_mut_slices();
+        if let Some(offset) = slice2.len().checked_sub(len) {
+            buf.read(0, &mut slice2[offset..])?;
+        } else {
+            let offset = slice1.len() - (len - slice2.len());
+            buf.read(0, &mut slice1[offset..])?;
+            buf.read(len - slice2.len(), slice2)?;
+        }
+
+        if let Some(ancillary_data) = ancillary_data {
+            buffer.boundaries.push_back(MessageBoundary {
+                boundary: buffer.total_sent,
+                data: ancillary_data,
+                len,
+            });
+        }
+
+        buffer.total_sent += len;
+
+        self.buffer.notify.notify();
+
+        Ok(len)
+    }
+
+    pub fn can_write(&self, count: usize) -> bool {
+        let buffer = &*self.guard;
+        buffer.capacity.saturating_sub(buffer.data.len()) >= count
+            || buffer.shutdown
+            || Arc::strong_count(&self.buffer.buffer) == 1
+    }
+
+    pub fn splice_from(
+        &mut self,
+        read_half: &stream_buffer::ReadHalf,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let buffer = &mut *self.guard;
+
+        if len == 0 {
+            return Ok(Ok(0));
+        }
+
+        ensure!(!buffer.shutdown, Pipe);
+        ensure!(Arc::strong_count(&self.buffer.buffer) > 1, Pipe);
+
+        let len = cmp::min(len, buffer.capacity.saturating_sub(buffer.data.len()));
+        read_half.splice_to(len, |buf, len| {
+            buffer.data.extend(buf.drain(..len));
+            buffer.total_sent += len;
+            self.buffer.notify.notify();
+        })
+    }
+
+    pub fn splice_to(
+        &mut self,
+        write_half: &stream_buffer::WriteHalf,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        let buffer = &mut *self.guard;
+
+        if len == 0 {
+            return Ok(Ok(0));
+        }
+
+        if buffer.data.is_empty() {
+            if buffer.shutdown {
+                return Ok(Ok(0));
+            }
+
+            if Arc::strong_count(&self.buffer.buffer) == 1 {
+                return Ok(Ok(0));
+            }
+
+            bail!(Again)
+        }
+
+        let mut len = cmp::min(len, buffer.data.len());
+
+        if let Some(front) = buffer.boundaries.front() {
+            let next_message_boundary = (front.boundary + front.len) - buffer.total_received;
+            len = cmp::min(len, next_message_boundary);
+        }
+
+        write_half.splice_from(len, |buf, len| {
+            buf.extend(buffer.data.drain(..len));
+            buffer.total_received += len;
+            buffer
+                .boundaries
+                .pop_front_if(|b| b.boundary <= buffer.total_received);
+            self.buffer.notify.notify();
+        })
+    }
+
+    pub fn shutdown(&mut self) {
+        self.guard.shutdown = true;
+        self.buffer.notify.notify();
+    }
+
+    pub fn poll_read(&self, events: Events) -> Events {
+        let buffer = &*self.guard;
+
+        let mut ready_events = Events::empty();
+        let strong_count = Arc::strong_count(&self.buffer.buffer);
+        ready_events.set(
+            Events::READ,
+            !buffer.data.is_empty() || strong_count == 1 || buffer.shutdown,
+        );
+        ready_events.set(Events::RDHUP, strong_count == 1 || buffer.shutdown);
+
+        ready_events &= events;
+        ready_events
+    }
+
+    pub fn poll_write(&self, events: Events) -> Events {
+        let buffer = &*self.guard;
+
+        let mut ready_events = Events::empty();
+        let closed = buffer.shutdown || Arc::strong_count(&self.buffer.buffer) == 1;
+        ready_events.set(Events::WRITE, buffer.data.len() < buffer.capacity || closed);
+        ready_events &= events;
+        ready_events.set(Events::HUP, closed);
+        ready_events.set(Events::ERR, closed);
+
+        ready_events
+    }
+}
+
+struct Passive {
+    connect_notify: Notify,
+    internal: Mutex<PassiveInternal>,
+}
+
+struct PassiveInternal {
+    queue: VecDeque<Active>,
+    backlog: usize,
 }
