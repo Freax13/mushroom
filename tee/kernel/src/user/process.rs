@@ -405,7 +405,7 @@ impl Process {
         let now = now(ClockId::Monotonic);
         let (cancel_tx, cancel_rx) = oneshot::new();
         let deadline = now.saturating_add(Timespec {
-            tv_sec: i32::try_from(seconds).unwrap(),
+            tv_sec: i32::try_from(seconds).unwrap_or(i32::MAX),
             tv_nsec: 0,
         });
         let new_state = AlarmState {
