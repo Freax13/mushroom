@@ -958,7 +958,7 @@ async fn select(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
-    numfds: i64,
+    numfds: i32,
     readfds: Pointer<FdSet>,
     writefds: Pointer<FdSet>,
     exceptfds: Pointer<FdSet>,
@@ -985,7 +985,7 @@ async fn select(
 async fn select_impl(
     virtual_memory: Arc<VirtualMemory>,
     fdtable: Arc<FileDescriptorTable>,
-    numfds: i64,
+    numfds: i32,
     readfds: Pointer<FdSet>,
     writefds: Pointer<FdSet>,
     exceptfds: Pointer<FdSet>,
@@ -1051,6 +1051,7 @@ async fn select_impl(
             let mut events = Events::empty();
             events.set(Events::READ, read);
             events.set(Events::WRITE, write);
+            events.set(Events::PRI, except);
 
             if events.is_empty() {
                 continue;
@@ -3875,7 +3876,7 @@ async fn pselect6(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
-    numfds: i64,
+    numfds: i32,
     readfds: Pointer<FdSet>,
     writefds: Pointer<FdSet>,
     exceptfds: Pointer<FdSet>,
@@ -3884,7 +3885,11 @@ async fn pselect6(
 ) -> SyscallResult {
     let mut sigmask = if !sigmask.is_null() {
         let sigmask = virtual_memory.read_with_abi(sigmask, abi)?;
-        Some(virtual_memory.read_with_abi(sigmask.ss, abi)?)
+        if !sigmask.ss.is_null() {
+            Some(virtual_memory.read_with_abi(sigmask.ss, abi)?)
+        } else {
+            None
+        }
     } else {
         None
     };
