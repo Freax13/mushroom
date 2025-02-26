@@ -63,3 +63,32 @@ unsafe fn copy_into_page_direct(src: *const [u8; 4096], dst: *mut [u8; 4096]) {
         }
     }
 }
+
+/// Fill a frame with zeros.
+///
+/// # Safety
+///
+/// Writing to the frame must be safe.
+#[inline(always)]
+pub unsafe fn zero_frame(frame: PhysFrame) {
+    let dst = get_fast_mapping(frame).unwrap();
+    unsafe { zero_page_direct(dst) };
+}
+
+#[inline(always)]
+unsafe fn zero_page_direct(dst: *mut [u8; 4096]) {
+    assert!(dst.is_aligned_to(32));
+
+    unsafe {
+        asm! {
+            "vpxor ymm0, ymm0, ymm0",
+            "66:",
+            "vmovdqa [{dst}], ymm0",
+            "add {dst}, 32",
+            "loop 66b",
+            dst = inout(reg) dst => _,
+            inout("ecx") 4096 / 32 => _,
+            options(nostack),
+        }
+    }
+}

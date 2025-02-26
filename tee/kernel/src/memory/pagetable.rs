@@ -39,7 +39,7 @@ use x86_64::{
 
 use super::{
     frame::{allocate_frame, deallocate_frame},
-    temporary::copy_into_frame,
+    temporary::{copy_into_frame, zero_frame},
 };
 
 pub mod flush;
@@ -948,27 +948,24 @@ where
                     }
                 }
 
-                // Actually initialize the entry.
+                // Allocate memory for the page table and zero initialize it.
+                // Note that it's important to zero the memory before mapping
+                // it because the CPU may speculatively read from it and
+                // install TLB entries based on the uninitialized data.
                 let frame = allocate_frame();
+                unsafe {
+                    zero_frame(frame);
+                }
+
+                // Prepare the entry.
                 let mut new_entry = frame.start_address().as_u64();
                 new_entry.set_bit(PRESENT_BIT, true);
                 new_entry.set_bit(WRITE_BIT, true);
                 new_entry.set_bit(USER_BIT, user);
                 new_entry.set_bit(GLOBAL_BIT, global);
-                new_entry.set_bit(INITIALIZING_BIT, true);
                 new_entry.set_bits(REFERENCE_COUNT_BITS, 0);
 
                 // Write the entry back.
-                atomic_store(&self.entry, new_entry);
-
-                // Zero out the page table.
-                let table_ptr = self.as_table_ptr().cast_mut();
-                unsafe {
-                    core::ptr::write_bytes(table_ptr, 0, 1);
-                }
-
-                // Unset INITIALIZING_BIT.
-                new_entry.set_bit(INITIALIZING_BIT, false);
                 atomic_store(&self.entry, new_entry);
 
                 // We're done.
