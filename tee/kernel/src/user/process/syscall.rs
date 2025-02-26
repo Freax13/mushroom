@@ -1051,6 +1051,7 @@ async fn select_impl(
             let mut events = Events::empty();
             events.set(Events::READ, read);
             events.set(Events::WRITE, write);
+            events.set(Events::PRI, except);
 
             if events.is_empty() {
                 continue;
