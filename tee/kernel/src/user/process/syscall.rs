@@ -3885,7 +3885,11 @@ async fn pselect6(
 ) -> SyscallResult {
     let mut sigmask = if !sigmask.is_null() {
         let sigmask = virtual_memory.read_with_abi(sigmask, abi)?;
-        Some(virtual_memory.read_with_abi(sigmask.ss, abi)?)
+        if !sigmask.ss.is_null() {
+            Some(virtual_memory.read_with_abi(sigmask.ss, abi)?)
+        } else {
+            None
+        }
     } else {
         None
     };
