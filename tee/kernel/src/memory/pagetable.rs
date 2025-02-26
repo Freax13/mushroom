@@ -39,7 +39,7 @@ use x86_64::{
 
 use super::{
     frame::{allocate_frame, deallocate_frame},
-    temporary::copy_into_frame,
+    temporary::{copy_into_frame, zero_frame},
 };
 
 pub mod flush;
@@ -709,28 +709,24 @@ unsafe trait TableLevel {
     type Next;
 
     const CAN_SET_GLOBAL: bool;
-    const CAN_SET_HUGE: bool;
 }
 
 unsafe impl TableLevel for Level4 {
     type Next = Level3;
 
     const CAN_SET_GLOBAL: bool = false;
-    const CAN_SET_HUGE: bool = false;
 }
 
 unsafe impl TableLevel for Level3 {
     type Next = Level2;
 
     const CAN_SET_GLOBAL: bool = true;
-    const CAN_SET_HUGE: bool = true;
 }
 
 unsafe impl TableLevel for Level2 {
     type Next = Level1;
 
     const CAN_SET_GLOBAL: bool = true;
-    const CAN_SET_HUGE: bool = true;
 }
 
 /// A level that has a parent level.
@@ -891,10 +887,6 @@ where
 
         let mut current_entry = atomic_load(&self.entry);
         loop {
-            if L::CAN_SET_HUGE {
-                assert!(!current_entry.get_bit(HUGE_BIT));
-            }
-
             // If the entry is being initialized right now, spin.
             if current_entry.get_bit(INITIALIZING_BIT) {
                 core::hint::spin_loop();
@@ -948,27 +940,24 @@ where
                     }
                 }
 
-                // Actually initialize the entry.
+                // Allocate memory for the page table and zero initialize it.
+                // Note that it's important to zero the memory before mapping
+                // it because the CPU may speculatively read from it and
+                // install TLB entries based on the uninitialized data.
                 let frame = allocate_frame();
+                unsafe {
+                    zero_frame(frame);
+                }
+
+                // Prepare the entry.
                 let mut new_entry = frame.start_address().as_u64();
                 new_entry.set_bit(PRESENT_BIT, true);
                 new_entry.set_bit(WRITE_BIT, true);
                 new_entry.set_bit(USER_BIT, user);
                 new_entry.set_bit(GLOBAL_BIT, global);
-                new_entry.set_bit(INITIALIZING_BIT, true);
                 new_entry.set_bits(REFERENCE_COUNT_BITS, 0);
 
                 // Write the entry back.
-                atomic_store(&self.entry, new_entry);
-
-                // Zero out the page table.
-                let table_ptr = self.as_table_ptr().cast_mut();
-                unsafe {
-                    core::ptr::write_bytes(table_ptr, 0, 1);
-                }
-
-                // Unset INITIALIZING_BIT.
-                new_entry.set_bit(INITIALIZING_BIT, false);
                 atomic_store(&self.entry, new_entry);
 
                 // We're done.
@@ -1353,7 +1342,6 @@ const PRESENT_BIT: usize = 0;
 const WRITE_BIT: usize = 1;
 const USER_BIT: usize = 2;
 const DIRTY_BIT: usize = 6;
-const HUGE_BIT: usize = 7;
 const GLOBAL_BIT: usize = 8;
 const DISABLE_EXECUTE_BIT: usize = 63;
 

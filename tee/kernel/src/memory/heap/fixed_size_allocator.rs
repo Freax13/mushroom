@@ -136,7 +136,10 @@ where
 
             // Take an allocator-wide lock to prevent racing try_free.
             let mut guard = self.state.lock();
-            let idx = guard.chunks.binary_search(&ptr).unwrap();
+            let Ok(idx) = guard.chunks.binary_search(&ptr) else {
+                // Another thread already freed the chunk.
+                return;
+            };
 
             let res = unsafe { ChunkHeader::try_free(ptr.as_ptr()) };
             if res.is_ok() {
