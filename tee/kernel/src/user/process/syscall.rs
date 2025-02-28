@@ -509,7 +509,7 @@ async fn poll(
                 pollfd.revents = PollEvents::empty();
             } else if let Ok(fd) = fdtable.get(pollfd.fd) {
                 let events = Events::from(pollfd.events) | Events::HUP | Events::ERR;
-                let revents = fd.poll_ready(events);
+                let revents = fd.poll_ready(events).map_or(Events::empty(), Events::from);
                 pollfd.revents = PollEvents::from(revents);
 
                 futures.push(async move { fd.ready(events).await });
@@ -548,9 +548,8 @@ async fn poll(
         let res = future::select(ready_fut, sleep_fut).await;
         match res {
             Either::Left((res, _)) => {
-                if let Some(res) = res {
+                if res.is_some() {
                     // A file descriptor became ready.
-                    res?;
                 } else {
                     // There are no file descriptors. Exit early.
                     break;
@@ -1058,7 +1057,7 @@ async fn select_impl(
             }
 
             let fd = fdtable.get(FdNum::new(i as i32))?;
-            let ready_events = fd.poll_ready(events);
+            let ready_events = fd.poll_ready(events).map_or(Events::empty(), Events::from);
 
             if ready_events.contains(Events::READ) {
                 result_readfds.as_mut().unwrap().set_bit(i, true);
@@ -1322,7 +1321,7 @@ fn socket(
                 r#type,
                 no_file_limit,
             )?,
-            SocketType::Dgram => todo!(),
+            SocketType::Dgram => bail!(NoSys),
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
@@ -1832,8 +1831,6 @@ async fn execve(
         }
         envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
     }
-
-    log::info!("execve({pathname:?}, {args:?}, {envs:?})");
 
     // Open the executable.
     let cwd = thread.process().cwd();
@@ -4005,7 +4002,7 @@ async fn splice(
                     .is_err_and(|err| err.kind() == ErrorKind::Again)
                 {
                     ensure!(!write_nonblock, Again);
-                    fd_out.ready_for_write(1).await?;
+                    fd_out.ready_for_write(1).await;
                     continue;
                 }
 
@@ -4046,7 +4043,7 @@ async fn splice(
                     .is_err_and(|err| err.kind() == ErrorKind::Again)
                 {
                     ensure!(!read_nonblock, Again);
-                    fd_in.ready(Events::READ).await?;
+                    fd_in.ready(Events::READ).await;
                     continue;
                 }
 

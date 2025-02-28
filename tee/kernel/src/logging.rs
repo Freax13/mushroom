@@ -34,7 +34,15 @@ impl Log for FastLogger {
         };
         let reset_color = "\x1b[0m";
 
-        let mut guard = WRITER.lock();
+        // Take the lock without potentially trigger a stall warning.
+        let mut guard = {
+            loop {
+                if let Some(guard) = WRITER.try_lock() {
+                    break guard;
+                }
+            }
+        };
+
         let _ = writeln!(
             guard,
             "{level_color}[{:<5} {}:{}]{reset_color} {}",

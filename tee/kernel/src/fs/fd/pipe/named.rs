@@ -3,13 +3,15 @@ use alloc::{
     sync::{Arc, Weak},
 };
 use async_trait::async_trait;
+use futures::future;
 
 use crate::{
     error::{Result, ensure},
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, WriteBuf, stream_buffer,
+            Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            WriteBuf, stream_buffer,
         },
         node::{DynINode, FileAccessContext},
         path::Path,
@@ -253,21 +255,21 @@ impl OpenFileDescription for ReadHalf {
         Some(&self.read_half)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         self.read_half.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         loop {
             let wait = self.read_half.wait();
 
             let events = self.poll_ready(events);
-            if !events.is_empty() {
-                return Ok(events);
+            if let Some(events) = events {
+                return events;
             }
 
             wait.await;
@@ -331,28 +333,28 @@ impl OpenFileDescription for WriteHalf {
         Some(&self.write_half)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         self.write_half.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         loop {
             let wait = self.write_half.wait();
 
             let events = self.poll_ready(events);
-            if !events.is_empty() {
-                return Ok(events);
+            if let Some(events) = events {
+                return events;
             }
 
             wait.await;
         }
     }
 
-    async fn ready_for_write(&self, count: usize) -> Result<()> {
+    async fn ready_for_write(&self, count: usize) {
         self.write_half.ready_for_write(count).await
     }
 
@@ -424,30 +426,32 @@ impl OpenFileDescription for FullReadWrite {
         Some(&self.write_half)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        self.read_half.poll_ready(events) | self.write_half.poll_ready(events)
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::zip(
+            self.read_half.poll_ready(events),
+            self.write_half.poll_ready(events),
+        )
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         loop {
             let read_wait = self.read_half.wait();
             let write_wait = self.write_half.wait();
 
             let events = self.poll_ready(events);
-            if !events.is_empty() {
-                return Ok(events);
+            if let Some(events) = events {
+                return events;
             }
 
-            read_wait.await;
-            write_wait.await;
+            future::select(read_wait, write_wait).await;
         }
     }
 
-    async fn ready_for_write(&self, count: usize) -> Result<()> {
+    async fn ready_for_write(&self, count: usize) {
         self.write_half.ready_for_write(count).await
     }
 

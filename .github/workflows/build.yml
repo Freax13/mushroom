@@ -123,6 +123,7 @@ jobs:
 
   test:
     strategy:
+      fail-fast: false
       matrix:
         profile:
           - development
@@ -169,3 +170,27 @@ jobs:
         env:
           PROFILE: release
           TEE: ${{ matrix.tee }}
+
+  external-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - coreutils
+        tee:
+          - snp
+          - tdx
+        profile:
+          - development
+          - release
+    name: "External Test"
+    runs-on: ${{ matrix.tee }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Run external tests"
+        run: make run-external-test
+        env:
+          PACKAGE: ${{ matrix.package }}
+          PROFILE: ${{ matrix.profile }}
+          TEE: ${{ matrix.tee }}
+          TIME_BACKEND: real

@@ -21,6 +21,8 @@ use crate::{
 
 use super::{SYSCALL_HANDLERS, args::SyscallArg};
 
+const VERBOSE: bool = false;
+
 #[derive(Clone, Copy, Debug)]
 pub struct SyscallArgs {
     pub abi: Abi,
@@ -170,12 +172,30 @@ impl SyscallHandlers {
         };
 
         let handler = handlers.get(syscall_no).copied().flatten().ok_or_else(|| {
-            warn!("unsupported syscall: no={syscall_no}, abi={:?}", args.abi);
+            if VERBOSE {
+                warn!("unsupported syscall: no={syscall_no}, abi={:?}", args.abi);
+            }
             err!(NoSys)
         })?;
 
         // Whether the syscall should occur in the debug logs.
-        let enable_log = !matches!(syscall_no, 0 | 1 | 202 | 228) && thread.tid() != 1;
+        let enable_log = VERBOSE;
+
+        if enable_log {
+            let guard = thread.lock();
+            let formatted_syscall = FormattedSyscall {
+                handler,
+                args,
+                thread: &guard,
+            };
+
+            trace!(
+                "core={} tid={} abi={:?} @ {formatted_syscall} = ...",
+                PerCpu::get().idx,
+                guard.tid(),
+                args.abi,
+            );
+        }
 
         let mut slot = SyscallHandlerSlot::new();
         let slot = pin!(slot);

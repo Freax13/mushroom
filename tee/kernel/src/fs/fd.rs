@@ -3,7 +3,9 @@ use core::fmt;
 use core::{
     cmp,
     ffi::c_void,
-    ops::Deref,
+    num::NonZeroU8,
+    ops::{BitOr, BitOrAssign, Deref},
+    pin::pin,
     sync::atomic::{AtomicI64, Ordering},
 };
 
@@ -36,6 +38,10 @@ use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use file::File;
+use futures::{
+    FutureExt,
+    future::{Either, select},
+};
 
 use crate::{
     error::{ErrorKind, Result},
@@ -639,24 +645,21 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn poll_ready(&self, events: Events) -> Events;
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents>;
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         let _ = events;
         bail!(Perm)
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
-        let _ = events;
-        bail!(Perm)
-    }
+    async fn ready(&self, events: Events) -> NonEmptyEvents;
 
     /// Returns a future that is ready when the file descriptor can process
     /// write of `size` bytes. Note that this doesn't necessairly mean that all
     /// `size` bytes will be written.
-    async fn ready_for_write(&self, count: usize) -> Result<()> {
+    async fn ready_for_write(&self, count: usize) {
         let _ = count;
-        self.ready(Events::WRITE).await.map(drop)
+        self.ready(Events::WRITE).await;
     }
 
     fn file_lock(&self) -> Result<&FileLock>;
@@ -710,6 +713,69 @@ bitflags! {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct NonEmptyEvents(NonZeroU8);
+
+impl NonEmptyEvents {
+    pub const READ: Self = Self::new(Events::READ).unwrap();
+
+    pub const fn new(events: Events) -> Option<Self> {
+        if let Some(bits) = NonZeroU8::new(events.bits()) {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+
+    pub fn zip(lhs: Option<Self>, rhs: Option<Self>) -> Option<Self> {
+        match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => Some(lhs | rhs),
+            (Some(events), None) | (None, Some(events)) => Some(events),
+            (None, None) => None,
+        }
+    }
+
+    pub async fn select(lhs: impl Future<Output = Self>, rhs: impl Future<Output = Self>) -> Self {
+        let lhs = pin!(lhs);
+        let rhs = pin!(rhs);
+        let res = select(lhs, rhs).await;
+        match res {
+            Either::Left((mut events, fut)) => {
+                if let Some(more) = fut.now_or_never() {
+                    events |= more;
+                }
+                events
+            }
+            Either::Right((mut events, fut)) => {
+                if let Some(more) = fut.now_or_never() {
+                    events |= more;
+                }
+                events
+            }
+        }
+    }
+}
+
+impl From<NonEmptyEvents> for Events {
+    fn from(value: NonEmptyEvents) -> Self {
+        Self::from_bits_retain(value.0.get())
+    }
+}
+
+impl BitOr for NonEmptyEvents {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for NonEmptyEvents {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
+
 pub async fn do_io<R>(
     fd: &(impl OpenFileDescription + ?Sized),
     events: Events,
@@ -725,7 +791,7 @@ pub async fn do_io<R>(
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
-                fd.ready(events).await?;
+                fd.ready(events).await;
             }
             Err(err) => return Err(err),
         }
@@ -747,7 +813,7 @@ pub async fn do_write_io<R>(
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
-                fd.ready_for_write(count).await?;
+                fd.ready_for_write(count).await;
             }
             Err(err) => return Err(err),
         }

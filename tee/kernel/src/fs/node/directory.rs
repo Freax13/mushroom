@@ -154,6 +154,7 @@ pub trait Directory: INode {
         let Some((parent, name)) = Directory::location(self)? else {
             return Path::new(b"/".to_vec());
         };
+        let _ = parent.get_node(&name, ctx)?; // Make sure that the node still exists in the parent.
         let mut path = parent.path(ctx)?;
         path = path.join_segment(&name)?;
         Ok(path)

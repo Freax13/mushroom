@@ -33,6 +33,9 @@ endif
 run-example: all
 	$(MAKE) -C tee/example run
 
+run-external-test: all
+	$(MAKE) -C tee/external-tests run-external-test
+
 clippy:
 	$(MAKE) -C common clippy
 	$(MAKE) -C host   clippy

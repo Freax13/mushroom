@@ -51,7 +51,7 @@ pub fn switch_stack(f: extern "C" fn() -> !) -> ! {
 
 fn allocate_stack() -> VirtAddr {
     // FIXME: Guard pages.
-    let stack_layout = Layout::from_size_align(0x10000, 16).unwrap();
+    let stack_layout = Layout::from_size_align(0x10_0000, 16).unwrap();
     let stack = unsafe { alloc(stack_layout) };
     assert_ne!(stack, null_mut());
     let end_of_stack = unsafe { stack.add(stack_layout.size()) };

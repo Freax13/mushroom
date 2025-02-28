@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
-use super::{Events, FileLock, OpenFileDescription, ReadBuf, WriteBuf};
+use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf};
 use crate::{
     error::{Result, ensure, err},
     fs::{
@@ -96,7 +96,7 @@ impl OpenFileDescription for EventFd {
         Ok(8)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let counter_value = self.counter.load(Ordering::SeqCst);
 
         let mut ready_events = Events::empty();
@@ -105,24 +105,15 @@ impl OpenFileDescription for EventFd {
         ready_events.set(Events::WRITE, counter_value != !0);
 
         ready_events &= events;
-        ready_events
+        NonEmptyEvents::new(ready_events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
-        loop {
-            let wait = self.notify.wait();
-
-            let ready_events = self.epoll_ready(events)?;
-            if !ready_events.is_empty() {
-                return Ok(ready_events);
-            }
-
-            wait.await;
-        }
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        self.notify.wait_until(|| self.poll_ready(events)).await
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

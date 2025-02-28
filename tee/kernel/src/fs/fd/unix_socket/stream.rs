@@ -1,4 +1,4 @@
-use core::{cmp, ops::Not, pin::pin};
+use core::cmp;
 
 use alloc::{
     borrow::ToOwned,
@@ -13,7 +13,6 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
-use futures::future::select;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{align_down, align_up};
 
@@ -23,8 +22,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            FdFlags, FileDescriptor, FileDescriptorTable, PipeBlocked, ReadBuf, VectoredUserBuf,
-            WriteBuf,
+            FdFlags, FileDescriptor, FileDescriptorTable, NonEmptyEvents, PipeBlocked, ReadBuf,
+            VectoredUserBuf, WriteBuf,
             stream_buffer::{self},
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
@@ -594,73 +593,67 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        let Some(mode) = self.mode.get() else {
-            return Events::empty();
-        };
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        let mode = self.mode.get()?;
         match mode {
-            Mode::Active(active) => {
-                active.read_half.lock().poll_read(events)
-                    | active.write_half.lock().poll_write(events)
-            }
+            Mode::Active(active) => NonEmptyEvents::zip(
+                active.read_half.lock().poll_read(events),
+                active.write_half.lock().poll_write(events),
+            ),
             Mode::Passive(passive) => {
                 let guard = passive.internal.lock();
                 let mut ready_events = Events::empty();
                 ready_events.set(Events::READ, !guard.queue.is_empty());
-                ready_events & events
+                NonEmptyEvents::new(ready_events & events)
             }
         }
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         match mode {
             Mode::Active(active) => {
-                let write_ready = active.write_half.notify.wait_until(|| {
-                    let events = active.write_half.lock().poll_write(events);
-                    events.is_empty().not().then_some(events)
-                });
-                let read_ready = active.read_half.notify.wait_until(|| {
-                    let events = active.read_half.lock().poll_read(events);
-                    events.is_empty().not().then_some(events)
-                });
-                let events = select(pin!(write_ready), pin!(read_ready))
-                    .await
-                    .factor_first()
-                    .0;
-                Ok(events)
+                let write_ready = active
+                    .write_half
+                    .notify
+                    .wait_until(|| active.write_half.lock().poll_write(events));
+                let read_ready = active
+                    .read_half
+                    .notify
+                    .wait_until(|| active.read_half.lock().poll_read(events));
+                NonEmptyEvents::select(write_ready, read_ready).await
             }
             Mode::Passive(passive) => {
-                let events = passive
+                passive
                     .connect_notify
                     .wait_until(|| {
                         let guard = passive.internal.lock();
                         let mut ready_events = Events::empty();
                         ready_events.set(Events::READ, !guard.queue.is_empty());
                         ready_events &= events;
-                        ready_events.is_empty().not().then_some(ready_events)
+                        NonEmptyEvents::new(ready_events)
                     })
-                    .await;
-                Ok(events)
+                    .await
             }
         }
     }
 
-    async fn ready_for_write(&self, count: usize) -> Result<()> {
-        let mode = self.mode.get().ok_or(err!(NotConn))?;
+    async fn ready_for_write(&self, count: usize) {
+        let Some(mode) = self.mode.get() else {
+            return;
+        };
         let Mode::Active(active) = mode else {
-            bail!(NotConn);
+            return;
         };
         active
             .write_half
             .notify
             .wait_until(|| active.write_half.lock().can_write(count).then_some(()))
             .await;
-        Ok(())
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -940,7 +933,7 @@ impl BufferGuard<'_> {
         self.buffer.notify.notify();
     }
 
-    pub fn poll_read(&self, events: Events) -> Events {
+    pub fn poll_read(&self, events: Events) -> Option<NonEmptyEvents> {
         let buffer = &*self.guard;
 
         let mut ready_events = Events::empty();
@@ -952,10 +945,10 @@ impl BufferGuard<'_> {
         ready_events.set(Events::RDHUP, strong_count == 1 || buffer.shutdown);
 
         ready_events &= events;
-        ready_events
+        NonEmptyEvents::new(ready_events)
     }
 
-    pub fn poll_write(&self, events: Events) -> Events {
+    pub fn poll_write(&self, events: Events) -> Option<NonEmptyEvents> {
         let buffer = &*self.guard;
 
         let mut ready_events = Events::empty();
@@ -965,7 +958,7 @@ impl BufferGuard<'_> {
         ready_events.set(Events::HUP, closed);
         ready_events.set(Events::ERR, closed);
 
-        ready_events
+        NonEmptyEvents::new(ready_events)
     }
 }
 

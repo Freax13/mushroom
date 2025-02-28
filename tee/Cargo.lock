@@ -249,6 +249,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "external-tests-wrapper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nix",
+ "tar",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"

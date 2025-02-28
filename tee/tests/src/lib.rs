@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 mod net;
+mod ready;
 mod unix;
 
 use std::{

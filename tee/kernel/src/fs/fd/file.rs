@@ -1,3 +1,5 @@
+use core::future::pending;
+
 use crate::{
     error::{bail, ensure, err},
     fs::{
@@ -12,7 +14,8 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
+use async_trait::async_trait;
 
 use crate::{
     error::Result,
@@ -20,8 +23,8 @@ use crate::{
 };
 
 use super::{
-    Events, FileDescriptor, FileLock, OpenFileDescription, PipeBlocked, ReadBuf, WriteBuf,
-    stream_buffer,
+    Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
+    WriteBuf, stream_buffer,
 };
 
 pub trait File: INode {
@@ -105,6 +108,7 @@ impl FileFileDescription {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for FileFileDescription {
     fn flags(&self) -> OpenFlags {
         self.internal.lock().flags
@@ -323,8 +327,16 @@ impl OpenFileDescription for FileFileDescription {
         self.file.get_page(page_idx, shared)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::READ
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(event) = self.poll_ready(events) {
+            event
+        } else {
+            pending().await
+        }
     }
 
     fn file_lock(&self) -> Result<&FileLock> {
