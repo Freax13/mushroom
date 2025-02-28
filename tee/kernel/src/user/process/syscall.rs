@@ -1321,7 +1321,7 @@ fn socket(
                 r#type,
                 no_file_limit,
             )?,
-            SocketType::Dgram => todo!(),
+            SocketType::Dgram => bail!(NoSys),
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
