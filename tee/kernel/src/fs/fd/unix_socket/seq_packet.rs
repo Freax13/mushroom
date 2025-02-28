@@ -9,7 +9,7 @@ use crate::{
     error::{Result, bail, err},
     fs::{
         FileSystem,
-        fd::{ReadBuf, WriteBuf},
+        fd::{NonEmptyEvents, ReadBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -138,7 +138,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok(len)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         ready_events.set(
             Events::READ,
@@ -148,21 +148,21 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         ready_events.set(Events::WRITE, Arc::strong_count(&self.write_half.state) > 1);
         ready_events.set(Events::HUP, Arc::strong_count(&self.read_half.state) == 1);
         ready_events.set(Events::ERR, Arc::strong_count(&self.write_half.state) == 1);
-        ready_events & events
+        NonEmptyEvents::new(ready_events & events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         loop {
             let read_wait = self.read_half.notify.wait();
             let write_wait = self.write_half.notify.wait();
 
-            let events = self.epoll_ready(events)?;
-            if !events.is_empty() {
-                return Ok(events);
+            let events = self.poll_ready(events);
+            if let Some(events) = events {
+                return events;
             }
 
             future::select(read_wait, write_wait).await;

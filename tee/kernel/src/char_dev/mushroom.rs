@@ -1,6 +1,7 @@
-use core::cmp;
+use core::{cmp, future::pending};
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
+use async_trait::async_trait;
 use kernel_macros::register;
 
 use crate::{
@@ -8,8 +9,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, WriteBuf,
-            stream_buffer,
+            Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
+            WriteBuf, stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
@@ -50,6 +51,7 @@ impl CharDev for Output {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Output {
     fn flags(&self) -> OpenFlags {
         self.flags
@@ -71,8 +73,16 @@ impl OpenFileDescription for Output {
         Ok(self.stat)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::WRITE
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & Events::WRITE)
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {

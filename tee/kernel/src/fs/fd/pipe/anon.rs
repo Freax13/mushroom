@@ -1,7 +1,7 @@
 use crate::{
     fs::{
         FileSystem, StatFs,
-        fd::{ReadBuf, WriteBuf},
+        fd::{NonEmptyEvents, ReadBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -86,21 +86,21 @@ impl OpenFileDescription for ReadHalf {
         self.stream_buffer.read(buf)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         self.stream_buffer.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         loop {
             let wait = self.stream_buffer.wait();
 
-            let events = self.epoll_ready(events)?;
-            if !events.is_empty() {
-                return Ok(events);
+            let events = self.poll_ready(events);
+            if let Some(events) = events {
+                return events;
             }
 
             wait.await;
@@ -214,28 +214,28 @@ impl OpenFileDescription for WriteHalf {
         Some(&self.stream_buffer)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         self.stream_buffer.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         loop {
             let wait = self.stream_buffer.wait();
 
-            let events = self.epoll_ready(events)?;
-            if !events.is_empty() {
-                return Ok(events);
+            let events = self.poll_ready(events);
+            if let Some(events) = events {
+                return events;
             }
 
             wait.await;
         }
     }
 
-    async fn ready_for_write(&self, count: usize) -> Result<()> {
+    async fn ready_for_write(&self, count: usize) {
         self.stream_buffer.ready_for_write(count).await
     }
 

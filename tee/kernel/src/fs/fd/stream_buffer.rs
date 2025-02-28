@@ -8,7 +8,7 @@ use crate::{
     spin::mutex::Mutex,
 };
 
-use super::{Events, PipeBlocked, ReadBuf, WriteBuf, err};
+use super::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err};
 
 pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {
@@ -218,7 +218,7 @@ impl ReadHalf {
         Ok(len)
     }
 
-    pub fn poll_ready(&self, events: Events) -> Events {
+    pub fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let guard = self.data.buffer.lock();
 
         let mut ready_events = Events::empty();
@@ -238,7 +238,7 @@ impl ReadHalf {
         ready_events.set(Events::PRI, guard.oob_mark_state.pri_event());
 
         ready_events &= events;
-        ready_events
+        NonEmptyEvents::new(ready_events)
     }
 
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {
@@ -423,7 +423,7 @@ impl WriteHalf {
         Ok(len)
     }
 
-    pub fn poll_ready(&self, events: Events) -> Events {
+    pub fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
 
         let guard = self.data.buffer.lock();
@@ -434,10 +434,10 @@ impl WriteHalf {
         ready_events.set(Events::ERR, closed);
         drop(guard);
 
-        ready_events
+        NonEmptyEvents::new(ready_events)
     }
 
-    pub async fn ready_for_write(&self, count: usize) -> Result<()> {
+    pub async fn ready_for_write(&self, count: usize) {
         loop {
             let wait = self.notify.wait();
 
@@ -461,8 +461,6 @@ impl WriteHalf {
 
             wait.await;
         }
-
-        Ok(())
     }
 
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {

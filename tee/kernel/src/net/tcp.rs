@@ -3,7 +3,6 @@ use core::{
     ffi::c_void,
     net::{Ipv4Addr, SocketAddrV4},
     ops::Not,
-    pin::pin,
 };
 
 use alloc::{
@@ -20,8 +19,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, WriteBuf, common_ioctl,
-            stream_buffer,
+            Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            WriteBuf, common_ioctl, stream_buffer,
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -802,13 +801,9 @@ impl OpenFileDescription for TcpSocket {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        let Some(bound) = self.bound_socket.get() else {
-            return Events::empty();
-        };
-        let Some(mode) = bound.mode.get() else {
-            return Events::empty();
-        };
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        let bound = self.bound_socket.get()?;
+        let mode = bound.mode.get()?;
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 let mut events = events & Events::READ;
@@ -817,20 +812,20 @@ impl OpenFileDescription for TcpSocket {
                 {
                     events.remove(Events::READ);
                 }
-                events
+                NonEmptyEvents::new(events)
             }
-            Mode::Active(active_tcp_socket) => {
-                active_tcp_socket.read_half.poll_ready(events)
-                    | active_tcp_socket.write_half.poll_ready(events)
-            }
+            Mode::Active(active_tcp_socket) => NonEmptyEvents::zip(
+                active_tcp_socket.read_half.poll_ready(events),
+                active_tcp_socket.write_half.poll_ready(events),
+            ),
         }
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Events> {
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
         Ok(self.poll_ready(events))
     }
 
-    async fn ready(&self, events: Events) -> Result<Events> {
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mode = loop {
             let wait = self.activate_notify.wait();
             if let Some(bound) = self.bound_socket.get() {
@@ -845,22 +840,25 @@ impl OpenFileDescription for TcpSocket {
                 if !events.contains(Events::READ) {
                     return core::future::pending().await;
                 }
-                loop {
-                    let wait = passive_tcp_socket.notify.wait();
-                    let guard = passive_tcp_socket.internal.lock();
-                    if !guard.queue.is_empty() {
-                        return Ok(Events::READ);
-                    }
-                    drop(guard);
-                    wait.await;
-                }
+                passive_tcp_socket
+                    .notify
+                    .wait_until(|| {
+                        passive_tcp_socket
+                            .internal
+                            .lock()
+                            .queue
+                            .is_empty()
+                            .not()
+                            .then_some(NonEmptyEvents::READ)
+                    })
+                    .await
             }
-            Mode::Active(active_tcp_socket) => loop {
+            Mode::Active(active_tcp_socket) => {
                 let wait_read = async {
                     loop {
                         let wait = active_tcp_socket.read_half.wait();
-                        if !active_tcp_socket.read_half.poll_ready(events).is_empty() {
-                            break;
+                        if let Some(events) = active_tcp_socket.read_half.poll_ready(events) {
+                            return events;
                         }
                         wait.await;
                     }
@@ -868,21 +866,14 @@ impl OpenFileDescription for TcpSocket {
                 let wait_write = async {
                     loop {
                         let wait = active_tcp_socket.write_half.wait();
-                        if !active_tcp_socket.write_half.poll_ready(events).is_empty() {
-                            break;
+                        if let Some(events) = active_tcp_socket.write_half.poll_ready(events) {
+                            return events;
                         }
                         wait.await;
                     }
                 };
-                let wait_read = pin!(wait_read);
-                let wait_write = pin!(wait_write);
-                futures::future::select(wait_read, wait_write).await;
-                let events = active_tcp_socket.read_half.poll_ready(events)
-                    | active_tcp_socket.write_half.poll_ready(events);
-                if !events.is_empty() {
-                    return Ok(events);
-                }
-            },
+                NonEmptyEvents::select(wait_read, wait_write).await
+            }
         }
     }
 

@@ -1,3 +1,5 @@
+use core::future::pending;
+
 use crate::fs::FileSystem;
 use crate::fs::node::{FileAccessContext, new_ino};
 use crate::fs::ownership::Ownership;
@@ -16,7 +18,7 @@ use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription};
+use super::{Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription};
 
 pub struct Epoll {
     ino: u64,
@@ -62,8 +64,8 @@ impl OpenFileDescription for Epoll {
                 let events = e.event.events;
                 let data = e.event.data;
                 async move {
-                    let events = fd.ready(Events::from(events)).await?;
-                    Result::<_>::Ok(EpollEvent::new(EpollEvents::from(events), data))
+                    let events = fd.ready(Events::from(events)).await;
+                    EpollEvent::new(EpollEvents::from(Events::from(events)), data)
                 }
             })
             .collect::<FuturesUnordered<_>>();
@@ -74,11 +76,11 @@ impl OpenFileDescription for Epoll {
         }
 
         // Wait for the first event.
-        let event = futures.next().await.unwrap()?;
+        let event = futures.next().await.unwrap();
         let mut events = vec![event];
 
         // Check if any more futures are ready, but don't wait.
-        while let Some(event) = futures.next().now_or_never().flatten().and_then(Result::ok) {
+        while let Some(event) = futures.next().now_or_never().flatten() {
             events.push(event);
         }
 
@@ -154,8 +156,12 @@ impl OpenFileDescription for Epoll {
         bail!(BadF)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::empty()
+    fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {
+        None
+    }
+
+    async fn ready(&self, _events: Events) -> NonEmptyEvents {
+        pending().await
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

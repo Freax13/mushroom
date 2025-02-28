@@ -1,6 +1,10 @@
-use core::iter::{from_fn, repeat_n};
+use core::{
+    future::pending,
+    iter::{from_fn, repeat_n},
+};
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
+use async_trait::async_trait;
 use kernel_macros::register;
 use x86_64::instructions::random::RdRand;
 
@@ -9,8 +13,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, LazyFileLockRecord, OpenFileDescription, PipeBlocked, ReadBuf,
-            WriteBuf, stream_buffer,
+            Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
+            ReadBuf, WriteBuf, stream_buffer,
         },
         node::FileAccessContext,
         path::Path,
@@ -52,6 +56,7 @@ impl CharDev for Null {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Null {
     fn flags(&self) -> OpenFlags {
         self.flags
@@ -77,8 +82,16 @@ impl OpenFileDescription for Null {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & (Events::READ | Events::WRITE)
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn read(&self, _buf: &mut dyn ReadBuf) -> Result<usize> {
@@ -155,6 +168,7 @@ impl CharDev for Zero {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Zero {
     fn flags(&self) -> OpenFlags {
         self.flags
@@ -180,8 +194,16 @@ impl OpenFileDescription for Zero {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & (Events::READ | Events::WRITE)
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
@@ -267,6 +289,7 @@ impl CharDev for Random {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Random {
     fn flags(&self) -> OpenFlags {
         self.flags
@@ -292,8 +315,16 @@ impl OpenFileDescription for Random {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & (Events::READ | Events::WRITE)
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
@@ -368,6 +399,7 @@ impl CharDev for URandom {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for URandom {
     fn flags(&self) -> OpenFlags {
         self.flags
@@ -393,8 +425,16 @@ impl OpenFileDescription for URandom {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & (Events::READ | Events::WRITE)
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {

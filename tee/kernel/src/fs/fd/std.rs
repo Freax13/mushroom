@@ -1,7 +1,10 @@
-use alloc::{format, sync::Arc, vec};
+use core::future::pending;
+
+use alloc::{boxed::Box, format, sync::Arc, vec};
+use async_trait::async_trait;
 use log::debug;
 
-use super::{Events, FileLock, OpenFileDescription, WriteBuf, pipe::anon::PIPE_FS};
+use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription, WriteBuf, pipe::anon::PIPE_FS};
 use crate::{
     error::Result,
     fs::{
@@ -39,6 +42,7 @@ impl Stdin {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Stdin {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
@@ -79,8 +83,12 @@ impl OpenFileDescription for Stdin {
         Ok(PIPE_FS.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::empty()
+    fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {
+        None
+    }
+
+    async fn ready(&self, _events: Events) -> NonEmptyEvents {
+        pending().await
     }
 
     fn file_lock(&self) -> Result<&FileLock> {
@@ -110,6 +118,7 @@ impl Stdout {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Stdout {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
@@ -164,8 +173,16 @@ impl OpenFileDescription for Stdout {
         Ok(PIPE_FS.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::WRITE
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & Events::WRITE)
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn file_lock(&self) -> Result<&FileLock> {
@@ -195,6 +212,7 @@ impl Stderr {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for Stderr {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
@@ -249,8 +267,16 @@ impl OpenFileDescription for Stderr {
         Ok(PIPE_FS.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::WRITE
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & Events::WRITE)
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

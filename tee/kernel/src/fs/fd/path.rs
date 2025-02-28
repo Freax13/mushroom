@@ -1,4 +1,7 @@
-use alloc::sync::Arc;
+use core::future::pending;
+
+use alloc::{boxed::Box, sync::Arc};
+use async_trait::async_trait;
 
 use crate::{
     error::{Result, bail},
@@ -13,7 +16,7 @@ use crate::{
     },
 };
 
-use super::{Events, FileLock, OpenFileDescription};
+use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription};
 
 pub struct PathFd {
     path: Path,
@@ -26,6 +29,7 @@ impl PathFd {
     }
 }
 
+#[async_trait]
 impl OpenFileDescription for PathFd {
     fn flags(&self) -> OpenFlags {
         OpenFlags::empty()
@@ -55,8 +59,12 @@ impl OpenFileDescription for PathFd {
         Ok(self.node.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::empty()
+    fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {
+        None
+    }
+
+    async fn ready(&self, _events: Events) -> NonEmptyEvents {
+        pending().await
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

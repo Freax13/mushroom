@@ -1,3 +1,5 @@
+use core::future::pending;
+
 use crate::{
     error::{bail, ensure},
     fs::{
@@ -11,11 +13,14 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use async_trait::async_trait;
 
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
-use super::{Events, FileDescriptor, FileLock, OpenFileDescription, ReadBuf, WriteBuf};
+use super::{
+    Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+};
 
 pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
     ensure!(!flags.contains(OpenFlags::WRONLY), IsDir);
@@ -36,6 +41,7 @@ struct DirectoryFileDescription {
     file_lock: FileLock,
 }
 
+#[async_trait]
 impl OpenFileDescription for DirectoryFileDescription {
     fn flags(&self) -> OpenFlags {
         self.flags
@@ -110,8 +116,16 @@ impl OpenFileDescription for DirectoryFileDescription {
         Ok(ret)
     }
 
-    fn poll_ready(&self, events: Events) -> Events {
-        events & Events::READ
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & Events::READ)
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
     }
 
     fn file_lock(&self) -> Result<&FileLock> {
