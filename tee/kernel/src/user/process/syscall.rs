@@ -1832,8 +1832,6 @@ async fn execve(
         envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
     }
 
-    log::info!("execve({pathname:?}, {args:?}, {envs:?})");
-
     // Open the executable.
     let cwd = thread.process().cwd();
     let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
