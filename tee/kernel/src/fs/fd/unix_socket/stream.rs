@@ -446,6 +446,21 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
+    fn set_socket_option(
+        &self,
+        _: Arc<VirtualMemory>,
+        _: Abi,
+        level: i32,
+        optname: i32,
+        _optval: Pointer<[u8]>,
+        _optlen: i32,
+    ) -> Result<()> {
+        match (level, optname) {
+            (1, 2) => Ok(()), // SO_REUSEADDR
+            _ => bail!(Inval),
+        }
+    }
+
     fn get_socket_name(&self) -> Result<Vec<u8>> {
         Ok(self.socketname.lock().to_bytes())
     }
