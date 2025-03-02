@@ -1,13 +1,15 @@
 use std::{cmp::Ordering, mem::size_of};
 
 use bytemuck::{NoUninit, bytes_of, checked::try_pod_read_unaligned, pod_read_unaligned};
+use ecdsa::RecoveryId;
 use loader::{LoadCommand, LoadCommandPayload, generate_base_load_commands};
-use p384::ecdsa::{self, Signature, signature::Verifier};
+use p384::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use sha2::{Digest, Sha384};
 use snp_types::{
     VmplPermissions,
     attestation::{AttestionReport, EcdsaP384Sha384Signature, TcbVersion},
     guest_policy::GuestPolicy,
+    id_block::{IdBlock, PublicKey},
 };
 use thiserror::Error;
 use vcek_kds::Vcek;
@@ -15,9 +17,11 @@ use vcek_kds::Vcek;
 use crate::{InputHash, OutputHash, hex};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Configuration {
+pub(crate) struct Configuration {
     #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
     launch_digest: [u8; 48],
+    #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
+    id_key_digest: [u8; 48],
     policy: GuestPolicy,
     min_tcb: TcbVersion,
 }
@@ -34,17 +38,17 @@ impl Configuration {
         let commands =
             generate_base_load_commands(Some(supervisor), kernel, init, load_kasan_shadow_mappings);
 
-        let mut launch_digest = [0; 48];
+        let launch_digest = LaunchDigest::digest(commands);
 
-        for command in commands {
-            let Some(info) = PageInfo::new(launch_digest, &command) else {
-                continue;
-            };
-            launch_digest = Sha384::digest(bytes_of(&info)).into();
-        }
+        let id_block = id_block(launch_digest, policy);
+        let (_signature_key, id_key) = create_signature(&id_block);
+        let id_key = PublicKey::P384(id_key.into());
+        let id_key_digest = Sha384::digest(bytes_of(&id_key));
+        let id_key_digest = id_key_digest.into();
 
         Self {
             launch_digest,
+            id_key_digest,
             policy,
             min_tcb,
         }
@@ -85,6 +89,12 @@ impl Configuration {
                 got: report.measurement,
             });
         }
+        if report.id_key_digest != self.id_key_digest {
+            return Err(Error::IdKeyDigest {
+                expected: self.id_key_digest,
+                got: report.id_key_digest,
+            });
+        }
         if report.host_data != input_hash.0 {
             return Err(Error::HostData {
                 expected: input_hash.0,
@@ -116,16 +126,8 @@ impl Configuration {
         }
 
         // Construct signature.
-        let signature = &report.signature[..size_of::<EcdsaP384Sha384Signature>()];
-        let signature = pod_read_unaligned::<EcdsaP384Sha384Signature>(signature);
-
-        let (&r, _) = signature.r.split_first_chunk().unwrap();
-        let (&s, _) = signature.s.split_first_chunk().unwrap();
-        let mut r = r;
-        let mut s = s;
-        r.reverse();
-        s.reverse();
-        let signature = Signature::from_scalars(r, s)?;
+        let signature = pod_read_unaligned::<EcdsaP384Sha384Signature>(&report.signature);
+        let signature = Signature::try_from(signature)?;
 
         // Verify signature.
         let public_key = vcek.verifying_key();
@@ -193,8 +195,70 @@ impl PageInfo {
     }
 }
 
+pub struct LaunchDigest {
+    launch_digest: [u8; 48],
+}
+
+impl LaunchDigest {
+    pub const fn new() -> Self {
+        Self {
+            launch_digest: [0; 48],
+        }
+    }
+
+    pub fn add(&mut self, cmd: &LoadCommand) {
+        if let Some(info) = PageInfo::new(self.launch_digest, cmd) {
+            self.launch_digest = Sha384::digest(bytes_of(&info)).into();
+        }
+    }
+
+    pub fn finish(self) -> [u8; 48] {
+        self.launch_digest
+    }
+
+    pub fn digest(iter: impl IntoIterator<Item = LoadCommand>) -> [u8; 48] {
+        let mut digest = Self::new();
+        for cmd in iter {
+            digest.add(&cmd);
+        }
+        digest.finish()
+    }
+}
+
+impl Default for LaunchDigest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn id_block(launch_digest: [u8; 48], policy: GuestPolicy) -> IdBlock {
+    IdBlock {
+        launch_digest,
+        family_id: [0; 16],
+        image_id: [0; 16],
+        version: 0,
+        guest_svn: 0,
+        policy,
+    }
+}
+
+pub fn create_signature(id_block: &IdBlock) -> (Signature, VerifyingKey) {
+    // 1. Make up a signature.
+    let r = *b"ECDSA is cool! Public Key Recovery rocks!!!!!!!!";
+    let s = *b"    https://www.secg.org/sec1-v2.pdf - 4.1.6    ";
+    let signature = Signature::from_scalars(r, s).unwrap();
+
+    // 2. Recover a public key that matches the verifies the message with the
+    // signature from step 1.
+    let msg = bytes_of(id_block);
+    let recovery_id = RecoveryId::new(false, false);
+    let key = VerifyingKey::recover_from_msg(msg, &signature, recovery_id).unwrap();
+
+    (signature, key)
+}
+
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("report is too short: expected at least {} bytes, got {got}", size_of::<AttestionReport>())]
     Length { got: usize },
     #[error("failed to parse report")]
@@ -207,6 +271,8 @@ pub enum Error {
     ReportDataPadding([u8; 24]),
     #[error("expected measurement to be {}, got {}", hex(.expected), hex(.got))]
     Measurement { expected: [u8; 48], got: [u8; 48] },
+    #[error("expected id key digest to be {}, got {}", hex(.expected), hex(.got))]
+    IdKeyDigest { expected: [u8; 48], got: [u8; 48] },
     #[error("expected host data to be {}, got {}", hex(.expected), hex(.got))]
     HostData { expected: [u8; 32], got: [u8; 32] },
     #[error("expected policy to be {expected:?}, got {got:?}")]
@@ -223,4 +289,17 @@ pub enum Error {
     },
     #[error("failed to verify report signature")]
     Ecdsa(#[from] ecdsa::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use snp_types::{guest_policy::GuestPolicy, id_block::IdBlock};
+
+    use super::{create_signature, id_block};
+
+    #[test]
+    fn public_key_recovery() {
+        let id_block = id_block([0xcc; 48], GuestPolicy::new(0, 0));
+        create_signature(&id_block);
+    }
 }

@@ -1,6 +1,8 @@
 use core::{cmp::Ordering, fmt};
 
-use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit};
+use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit, Zeroable};
+#[cfg(feature = "p384")]
+use p384::ecdsa::Signature;
 
 use crate::{Reserved, guest_policy::GuestPolicy};
 
@@ -92,11 +94,73 @@ pub struct AttestionReportV2 {
     pub signature: [u8; 512],
 }
 
-#[derive(Clone, Copy, AnyBitPattern)]
+#[derive(Clone, Copy, AnyBitPattern, NoUninit)]
 #[repr(C)]
 pub struct EcdsaP384Sha384Signature {
     pub r: [u8; 72],
     pub s: [u8; 72],
+    _padding: [u8; 0x200 - 0x90],
+}
+
+#[cfg(feature = "p384")]
+impl TryFrom<EcdsaP384Sha384Signature> for Signature {
+    type Error = p384::ecdsa::Error;
+
+    fn try_from(value: EcdsaP384Sha384Signature) -> Result<Self, Self::Error> {
+        use p384::ecdsa::Error;
+
+        let (r, rest) = value.r.split_first_chunk::<48>().unwrap();
+        if rest != [0; 24] {
+            // Make sure that r was zero-padded.
+            return Err(Error::new());
+        }
+        let (s, rest) = value.s.split_first_chunk::<48>().unwrap();
+        if rest != [0; 24] {
+            // Make sure that s was zero-padded.
+            return Err(Error::new());
+        }
+        let mut r = *r;
+        let mut s = *s;
+        r.reverse();
+        s.reverse();
+        Self::from_scalars(r, s)
+    }
+}
+
+#[cfg(feature = "p384")]
+impl From<Signature> for EcdsaP384Sha384Signature {
+    fn from(value: Signature) -> Self {
+        let r = value.r().to_bytes();
+        let s = value.s().to_bytes();
+        let mut r = <[u8; 48]>::from(r);
+        let mut s = <[u8; 48]>::from(s);
+        r.reverse();
+        s.reverse();
+        let mut zext_r = [0; 72];
+        let mut zext_s = [0; 72];
+        zext_r[0..48].copy_from_slice(&r);
+        zext_s[0..48].copy_from_slice(&s);
+        Self {
+            r: zext_r,
+            s: zext_s,
+            _padding: [0; 0x200 - 0x90],
+        }
+    }
+}
+
+impl fmt::Debug for EcdsaP384Sha384Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EcdsaP384Sha384Signature")
+            .field("r", &self.r)
+            .field("s", &self.s)
+            .finish()
+    }
+}
+
+impl Default for EcdsaP384Sha384Signature {
+    fn default() -> Self {
+        Self::zeroed()
+    }
 }
 
 #[derive(Clone, Copy)]
