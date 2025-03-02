@@ -17,8 +17,12 @@ use constants::{
     physical_address::{DYNAMIC_2MIB, kernel, supervisor},
 };
 use loader::Input;
+use mushroom_verify::snp::{LaunchDigest, create_signature, id_block};
 use nix::sys::pthread::pthread_kill;
-use snp_types::PageType;
+use snp_types::{
+    PageType,
+    id_block::{EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey},
+};
 use tracing::{debug, info};
 use x86_64::{
     PhysAddr,
@@ -192,6 +196,8 @@ impl VmContext {
             load_kasan_shadow_mappings,
             inputs,
         );
+        let mut launch_digest = LaunchDigest::new();
+        let load_commands = load_commands.inspect(|cmd| launch_digest.add(cmd));
         let mut load_commands = load_commands.peekable();
 
         let mut num_launch_pages = 0;
@@ -267,7 +273,21 @@ impl VmContext {
             slot_id += 1;
         }
 
-        vm.sev_snp_launch_finish(sev_handle, host_data)?;
+        let launch_digest = launch_digest.finish();
+        let id_block = id_block(launch_digest, policy);
+        let (id_block_sig, id_key) = create_signature(&id_block);
+        let id_block_sig = EcdsaP384Sha384Signature::from(id_block_sig);
+        let id_key = PublicKey::P384(EcdsaP384PublicKey::from(id_key));
+        let id_auth_info = IdAuthInfo::new(
+            KeyAlgo::EcdsaP384Sha384,
+            KeyAlgo::EcdsaP384Sha384,
+            id_block_sig,
+            id_key,
+            EcdsaP384Sha384Signature::default(),
+            PublicKey::default(),
+        );
+
+        vm.sev_snp_launch_finish(sev_handle, host_data, Some((&id_block, &id_auth_info)))?;
 
         info!(
             num_launch_pages,

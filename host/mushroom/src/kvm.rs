@@ -21,7 +21,12 @@ use nix::{
     sys::mman::{MapFlags, ProtFlags},
 };
 #[cfg(feature = "snp")]
-use snp_types::{PageType, VmplPermissions, guest_policy::GuestPolicy, vmsa::SevFeatures};
+use snp_types::{
+    PageType, VmplPermissions,
+    guest_policy::GuestPolicy,
+    id_block::{IdAuthInfo, IdBlock},
+    vmsa::SevFeatures,
+};
 use tracing::debug;
 use volatile::VolatilePtr;
 
@@ -413,13 +418,14 @@ impl VmHandle {
         // FIXME: figure out if we need a sev handle for this operation
         sev_handle: &SevHandle,
         host_data: [u8; 32],
+        id_block: Option<(&IdBlock, &IdAuthInfo)>,
     ) -> Result<()> {
         debug!("finishing snp launch");
 
         let mut data = KvmSevSnpLaunchFinish {
-            id_block_uaddr: 0,
-            id_auth_uaddr: 0,
-            id_block_en: 0,
+            id_block_uaddr: id_block.map_or(0, |(id_block, _id_auth)| id_block as *const _ as u64),
+            id_auth_uaddr: id_block.map_or(0, |(_id_block, id_auth)| id_auth as *const _ as u64),
+            id_block_en: u8::from(id_block.is_some()),
             auth_key_en: 0,
             host_data,
             vcek_disabled: 0,

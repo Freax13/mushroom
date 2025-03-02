@@ -5,12 +5,13 @@ edition.workspace = true
 
 [dependencies]
 bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics"], optional = true }
+ecdsa = "0.16.9"
 io = { workspace = true }
 loader = { workspace = true }
 p384 = { version = "0.13.0", optional = true }
 serde = { version = "1.0.213", features = ["derive"], optional = true }
 sha2 = "0.10.8"
-snp-types = { workspace = true, optional = true }
+snp-types = { workspace = true, features = ["p384"], optional = true }
 tdx-types = { workspace = true, features = ["quote"], optional = true }
 thiserror = "2.0.9"
 vcek-kds = { workspace = true, optional = true }

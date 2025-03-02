@@ -919,6 +919,7 @@ name = "mushroom-verify"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "ecdsa",
  "io",
  "loader",
  "p384",
@@ -1540,6 +1541,7 @@ dependencies = [
  "bit_field",
  "bitflags",
  "bytemuck",
+ "p384",
  "paste",
  "serde",
  "x86_64",

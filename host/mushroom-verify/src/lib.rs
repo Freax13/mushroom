@@ -13,7 +13,10 @@ pub use tdx_types::td_quote::TeeTcbSvn;
 #[cfg(feature = "serde")]
 mod hex;
 #[cfg(feature = "snp")]
-mod snp;
+// mushroom uses some code in this module. But it shouldn't be considered part
+// of the public API.
+#[doc(hidden)]
+pub mod snp;
 #[cfg(feature = "tdx")]
 mod tdx;
 

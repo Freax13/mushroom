@@ -1,7 +1,7 @@
 use bit_field::BitField;
-use bytemuck::CheckedBitPattern;
+use bytemuck::{CheckedBitPattern, NoUninit};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, NoUninit)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),

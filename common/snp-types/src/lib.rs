@@ -10,6 +10,7 @@ pub mod cpuid;
 pub mod ghcb;
 pub mod guest_message;
 pub mod guest_policy;
+pub mod id_block;
 pub mod intercept;
 pub mod secrets;
 pub mod vmsa;
