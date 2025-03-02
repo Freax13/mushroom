@@ -42,7 +42,7 @@ use crate::{
         },
         path::Path,
     },
-    net::tcp::TcpSocket,
+    net::{tcp::TcpSocket, udp::UdpSocket},
     rt::oneshot,
     time::{self, now, sleep_until},
     user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
@@ -254,7 +254,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPipe2);
     handlers.register(SysPreadv);
     handlers.register(SysPwritev);
+    handlers.register(SysRecvmmsg);
     handlers.register(SysPrlimit64);
+    handlers.register(SysSendmmsg);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
@@ -274,7 +276,7 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut buf)).await?;
+    let len = do_io(&*fd, Events::READ, || fd.read(&mut buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -297,7 +299,7 @@ async fn write(
     // userspace.
     let res = thread
         .interruptable(
-            do_write_io(&*fd.clone(), count, || {
+            do_write_io(&*fd, count, || {
                 let buf = UserBuf::new(&virtual_memory, buf, count);
                 fd.write(&buf)
             }),
@@ -321,7 +323,7 @@ async fn write(
     while written != count {
         let res = thread
             .interruptable(
-                do_write_io(&*fd.clone(), count - written, || {
+                do_write_io(&*fd, count - written, || {
                     let buf =
                         UserBuf::new(&virtual_memory, buf.bytes_offset(written), count - written);
                     fd.write(&buf)
@@ -870,15 +872,8 @@ async fn readv(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let mut vec = vec;
-    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vectored_buf.push(iovec_value);
-        vec = vec.bytes_offset(len);
-    }
-
-    let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut vectored_buf)).await?;
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
+    let len = do_io(&*fd, Events::READ, || fd.read(&mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -1321,7 +1316,7 @@ fn socket(
                 r#type,
                 no_file_limit,
             )?,
-            SocketType::Dgram => bail!(NoSys),
+            SocketType::Dgram => fdtable.insert(UdpSocket::new(r#type), r#type, no_file_limit)?,
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
@@ -1409,7 +1404,7 @@ async fn recv_from(
         Events::READ
     };
     let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&*fd.clone(), events, || fd.recv_from(&mut buf, flags)).await?
+        do_io(&*fd, events, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
@@ -1425,11 +1420,11 @@ async fn sendmsg(
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     msg: Pointer<MsgHdr>,
-    flags: RecvMsgFlags,
+    flags: SendMsgFlags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&*fd.clone(), Events::WRITE, || {
+    let len = do_io(&*fd, Events::WRITE, || {
         fd.send_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable)
     })
     .await?;
@@ -1449,7 +1444,7 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&*fd.clone(), Events::READ, || {
+    let len = do_io(&*fd, Events::READ, || {
         fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
     })
     .await?;
@@ -3330,7 +3325,7 @@ async fn clock_nanosleep(
 
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
-    let process = thread.process().clone();
+    let process = thread.process();
     process.exit_group(WStatus::exit(status as u8));
     core::future::pending().await
 }
@@ -3465,16 +3460,16 @@ async fn openat(
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let node = if flags.contains(OpenFlags::NOFOLLOW) {
-            lookup_node(start_dir.clone(), &filename, &mut ctx)?
+            lookup_node(start_dir, &filename, &mut ctx)?
         } else {
-            lookup_and_resolve_node(start_dir.clone(), &filename, &mut ctx)?
+            lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
         };
 
         if flags.contains(OpenFlags::DIRECTORY) {
             ensure!(node.ty()? == FileType::Dir, NotDir);
         }
 
-        let path_fd = PathFd::new(filename.clone(), node);
+        let path_fd = PathFd::new(filename, node);
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
@@ -3483,7 +3478,7 @@ async fn openat(
             create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
         } else {
             let node = if flags.contains(OpenFlags::NOFOLLOW) {
-                lookup_node(start_dir.clone(), &filename, &mut ctx)?
+                lookup_node(start_dir, &filename, &mut ctx)?
             } else {
                 lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
             };
@@ -4289,20 +4284,9 @@ async fn preadv(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let mut vec = vec;
-    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vectored_buf.push(iovec_value);
-        vec = vec.bytes_offset(len);
-    }
-
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-
-    let len = do_io(&*fd.clone(), Events::READ, || {
-        fd.pread(pos, &mut vectored_buf)
-    })
-    .await?;
+    let len = do_io(&*fd, Events::READ, || fd.pread(pos, &mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -4314,28 +4298,86 @@ async fn pwritev(
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     vec: Pointer<Iovec>,
-    vlen: u64,
+    vlen: u32,
     pos_l: u32,
     pos_h: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let mut vec = vec;
-    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vectored_buf.push(iovec_value);
-        vec = vec.bytes_offset(len);
-    }
-
+    let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-
-    let len = do_write_io(&*fd.clone(), vectored_buf.buffer_len(), || {
+    let len = do_write_io(&*fd, vectored_buf.buffer_len(), || {
         fd.pwrite(pos, &vectored_buf)
     })
     .await?;
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(i386 = 337, amd64 = 299)]
+async fn recvmmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fd: FdNum,
+    msgvec: Pointer<MMsgHdr>,
+    n: u32,
+    flags: RecvMMsgFlags,
+    timeout: Pointer<Timespec>,
+) -> SyscallResult {
+    let socket = fdtable.get(fd)?;
+
+    let timeout_fut = if !timeout.is_null() {
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        sleep_until(
+            now(ClockId::Monotonic).saturating_add(timeout),
+            ClockId::Monotonic,
+        )
+        .fuse()
+    } else {
+        Fuse::terminated()
+    };
+    let mut timeout_fut = pin!(timeout_fut);
+
+    let mut msgvec = msgvec;
+    let n = usize_from(n);
+    let mut i = 0;
+    let n = loop {
+        if i >= n {
+            break i;
+        }
+
+        let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
+
+        let res = {
+            let recv_fut = do_io(&*socket, Events::READ, || {
+                socket.recv_msg(
+                    &virtual_memory,
+                    abi,
+                    &mut msg_header.hdr,
+                    &fdtable,
+                    no_file_limit,
+                )
+            });
+            let recv_fut = pin!(recv_fut);
+            let Either::Left((res, _)) = future::select(recv_fut, &mut timeout_fut).await else {
+                break i;
+            };
+            res
+        };
+
+        match res {
+            Ok(len) => {
+                msg_header.len = len as u32;
+                virtual_memory.write_with_abi(msgvec, msg_header, abi)?;
+                msgvec = msgvec.bytes_offset(offset);
+                i += 1;
+            }
+            Err(err) => break i.checked_sub(1).ok_or(err)?,
+        }
+    };
+    Ok(u64::from_usize(n))
 }
 
 #[syscall(i386 = 340, amd64 = 302)]
@@ -4378,6 +4420,45 @@ fn prlimit64(
     }
 
     Ok(0)
+}
+
+#[syscall(i386 = 345, amd64 = 307)]
+async fn sendmmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    msgvec: Pointer<MMsgHdr>,
+    n: u32,
+    flags: SendMsgFlags,
+) -> SyscallResult {
+    let socket = fdtable.get(fd)?;
+
+    let mut msgvec = msgvec;
+    let n = usize_from(n);
+    let mut i = 0;
+    let n = loop {
+        if i >= n {
+            break i;
+        }
+
+        let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
+
+        let res = do_io(&*socket, Events::WRITE, || {
+            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, &fdtable)
+        })
+        .await;
+        match res {
+            Ok(len) => {
+                msg_header.len = len as u32;
+                virtual_memory.write_with_abi(msgvec, msg_header, abi)?;
+                msgvec = msgvec.bytes_offset(offset);
+                i += 1;
+            }
+            Err(err) => break i.checked_sub(1).ok_or(err)?,
+        }
+    };
+    Ok(u64::from_usize(n))
 }
 
 #[syscall(amd64 = 316)]

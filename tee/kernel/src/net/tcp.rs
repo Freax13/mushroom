@@ -211,6 +211,7 @@ struct TcpSocketInternal {
     reuse_addr: bool,
     reuse_port: bool,
     send_buffer_size: usize,
+    receive_buffer_size: usize,
     no_delay: bool,
     linger: Option<i32>,
 }
@@ -225,6 +226,7 @@ impl TcpSocket {
                 reuse_addr: false,
                 reuse_port: false,
                 send_buffer_size: 1024 * 1024,
+                receive_buffer_size: 1024 * 1024,
                 no_delay: false,
                 linger: None,
             }),
@@ -499,7 +501,7 @@ impl OpenFileDescription for TcpSocket {
 
                 // Add a round robin offset and get the entry.
                 let offset_index =
-                    (i + ports.round_robin_counter.wrapping_add(i)) % ports.entries.len();
+                    (i.wrapping_add(ports.round_robin_counter)) % ports.entries.len();
                 i += 1;
                 let entry = &ports.entries[offset_index];
 
@@ -608,15 +610,26 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
-        match (level, optname) {
+        let guard = self.internal.lock();
+        Ok(match (level, optname) {
             (1, 3) => {
                 // SO_TYPE
                 let ty = SocketType::Stream as u32;
-                Ok(ty.to_le_bytes().to_vec())
+                ty.to_le_bytes().to_vec()
             }
-            (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            (1, 4) => 0u32.to_ne_bytes().to_vec(), // SO_ERROR
+            (1, 7) => {
+                // SO_SNDBUF
+                let val = guard.send_buffer_size as u32;
+                val.to_ne_bytes().to_vec()
+            }
+            (1, 8) => {
+                // SO_RCVBUF
+                let val = guard.receive_buffer_size as u32;
+                val.to_ne_bytes().to_vec()
+            }
             _ => bail!(Inval),
-        }
+        })
     }
 
     fn set_socket_option(
@@ -642,13 +655,22 @@ impl OpenFileDescription for TcpSocket {
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())?;
                 let new_send_buffer_size = optval as usize * 2;
-                let new_send_buffer_size = cmp::min(new_send_buffer_size, 2048); // 2048 is the minimum
+                let new_send_buffer_size = cmp::max(new_send_buffer_size, 2048); // 2048 is the minimum
                 guard.send_buffer_size = new_send_buffer_size;
                 if let Some(bound) = self.bound_socket.get() {
                     if let Some(Mode::Active(active)) = bound.mode.get() {
                         active.write_half.set_buffer_capacity(new_send_buffer_size);
                     }
                 }
+                Ok(())
+            }
+            (1, 8) => {
+                // SO_RCVBUF
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())?;
+                let new_receive_buffer_size = optval as usize * 2;
+                let new_receive_buffer_size = cmp::max(new_receive_buffer_size, 2048); // 2048 is the minimum
+                guard.receive_buffer_size = new_receive_buffer_size;
                 Ok(())
             }
             (1, 9) => {

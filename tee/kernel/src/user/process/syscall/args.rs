@@ -206,7 +206,7 @@ where
 
     pub fn add(self, count: usize) -> Self
     where
-        T: Sized,
+        T: Sized + PrimitivePointee,
     {
         self.bytes_offset(count * size_of::<T>())
     }
@@ -1568,9 +1568,24 @@ impl Rusage {
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C, u16)]
 pub enum SocketAddr {
+    #[expect(dead_code)]
+    Unspecified(SocketAddrUnspecified) = 0,
     Inet(SocketAddrInet) = 2,
     #[expect(dead_code)]
     Netlink(SocketAddrNetlink) = 16,
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct SocketAddrUnspecified {
+    _pad: [u8; 14],
+}
+
+impl fmt::Debug for SocketAddrUnspecified {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SocketAddrUnspecified")
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Default, Clone, Copy, Pod, Zeroable)]
@@ -1664,6 +1679,12 @@ bitflags! {
 }
 
 bitflags! {
+    pub struct SendMsgFlags {
+        const NOSIGNAL = 0x4000;
+    }
+}
+
+bitflags! {
     pub struct Accept4Flags {
         const CLOEXEC = OpenFlags::CLOEXEC.bits();
         const NONBLOCK = OpenFlags::NONBLOCK.bits();
@@ -1743,4 +1764,16 @@ impl UnixAddr {
         }
         bytes
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MMsgHdr {
+    /// Message header
+    pub hdr: MsgHdr,
+    /// Number of received bytes for header
+    pub len: u32,
+}
+
+bitflags! {
+    pub struct RecvMMsgFlags {}
 }

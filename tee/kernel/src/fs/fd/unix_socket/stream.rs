@@ -210,12 +210,7 @@ impl OpenFileDescription for StreamUnixSocket {
             bail!(NotConn);
         };
 
-        let mut vectored_buf = VectoredUserBuf::new(vm);
-        for i in 0..usize_from(msg_hdr.iovlen) {
-            let iov = vm.read_with_abi(msg_hdr.iov.add(i), abi)?;
-            vectored_buf.push(iov);
-        }
-
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf)?;
 
         if let Some(ancillary_data) = ancillary_data {
@@ -351,12 +346,7 @@ impl OpenFileDescription for StreamUnixSocket {
             None
         };
 
-        let mut vectored_buf = VectoredUserBuf::new(vm);
-        for i in 0..usize_from(msg_hdr.iovlen) {
-            let iov = vm.read_with_abi(msg_hdr.iov.add(i), abi)?;
-            vectored_buf.push(iov);
-        }
-
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         active
             .write_half
             .lock()
@@ -452,6 +442,21 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(ty.to_le_bytes().to_vec())
             }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            _ => bail!(Inval),
+        }
+    }
+
+    fn set_socket_option(
+        &self,
+        _: Arc<VirtualMemory>,
+        _: Abi,
+        level: i32,
+        optname: i32,
+        _optval: Pointer<[u8]>,
+        _optlen: i32,
+    ) -> Result<()> {
+        match (level, optname) {
+            (1, 2) => Ok(()), // SO_REUSEADDR
             _ => bail!(Inval),
         }
     }

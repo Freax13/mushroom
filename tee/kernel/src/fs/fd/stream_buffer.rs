@@ -431,7 +431,10 @@ impl WriteHalf {
         ready_events.set(Events::WRITE, guard.bytes.len() < guard.capacity || closed);
         ready_events &= events;
         ready_events.set(Events::HUP, closed);
-        ready_events.set(Events::ERR, closed);
+        ready_events.set(
+            Events::ERR,
+            guard.reset || Arc::strong_count(&self.data) == 1,
+        );
         drop(guard);
 
         NonEmptyEvents::new(ready_events)
