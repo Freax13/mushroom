@@ -254,7 +254,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPipe2);
     handlers.register(SysPreadv);
     handlers.register(SysPwritev);
+    handlers.register(SysRecvmmsg);
     handlers.register(SysPrlimit64);
+    handlers.register(SysSendmmsg);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
@@ -1418,7 +1420,7 @@ async fn sendmsg(
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     msg: Pointer<MsgHdr>,
-    flags: RecvMsgFlags,
+    flags: SendMsgFlags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
@@ -4312,6 +4314,72 @@ async fn pwritev(
     Ok(len)
 }
 
+#[syscall(i386 = 337, amd64 = 299)]
+async fn recvmmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    fd: FdNum,
+    msgvec: Pointer<MMsgHdr>,
+    n: u32,
+    flags: RecvMMsgFlags,
+    timeout: Pointer<Timespec>,
+) -> SyscallResult {
+    let socket = fdtable.get(fd)?;
+
+    let timeout_fut = if !timeout.is_null() {
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        sleep_until(
+            now(ClockId::Monotonic).saturating_add(timeout),
+            ClockId::Monotonic,
+        )
+        .fuse()
+    } else {
+        Fuse::terminated()
+    };
+    let mut timeout_fut = pin!(timeout_fut);
+
+    let mut msgvec = msgvec;
+    let n = usize_from(n);
+    let mut i = 0;
+    let n = loop {
+        if i >= n {
+            break i;
+        }
+
+        let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
+
+        let res = {
+            let recv_fut = do_io(&*socket, Events::READ, || {
+                socket.recv_msg(
+                    &virtual_memory,
+                    abi,
+                    &mut msg_header.hdr,
+                    &fdtable,
+                    no_file_limit,
+                )
+            });
+            let recv_fut = pin!(recv_fut);
+            let Either::Left((res, _)) = future::select(recv_fut, &mut timeout_fut).await else {
+                break i;
+            };
+            res
+        };
+
+        match res {
+            Ok(len) => {
+                msg_header.len = len as u32;
+                virtual_memory.write_with_abi(msgvec, msg_header, abi)?;
+                msgvec = msgvec.bytes_offset(offset);
+                i += 1;
+            }
+            Err(err) => break i.checked_sub(1).ok_or(err)?,
+        }
+    };
+    Ok(u64::from_usize(n))
+}
+
 #[syscall(i386 = 340, amd64 = 302)]
 fn prlimit64(
     thread: &mut ThreadGuard,
@@ -4352,6 +4420,45 @@ fn prlimit64(
     }
 
     Ok(0)
+}
+
+#[syscall(i386 = 345, amd64 = 307)]
+async fn sendmmsg(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    msgvec: Pointer<MMsgHdr>,
+    n: u32,
+    flags: SendMsgFlags,
+) -> SyscallResult {
+    let socket = fdtable.get(fd)?;
+
+    let mut msgvec = msgvec;
+    let n = usize_from(n);
+    let mut i = 0;
+    let n = loop {
+        if i >= n {
+            break i;
+        }
+
+        let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
+
+        let res = do_io(&*socket, Events::WRITE, || {
+            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, &fdtable)
+        })
+        .await;
+        match res {
+            Ok(len) => {
+                msg_header.len = len as u32;
+                virtual_memory.write_with_abi(msgvec, msg_header, abi)?;
+                msgvec = msgvec.bytes_offset(offset);
+                i += 1;
+            }
+            Err(err) => break i.checked_sub(1).ok_or(err)?,
+        }
+    };
+    Ok(u64::from_usize(n))
 }
 
 #[syscall(amd64 = 316)]

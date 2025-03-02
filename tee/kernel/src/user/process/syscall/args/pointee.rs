@@ -33,8 +33,9 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, FdNum, Iovec, Linger, LinuxDirent64, LongOffset, MsgHdr, Offset, PSelectSigsetArg,
-    Pointer, RLimit, Rusage, SocketAddr, Stat, SysInfo, Time, Timespec, Timeval, WStatus,
+    CmsgHdr, FdNum, Iovec, Linger, LinuxDirent64, LongOffset, MMsgHdr, MsgHdr, Offset,
+    PSelectSigsetArg, Pointer, RLimit, Rusage, SocketAddr, Stat, SysInfo, Time, Timespec, Timeval,
+    WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2019,6 +2020,67 @@ impl From<CmsgHdr> for CmsgHdr64 {
             len: value.len,
             level: value.level,
             r#type: value.r#type,
+        }
+    }
+}
+
+impl Pointee for MMsgHdr {}
+
+impl AbiDependentPointee for MMsgHdr {
+    type I386 = MMsgHdr32;
+    type Amd64 = MMsgHdr64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MMsgHdr32 {
+    hdr: MsgHdr32,
+    len: u32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct MMsgHdr64 {
+    hdr: MsgHdr64,
+    len: u32,
+    _pad: u32,
+}
+
+impl From<MMsgHdr32> for MMsgHdr {
+    fn from(value: MMsgHdr32) -> Self {
+        Self {
+            hdr: value.hdr.into(),
+            len: value.len,
+        }
+    }
+}
+
+impl From<MMsgHdr64> for MMsgHdr {
+    fn from(value: MMsgHdr64) -> Self {
+        Self {
+            hdr: value.hdr.into(),
+            len: value.len,
+        }
+    }
+}
+
+impl TryFrom<MMsgHdr> for MMsgHdr32 {
+    type Error = Error;
+
+    fn try_from(value: MMsgHdr) -> Result<Self> {
+        Ok(Self {
+            hdr: MsgHdr32::try_from(value.hdr)?,
+            len: value.len,
+        })
+    }
+}
+
+impl From<MMsgHdr> for MMsgHdr64 {
+    fn from(value: MMsgHdr) -> Self {
+        Self {
+            hdr: value.hdr.into(),
+            len: value.len,
+            _pad: 0,
         }
     }
 }

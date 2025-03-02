@@ -1679,6 +1679,12 @@ bitflags! {
 }
 
 bitflags! {
+    pub struct SendMsgFlags {
+        const NOSIGNAL = 0x4000;
+    }
+}
+
+bitflags! {
     pub struct Accept4Flags {
         const CLOEXEC = OpenFlags::CLOEXEC.bits();
         const NONBLOCK = OpenFlags::NONBLOCK.bits();
@@ -1758,4 +1764,16 @@ impl UnixAddr {
         }
         bytes
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MMsgHdr {
+    /// Message header
+    pub hdr: MsgHdr,
+    /// Number of received bytes for header
+    pub len: u32,
+}
+
+bitflags! {
+    pub struct RecvMMsgFlags {}
 }
