@@ -210,12 +210,7 @@ impl OpenFileDescription for StreamUnixSocket {
             bail!(NotConn);
         };
 
-        let mut vectored_buf = VectoredUserBuf::new(vm);
-        for i in 0..usize_from(msg_hdr.iovlen) {
-            let iov = vm.read_with_abi(msg_hdr.iov.add(i), abi)?;
-            vectored_buf.push(iov);
-        }
-
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf)?;
 
         if let Some(ancillary_data) = ancillary_data {
@@ -351,12 +346,7 @@ impl OpenFileDescription for StreamUnixSocket {
             None
         };
 
-        let mut vectored_buf = VectoredUserBuf::new(vm);
-        for i in 0..usize_from(msg_hdr.iovlen) {
-            let iov = vm.read_with_abi(msg_hdr.iov.add(i), abi)?;
-            vectored_buf.push(iov);
-        }
-
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         active
             .write_half
             .lock()

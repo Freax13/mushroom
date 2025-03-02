@@ -206,7 +206,7 @@ where
 
     pub fn add(self, count: usize) -> Self
     where
-        T: Sized,
+        T: Sized + PrimitivePointee,
     {
         self.bytes_offset(count * size_of::<T>())
     }

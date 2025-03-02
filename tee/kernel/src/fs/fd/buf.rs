@@ -1,14 +1,17 @@
 use core::{cmp, ptr::NonNull};
 
 use alloc::vec::Vec;
-use usize_conversions::{FromUsize, usize_from};
+use usize_conversions::{FromUsize, IntoUsize, usize_from};
 use x86_64::VirtAddr;
 
 use crate::{
     error::Result,
     user::process::{
         memory::VirtualMemory,
-        syscall::args::{Iovec, Pointer},
+        syscall::{
+            args::{Iovec, Pointer},
+            traits::Abi,
+        },
     },
 };
 
@@ -154,11 +157,22 @@ pub struct VectoredUserBuf<'a> {
 }
 
 impl<'a> VectoredUserBuf<'a> {
-    pub fn new(vm: &'a VirtualMemory) -> Self {
-        Self {
+    pub fn new(
+        vm: &'a VirtualMemory,
+        mut iov: Pointer<Iovec>,
+        iovlen: impl IntoUsize,
+        abi: Abi,
+    ) -> Result<Self> {
+        let mut vectored_buf = Self {
             vm,
             iovec: Vec::new(),
+        };
+        for _ in 0..iovlen.into_usize() {
+            let (size, value) = vm.read_sized_with_abi(iov, abi)?;
+            vectored_buf.push(value);
+            iov = iov.bytes_offset(size);
         }
+        Ok(vectored_buf)
     }
 
     pub fn push(&mut self, buf: Iovec) {

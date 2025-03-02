@@ -870,14 +870,7 @@ async fn readv(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let mut vec = vec;
-    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vectored_buf.push(iovec_value);
-        vec = vec.bytes_offset(len);
-    }
-
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
@@ -4289,14 +4282,7 @@ async fn preadv(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let mut vec = vec;
-    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vectored_buf.push(iovec_value);
-        vec = vec.bytes_offset(len);
-    }
-
+    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
 
     let len = do_io(&*fd.clone(), Events::READ, || {
@@ -4314,20 +4300,13 @@ async fn pwritev(
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     vec: Pointer<Iovec>,
-    vlen: u64,
+    vlen: u32,
     pos_l: u32,
     pos_h: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let mut vec = vec;
-    let mut vectored_buf = VectoredUserBuf::new(&virtual_memory);
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vectored_buf.push(iovec_value);
-        vec = vec.bytes_offset(len);
-    }
-
+    let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
 
     let len = do_write_io(&*fd.clone(), vectored_buf.buffer_len(), || {
