@@ -98,6 +98,7 @@ pub enum ErrorKind {
     NotEmpty = 39,
     Loop = 40,
     NotSock = 88,
+    MsgSize = 90,
     OpNotSupp = 95,
     AddrInUse = 98,
     AddrNotAvail = 99,
