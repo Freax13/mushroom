@@ -274,7 +274,7 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut buf)).await?;
+    let len = do_io(&*fd, Events::READ, || fd.read(&mut buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -297,7 +297,7 @@ async fn write(
     // userspace.
     let res = thread
         .interruptable(
-            do_write_io(&*fd.clone(), count, || {
+            do_write_io(&*fd, count, || {
                 let buf = UserBuf::new(&virtual_memory, buf, count);
                 fd.write(&buf)
             }),
@@ -321,7 +321,7 @@ async fn write(
     while written != count {
         let res = thread
             .interruptable(
-                do_write_io(&*fd.clone(), count - written, || {
+                do_write_io(&*fd, count - written, || {
                     let buf =
                         UserBuf::new(&virtual_memory, buf.bytes_offset(written), count - written);
                     fd.write(&buf)
@@ -871,7 +871,7 @@ async fn readv(
     let fd = fdtable.get(fd)?;
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    let len = do_io(&*fd.clone(), Events::READ, || fd.read(&mut vectored_buf)).await?;
+    let len = do_io(&*fd, Events::READ, || fd.read(&mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -1402,7 +1402,7 @@ async fn recv_from(
         Events::READ
     };
     let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&*fd.clone(), events, || fd.recv_from(&mut buf, flags)).await?
+        do_io(&*fd, events, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
@@ -1422,7 +1422,7 @@ async fn sendmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&*fd.clone(), Events::WRITE, || {
+    let len = do_io(&*fd, Events::WRITE, || {
         fd.send_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable)
     })
     .await?;
@@ -1442,7 +1442,7 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&*fd.clone(), Events::READ, || {
+    let len = do_io(&*fd, Events::READ, || {
         fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
     })
     .await?;
@@ -3323,7 +3323,7 @@ async fn clock_nanosleep(
 
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
-    let process = thread.process().clone();
+    let process = thread.process();
     process.exit_group(WStatus::exit(status as u8));
     core::future::pending().await
 }
@@ -3458,16 +3458,16 @@ async fn openat(
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let node = if flags.contains(OpenFlags::NOFOLLOW) {
-            lookup_node(start_dir.clone(), &filename, &mut ctx)?
+            lookup_node(start_dir, &filename, &mut ctx)?
         } else {
-            lookup_and_resolve_node(start_dir.clone(), &filename, &mut ctx)?
+            lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
         };
 
         if flags.contains(OpenFlags::DIRECTORY) {
             ensure!(node.ty()? == FileType::Dir, NotDir);
         }
 
-        let path_fd = PathFd::new(filename.clone(), node);
+        let path_fd = PathFd::new(filename, node);
         FileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
@@ -3476,7 +3476,7 @@ async fn openat(
             create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
         } else {
             let node = if flags.contains(OpenFlags::NOFOLLOW) {
-                lookup_node(start_dir.clone(), &filename, &mut ctx)?
+                lookup_node(start_dir, &filename, &mut ctx)?
             } else {
                 lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
             };
@@ -4284,11 +4284,7 @@ async fn preadv(
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-
-    let len = do_io(&*fd.clone(), Events::READ, || {
-        fd.pread(pos, &mut vectored_buf)
-    })
-    .await?;
+    let len = do_io(&*fd, Events::READ, || fd.pread(pos, &mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -4308,8 +4304,7 @@ async fn pwritev(
 
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-
-    let len = do_write_io(&*fd.clone(), vectored_buf.buffer_len(), || {
+    let len = do_write_io(&*fd, vectored_buf.buffer_len(), || {
         fd.pwrite(pos, &vectored_buf)
     })
     .await?;
