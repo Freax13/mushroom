@@ -1758,9 +1758,15 @@ impl UnixAddr {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&(Domain::Unix as u16).to_ne_bytes());
         match self {
-            UnixAddr::Pathname(path) => bytes.extend_from_slice(path.as_bytes()),
+            UnixAddr::Pathname(path) => {
+                bytes.extend_from_slice(path.as_bytes());
+                bytes.push(0);
+            }
             UnixAddr::Unnamed => {}
-            UnixAddr::Abstract(name) => bytes.extend_from_slice(name),
+            UnixAddr::Abstract(name) => {
+                bytes.push(0);
+                bytes.extend_from_slice(name);
+            }
         }
         bytes
     }
