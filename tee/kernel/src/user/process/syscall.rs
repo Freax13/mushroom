@@ -128,6 +128,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysAccess);
     handlers.register(SysPipe);
     handlers.register(SysSelect);
+    handlers.register(SysSchedYield);
     handlers.register(SysMsync);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
@@ -226,6 +227,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
+    handlers.register(SysClockGetres);
     handlers.register(SysClockNanosleep);
     handlers.register(SysTgkill);
     handlers.register(SysOpenat);
@@ -1105,6 +1107,16 @@ async fn select_impl(
     }
 
     Ok(set)
+}
+
+#[syscall(i386 = 158, amd64 = 24)]
+async fn sched_yield() -> SyscallResult {
+    let (tx, rx) = oneshot::new();
+    crate::rt::spawn(async move {
+        tx.send(()).unwrap();
+    });
+    rx.recv().await.unwrap();
+    Ok(0)
 }
 
 #[syscall(i386 = 144, amd64 = 26)]
@@ -3296,6 +3308,26 @@ fn clock_gettime(
 ) -> SyscallResult {
     let time = time::now(clock_id);
     virtual_memory.write_with_abi(tp, time, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 406, amd64 = 229)]
+fn clock_getres(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    res: Pointer<Timespec>,
+) -> SyscallResult {
+    if !res.is_null() {
+        virtual_memory.write_with_abi(
+            res,
+            Timespec {
+                tv_sec: 0,
+                tv_nsec: 1,
+            },
+            abi,
+        )?;
+    }
     Ok(0)
 }
 
