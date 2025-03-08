@@ -5,7 +5,7 @@ use crate::{
     error::{Result, ensure, err},
     fs::{
         FileSystem,
-        fd::{FileDescriptor, OpenFileDescription},
+        fd::{OpenFileDescription, StrongFileDescriptor},
         path::Path,
     },
     user::process::syscall::args::{OpenFlags, Stat},
@@ -26,7 +26,7 @@ pub fn open(
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-) -> Result<FileDescriptor> {
+) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), IsDir);
     let registration = REGISTRATIONS
         .iter()
@@ -45,7 +45,7 @@ pub struct Registration {
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<FileDescriptor>,
+    ) -> Result<StrongFileDescriptor>,
 }
 
 impl Registration {
@@ -59,7 +59,9 @@ impl Registration {
         let rdev = ((T::MAJOR as u32) << 8) | T::MINOR as u32;
         Self {
             rdev,
-            new: |path, flags, stat, fs| T::new(path, flags, stat, fs).map(FileDescriptor::from),
+            new: |path, flags, stat, fs| {
+                T::new(path, flags, stat, fs).map(StrongFileDescriptor::from)
+            },
         }
     }
 }

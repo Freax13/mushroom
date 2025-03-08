@@ -20,8 +20,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptorTable, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            VectoredUserBuf, WriteBuf,
+            Events, FileDescriptorTable, FileLock, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
         },
         node::FileAccessContext,
         path::Path,
@@ -54,7 +54,12 @@ struct PortData {
 }
 
 impl PortData {
-    pub fn bind(&mut self, ip: Ipv4Addr, reuse_addr: bool, socket: Weak<UdpSocket>) -> Result<()> {
+    pub fn bind(
+        &mut self,
+        ip: Ipv4Addr,
+        reuse_addr: bool,
+        socket: Weak<OpenFileDescriptionData<UdpSocket>>,
+    ) -> Result<()> {
         let local_ip = ip.is_unspecified().not().then_some(ip);
 
         if let Some(local_ip) = local_ip {
@@ -106,14 +111,14 @@ impl PortData {
 struct PortDataEntry {
     local_ip: Option<Ipv4Addr>,
     reuse_addr: bool,
-    socket: Weak<UdpSocket>,
+    socket: Weak<OpenFileDescriptionData<UdpSocket>>,
 }
 
 const EPHEMERAL_PORT_START: u16 = 32768;
 const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct UdpSocket {
-    this: Weak<Self>,
+    this: Weak<OpenFileDescriptionData<Self>>,
     internal: Mutex<UdpSocketInternal>,
     rx_notify: Notify,
 }
@@ -129,8 +134,9 @@ struct UdpSocketInternal {
 }
 
 impl UdpSocket {
-    pub fn new(r#type: SocketTypeWithFlags) -> Arc<Self> {
-        Arc::new_cyclic(|this| Self {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(r#type: SocketTypeWithFlags) -> StrongFileDescriptor {
+        StrongFileDescriptor::new_cyclic(|this| Self {
             this: this.clone(),
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,

@@ -10,7 +10,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
             WriteBuf, stream_buffer,
         },
         node::{DynINode, FileAccessContext},
@@ -52,7 +52,7 @@ impl NamedPipe {
         flags: OpenFlags,
         node: DynINode,
         path: Path,
-    ) -> Result<FileDescriptor> {
+    ) -> Result<StrongFileDescriptor> {
         let mut guard = self.internal.lock();
 
         Ok(if flags.contains(OpenFlags::WRONLY) {
@@ -100,7 +100,7 @@ impl NamedPipe {
             }
 
             let file_lock = FileLock::new(node.file_lock_record().clone());
-            FileDescriptor::from(WriteHalf {
+            StrongFileDescriptor::from(WriteHalf {
                 node,
                 path,
                 write_half,
@@ -141,7 +141,7 @@ impl NamedPipe {
                 };
 
             let file_lock = FileLock::new(node.file_lock_record().clone());
-            FileDescriptor::from(FullReadWrite {
+            StrongFileDescriptor::from(FullReadWrite {
                 node,
                 path,
                 read_half,
@@ -192,7 +192,7 @@ impl NamedPipe {
             }
 
             let file_lock = FileLock::new(node.file_lock_record().clone());
-            FileDescriptor::from(ReadHalf {
+            StrongFileDescriptor::from(ReadHalf {
                 node,
                 path,
                 read_half,

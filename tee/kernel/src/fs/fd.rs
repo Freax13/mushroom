@@ -6,7 +6,7 @@ use core::{
     num::NonZeroU8,
     ops::{BitOr, BitOrAssign, Deref},
     pin::pin,
-    sync::atomic::{AtomicI64, Ordering},
+    sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -34,7 +34,13 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-use alloc::{boxed::Box, collections::BTreeMap, format, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    format,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use file::File;
@@ -67,32 +73,66 @@ pub mod unix_socket;
 
 pub use buf::{KernelReadBuf, KernelWriteBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf};
 
-#[derive(Clone)]
-pub struct FileDescriptor(Arc<dyn OpenFileDescription>);
+pub struct OpenFileDescriptionData<T: ?Sized> {
+    /// This reference count counts how many times the file descriptor is
+    /// stored in a file descriptor table. When this count reaches zero, the
+    /// file descriptor is considered closed. Note that the Arc strong
+    /// reference count may still be greater than one. This can happen if the
+    /// file descriptor is stored internally within the kernel somewhere e.g.
+    /// in a epoll interest list.
+    reference_count: AtomicUsize,
+    ofd: T,
+}
 
-impl<T> From<T> for FileDescriptor
+impl<T> OpenFileDescriptionData<T>
 where
-    T: OpenFileDescription,
+    T: ?Sized,
 {
-    fn from(value: T) -> Self {
-        FileDescriptor(Arc::new(value))
+    pub fn is_closed(&self) -> bool {
+        self.reference_count.load(Ordering::Relaxed) == 0
     }
 }
 
-impl<T> From<Arc<T>> for FileDescriptor
+impl<T> Deref for OpenFileDescriptionData<T>
 where
-    T: OpenFileDescription,
+    T: ?Sized,
 {
-    fn from(value: Arc<T>) -> Self {
-        FileDescriptor(value)
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ofd
+    }
+}
+
+#[derive(Clone)]
+pub struct FileDescriptor(Arc<OpenFileDescriptionData<dyn OpenFileDescription>>);
+
+impl FileDescriptor {
+    pub fn upgrade(this: &Self) -> Option<StrongFileDescriptor> {
+        let mut rc = this.reference_count.load(Ordering::Relaxed);
+        loop {
+            if rc == 0 {
+                break None;
+            }
+            let res = this.reference_count.compare_exchange(
+                rc,
+                rc + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+            match res {
+                Ok(_) => break Some(StrongFileDescriptor(this.clone())),
+                Err(new_rc) => rc = new_rc,
+            }
+        }
     }
 }
 
 impl Deref for FileDescriptor {
-    type Target = dyn OpenFileDescription;
+    type Target = OpenFileDescriptionData<dyn OpenFileDescription>;
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 
@@ -106,7 +146,71 @@ impl Eq for FileDescriptor {}
 
 impl PartialEq<dyn OpenFileDescription> for FileDescriptor {
     fn eq(&self, other: &dyn OpenFileDescription) -> bool {
-        core::ptr::eq(&*self.0, other)
+        core::ptr::eq(&***self, other)
+    }
+}
+
+/// Instances of this type are counted in [`OpenFileDescriptionInternal::reference_count`].
+/// This prevents fds from being marked as "closed".
+pub struct StrongFileDescriptor(FileDescriptor);
+
+impl StrongFileDescriptor {
+    pub fn new<T>(ofd: T) -> Self
+    where
+        T: OpenFileDescription,
+    {
+        Self(FileDescriptor(Arc::new(OpenFileDescriptionData {
+            reference_count: AtomicUsize::new(1),
+            ofd,
+        })))
+    }
+
+    pub fn new_cyclic<T>(f: impl FnOnce(&Weak<OpenFileDescriptionData<T>>) -> T) -> Self
+    where
+        T: OpenFileDescription,
+    {
+        Self(FileDescriptor(Arc::new_cyclic(|this| {
+            OpenFileDescriptionData {
+                reference_count: AtomicUsize::new(1),
+                ofd: f(this),
+            }
+        })))
+    }
+
+    pub fn downgrade(this: &Self) -> FileDescriptor {
+        this.0.clone()
+    }
+}
+
+impl<T> From<T> for StrongFileDescriptor
+where
+    T: OpenFileDescription,
+{
+    fn from(ofd: T) -> Self {
+        Self::new(ofd)
+    }
+}
+
+impl Deref for StrongFileDescriptor {
+    type Target = FileDescriptor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Clone for StrongFileDescriptor {
+    fn clone(&self) -> Self {
+        let val = self.0.0.reference_count.fetch_add(1, Ordering::Relaxed);
+        debug_assert_ne!(val, 0);
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for StrongFileDescriptor {
+    fn drop(&mut self) {
+        let val = self.0.0.reference_count.fetch_sub(1, Ordering::Relaxed);
+        debug_assert_ne!(val, 0);
     }
 }
 
@@ -155,7 +259,7 @@ impl FileDescriptorTable {
 
     pub fn insert(
         &self,
-        fd: impl Into<FileDescriptor>,
+        fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
@@ -184,7 +288,7 @@ impl FileDescriptorTable {
     pub fn insert_after(
         &self,
         min: i32,
-        fd: impl Into<FileDescriptor>,
+        fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
@@ -200,7 +304,7 @@ impl FileDescriptorTable {
     pub fn replace(
         &self,
         fd_num: FdNum,
-        fd: impl Into<FileDescriptor>,
+        fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<()> {
@@ -220,6 +324,18 @@ impl FileDescriptorTable {
     }
 
     pub fn get_with_flags(&self, fd_num: FdNum) -> Result<(FileDescriptor, FdFlags)> {
+        self.table
+            .lock()
+            .get(&fd_num.get())
+            .map(|fd| (StrongFileDescriptor::downgrade(&fd.fd), fd.flags))
+            .ok_or(err!(BadF))
+    }
+
+    pub fn get_strong(&self, fd_num: FdNum) -> Result<StrongFileDescriptor> {
+        self.get_strong_with_flags(fd_num).map(|(fd, _flags)| fd)
+    }
+
+    pub fn get_strong_with_flags(&self, fd_num: FdNum) -> Result<(StrongFileDescriptor, FdFlags)> {
         self.table
             .lock()
             .get(&fd_num.get())
@@ -285,7 +401,7 @@ impl FileDescriptorTable {
             entry.ino,
             uid,
             gid,
-            entry.fd.clone(),
+            StrongFileDescriptor::downgrade(&entry.fd),
             entry.file_lock_record.get().clone(),
         )))
     }
@@ -309,13 +425,13 @@ impl FileDescriptorTable {
 
 struct FileDescriptorTableEntry {
     ino: u64,
-    fd: FileDescriptor,
+    fd: StrongFileDescriptor,
     flags: FdFlags,
     file_lock_record: LazyFileLockRecord,
 }
 
 impl FileDescriptorTableEntry {
-    fn new(fd: FileDescriptor, flags: FdFlags) -> Self {
+    fn new(fd: StrongFileDescriptor, flags: FdFlags) -> Self {
         Self {
             ino: new_ino(),
             fd,
@@ -477,7 +593,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, Vec<u8>)> {
         let _ = flags;
         bail!(NotSock)
     }

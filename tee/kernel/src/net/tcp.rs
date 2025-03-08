@@ -19,7 +19,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
             WriteBuf, common_ioctl, stream_buffer,
         },
         node::{FileAccessContext, new_ino},
@@ -412,7 +412,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
-    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, Vec<u8>)> {
         let bound = self.bound_socket.get().ok_or(err!(Inval))?;
         let mode = bound.mode.get().ok_or(err!(Inval))?;
         let Mode::Passive(passive) = mode else {
@@ -446,7 +446,7 @@ impl OpenFileDescription for TcpSocket {
                 mode: Arc::new(Once::with_value(Mode::Active(active))),
             }),
         };
-        let fd = FileDescriptor::from(socket);
+        let fd = StrongFileDescriptor::from(socket);
 
         let socket_addr = SocketAddr::Inet(SocketAddrInet::from(remote_addr));
         let socket_addr = bytes_of(&socket_addr).to_vec();
