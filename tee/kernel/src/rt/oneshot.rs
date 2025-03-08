@@ -20,6 +20,7 @@ enum State<T> {
 
 pub struct Sender<T>(Arc<Mutex<State<T>>>);
 
+#[derive(Debug)]
 pub struct SendError<T>(T);
 
 impl<T> Sender<T> {

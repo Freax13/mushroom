@@ -128,6 +128,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysAccess);
     handlers.register(SysPipe);
     handlers.register(SysSelect);
+    handlers.register(SysSchedYield);
     handlers.register(SysMsync);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
@@ -1105,6 +1106,16 @@ async fn select_impl(
     }
 
     Ok(set)
+}
+
+#[syscall(i386 = 158, amd64 = 24)]
+async fn sched_yield() -> SyscallResult {
+    let (tx, rx) = oneshot::new();
+    crate::rt::spawn(async move {
+        tx.send(()).unwrap();
+    });
+    rx.recv().await.unwrap();
+    Ok(0)
 }
 
 #[syscall(i386 = 144, amd64 = 26)]
