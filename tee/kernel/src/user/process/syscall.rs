@@ -222,6 +222,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFutex);
     handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
+    handlers.register(SysEpollCreate);
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
@@ -3237,6 +3238,17 @@ pub fn set_thread_area(
     }
 
     Ok(0)
+}
+
+#[syscall(i386 = 254, amd64 = 213)]
+fn epoll_create(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    size: i32,
+) -> SyscallResult {
+    ensure!(size > 0, Inval);
+    epoll_create1(fdtable, ctx, no_file_limit, EpollCreate1Flags::empty())
 }
 
 #[syscall(i386 = 220, amd64 = 217)]
