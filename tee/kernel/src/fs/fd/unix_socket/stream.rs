@@ -425,7 +425,33 @@ impl OpenFileDescription for StreamUnixSocket {
                     ctx,
                 )
             }
-            UnixAddr::Unnamed => bail!(Inval),
+            UnixAddr::Unnamed => {
+                // Auto-bind. Pick a 5-hexdigit abstract name and bind it.
+
+                const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
+                let mut candidates = HEX_DIGITS.iter().flat_map(|&a| {
+                    HEX_DIGITS.iter().flat_map(move |&b| {
+                        HEX_DIGITS.iter().flat_map(move |&c| {
+                            HEX_DIGITS.iter().flat_map(move |&d| {
+                                HEX_DIGITS.iter().map(move |&e| [a, b, c, d, e])
+                            })
+                        })
+                    })
+                });
+
+                let mut guard = ABSTRACT_SOCKETS.lock();
+                let name = candidates
+                    .find(|name| !guard.contains_key(name.as_slice()))
+                    .ok_or(err!(AddrInUse))?;
+                let entry = guard.entry(name.to_vec());
+                let Entry::Vacant(entry) = entry else {
+                    bail!(AddrInUse);
+                };
+                let addr = UnixAddr::Abstract(name.to_vec());
+                let weak = self.bind(addr)?;
+                entry.insert(weak);
+                Ok(())
+            }
             UnixAddr::Abstract(ref name) => {
                 let mut guard = ABSTRACT_SOCKETS.lock();
                 let entry = guard.entry(name.to_owned());
