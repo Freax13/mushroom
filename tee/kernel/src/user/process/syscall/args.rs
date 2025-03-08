@@ -1,5 +1,5 @@
 use core::{
-    cmp,
+    cmp::{self, Reverse},
     fmt::{self, Display},
     marker::PhantomData,
     net::{Ipv4Addr, SocketAddrV4},
@@ -1466,17 +1466,17 @@ enum_arg! {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Nice(i8);
+pub struct Nice(Reverse<i8>);
 
 impl Nice {
-    pub const DEFAULT: Self = Self(0);
+    pub const DEFAULT: Self = Self(Reverse(0));
 
     pub fn get(&self) -> i8 {
-        self.0
+        self.0.0
     }
 
     pub fn as_syscall_return_value(self) -> u64 {
-        (self.0 + 21) as u64
+        (20 - self.get()) as u64
     }
 }
 
@@ -1484,7 +1484,7 @@ impl SyscallArg for Nice {
     fn parse(value: u64, _: Abi) -> Result<Self> {
         let value = value as u32 as i32;
         ensure!((-20..=19).contains(&value), Inval);
-        Ok(Self(value as i8))
+        Ok(Self(Reverse(value as i8)))
     }
 
     fn display(f: &mut dyn fmt::Write, value: u64, _: Abi, _: &ThreadGuard<'_>) -> fmt::Result {

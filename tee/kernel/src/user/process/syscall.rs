@@ -3051,7 +3051,7 @@ fn getpriority(thread: &mut ThreadGuard, which: Which, who: u32) -> SyscallResul
     let min = targets
         .into_iter()
         .map(|thread| thread.nice.load())
-        .min()
+        .max()
         .unwrap();
     Ok(min.as_syscall_return_value())
 }
