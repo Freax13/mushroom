@@ -678,7 +678,7 @@ pub fn get_socket(
     path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
-    let node = lookup_and_resolve_node(ROOT_NODE.clone(), path, ctx)?;
+    let node = lookup_and_resolve_node(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
     node.get_socket()
 }
 
