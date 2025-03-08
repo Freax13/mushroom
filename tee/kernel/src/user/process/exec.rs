@@ -79,7 +79,7 @@ impl VirtualMemory {
                 Ok((state, path))
             }
             [b'#', b'!', ..] => {
-                self.start_shebang(path, &**file, argv, envp, ctx, cwd, stack_limit)
+                self.start_shebang(path, &***file, argv, envp, ctx, cwd, stack_limit)
             }
             _ => bail!(NoExec),
         }

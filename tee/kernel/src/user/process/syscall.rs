@@ -25,8 +25,8 @@ use crate::{
     fs::{
         StatFs,
         fd::{
-            Events, FdFlags, FileDescriptor, FileDescriptorTable, KernelReadBuf, KernelWriteBuf,
-            UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
+            Events, FdFlags, FileDescriptorTable, KernelReadBuf, KernelWriteBuf,
+            StrongFileDescriptor, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             path::PathFd,
@@ -222,6 +222,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFutex);
     handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
+    handlers.register(SysEpollCreate);
     handlers.register(SysSetTidAddress);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
@@ -276,7 +277,7 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&*fd, Events::READ, || fd.read(&mut buf)).await?;
+    let len = do_io(&**fd, Events::READ, || fd.read(&mut buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -299,7 +300,7 @@ async fn write(
     // userspace.
     let res = thread
         .interruptable(
-            do_write_io(&*fd, count, || {
+            do_write_io(&**fd, count, || {
                 let buf = UserBuf::new(&virtual_memory, buf, count);
                 fd.write(&buf)
             }),
@@ -323,7 +324,7 @@ async fn write(
     while written != count {
         let res = thread
             .interruptable(
-                do_write_io(&*fd, count - written, || {
+                do_write_io(&**fd, count - written, || {
                     let buf =
                         UserBuf::new(&virtual_memory, buf.bytes_offset(written), count - written);
                     fd.write(&buf)
@@ -873,7 +874,7 @@ async fn readv(
     let fd = fdtable.get(fd)?;
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    let len = do_io(&*fd, Events::READ, || fd.read(&mut vectored_buf)).await?;
+    let len = do_io(&**fd, Events::READ, || fd.read(&mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -1139,7 +1140,7 @@ fn dup(
     #[state] no_file_limit: CurrentNoFileLimit,
     fildes: FdNum,
 ) -> SyscallResult {
-    let fd = fdtable.get(fildes)?;
+    let fd = fdtable.get_strong(fildes)?;
     let newfd = fdtable.insert(fd, FdFlags::empty(), no_file_limit)?;
 
     Ok(newfd.get() as u64)
@@ -1154,7 +1155,7 @@ fn dup2(
 ) -> SyscallResult {
     ensure!(newfd.get() >= 0, BadF);
 
-    let fd = fdtable.get(oldfd)?;
+    let fd = fdtable.get_strong(oldfd)?;
 
     if oldfd != newfd {
         fdtable.replace(newfd, fd, FdFlags::empty(), no_file_limit)?;
@@ -1216,7 +1217,7 @@ async fn sendfile(
         let chunk_len = cmp::min(count - total_len, buffer.len());
         let buffer = &mut buffer[..chunk_len];
 
-        let len = do_io(&*r#in, Events::READ, || {
+        let len = do_io(&**r#in, Events::READ, || {
             r#in.read(&mut KernelReadBuf::new(buffer))
         })
         .await?;
@@ -1228,7 +1229,7 @@ async fn sendfile(
 
         let mut buffer = buffer;
         while !buffer.is_empty() {
-            let n = do_write_io(&*r#in, buffer.len(), || {
+            let n = do_write_io(&**r#in, buffer.len(), || {
                 out.write(&KernelWriteBuf::new(buffer))
             })
             .await?;
@@ -1262,7 +1263,7 @@ async fn sendfile64(
         let chunk_len = cmp::min(count - total_len, buffer.len());
         let buffer = &mut buffer[..chunk_len];
 
-        let len = do_io(&*r#in, Events::READ, || {
+        let len = do_io(&**r#in, Events::READ, || {
             r#in.read(&mut KernelReadBuf::new(buffer))
         })
         .await?;
@@ -1274,7 +1275,7 @@ async fn sendfile64(
 
         let mut buffer = buffer;
         while !buffer.is_empty() {
-            let n = do_write_io(&*r#in, buffer.len(), || {
+            let n = do_write_io(&**r#in, buffer.len(), || {
                 out.write(&KernelWriteBuf::new(buffer))
             })
             .await?;
@@ -1404,7 +1405,7 @@ async fn recv_from(
         Events::READ
     };
     let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&*fd, events, || fd.recv_from(&mut buf, flags)).await?
+        do_io(&**fd, events, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
@@ -1424,7 +1425,7 @@ async fn sendmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&*fd, Events::WRITE, || {
+    let len = do_io(&**fd, Events::WRITE, || {
         fd.send_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable)
     })
     .await?;
@@ -1444,7 +1445,7 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&*fd, Events::READ, || {
+    let len = do_io(&**fd, Events::READ, || {
         fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
     })
     .await?;
@@ -2008,6 +2009,7 @@ fn fcntl(
 
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
+            let fd = fdtable.get_strong(fd_num)?;
             let min = i32::try_from(arg)?;
 
             let mut flags = FdFlags::empty();
@@ -2050,6 +2052,7 @@ fn fcntl64(
 
     match cmd {
         FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
+            let fd = fdtable.get_strong(fd_num)?;
             let min = i32::try_from(arg)?;
 
             let mut flags = FdFlags::empty();
@@ -3237,6 +3240,17 @@ pub fn set_thread_area(
     Ok(0)
 }
 
+#[syscall(i386 = 254, amd64 = 213)]
+fn epoll_create(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    size: i32,
+) -> SyscallResult {
+    ensure!(size > 0, Inval);
+    epoll_create1(fdtable, ctx, no_file_limit, EpollCreate1Flags::empty())
+}
+
 #[syscall(i386 = 220, amd64 = 217)]
 fn getdents64(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -3397,10 +3411,10 @@ fn epoll_ctl(
             let event = event.ok_or(err!(Inval))?;
             epoll.epoll_add(fd, event)?
         }
-        EpollCtlOp::Del => epoll.epoll_del(&*fd)?,
+        EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
         EpollCtlOp::Mod => {
             let event = event.ok_or(err!(Inval))?;
-            epoll.epoll_mod(&*fd, event)?
+            epoll.epoll_mod(&**fd, event)?
         }
     }
 
@@ -3470,7 +3484,7 @@ async fn openat(
         }
 
         let path_fd = PathFd::new(filename, node);
-        FileDescriptor::from(path_fd)
+        StrongFileDescriptor::from(path_fd)
     } else {
         let node = if flags.contains(OpenFlags::CREAT) {
             let mut mode = FileMode::from_bits_truncate(mode);
@@ -4182,7 +4196,7 @@ async fn accept4(
     flags: Accept4Flags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let (socket, mut addr) = do_io(&*fd, Events::READ, || fd.accept(flags)).await?;
+    let (socket, mut addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
     let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
 
     if !upeer_sockaddr.is_null() {
@@ -4239,7 +4253,7 @@ fn dup3(
     flags: Dup3Flags,
 ) -> SyscallResult {
     ensure!(oldfd != newfd, Inval);
-    let fd = fdtable.get(oldfd)?;
+    let fd = fdtable.get_strong(oldfd)?;
     fdtable.replace(newfd, fd, flags, no_file_limit)?;
     Ok(newfd.get() as u64)
 }
@@ -4286,7 +4300,7 @@ async fn preadv(
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_io(&*fd, Events::READ, || fd.pread(pos, &mut vectored_buf)).await?;
+    let len = do_io(&**fd, Events::READ, || fd.pread(pos, &mut vectored_buf)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -4306,7 +4320,7 @@ async fn pwritev(
 
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_write_io(&*fd, vectored_buf.buffer_len(), || {
+    let len = do_write_io(&**fd, vectored_buf.buffer_len(), || {
         fd.pwrite(pos, &vectored_buf)
     })
     .await?;
@@ -4351,7 +4365,7 @@ async fn recvmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = {
-            let recv_fut = do_io(&*socket, Events::READ, || {
+            let recv_fut = do_io(&**socket, Events::READ, || {
                 socket.recv_msg(
                     &virtual_memory,
                     abi,
@@ -4444,7 +4458,7 @@ async fn sendmmsg(
 
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
-        let res = do_io(&*socket, Events::WRITE, || {
+        let res = do_io(&**socket, Events::WRITE, || {
             socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, &fdtable)
         })
         .await;
@@ -4542,7 +4556,7 @@ fn copy_file_range(
     let len = usize::try_from(len)?;
 
     // Do the copy operations.
-    let len = fd_in.copy_file_range(off_in_val, &*fd_out, off_out_val, len)?;
+    let len = fd_in.copy_file_range(off_in_val, &**fd_out, off_out_val, len)?;
 
     // Write the offset back.
     if let Some(off_in_val) = off_in_val {

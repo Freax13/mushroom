@@ -15,7 +15,8 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf, WriteBuf,
+            FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf, StrongFileDescriptor,
+            WriteBuf,
             dir::open_dir,
             file::{File, open_file},
             unix_socket::StreamUnixSocket,
@@ -118,7 +119,7 @@ impl INode for ProcFsRoot {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -334,7 +335,7 @@ impl INode for SelfLink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -463,7 +464,7 @@ impl INode for ProcessDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -700,7 +701,7 @@ impl INode for FdDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -903,7 +904,7 @@ impl INode for FdINode {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _: Path, _: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -971,23 +972,27 @@ impl INode for FollowedFdINode {
         }
     }
 
-    fn open(&self, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         if let Some((path, node)) = self.fd.path_fd_node() {
             // Special case for path fds: Forward the open call to the pointed
             // to node.
             node.open(path, flags)
         } else {
-            Ok(self.fd.clone())
+            FileDescriptor::upgrade(&self.fd).ok_or(err!(BadF))
         }
     }
 
-    async fn async_open(self: Arc<Self>, _: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    async fn async_open(
+        self: Arc<Self>,
+        _: Path,
+        flags: OpenFlags,
+    ) -> Result<StrongFileDescriptor> {
         if let Some((path, node)) = self.fd.path_fd_node() {
             // Special case for path fds: Forward the open call to the pointed
             // to node.
             node.async_open(path, flags).await
         } else {
-            Ok(self.fd.clone())
+            FileDescriptor::upgrade(&self.fd).ok_or(err!(BadF))
         }
     }
 
@@ -1076,7 +1081,7 @@ impl INode for ExeLink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -1158,7 +1163,7 @@ impl INode for MapsFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
@@ -1252,7 +1257,7 @@ impl INode for ProcessStatFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
@@ -1358,7 +1363,7 @@ impl INode for StatFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
@@ -1471,7 +1476,7 @@ impl INode for UptimeFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_file(path, self.this.upgrade().unwrap(), flags)
     }
 

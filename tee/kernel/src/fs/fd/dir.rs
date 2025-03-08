@@ -19,14 +19,14 @@ use async_trait::async_trait;
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
 use super::{
-    Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+    Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor, WriteBuf,
 };
 
-pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::WRONLY), IsDir);
     ensure!(!flags.contains(OpenFlags::RDWR), IsDir);
     let file_lock = FileLock::new(dir.file_lock_record().clone());
-    Ok(FileDescriptor::from(DirectoryFileDescription {
+    Ok(StrongFileDescriptor::from(DirectoryFileDescription {
         flags,
         dir,
         entries: Mutex::new(None),

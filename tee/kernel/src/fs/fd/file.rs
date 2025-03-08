@@ -23,8 +23,8 @@ use crate::{
 };
 
 use super::{
-    Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
-    WriteBuf, stream_buffer,
+    Events, FileLock, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
+    StrongFileDescriptor, WriteBuf, stream_buffer,
 };
 
 pub trait File: INode {
@@ -73,7 +73,11 @@ pub trait File: INode {
     fn truncate(&self, length: usize) -> Result<()>;
 }
 
-pub fn open_file(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Result<FileDescriptor> {
+pub fn open_file(
+    path: Path,
+    file: Arc<dyn File>,
+    flags: OpenFlags,
+) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), NotDir);
     if flags.contains(OpenFlags::TRUNC) {
         file.truncate(0)?;

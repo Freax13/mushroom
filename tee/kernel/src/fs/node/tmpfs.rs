@@ -6,8 +6,8 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, KernelReadBuf, KernelWriteBuf, LazyFileLockRecord,
-            PipeBlocked, ReadBuf, WriteBuf,
+            FileLockRecord, KernelReadBuf, KernelWriteBuf, LazyFileLockRecord,
+            OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
             pipe::named::NamedPipe,
@@ -161,7 +161,7 @@ impl INode for TmpFsDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -851,7 +851,7 @@ impl INode for TmpFsFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_file(path, self.this.upgrade().unwrap(), flags)
     }
 
@@ -1141,7 +1141,7 @@ impl INode for TmpFsSymlink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -1234,7 +1234,7 @@ impl INode for TmpFsCharDev {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         char_dev::open(path, flags, self.stat()?, self.fs.clone())
     }
 
@@ -1304,11 +1304,15 @@ impl INode for TmpFsFifo {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _: Path, _: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Perm)
     }
 
-    async fn async_open(self: Arc<Self>, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    async fn async_open(
+        self: Arc<Self>,
+        path: Path,
+        flags: OpenFlags,
+    ) -> Result<StrongFileDescriptor> {
         self.named_pipe.open(flags, self.clone(), path).await
     }
 
@@ -1332,7 +1336,7 @@ pub struct TmpFsSocket {
     ino: u64,
     internal: Mutex<TmpFsSocketInternal>,
     file_lock_record: LazyFileLockRecord,
-    socket: Weak<StreamUnixSocket>,
+    socket: Weak<OpenFileDescriptionData<StreamUnixSocket>>,
 }
 
 struct TmpFsSocketInternal {
@@ -1345,7 +1349,7 @@ impl TmpFsSocket {
         mode: FileMode,
         uid: Uid,
         gid: Gid,
-        socket: Weak<StreamUnixSocket>,
+        socket: Weak<OpenFileDescriptionData<StreamUnixSocket>>,
     ) -> Self {
         Self {
             fs,
@@ -1384,7 +1388,7 @@ impl INode for TmpFsSocket {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: Path, _: OpenFlags) -> Result<FileDescriptor> {
+    fn open(&self, _: Path, _: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(XIo)
     }
 
@@ -1402,7 +1406,7 @@ impl INode for TmpFsSocket {
         self.file_lock_record.get()
     }
 
-    fn get_socket(&self) -> Result<Arc<StreamUnixSocket>> {
+    fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
         self.socket.upgrade().ok_or(err!(ConnRefused))
     }
 }

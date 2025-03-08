@@ -29,7 +29,10 @@ use self::{
 
 use super::{
     FileSystem,
-    fd::{FileDescriptor, FileLockRecord, unix_socket::StreamUnixSocket},
+    fd::{
+        FileLockRecord, OpenFileDescriptionData, StrongFileDescriptor,
+        unix_socket::StreamUnixSocket,
+    },
     path::{FileName, Path, PathSegment},
 };
 
@@ -69,9 +72,13 @@ pub trait INode: Any + Send + Sync + 'static {
     fn stat(&self) -> Result<Stat>;
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<FileDescriptor>;
+    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor>;
 
-    async fn async_open(self: Arc<Self>, path: Path, flags: OpenFlags) -> Result<FileDescriptor> {
+    async fn async_open(
+        self: Arc<Self>,
+        path: Path,
+        flags: OpenFlags,
+    ) -> Result<StrongFileDescriptor> {
         self.open(path, flags)
     }
 
@@ -280,7 +287,7 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord>;
 
-    fn get_socket(&self) -> Result<Arc<StreamUnixSocket>> {
+    fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
         bail!(ConnRefused)
     }
 }
@@ -667,7 +674,10 @@ pub fn bind_socket(
     Ok(())
 }
 
-pub fn get_socket(path: &Path, ctx: &mut FileAccessContext) -> Result<Arc<StreamUnixSocket>> {
+pub fn get_socket(
+    path: &Path,
+    ctx: &mut FileAccessContext,
+) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
     let node = lookup_and_resolve_node(ROOT_NODE.clone(), path, ctx)?;
     node.get_socket()
 }

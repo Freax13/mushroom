@@ -22,8 +22,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            FdFlags, FileDescriptor, FileDescriptorTable, NonEmptyEvents, PipeBlocked, ReadBuf,
-            VectoredUserBuf, WriteBuf,
+            FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescriptionData, PipeBlocked,
+            ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             stream_buffer::{self},
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
@@ -52,11 +52,11 @@ use crate::{
 
 const CAPACITY: usize = 262144;
 
-static ABSTRACT_SOCKETS: Mutex<BTreeMap<Vec<u8>, Weak<StreamUnixSocket>>> =
+static ABSTRACT_SOCKETS: Mutex<BTreeMap<Vec<u8>, Weak<OpenFileDescriptionData<StreamUnixSocket>>>> =
     Mutex::new(BTreeMap::new());
 
 pub struct StreamUnixSocket {
-    this: Weak<Self>,
+    this: Weak<OpenFileDescriptionData<Self>>,
     ino: u64,
     internal: Mutex<StreamUnixSocketInternal>,
     socketname: Mutex<UnixAddr>,
@@ -77,8 +77,9 @@ enum Mode {
 }
 
 impl StreamUnixSocket {
-    pub fn new(flags: OpenFlags, uid: Uid, gid: Gid) -> Arc<Self> {
-        Arc::new_cyclic(|this| Self {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(flags: OpenFlags, uid: Uid, gid: Gid) -> StrongFileDescriptor {
+        StrongFileDescriptor::new_cyclic(|this| Self {
             this: this.clone(),
             ino: new_ino(),
             internal: Mutex::new(StreamUnixSocketInternal {
@@ -92,11 +93,15 @@ impl StreamUnixSocket {
         })
     }
 
-    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Arc<Self>, Arc<Self>) {
+    pub fn new_pair(
+        flags: OpenFlags,
+        uid: Uid,
+        gid: Gid,
+    ) -> (StrongFileDescriptor, StrongFileDescriptor) {
         let (read_half1, write_half2) = LockedBuffer::new();
         let (read_half2, write_half1) = LockedBuffer::new();
         (
-            Arc::new_cyclic(|this| Self {
+            StrongFileDescriptor::new_cyclic(|this| Self {
                 this: this.clone(),
                 ino: new_ino(),
                 internal: Mutex::new(StreamUnixSocketInternal {
@@ -116,7 +121,7 @@ impl StreamUnixSocket {
                 })),
                 file_lock: FileLock::anonymous(),
             }),
-            Arc::new_cyclic(|this| Self {
+            StrongFileDescriptor::new_cyclic(|this| Self {
                 this: this.clone(),
                 ino: new_ino(),
                 internal: Mutex::new(StreamUnixSocketInternal {
@@ -139,7 +144,7 @@ impl StreamUnixSocket {
         )
     }
 
-    pub fn bind(&self, socketname: UnixAddr) -> Result<Weak<Self>> {
+    pub fn bind(&self, socketname: UnixAddr) -> Result<Weak<OpenFileDescriptionData<Self>>> {
         ensure!(!matches!(socketname, UnixAddr::Unnamed), Inval);
 
         let mut guard = self.socketname.lock();
@@ -324,7 +329,7 @@ impl OpenFileDescription for StreamUnixSocket {
                             .map(|i| {
                                 let fd =
                                     vm.read(msg_hdr.control.bytes_offset(len).cast().add(i))?;
-                                fdtable.get(fd)
+                                fdtable.get_strong(fd)
                             })
                             .collect::<Result<_>>()?;
                         ancillary_data.rights = Some(fds);
@@ -506,7 +511,7 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(())
     }
 
-    fn accept(&self, flags: Accept4Flags) -> Result<(FileDescriptor, Vec<u8>)> {
+    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, Vec<u8>)> {
         let mode = self.mode.get().ok_or(err!(Inval))?;
         let Mode::Passive(passive) = mode else {
             bail!(Inval)
@@ -524,7 +529,7 @@ impl OpenFileDescription for StreamUnixSocket {
         internal
             .flags
             .set(OpenFlags::CLOEXEC, flags.contains(Accept4Flags::CLOEXEC));
-        let socket = Arc::new_cyclic(|this| StreamUnixSocket {
+        let socket = StrongFileDescriptor::new_cyclic(|this| StreamUnixSocket {
             this: this.clone(),
             ino: new_ino(),
             internal: Mutex::new(internal),
@@ -533,7 +538,7 @@ impl OpenFileDescription for StreamUnixSocket {
             mode: Once::with_value(Mode::Active(active)),
             file_lock: FileLock::anonymous(),
         });
-        Ok((FileDescriptor::from(socket), addr))
+        Ok((socket, addr))
     }
 
     async fn connect(
@@ -720,7 +725,7 @@ struct MessageBoundary {
 
 #[derive(Default)]
 struct AncillaryData {
-    rights: Option<Vec<FileDescriptor>>,
+    rights: Option<Vec<StrongFileDescriptor>>,
 }
 
 impl Buffer {
