@@ -242,7 +242,7 @@ where
             fn new() -> Self {
                 Self {
                     initialized: 0,
-                    arr: MaybeUninit::uninit_array(),
+                    arr: MaybeUninit::uninit().transpose(),
                 }
             }
 
@@ -254,7 +254,7 @@ where
             fn take(mut self) -> [T; N] {
                 assert_eq!(self.initialized, N);
                 self.initialized = 0;
-                let arr = core::mem::replace(&mut self.arr, MaybeUninit::uninit_array());
+                let arr = core::mem::replace(&mut self.arr, MaybeUninit::uninit().transpose());
                 unsafe { MaybeUninit::array_assume_init(arr) }
             }
         }

@@ -422,7 +422,7 @@ fn lookup_node_with_parent(
     path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<(DynINode, DynINode)> {
-    let res = path.segments().try_fold(
+    path.segments().try_fold(
         (start_dir.clone(), start_dir),
         |(start_dir, node), segment| -> Result<_> {
             let node = resolve_links(node, start_dir.clone(), ctx)?;
@@ -449,8 +449,7 @@ fn lookup_node_with_parent(
                 }
             }
         },
-    );
-    res
+    )
 }
 
 // Find a node and resolve links.
