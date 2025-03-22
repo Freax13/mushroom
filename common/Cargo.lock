@@ -157,12 +157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "either"
-version = "1.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
-
-[[package]]
 name = "elliptic-curve"
 version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,15 +264,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.171"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -293,10 +278,8 @@ dependencies = [
  "constants",
  "goblin",
  "io",
- "itertools",
  "raw-cpuid",
  "snp-types",
- "thiserror",
  "x86_64",
 ]
 
