@@ -55,6 +55,72 @@ pub enum MsgReportRspStatus {
 #[repr(u32)]
 pub enum AttestionReport {
     V2(AttestionReportV2) = 2,
+    V3(AttestionReportV3) = 3,
+}
+
+impl AttestionReport {
+    pub fn policy(&self) -> GuestPolicy {
+        match self {
+            AttestionReport::V2(report) => report.policy,
+            AttestionReport::V3(report) => report.policy,
+        }
+    }
+
+    pub fn vmpl(&self) -> u32 {
+        match self {
+            AttestionReport::V2(report) => report.vmpl,
+            AttestionReport::V3(report) => report.vmpl,
+        }
+    }
+
+    pub fn signature_algo(&self) -> u32 {
+        match self {
+            AttestionReport::V2(report) => report.signature_algo,
+            AttestionReport::V3(report) => report.signature_algo,
+        }
+    }
+
+    pub fn report_data(&self) -> [u8; 64] {
+        match self {
+            AttestionReport::V2(report) => report.report_data,
+            AttestionReport::V3(report) => report.report_data,
+        }
+    }
+
+    pub fn measurement(&self) -> [u8; 48] {
+        match self {
+            AttestionReport::V2(report) => report.measurement,
+            AttestionReport::V3(report) => report.measurement,
+        }
+    }
+
+    pub fn host_data(&self) -> [u8; 32] {
+        match self {
+            AttestionReport::V2(report) => report.host_data,
+            AttestionReport::V3(report) => report.host_data,
+        }
+    }
+
+    pub fn id_key_digest(&self) -> [u8; 48] {
+        match self {
+            AttestionReport::V2(report) => report.id_key_digest,
+            AttestionReport::V3(report) => report.id_key_digest,
+        }
+    }
+
+    pub fn launch_tcb(&self) -> TcbVersion {
+        match self {
+            AttestionReport::V2(report) => report.launch_tcb,
+            AttestionReport::V3(report) => report.launch_tcb,
+        }
+    }
+
+    pub fn signature(&self) -> [u8; 512] {
+        match self {
+            AttestionReport::V2(report) => report.signature,
+            AttestionReport::V3(report) => report.signature,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern)]
@@ -79,6 +145,46 @@ pub struct AttestionReportV2 {
     pub report_id_ma: [u8; 32],
     pub reported_tcb: TcbVersion,
     _reserved2: Reserved<24>,
+    pub chip_id: [u8; 64],
+    pub commited_tcb: TcbVersion,
+    pub current_build: u8,
+    pub current_minor: u8,
+    pub current_major: u8,
+    _reserved3: Reserved<1>,
+    pub commited_build: u8,
+    pub commited_minor: u8,
+    pub commited_major: u8,
+    _reserved4: Reserved<1>,
+    pub launch_tcb: TcbVersion,
+    _reserved5: Reserved<168>,
+    pub signature: [u8; 512],
+}
+
+#[derive(Debug, Clone, Copy, CheckedBitPattern)]
+#[repr(C, packed)]
+pub struct AttestionReportV3 {
+    pub guest_svn: u32,
+    pub policy: GuestPolicy,
+    pub familiy_id: u128,
+    pub image_id: u128,
+    pub vmpl: u32,
+    pub signature_algo: u32,
+    pub current_tcb: TcbVersion,
+    pub platform_info: u64,
+    pub fixme_key_stuff: u32,
+    _reserved1: Reserved<4>,
+    pub report_data: [u8; 64],
+    pub measurement: [u8; 48],
+    pub host_data: [u8; 32],
+    pub id_key_digest: [u8; 48],
+    pub author_key_digest: [u8; 48],
+    pub report_id: [u8; 32],
+    pub report_id_ma: [u8; 32],
+    pub reported_tcb: TcbVersion,
+    pub cpuid_fam_id: u8,
+    pub cpuid_mod_id: u8,
+    pub cpuid_step: u8,
+    _reserved2: Reserved<21>,
     pub chip_id: [u8; 64],
     pub commited_tcb: TcbVersion,
     pub current_build: u8,
