@@ -67,7 +67,7 @@ extern "x86-interrupt" fn hv_handler(mut frame: InterruptStackFrame) {
     }
     let start = addr_of!(__interruptable_start);
     let end = addr_of!(__interruptable_end);
-    let size = unsafe { end.sub_ptr(start) };
+    let size = unsafe { end.offset_from_unsigned(start) };
     let slice = unsafe { core::slice::from_raw_parts(start, size) };
     if let Some([_, end]) = slice
         .iter()

@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use futures::{FutureExt, select_biased};
 
 use crate::{
@@ -20,7 +21,7 @@ enum State {
     /// The thread has been terminated.
     Terminated,
     /// The thread is about to restart with the given parameters.
-    Restart(ExecveValues),
+    Restart(Box<ExecveValues>),
 }
 
 pub struct ThreadRunningState {
@@ -98,7 +99,7 @@ impl Thread {
             State::Terminated => return,
             State::Restart(_) => unreachable!(),
         }
-        *guard = State::Restart(params);
+        *guard = State::Restart(Box::new(params));
         running_state.notify.notify();
     }
 
@@ -158,7 +159,7 @@ impl PendingRestartValues<'_> {
                     else {
                         unreachable!();
                     };
-                    Some(Some(params))
+                    Some(Some(*params))
                 }
                 State::Running => unreachable!(),
             }

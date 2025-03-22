@@ -6,7 +6,6 @@
     lazy_get,
     naked_functions,
     pointer_is_aligned_to,
-    ptr_sub_ptr,
     sync_unsafe_cell
 )]
 #![allow(internal_features)]

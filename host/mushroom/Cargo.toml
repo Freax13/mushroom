@@ -27,7 +27,7 @@ mushroom-verify = { workspace = true, optional = true }
 nix = { version = "0.29.0", features = ["fs", "ioctl", "mman", "pthread", "resource", "signal", "time"] }
 profiler-types = { workspace = true }
 qgs-client = { workspace = true, optional = true }
-rand = "0.8.5"
+rand = "0.9.0"
 snp-types = { workspace = true, optional = true }
 supervisor-services = { workspace = true, optional = true }
 tdx-types = { workspace = true, optional = true }
