@@ -351,8 +351,8 @@ pub fn create_attestation_report(report_data: [u8; 64]) -> AttestionReport {
 }
 
 pub fn get_host_data() -> [u8; 32] {
-    let AttestionReport::V2(report) = create_attestation_report([0; 64]);
-    report.host_data
+    let report = create_attestation_report([0; 64]);
+    report.host_data()
 }
 
 pub fn create_ap(vmsa: PhysFrame, features: SevFeatures) {

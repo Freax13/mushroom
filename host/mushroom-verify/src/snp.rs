@@ -73,60 +73,58 @@ impl Configuration {
         let report = try_pod_read_unaligned::<AttestionReport>(attestation_report)?;
         let vcek = Vcek::from_bytes(vcek.to_owned())?;
 
-        let AttestionReport::V2(report) = report;
-
-        if report.vmpl != 0 {
-            return Err(Error::Vmpl(report.vmpl));
+        if report.vmpl() != 0 {
+            return Err(Error::Vmpl(report.vmpl()));
         }
-        if report.report_data[40..] != [0; 24] {
+        if report.report_data()[40..] != [0; 24] {
             return Err(Error::ReportDataPadding(
-                report.report_data[40..].try_into().unwrap(),
+                report.report_data()[40..].try_into().unwrap(),
             ));
         }
-        if report.measurement != self.launch_digest {
+        if report.measurement() != self.launch_digest {
             return Err(Error::Measurement {
                 expected: self.launch_digest,
-                got: report.measurement,
+                got: report.measurement(),
             });
         }
-        if report.id_key_digest != self.id_key_digest {
+        if report.id_key_digest() != self.id_key_digest {
             return Err(Error::IdKeyDigest {
                 expected: self.id_key_digest,
-                got: report.id_key_digest,
+                got: report.id_key_digest(),
             });
         }
-        if report.host_data != input_hash.0 {
+        if report.host_data() != input_hash.0 {
             return Err(Error::HostData {
                 expected: input_hash.0,
-                got: report.host_data,
+                got: report.host_data(),
             });
         }
-        if { report.policy } != self.policy {
+        if report.policy() != self.policy {
             return Err(Error::Policy {
                 expected: self.policy,
-                got: report.policy,
+                got: report.policy(),
             });
         }
-        if report.signature_algo != 1 {
+        if report.signature_algo() != 1 {
             return Err(Error::SignatureAlgo {
                 expected: 1,
-                got: report.signature_algo,
+                got: report.signature_algo(),
             });
         }
 
         let is_valid_tcb = report
-            .launch_tcb
+            .launch_tcb()
             .partial_cmp(&self.min_tcb)
             .is_some_and(Ordering::is_ge);
         if !is_valid_tcb {
             return Err(Error::Tcb {
                 expected: self.min_tcb,
-                got: report.launch_tcb,
+                got: report.launch_tcb(),
             });
         }
 
         // Construct signature.
-        let signature = pod_read_unaligned::<EcdsaP384Sha384Signature>(&report.signature);
+        let signature = pod_read_unaligned::<EcdsaP384Sha384Signature>(&report.signature());
         let signature = Signature::try_from(signature)?;
 
         // Verify signature.
@@ -134,8 +132,8 @@ impl Configuration {
         public_key.verify(&attestation_report[..=0x29f], &signature)?;
 
         Ok(OutputHash {
-            hash: report.report_data[..32].try_into().unwrap(),
-            len: u64::from_le_bytes(report.report_data[32..40].try_into().unwrap()),
+            hash: report.report_data()[..32].try_into().unwrap(),
+            len: u64::from_le_bytes(report.report_data()[32..40].try_into().unwrap()),
         })
     }
 }
