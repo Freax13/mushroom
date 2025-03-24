@@ -13,7 +13,7 @@ use crate::{
             Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
             WriteBuf, stream_buffer,
         },
-        node::{DynINode, FileAccessContext},
+        node::{FileAccessContext, Link},
         path::Path,
     },
     rt::notify::Notify,
@@ -47,12 +47,7 @@ impl NamedPipe {
         }
     }
 
-    pub async fn open(
-        &self,
-        flags: OpenFlags,
-        node: DynINode,
-        path: Path,
-    ) -> Result<StrongFileDescriptor> {
+    pub async fn open(&self, flags: OpenFlags, link: Link) -> Result<StrongFileDescriptor> {
         let mut guard = self.internal.lock();
 
         Ok(if flags.contains(OpenFlags::WRONLY) {
@@ -99,10 +94,9 @@ impl NamedPipe {
                 }
             }
 
-            let file_lock = FileLock::new(node.file_lock_record().clone());
+            let file_lock = FileLock::new(link.node.file_lock_record().clone());
             StrongFileDescriptor::from(WriteHalf {
-                node,
-                path,
+                link,
                 write_half,
                 flags: Mutex::new(flags),
                 file_lock,
@@ -140,10 +134,9 @@ impl NamedPipe {
                     }
                 };
 
-            let file_lock = FileLock::new(node.file_lock_record().clone());
+            let file_lock = FileLock::new(link.node.file_lock_record().clone());
             StrongFileDescriptor::from(FullReadWrite {
-                node,
-                path,
+                link,
                 read_half,
                 write_half,
                 flags: Mutex::new(flags),
@@ -191,10 +184,9 @@ impl NamedPipe {
                 }
             }
 
-            let file_lock = FileLock::new(node.file_lock_record().clone());
+            let file_lock = FileLock::new(link.node.file_lock_record().clone());
             StrongFileDescriptor::from(ReadHalf {
-                node,
-                path,
+                link,
                 read_half,
                 flags: Mutex::new(flags),
                 file_lock,
@@ -204,8 +196,7 @@ impl NamedPipe {
 }
 
 struct ReadHalf {
-    node: DynINode,
-    path: Path,
+    link: Link,
     read_half: Arc<stream_buffer::ReadHalf>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
@@ -228,7 +219,7 @@ impl OpenFileDescription for ReadHalf {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.link.location.path()
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
@@ -236,19 +227,19 @@ impl OpenFileDescription for ReadHalf {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.node.chmod(mode, ctx)
+        self.link.node.chmod(mode, ctx)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.node.chown(uid, gid, ctx)
+        self.link.node.chown(uid, gid, ctx)
     }
 
     fn stat(&self) -> Result<Stat> {
-        self.node.stat()
+        self.link.node.stat()
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.node.fs()
+        self.link.node.fs()
     }
 
     fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
@@ -282,8 +273,7 @@ impl OpenFileDescription for ReadHalf {
 }
 
 struct WriteHalf {
-    node: DynINode,
-    path: Path,
+    link: Link,
     write_half: Arc<stream_buffer::WriteHalf>,
     flags: Mutex<OpenFlags>,
     file_lock: FileLock,
@@ -306,7 +296,7 @@ impl OpenFileDescription for WriteHalf {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.link.location.path()
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
@@ -314,19 +304,19 @@ impl OpenFileDescription for WriteHalf {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.node.chmod(mode, ctx)
+        self.link.node.chmod(mode, ctx)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.node.chown(uid, gid, ctx)
+        self.link.node.chown(uid, gid, ctx)
     }
 
     fn stat(&self) -> Result<Stat> {
-        self.node.stat()
+        self.link.node.stat()
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.node.fs()
+        self.link.node.fs()
     }
 
     fn as_pipe_write_half(&self) -> Option<&stream_buffer::WriteHalf> {
@@ -364,8 +354,7 @@ impl OpenFileDescription for WriteHalf {
 }
 
 struct FullReadWrite {
-    node: DynINode,
-    path: Path,
+    link: Link,
     read_half: Arc<stream_buffer::ReadHalf>,
     write_half: Arc<stream_buffer::WriteHalf>,
     flags: Mutex<OpenFlags>,
@@ -391,7 +380,7 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.link.location.path()
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
@@ -403,19 +392,19 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.node.chmod(mode, ctx)
+        self.link.node.chmod(mode, ctx)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.node.chown(uid, gid, ctx)
+        self.link.node.chown(uid, gid, ctx)
     }
 
     fn stat(&self) -> Result<Stat> {
-        self.node.stat()
+        self.link.node.stat()
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.node.fs()
+        self.link.node.fs()
     }
 
     fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {

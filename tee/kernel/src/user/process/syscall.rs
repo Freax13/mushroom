@@ -35,10 +35,9 @@ use crate::{
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
-            self, DirEntry, DynINode, FileAccessContext, OldDirEntry, Permission, ROOT_NODE,
-            create_char_dev, create_directory, create_fifo, create_file, create_link, devtmpfs,
-            hard_link, lookup_and_resolve_node, lookup_node, procfs, read_link, unlink_dir,
-            unlink_file,
+            self, DirEntry, FileAccessContext, Link, OldDirEntry, Permission, create_char_dev,
+            create_directory, create_fifo, create_file, create_link, devtmpfs, hard_link,
+            lookup_and_resolve_link, lookup_link, procfs, read_soft_link, unlink_dir, unlink_file,
         },
         path::Path,
     },
@@ -386,8 +385,8 @@ fn stat(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_and_resolve_node(thread.process().cwd(), &filename, &mut ctx)?;
-    let stat = node.stat()?;
+    let link = lookup_and_resolve_link(thread.process().cwd(), &filename, &mut ctx)?;
+    let stat = link.node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -404,8 +403,8 @@ fn stat64(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_and_resolve_node(thread.process().cwd(), &filename, &mut ctx)?;
-    let stat = node.stat()?;
+    let link = lookup_and_resolve_link(thread.process().cwd(), &filename, &mut ctx)?;
+    let stat = link.node.stat()?;
     let stat64 = Stat64::from(stat);
 
     virtual_memory.write(statbuf, stat64)?;
@@ -456,8 +455,8 @@ fn lstat(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_node(thread.process().cwd(), &filename, &mut ctx)?;
-    let stat = node.stat()?;
+    let link = lookup_link(thread.process().cwd(), &filename, &mut ctx)?;
+    let stat = link.node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -474,8 +473,8 @@ fn lstat64(
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
 
-    let node = lookup_node(thread.process().cwd(), &filename, &mut ctx)?;
-    let stat = node.stat()?;
+    let link = lookup_link(thread.process().cwd(), &filename, &mut ctx)?;
+    let stat = link.node.stat()?;
     let stat64 = Stat64::from(stat);
 
     virtual_memory.write(statbuf, stat64)?;
@@ -1842,29 +1841,22 @@ async fn execve(
 
     // Open the executable.
     let cwd = thread.process().cwd();
-    let node = lookup_and_resolve_node(cwd.clone(), &pathname, &mut ctx)?;
-    let stat = node.stat()?;
+    let link = lookup_and_resolve_link(cwd.clone(), &pathname, &mut ctx)?;
+    let stat = link.node.stat()?;
     ctx.check_permissions(&stat, Permission::Execute)?;
-    let file = node.open(pathname.clone(), OpenFlags::empty())?;
+    let fd = link.node.open(link.location.clone(), OpenFlags::empty())?;
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let (cpu_state, exe_path) = virtual_memory.start_executable(
-        pathname,
-        &file,
-        &args,
-        &envs,
-        &mut ctx,
-        cwd,
-        stack_limit,
-    )?;
+    let (cpu_state, exe) =
+        virtual_memory.start_executable(link, &fd, &args, &envs, &mut ctx, cwd, stack_limit)?;
 
     // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
     thread
         .process()
-        .execve(virtual_memory, cpu_state, fdtable, exe_path);
+        .execve(virtual_memory, cpu_state, fdtable, exe);
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
@@ -2167,11 +2159,10 @@ fn getdents(
 fn getcwd(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] mut ctx: FileAccessContext,
     path: Pointer<Path>,
     size: u64,
 ) -> SyscallResult {
-    let cwd = thread.process().cwd().path(&mut ctx)?;
+    let cwd = thread.process().cwd().location.path()?;
     let len = cwd.as_bytes().len();
     ensure!(len < usize_from(size), Range);
     virtual_memory.write(path, cwd)?;
@@ -2186,7 +2177,7 @@ fn chdir(
     path: Pointer<Path>,
 ) -> SyscallResult {
     let path = virtual_memory.read(path)?;
-    let new_cwd = lookup_and_resolve_node(thread.process().cwd(), &path, &mut ctx)?;
+    let new_cwd = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
     thread.process().chdir(new_cwd);
     Ok(0)
 }
@@ -2985,8 +2976,8 @@ fn statfs(
 ) -> SyscallResult {
     let pathname = virtual_memory.read(pathname)?;
     let cwd = thread.process().cwd();
-    let node = lookup_and_resolve_node(cwd, &pathname, &mut ctx)?;
-    let statfs = node.fs()?.stat();
+    let link = lookup_and_resolve_link(cwd, &pathname, &mut ctx)?;
+    let statfs = link.node.fs()?.stat();
     virtual_memory.write_with_abi(buf, statfs, abi)?;
     Ok(0)
 }
@@ -3126,13 +3117,13 @@ fn mount(
     let dir_name = virtual_memory.read(dir_name)?;
     let r#type = virtual_memory.read_cstring(r#type, 0x10)?;
 
-    let node = match r#type.as_bytes() {
+    let create_node = match r#type.as_bytes() {
         b"devtmpfs" => devtmpfs::new,
         b"procfs" => procfs::new,
         _ => bail!(NoDev),
     };
 
-    node::mount(&dir_name, node, &mut ctx)?;
+    node::mount(&dir_name, create_node, &mut ctx)?;
 
     Ok(0)
 }
@@ -3477,10 +3468,10 @@ fn start_dir_for_path(
     dfd: FdNum,
     path: &Path,
     ctx: &mut FileAccessContext,
-) -> Result<DynINode> {
+) -> Result<Link> {
     if path.is_absolute() {
         // Completly ignore `dfd` if path is absolute.
-        Ok(ROOT_NODE.clone())
+        Ok(Link::root())
     } else if dfd == FdNum::CWD {
         Ok(thread.process().cwd())
     } else {
@@ -3505,31 +3496,31 @@ async fn openat(
     let start_dir = start_dir_for_path(&thread.lock(), &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
-        let node = if flags.contains(OpenFlags::NOFOLLOW) {
-            lookup_node(start_dir, &filename, &mut ctx)?
+        let link = if flags.contains(OpenFlags::NOFOLLOW) {
+            lookup_link(start_dir, &filename, &mut ctx)?
         } else {
-            lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
+            lookup_and_resolve_link(start_dir, &filename, &mut ctx)?
         };
 
         if flags.contains(OpenFlags::DIRECTORY) {
-            ensure!(node.ty()? == FileType::Dir, NotDir);
+            ensure!(link.node.ty()? == FileType::Dir, NotDir);
         }
 
-        let path_fd = PathFd::new(filename, node);
+        let path_fd = PathFd::new(link);
         StrongFileDescriptor::from(path_fd)
     } else {
-        let node = if flags.contains(OpenFlags::CREAT) {
+        let link = if flags.contains(OpenFlags::CREAT) {
             let mut mode = FileMode::from_bits_truncate(mode);
             mode &= !*thread.process().umask.lock();
             create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
         } else {
-            let node = if flags.contains(OpenFlags::NOFOLLOW) {
-                lookup_node(start_dir, &filename, &mut ctx)?
+            let link = if flags.contains(OpenFlags::NOFOLLOW) {
+                lookup_link(start_dir, &filename, &mut ctx)?
             } else {
-                lookup_and_resolve_node(start_dir, &filename, &mut ctx)?
+                lookup_and_resolve_link(start_dir, &filename, &mut ctx)?
             };
 
-            let stat = node.stat()?;
+            let stat = link.node.stat()?;
             if flags.contains(OpenFlags::WRONLY) {
                 ctx.check_permissions(&stat, Permission::Write)?;
             } else if flags.contains(OpenFlags::RDWR) {
@@ -3539,10 +3530,13 @@ async fn openat(
                 ctx.check_permissions(&stat, Permission::Read)?;
             }
 
-            node
+            link
         };
 
-        node.async_open(filename, flags).await?
+        link.node
+            .clone()
+            .async_open(link.location.clone(), flags)
+            .await?
     };
 
     let fd = fdtable.insert(fd, flags, no_file_limit)?;
@@ -3635,13 +3629,13 @@ fn fchownat(
     let path = virtual_memory.read(pathname)?;
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
-    let node = if flags.contains(FchownatFlags::SYMLINK_NOFOLLOW) {
-        lookup_node(start_dir, &path, &mut ctx)?
+    let link = if flags.contains(FchownatFlags::SYMLINK_NOFOLLOW) {
+        lookup_link(start_dir, &path, &mut ctx)?
     } else {
-        lookup_and_resolve_node(start_dir, &path, &mut ctx)?
+        lookup_and_resolve_link(start_dir, &path, &mut ctx)?
     };
 
-    node.chown(uid, gid, &ctx)?;
+    link.node.chown(uid, gid, &ctx)?;
     Ok(0)
 }
 
@@ -3672,8 +3666,8 @@ fn futimesat(
     let atime = Some(times[0]);
     let mtime = Some(times[1]);
 
-    let node = lookup_and_resolve_node(start_dir, &path, &mut ctx)?;
-    node.update_times(ctime, atime, mtime);
+    let link = lookup_and_resolve_link(start_dir, &path, &mut ctx)?;
+    link.node.update_times(ctime, atime, mtime);
 
     Ok(0)
 }
@@ -3696,7 +3690,7 @@ fn newfstatat(
         let pathname = virtual_memory.read(pathname.cast::<u8>())?;
         if pathname == 0 {
             let stat = if dfd == FdNum::CWD {
-                thread.process().cwd().stat()?
+                thread.process().cwd().node.stat()?
             } else {
                 let fd = fdtable.get(dfd)?;
                 fd.stat()?
@@ -3711,12 +3705,12 @@ fn newfstatat(
     let pathname = virtual_memory.read(pathname)?;
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
-    let node = if flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
-        lookup_node(start_dir, &pathname, &mut ctx)?
+    let link = if flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
+        lookup_link(start_dir, &pathname, &mut ctx)?
     } else {
-        lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?
+        lookup_and_resolve_link(start_dir, &pathname, &mut ctx)?
     };
-    let stat = node.stat()?;
+    let stat = link.node.stat()?;
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -3833,7 +3827,7 @@ fn readlinkat(
     let pathname = virtual_memory.read(pathname)?;
     let dfd = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
-    let target = read_link(dfd, &pathname, &mut ctx)?;
+    let target = read_soft_link(dfd, &pathname, &mut ctx)?;
 
     let bytes = target.as_bytes();
     // Truncate to `bufsiz`.
@@ -3882,10 +3876,10 @@ fn faccessat(
     let pathname = virtual_memory.read(pathname)?;
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
-    let node = if flags.contains(FaccessatFlags::SYMLINK_NOFOLLOW) {
-        lookup_node(start_dir, &pathname, &mut ctx)?
+    let link = if flags.contains(FaccessatFlags::SYMLINK_NOFOLLOW) {
+        lookup_link(start_dir, &pathname, &mut ctx)?
     } else {
-        lookup_and_resolve_node(start_dir, &pathname, &mut ctx)?
+        lookup_and_resolve_link(start_dir, &pathname, &mut ctx)?
     };
 
     if !flags.contains(FaccessatFlags::EACCESS) {
@@ -3894,7 +3888,7 @@ fn faccessat(
         ctx.filesystem_group_id = credentials.real_group_id;
     }
 
-    let stat = node.stat()?;
+    let stat = link.node.stat()?;
     if mode.contains(AccessMode::READ) {
         ctx.check_permissions(&stat, Permission::Read)?;
     }
@@ -4146,19 +4140,19 @@ fn utimensat(
 
     if let Some(path) = path {
         let start_dir = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
-        let node = if !flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
-            lookup_and_resolve_node(start_dir, &path, &mut ctx)?
+        let link = if !flags.contains(AtFlags::AT_SYMLINK_NOFOLLOW) {
+            lookup_and_resolve_link(start_dir, &path, &mut ctx)?
         } else {
-            lookup_node(start_dir, &path, &mut ctx)?
+            lookup_link(start_dir, &path, &mut ctx)?
         };
 
-        let stat = node.stat()?;
+        let stat = link.node.stat()?;
         ensure!(
             ctx.is_user(stat.uid) || ctx.check_permissions(&stat, Permission::Write).is_ok(),
             Acces
         );
 
-        node.update_times(ctime, atime, mtime);
+        link.node.update_times(ctime, atime, mtime);
     } else {
         let fd = fdtable.get(dfd)?;
 
@@ -4619,13 +4613,13 @@ fn fchmodat2(
     let path = virtual_memory.read(filename)?;
     let newdfd = start_dir_for_path(thread, &fdtable, dfd, &path, &mut ctx)?;
 
-    let node = if flags.contains(Fchmodat2Flags::SYMLINK_NOFOLLOW) {
-        lookup_node(newdfd, &path, &mut ctx)?
+    let link = if flags.contains(Fchmodat2Flags::SYMLINK_NOFOLLOW) {
+        lookup_link(newdfd, &path, &mut ctx)?
     } else {
-        lookup_and_resolve_node(newdfd, &path, &mut ctx)?
+        lookup_and_resolve_link(newdfd, &path, &mut ctx)?
     };
-    node.chmod(mode, &ctx)?;
-    node.update_times(now(ClockId::Realtime), None, None);
+    link.node.chmod(mode, &ctx)?;
+    link.node.update_times(now(ClockId::Realtime), None, None);
 
     Ok(0)
 }

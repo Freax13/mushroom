@@ -1,3 +1,5 @@
+use alloc::sync::Arc;
+
 use crate::{
     char_dev::{
         CharDev,
@@ -11,12 +13,12 @@ use crate::{
 use crate::{error::Result, fs::path::FileName, user::process::syscall::args::FileMode};
 
 use super::{
-    DynINode, INode,
-    directory::MountLocation,
+    LinkLocation,
+    directory::Directory,
     tmpfs::{TmpFs, TmpFsDir},
 };
 
-pub fn new(location: MountLocation) -> Result<DynINode> {
+pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
     let tmp_fs_dir = TmpFsDir::new(
         TmpFs::new(),
         location,
@@ -26,7 +28,7 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
     );
 
     let input_name = FileName::new(b"input").unwrap();
-    let input_file = tmp_fs_dir
+    let (_, input_file) = tmp_fs_dir
         .create_file(
             input_name,
             FileMode::from_bits_truncate(0o444),

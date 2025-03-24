@@ -4,7 +4,7 @@ use crate::{
     error::{bail, ensure, err},
     fs::{
         FileSystem,
-        node::{FileAccessContext, INode},
+        node::{FileAccessContext, INode, LinkLocation},
         path::Path,
     },
     memory::page::KernelPage,
@@ -74,15 +74,15 @@ pub trait File: INode {
 }
 
 pub fn open_file(
-    path: Path,
     file: Arc<dyn File>,
+    location: LinkLocation,
     flags: OpenFlags,
 ) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), NotDir);
     if flags.contains(OpenFlags::TRUNC) {
         file.truncate(0)?;
     }
-    Ok(FileFileDescription::new(path, file, flags).into())
+    Ok(FileFileDescription::new(file, location, flags).into())
 }
 
 struct InternalFileFileDescription {
@@ -91,18 +91,18 @@ struct InternalFileFileDescription {
 }
 
 pub struct FileFileDescription {
-    path: Path,
     file: Arc<dyn File>,
+    location: LinkLocation,
     file_lock: FileLock,
     internal: Mutex<InternalFileFileDescription>,
 }
 
 impl FileFileDescription {
-    pub fn new(path: Path, file: Arc<dyn File>, flags: OpenFlags) -> Self {
+    pub fn new(file: Arc<dyn File>, location: LinkLocation, flags: OpenFlags) -> Self {
         let file_lock = FileLock::new(file.file_lock_record().clone());
         Self {
-            path,
             file,
+            location,
             file_lock,
             internal: Mutex::new(InternalFileFileDescription {
                 flags,
@@ -123,7 +123,7 @@ impl OpenFileDescription for FileFileDescription {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.location.path()
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {

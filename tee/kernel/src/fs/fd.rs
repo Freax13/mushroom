@@ -56,7 +56,10 @@ use crate::{
 
 use super::{
     FileSystem,
-    node::procfs::{FdINode, ProcFs},
+    node::{
+        Link,
+        procfs::{FdINode, ProcFs},
+    },
     path::Path,
 };
 
@@ -715,7 +718,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
-    fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
+    fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<Link> {
         let _ = ctx;
         bail!(NotDir)
     }
@@ -781,8 +784,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn file_lock(&self) -> Result<&FileLock>;
 
     /// For path file descriptors, this method should return the pointed to
-    /// path and INode.
-    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
+    /// link.
+    fn path_fd_link(&self) -> Option<&Link> {
         None
     }
 
