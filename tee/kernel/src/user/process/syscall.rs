@@ -29,6 +29,7 @@ use crate::{
             StrongFileDescriptor, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
+            inotify::Inotify,
             path::PathFd,
             pipe,
             stream_buffer::{self, SpliceBlockedError},
@@ -229,6 +230,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysClockGetres);
     handlers.register(SysClockNanosleep);
     handlers.register(SysTgkill);
+    handlers.register(SysInotifyInit);
+    handlers.register(SysInotifyAddWatch);
+    handlers.register(SysInotifyRmWatch);
     handlers.register(SysOpenat);
     handlers.register(SysMkdirat);
     handlers.register(SysExitGroup);
@@ -254,6 +258,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
     handlers.register(SysPipe2);
+    handlers.register(SysInotifyInit1);
     handlers.register(SysPreadv);
     handlers.register(SysPwritev);
     handlers.register(SysRecvmmsg);
@@ -3461,6 +3466,43 @@ fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
     Ok(0)
 }
 
+#[syscall(i386 = 291, amd64 = 253)]
+fn inotify_init(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    #[state] ctx: FileAccessContext,
+) -> SyscallResult {
+    inotify_init1(fdtable, no_file_limit, ctx, InotifyInit1Flags::empty())
+}
+
+#[syscall(i386 = 292, amd64 = 254)]
+fn inotify_add_watch(
+    #[state] thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    fd: FdNum,
+    pathname: Pointer<Path>,
+    mask: InotifyMask,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let path = virtual_memory.read(pathname)?;
+    let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
+    let wd = fd.add_watch(link.node, mask)?;
+    Ok(u64::from(wd))
+}
+
+#[syscall(i386 = 293, amd64 = 255)]
+fn inotify_rm_watch(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    wd: u32,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    fd.rm_watch(wd)?;
+    Ok(0)
+}
+
 /// Find the start directory for resolving `path`.
 fn start_dir_for_path(
     thread: &ThreadGuard,
@@ -3533,10 +3575,23 @@ async fn openat(
             link
         };
 
-        link.node
+        let fd = link
+            .node
             .clone()
             .async_open(link.location.clone(), flags)
-            .await?
+            .await?;
+
+        link.node
+            .watchers()
+            .send_event(InotifyMask::OPEN, None, None);
+        if let Some(file_name) = link.location.file_name() {
+            link.parent()
+                .node
+                .watchers()
+                .send_event(InotifyMask::OPEN, None, Some(file_name));
+        }
+
+        fd
     };
 
     let fd = fdtable.insert(fd, flags, no_file_limit)?;
@@ -4309,6 +4364,25 @@ fn pipe2(
     virtual_memory.write(pipefd, [read_half, write_half])?;
 
     Ok(0)
+}
+
+#[syscall(i386 = 332, amd64 = 294)]
+fn inotify_init1(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    #[state] ctx: FileAccessContext,
+    flags: InotifyInit1Flags,
+) -> SyscallResult {
+    let fd = fdtable.insert(
+        Inotify::new(
+            flags.into(),
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+        ),
+        flags,
+        no_file_limit,
+    )?;
+    Ok(fd.get() as u64)
 }
 
 #[syscall(i386 = 333, amd64 = 295)]

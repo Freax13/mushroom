@@ -1,4 +1,4 @@
-use core::future::pending;
+use core::{future::pending, num::NonZeroU32};
 
 use crate::{
     error::{bail, ensure, err},
@@ -10,7 +10,7 @@ use crate::{
     memory::page::KernelPage,
     spin::mutex::Mutex,
     user::process::{
-        syscall::args::{OpenFlags, Timespec},
+        syscall::args::{InotifyMask, OpenFlags, Timespec},
         thread::{Gid, Uid},
     },
 };
@@ -110,6 +110,13 @@ impl FileFileDescription {
             }),
         }
     }
+
+    fn send_event(&self, mask: InotifyMask, cookie: Option<NonZeroU32>) {
+        self.file.watchers().send_event(mask, cookie, None);
+        let parent = self.location.parent().unwrap();
+        let file_name = self.location.file_name().unwrap();
+        parent.watchers().send_event(mask, cookie, Some(file_name));
+    }
 }
 
 #[async_trait]
@@ -132,6 +139,12 @@ impl OpenFileDescription for FileFileDescription {
         let no_atime = guard.flags.contains(OpenFlags::NOATIME);
         let len = self.file.read(guard.cursor_idx, buf, no_atime)?;
         guard.cursor_idx += len;
+        drop(guard);
+
+        if len > 0 {
+            self.send_event(InotifyMask::ACCESS, None);
+        }
+
         Ok(len)
     }
 
@@ -140,7 +153,13 @@ impl OpenFileDescription for FileFileDescription {
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
         let no_atime = guard.flags.contains(OpenFlags::NOATIME);
         drop(guard);
-        self.file.read(pos, buf, no_atime)
+        let len = self.file.read(pos, buf, no_atime)?;
+
+        if len > 0 {
+            self.send_event(InotifyMask::ACCESS, None);
+        }
+
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
@@ -149,15 +168,22 @@ impl OpenFileDescription for FileFileDescription {
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        if !guard.flags.contains(OpenFlags::APPEND) {
+        let len = if !guard.flags.contains(OpenFlags::APPEND) {
             let len = self.file.write(guard.cursor_idx, buf)?;
             guard.cursor_idx += len;
-            Ok(len)
+            len
         } else {
             let (len, cursor_idx) = self.file.append(buf)?;
             guard.cursor_idx = cursor_idx;
-            Ok(len)
+            len
+        };
+        drop(guard);
+
+        if len > 0 {
+            self.send_event(InotifyMask::MODIFY, None);
         }
+
+        Ok(len)
     }
 
     fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
@@ -166,7 +192,14 @@ impl OpenFileDescription for FileFileDescription {
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        self.file.write(pos, buf)
+        let len = self.file.write(pos, buf)?;
+        drop(guard);
+
+        if len > 0 {
+            self.send_event(InotifyMask::MODIFY, None);
+        }
+
+        Ok(len)
     }
 
     fn splice_from(
@@ -345,5 +378,22 @@ impl OpenFileDescription for FileFileDescription {
 
     fn file_lock(&self) -> Result<&FileLock> {
         Ok(&self.file_lock)
+    }
+}
+
+impl Drop for FileFileDescription {
+    fn drop(&mut self) {
+        let mask = if self
+            .internal
+            .get_mut()
+            .flags
+            .intersects(OpenFlags::RDWR | OpenFlags::WRONLY)
+        {
+            InotifyMask::CLOSE_WRITE
+        } else {
+            InotifyMask::CLOSE_NOWRITE
+        };
+
+        self.send_event(mask, None);
     }
 }

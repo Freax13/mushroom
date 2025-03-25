@@ -10,6 +10,7 @@ use crate::{
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
+            inotify::{Watchers, next_cookie},
             pipe::named::NamedPipe,
             stream_buffer,
             unix_socket::StreamUnixSocket,
@@ -20,7 +21,7 @@ use crate::{
     spin::{mutex::Mutex, rwlock::RwLock},
     time::now,
     user::process::{
-        syscall::args::{ClockId, OpenFlags, UnixAddr},
+        syscall::args::{ClockId, InotifyMask, OpenFlags, UnixAddr},
         thread::{Gid, Uid},
     },
 };
@@ -77,6 +78,7 @@ pub struct TmpFsDir {
     this: Weak<Self>,
     location: LinkLocation,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
     internal: Mutex<TmpFsDirInternal>,
 }
 
@@ -104,6 +106,7 @@ impl TmpFsDir {
             this: this_weak.clone(),
             location,
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
             internal: Mutex::new(TmpFsDirInternal {
                 ownership: Ownership::new(mode, uid, gid),
                 items: BTreeMap::new(),
@@ -129,6 +132,9 @@ impl TmpFsDir {
                 let node = TmpFsFile::new(self.fs.clone(), mode, uid, gid);
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
                 drop(guard);
+
+                self.watchers()
+                    .send_event(InotifyMask::CREATE, None, Some(file_name));
 
                 Ok(Ok((location, node)))
             }
@@ -204,6 +210,10 @@ impl INode for TmpFsDir {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 impl Directory for TmpFsDir {
@@ -277,6 +287,7 @@ impl Directory for TmpFsDir {
                     ctime: now,
                 }),
                 file_lock_record: Arc::new(FileLockRecord::new()),
+                watchers: Watchers::new(),
             });
             TmpFsDirEntry::Symlink(location, link)
         };
@@ -420,7 +431,14 @@ impl Directory for TmpFsDir {
             bail!(NoEnt);
         };
         ensure!(entry.get().ty()? != FileType::Dir, IsDir);
-        entry.remove();
+        let (file_name, node) = entry.remove_entry();
+        drop(guard);
+
+        node.watchers()
+            .send_event(InotifyMask::DELETE_SELF, None, None);
+        self.watchers()
+            .send_event(InotifyMask::DELETE_SELF, None, Some(file_name));
+
         Ok(())
     }
 
@@ -432,7 +450,14 @@ impl Directory for TmpFsDir {
         };
         ensure!(entry.get().ty()? == FileType::Dir, NotDir);
         ensure!(entry.get().is_empty_dir(), NotEmpty);
-        entry.remove();
+        let (file_name, node) = entry.remove_entry();
+        drop(guard);
+
+        node.watchers()
+            .send_event(InotifyMask::DELETE_SELF, None, None);
+        self.watchers()
+            .send_event(InotifyMask::DELETE_SELF, None, Some(file_name));
+
         Ok(())
     }
 
@@ -535,7 +560,17 @@ impl Directory for TmpFsDir {
                 let entry = guard.items.remove(&oldname).unwrap();
                 entry.update_link(self.this.upgrade().unwrap(), newname.clone());
 
+                entry
+                    .watchers()
+                    .send_event(InotifyMask::MOVE_SELF, None, None);
+
                 guard.items.insert(newname.clone(), entry);
+
+                let cookie = next_cookie();
+                self.watchers()
+                    .send_event(InotifyMask::MOVED_FROM, Some(cookie), Some(oldname));
+                self.watchers()
+                    .send_event(InotifyMask::MOVED_TO, Some(cookie), Some(newname));
 
                 Ok(())
             }
@@ -575,6 +610,9 @@ impl Directory for TmpFsDir {
             let node = old_entry.remove();
             node.update_link(new_dir.clone(), newname.clone());
 
+            node.watchers()
+                .send_event(InotifyMask::MOVE_SELF, None, None);
+
             match new_entry {
                 Entry::Vacant(entry) => {
                     entry.insert(node);
@@ -583,6 +621,13 @@ impl Directory for TmpFsDir {
                     entry.insert(node);
                 }
             }
+
+            let cookie = next_cookie();
+            self.watchers()
+                .send_event(InotifyMask::MOVED_FROM, Some(cookie), Some(oldname));
+            new_dir
+                .watchers()
+                .send_event(InotifyMask::MOVED_TO, Some(cookie), Some(newname));
 
             Ok(())
         }
@@ -609,12 +654,37 @@ impl Directory for TmpFsDir {
 
                 let old_entry = guard.items.remove(&oldname).unwrap();
 
+                old_entry
+                    .watchers()
+                    .send_event(InotifyMask::MOVE_SELF, None, None);
                 old_entry.update_link(self.this.upgrade().unwrap(), newname.clone());
 
                 let new_entry = guard.items.insert(newname.clone(), old_entry).unwrap();
 
+                new_entry
+                    .watchers()
+                    .send_event(InotifyMask::MOVE_SELF, None, None);
                 new_entry.update_link(self.this.upgrade().unwrap(), oldname.clone());
                 guard.items.insert(oldname.clone(), new_entry);
+
+                let cookie = next_cookie();
+                self.watchers().send_event(
+                    InotifyMask::MOVED_FROM,
+                    Some(cookie),
+                    Some(oldname.clone()),
+                );
+                new_dir.watchers().send_event(
+                    InotifyMask::MOVED_TO,
+                    Some(cookie),
+                    Some(newname.clone()),
+                );
+
+                let cookie = next_cookie();
+                new_dir
+                    .watchers()
+                    .send_event(InotifyMask::MOVED_FROM, Some(cookie), Some(newname));
+                self.watchers()
+                    .send_event(InotifyMask::MOVED_TO, Some(cookie), Some(oldname));
 
                 Ok(())
             }
@@ -830,6 +900,7 @@ pub struct TmpFsFile {
     this: Weak<Self>,
     internal: RwLock<TmpFsFileInternal>,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
 }
 
 struct TmpFsFileInternal {
@@ -858,6 +929,7 @@ impl TmpFsFile {
                 links: 1,
             }),
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
         })
     }
 
@@ -920,6 +992,10 @@ impl INode for TmpFsFile {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -1149,6 +1225,7 @@ pub struct TmpFsSymlink {
     ino: u64,
     target: Path,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Watchers,
     internal: Mutex<TmpFsSymlinkInternal>,
 }
 
@@ -1224,6 +1301,10 @@ impl INode for TmpFsSymlink {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 pub struct TmpFsCharDev {
@@ -1233,6 +1314,7 @@ pub struct TmpFsCharDev {
     minor: u8,
     internal: Mutex<TmpFsCharDevInternal>,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Watchers,
 }
 
 struct TmpFsCharDevInternal {
@@ -1250,6 +1332,7 @@ impl TmpFsCharDev {
                 ownership: Ownership::new(mode, uid, gid),
             }),
             file_lock_record: Arc::new(FileLockRecord::new()),
+            watchers: Watchers::new(),
         }
     }
 }
@@ -1295,6 +1378,10 @@ impl INode for TmpFsCharDev {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 pub struct TmpFsFifo {
@@ -1302,6 +1389,7 @@ pub struct TmpFsFifo {
     ino: u64,
     internal: Mutex<TmpFsFifoInternal>,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
     named_pipe: NamedPipe,
 }
 
@@ -1318,6 +1406,7 @@ impl TmpFsFifo {
                 ownership: Ownership::new(mode, uid, gid),
             }),
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
             named_pipe: NamedPipe::new(),
         }
     }
@@ -1377,6 +1466,10 @@ impl INode for TmpFsFifo {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 pub struct TmpFsSocket {
@@ -1384,6 +1477,7 @@ pub struct TmpFsSocket {
     ino: u64,
     internal: Mutex<TmpFsSocketInternal>,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
     socket: Weak<OpenFileDescriptionData<StreamUnixSocket>>,
 }
 
@@ -1406,6 +1500,7 @@ impl TmpFsSocket {
                 ownership: Ownership::new(mode, uid, gid),
             }),
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
             socket,
         }
     }
@@ -1456,5 +1551,9 @@ impl INode for TmpFsSocket {
 
     fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
         self.socket.upgrade().ok_or(err!(ConnRefused))
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }

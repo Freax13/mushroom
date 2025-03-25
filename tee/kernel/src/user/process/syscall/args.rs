@@ -1783,3 +1783,41 @@ pub struct MMsgHdr {
 bitflags! {
     pub struct RecvMMsgFlags {}
 }
+
+bitflags! {
+    pub struct InotifyInit1Flags {
+        const NON_BLOCK = 1 << 11;
+        const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<InotifyInit1Flags> for OpenFlags {
+    fn from(value: InotifyInit1Flags) -> Self {
+        OpenFlags::from_bits(value.bits()).unwrap()
+    }
+}
+
+impl From<InotifyInit1Flags> for FdFlags {
+    fn from(value: InotifyInit1Flags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(InotifyInit1Flags::CLOEXEC));
+        flags
+    }
+}
+
+bitflags! {
+    pub struct InotifyMask {
+        const ACCESS = 1 << 0;
+        const MODIFY = 1 << 1;
+        const ATTRIB = 1 << 2;
+        const CLOSE_WRITE = 1 << 3;
+        const CLOSE_NOWRITE = 1 << 4;
+        const OPEN = 1 << 5;
+        const MOVED_FROM =1<< 6;
+        const MOVED_TO = 1 << 7;
+        const CREATE = 1 << 8;
+        const DELETE = 1 << 9;
+        const DELETE_SELF = 1 << 10;
+        const MOVE_SELF = 1 << 11;
+    }
+}

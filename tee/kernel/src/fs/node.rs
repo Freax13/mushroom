@@ -28,7 +28,7 @@ use self::tmpfs::TmpFsDir;
 use super::{
     FileSystem,
     fd::{
-        FileLockRecord, OpenFileDescriptionData, StrongFileDescriptor,
+        FileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
         unix_socket::StreamUnixSocket,
     },
     path::{FileName, Path, PathSegment},
@@ -284,6 +284,8 @@ pub trait INode: Any + Send + Sync + 'static {
     fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
         bail!(ConnRefused)
     }
+
+    fn watchers(&self) -> &Watchers;
 }
 
 #[derive(Clone)]
