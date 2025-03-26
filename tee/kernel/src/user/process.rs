@@ -26,11 +26,11 @@ use crate::{
         StaticFile,
         fd::FileDescriptorTable,
         node::{
-            DynINode, FileAccessContext, INode,
+            FileAccessContext, INode, Link, LinkLocation, ROOT_NODE,
             procfs::ProcessInos,
             tmpfs::{TmpFs, TmpFsFile},
         },
-        path::{Path, PathSegment},
+        path::FileName,
     },
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
@@ -77,12 +77,12 @@ pub struct Process {
     /// The number of running threads.
     running: AtomicUsize,
     pub inos: ProcessInos,
-    exe: RwLock<Path>,
+    exe: RwLock<Link>,
     task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
     stop_state: StopState,
     pub credentials: Mutex<Credentials>,
-    cwd: Mutex<DynINode>,
+    cwd: Mutex<Link>,
     process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
     pub umask: Mutex<FileMode>,
@@ -97,17 +97,15 @@ impl Process {
         first_tid: u32,
         parent: Weak<Self>,
         termination_signal: Option<Signal>,
-        exe: Path,
+        exe: Link,
         credentials: Credentials,
-        cwd: DynINode,
+        cwd: Link,
         process_group: Arc<ProcessGroup>,
         limits: Limits,
         umask: FileMode,
     ) -> Arc<Self> {
-        let PathSegment::FileName(last_path_segment) = exe.segments().last().unwrap() else {
-            unreachable!()
-        };
-        let task_comm = last_path_segment
+        let file_name = exe.location.file_name().unwrap();
+        let task_comm = file_name
             .as_bytes()
             .iter()
             .copied()
@@ -166,7 +164,7 @@ impl Process {
         self.process_group.lock().session.lock().sid
     }
 
-    pub fn exe(&self) -> Path {
+    pub fn exe(&self) -> Link {
         self.exe.read().clone()
     }
 
@@ -174,11 +172,11 @@ impl Process {
         self.task_comm.lock().clone()
     }
 
-    pub fn cwd(&self) -> DynINode {
+    pub fn cwd(&self) -> Link {
         self.cwd.lock().clone()
     }
 
-    pub fn chdir(&self, cwd: DynINode) {
+    pub fn chdir(&self, cwd: Link) {
         *self.cwd.lock() = cwd;
     }
 
@@ -208,7 +206,7 @@ impl Process {
         virtual_memory: VirtualMemory,
         cpu_state: CpuState,
         fdtable: FileDescriptorTable,
-        exe: Path,
+        exe: Link,
     ) {
         *self.exe.write() = exe;
         let mut threads = self.threads.lock();
@@ -580,14 +578,18 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
         Gid::SUPER_USER,
     );
     StaticFile::init_file().copy_to(&file).unwrap();
-    let path = Path::new(b"/bin/init".to_vec()).unwrap();
-    let file = file.open(path.clone(), OpenFlags::empty()).unwrap();
+    let location = LinkLocation::new(ROOT_NODE.clone(), FileName::new(b"init").unwrap());
+    let link = Link {
+        location: location.clone(),
+        node: file.clone(),
+    };
+    let fd = file.open(location, OpenFlags::empty()).unwrap();
 
     guard
         .start_executable(
-            path,
-            &file,
-            &[c"/bin/init"],
+            link,
+            &fd,
+            &[c"/init"],
             &[] as &[&CStr],
             &mut ctx,
             CurrentStackLimit::default(),

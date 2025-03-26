@@ -6,7 +6,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{OpenFileDescription, StrongFileDescriptor},
-        path::Path,
+        node::LinkLocation,
     },
     user::process::syscall::args::{OpenFlags, Stat},
 };
@@ -18,11 +18,16 @@ pub trait CharDev: OpenFileDescription + Sized {
     const MAJOR: u16;
     const MINOR: u8;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self>;
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self>;
 }
 
 pub fn open(
-    path: Path,
+    location: LinkLocation,
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
@@ -32,7 +37,7 @@ pub fn open(
         .iter()
         .find(|r| u64::from(r.rdev) == stat.rdev)
         .ok_or(err!(NoDev))?;
-    (registration.new)(path, flags, stat, fs)
+    (registration.new)(location, flags, stat, fs)
 }
 
 #[distributed_slice]
@@ -41,7 +46,7 @@ pub static REGISTRATIONS: [Registration];
 pub struct Registration {
     rdev: u32,
     new: fn(
-        path: Path,
+        location: LinkLocation,
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
@@ -59,8 +64,8 @@ impl Registration {
         let rdev = ((T::MAJOR as u32) << 8) | T::MINOR as u32;
         Self {
             rdev,
-            new: |path, flags, stat, fs| {
-                T::new(path, flags, stat, fs).map(StrongFileDescriptor::from)
+            new: |location, flags, stat, fs| {
+                T::new(location, flags, stat, fs).map(StrongFileDescriptor::from)
             },
         }
     }

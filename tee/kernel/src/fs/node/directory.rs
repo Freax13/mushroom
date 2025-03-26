@@ -1,39 +1,22 @@
-use super::DirEntryName;
+use super::{Link, LinkLocation};
 use crate::{
-    error::err,
     fs::{
         fd::unix_socket::StreamUnixSocket,
         node::{DynINode, FileAccessContext, INode},
         path::{FileName, Path},
     },
-    spin::mutex::Mutex,
     user::process::{
-        syscall::args::{FileMode, FileType},
+        syscall::args::FileMode,
         thread::{Gid, Uid},
     },
 };
-use alloc::{
-    sync::{Arc, Weak},
-    vec::Vec,
-};
+use alloc::vec::Vec;
 
 use crate::{error::Result, fs::node::DirEntry};
 
 macro_rules! dir_impls {
     () => {
-        fn parent(self: Arc<Self>) -> Result<DynINode> {
-            Ok(if let Some((parent, _)) = Directory::location(&*self)? {
-                parent
-            } else {
-                self
-            })
-        }
-
-        fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
-            Directory::path(self, ctx)
-        }
-
-        fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
+        fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<Link> {
             Directory::get_node(self, file_name, ctx)
         }
 
@@ -43,7 +26,7 @@ macro_rules! dir_impls {
             mode: FileMode,
             uid: Uid,
             gid: Gid,
-        ) -> Result<Result<DynINode, DynINode>> {
+        ) -> Result<Result<Link, Link>> {
             Directory::create_file(self, file_name, mode, uid, gid)
         }
 
@@ -64,7 +47,7 @@ macro_rules! dir_impls {
             uid: Uid,
             gid: Gid,
             create_new: bool,
-        ) -> Result<DynINode> {
+        ) -> Result<()> {
             Directory::create_link(self, file_name, target, uid, gid, create_new)
         }
 
@@ -76,7 +59,7 @@ macro_rules! dir_impls {
             mode: FileMode,
             uid: Uid,
             gid: Gid,
-        ) -> Result<DynINode> {
+        ) -> Result<()> {
             Directory::create_char_dev(self, file_name, major, minor, mode, uid, gid)
         }
 
@@ -149,17 +132,8 @@ macro_rules! dir_impls {
 pub(crate) use dir_impls;
 
 pub trait Directory: INode {
-    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>>;
-    fn path(&self, ctx: &mut FileAccessContext) -> Result<Path> {
-        let Some((parent, name)) = Directory::location(self)? else {
-            return Path::new(b"/".to_vec());
-        };
-        let _ = parent.get_node(&name, ctx)?; // Make sure that the node still exists in the parent.
-        let mut path = parent.path(ctx)?;
-        path = path.join_segment(&name)?;
-        Ok(path)
-    }
-    fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode>;
+    fn location(&self) -> &LinkLocation;
+    fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<Link>;
     /// Atomically create a new file or return the existing node.
     fn create_file(
         &self,
@@ -167,7 +141,7 @@ pub trait Directory: INode {
         mode: FileMode,
         uid: Uid,
         gid: Gid,
-    ) -> Result<Result<DynINode, DynINode>>;
+    ) -> Result<Result<Link, Link>>;
     fn create_dir(
         &self,
         file_name: FileName<'static>,
@@ -182,7 +156,7 @@ pub trait Directory: INode {
         uid: Uid,
         gid: Gid,
         create_new: bool,
-    ) -> Result<DynINode>;
+    ) -> Result<()>;
     fn create_char_dev(
         &self,
         file_name: FileName<'static>,
@@ -191,7 +165,7 @@ pub trait Directory: INode {
         mode: FileMode,
         uid: Uid,
         gid: Gid,
-    ) -> Result<DynINode>;
+    ) -> Result<()>;
     fn create_fifo(
         &self,
         file_name: FileName<'static>,
@@ -233,144 +207,4 @@ pub trait Directory: INode {
         new_dir: DynINode,
         newname: FileName<'static>,
     ) -> Result<Option<Path>>;
-}
-
-/// The location of a directory in a file system.
-pub struct Location<T>(LocationImpl<T>);
-
-impl<T> Location<T>
-where
-    T: Directory,
-{
-    pub const fn root() -> Self {
-        Self(LocationImpl::Root)
-    }
-
-    /// Returns the parent of the directory and the filename of this directory
-    /// in that directory. Returns `None` if the parent is the root.
-    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        match &self.0 {
-            LocationImpl::Root => Ok(None),
-            LocationImpl::Directory(parent) => parent.get(),
-            LocationImpl::Static(parent) => parent.get(),
-            LocationImpl::Mount(parent) => parent.get(),
-        }
-    }
-}
-
-enum LocationImpl<T> {
-    Root,
-    Directory(DirectoryLocation<T>),
-    Static(StaticLocation<T>),
-    Mount(MountLocation),
-}
-
-pub struct DirectoryLocation<T>(Mutex<DirectoryLocationImpl<T>>);
-
-struct DirectoryLocationImpl<T> {
-    parent: Weak<T>,
-    /// The name of the directory in `parent`.
-    file_name: FileName<'static>,
-}
-
-impl<T> DirectoryLocation<T>
-where
-    T: Directory,
-{
-    pub fn new(parent: Weak<T>, file_name: FileName<'static>) -> Self {
-        Self(Mutex::new(DirectoryLocationImpl { parent, file_name }))
-    }
-
-    /// Returns the parent of the directory and the filename of this directory
-    /// in that directory.
-    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        let guard = self.0.lock();
-        let node = guard.parent.upgrade().ok_or(err!(NoEnt))?;
-        let file_name = guard.file_name.clone();
-        Ok(Some((node, file_name)))
-    }
-}
-
-impl<T> From<DirectoryLocation<T>> for Location<T> {
-    fn from(value: DirectoryLocation<T>) -> Self {
-        Self(LocationImpl::Directory(value))
-    }
-}
-
-/// This location type should only be used for dynamically generated nodes.
-/// They keep a strong reference to the parent, so the parent shouldn't keep
-/// one to the child.
-pub struct StaticLocation<T> {
-    parent: Arc<T>,
-    /// The name of the directory in `parent`.
-    file_name: FileName<'static>,
-}
-
-impl<T> StaticLocation<T>
-where
-    T: Directory,
-{
-    pub fn new(parent: Arc<T>, file_name: FileName<'static>) -> Self {
-        Self { parent, file_name }
-    }
-
-    /// Returns the parent of the directory and the filename of this directory
-    /// in that directory.
-    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        let node = self.parent.clone();
-        let file_name = self.file_name.clone();
-        Ok(Some((node, file_name)))
-    }
-
-    pub fn parent_entry(&self) -> Option<DirEntry> {
-        let parent = self.parent.clone();
-        let stat = parent.stat().ok()?;
-        Some(DirEntry {
-            ino: stat.ino,
-            ty: FileType::Dir,
-            name: DirEntryName::DotDot,
-        })
-    }
-}
-
-impl<T> From<StaticLocation<T>> for Location<T> {
-    fn from(value: StaticLocation<T>) -> Self {
-        Self(LocationImpl::Static(value))
-    }
-}
-
-pub struct MountLocation {
-    parent: Weak<dyn INode>,
-    /// The name of the directory in `parent`.
-    file_name: FileName<'static>,
-}
-
-impl MountLocation {
-    pub fn new(parent: Weak<dyn INode>, file_name: FileName<'static>) -> Self {
-        Self { parent, file_name }
-    }
-
-    /// Returns the parent of the directory and the filename of this directory
-    /// in that directory.
-    pub fn get(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        let node = self.parent.upgrade().ok_or(err!(NoEnt))?;
-        let file_name = self.file_name.clone();
-        Ok(Some((node, file_name)))
-    }
-
-    pub fn parent_entry(&self) -> Option<DirEntry> {
-        let parent = self.parent.upgrade()?;
-        let stat = parent.stat().ok()?;
-        Some(DirEntry {
-            ino: stat.ino,
-            ty: FileType::Dir,
-            name: DirEntryName::DotDot,
-        })
-    }
-}
-
-impl<T> From<MountLocation> for Location<T> {
-    fn from(value: MountLocation) -> Self {
-        Self(LocationImpl::Mount(value))
-    }
 }

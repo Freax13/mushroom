@@ -7,7 +7,7 @@ use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
-        node::{DynINode, FileAccessContext},
+        node::{FileAccessContext, Link},
         path::Path,
     },
     user::process::{
@@ -19,13 +19,12 @@ use crate::{
 use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription};
 
 pub struct PathFd {
-    path: Path,
-    node: DynINode,
+    link: Link,
 }
 
 impl PathFd {
-    pub fn new(path: Path, node: DynINode) -> Self {
-        Self { path, node }
+    pub fn new(link: Link) -> Self {
+        Self { link }
     }
 }
 
@@ -36,7 +35,7 @@ impl OpenFileDescription for PathFd {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.link.location.path()
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -48,15 +47,15 @@ impl OpenFileDescription for PathFd {
     }
 
     fn stat(&self) -> Result<Stat> {
-        self.node.stat()
+        self.link.node.stat()
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        self.node.fs()
+        self.link.node.fs()
     }
 
-    fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {
-        Ok(self.node.clone())
+    fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<Link> {
+        Ok(self.link.clone())
     }
 
     fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {
@@ -71,7 +70,7 @@ impl OpenFileDescription for PathFd {
         bail!(BadF)
     }
 
-    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
-        Some((self.path.clone(), self.node.clone()))
+    fn path_fd_link(&self) -> Option<&Link> {
+        Some(&self.link)
     }
 }

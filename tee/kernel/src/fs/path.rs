@@ -5,7 +5,10 @@ use core::{
 
 use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
-use crate::error::{Result, bail, ensure};
+use crate::{
+    error::{Result, bail, ensure},
+    spin::lazy::Lazy,
+};
 
 pub const PATH_MAX: usize = 0x1000;
 
@@ -15,6 +18,11 @@ pub struct Path {
 }
 
 impl Path {
+    pub fn root() -> Self {
+        static ROOT: Lazy<Path> = Lazy::new(|| Path::new(b"/".to_vec()).unwrap());
+        ROOT.clone()
+    }
+
     pub fn new(path: Vec<u8>) -> Result<Self> {
         ensure!(!path.is_empty(), NoEnt);
         ensure!(path.len() < PATH_MAX, NameTooLong);

@@ -4,7 +4,7 @@ use crate::{
     error::{bail, ensure, err},
     fs::{
         fd::{FileDescriptor, KernelReadBuf, OpenFileDescription},
-        node::{DynINode, FileAccessContext},
+        node::{FileAccessContext, Link, lookup_and_resolve_link},
     },
     spin::lazy::Lazy,
     user::process::memory::MemoryPermissions,
@@ -29,10 +29,7 @@ use super::{
         traits::Abi,
     },
 };
-use crate::{
-    error::Result,
-    fs::{node::lookup_and_resolve_node, path::Path},
-};
+use crate::{error::Result, fs::path::Path};
 
 mod elf;
 
@@ -40,27 +37,27 @@ impl VirtualMemory {
     #[allow(clippy::too_many_arguments)]
     pub fn start_executable(
         &self,
-        path: Path,
-        file: &FileDescriptor,
+        link: Link,
+        fd: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
-        cwd: DynINode,
+        cwd: Link,
         stack_limit: CurrentStackLimit,
-    ) -> Result<(CpuState, Path)> {
+    ) -> Result<(CpuState, Link)> {
         self.modify().map_sigreturn_trampoline();
 
         let mut header = [0; 4];
-        file.pread(0, &mut KernelReadBuf::new(&mut header))?;
+        fd.pread(0, &mut KernelReadBuf::new(&mut header))?;
 
         match header {
             elf::MAGIC => {
                 let mut header = ElfIdent::zeroed();
-                file.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
+                fd.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
 
                 let state = match header.verify()? {
                     Abi::I386 => self.start_elf::<elf::ElfLoaderParams32>(
-                        file,
+                        fd,
                         argv,
                         envp,
                         ctx,
@@ -68,7 +65,7 @@ impl VirtualMemory {
                         stack_limit,
                     )?,
                     Abi::Amd64 => self.start_elf::<elf::ElfLoaderParams64>(
-                        file,
+                        fd,
                         argv,
                         envp,
                         ctx,
@@ -76,11 +73,9 @@ impl VirtualMemory {
                         stack_limit,
                     )?,
                 };
-                Ok((state, path))
+                Ok((state, link))
             }
-            [b'#', b'!', ..] => {
-                self.start_shebang(path, &***file, argv, envp, ctx, cwd, stack_limit)
-            }
+            [b'#', b'!', ..] => self.start_shebang(link, &***fd, argv, envp, ctx, cwd, stack_limit),
             _ => bail!(NoExec),
         }
     }
@@ -91,7 +86,7 @@ impl VirtualMemory {
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
-        cwd: DynINode,
+        cwd: Link,
         stack_limit: CurrentStackLimit,
     ) -> Result<CpuState>
     where
@@ -105,10 +100,18 @@ impl VirtualMemory {
         let mut at_base = None;
 
         if let Some(interpreter_path) = info.interpreter_path {
-            let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
-            ensure!(node.mode()?.contains(FileMode::OTHER_EXECUTE), Acces);
+            let interpreter_link = lookup_and_resolve_link(cwd.clone(), &interpreter_path, ctx)?;
+            ensure!(
+                interpreter_link
+                    .node
+                    .mode()?
+                    .contains(FileMode::OTHER_EXECUTE),
+                Acces
+            );
 
-            let file = node.open(interpreter_path, OpenFlags::empty())?;
+            let file = interpreter_link
+                .node
+                .open(interpreter_link.location, OpenFlags::empty())?;
             let info = elf::load_elf::<E>(&file, self.modify(), info.base + 0x2000_0000)?;
 
             entrypoint = info.entry;
@@ -246,14 +249,14 @@ impl VirtualMemory {
     #[allow(clippy::too_many_arguments)]
     fn start_shebang(
         &self,
-        path: Path,
+        link: Link,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
-        cwd: DynINode,
+        cwd: Link,
         stack_limit: CurrentStackLimit,
-    ) -> Result<(CpuState, Path)> {
+    ) -> Result<(CpuState, Link)> {
         let mut bytes = [0; 128];
         let len = file.pread(0, &mut KernelReadBuf::new(&mut bytes))?;
         let bytes = &bytes[..len];
@@ -290,19 +293,28 @@ impl VirtualMemory {
 
         let interpreter_path_str = args.next().ok_or(err!(Inval))??;
         let interpreter_path = Path::new(interpreter_path_str.as_bytes().to_vec())?;
-        let node = lookup_and_resolve_node(cwd.clone(), &interpreter_path, ctx)?;
-        ensure!(node.mode()?.contains(FileMode::OTHER_EXECUTE), Acces);
-        let interpreter = node.open(interpreter_path.clone(), OpenFlags::empty())?;
+        let interpreter_link = lookup_and_resolve_link(cwd.clone(), &interpreter_path, ctx)?;
+        ensure!(
+            interpreter_link
+                .node
+                .mode()?
+                .contains(FileMode::OTHER_EXECUTE),
+            Acces
+        );
+        let interpreter = interpreter_link
+            .node
+            .open(interpreter_link.location.clone(), OpenFlags::empty())?;
 
         let mut new_argv = vec![interpreter_path_str];
         for arg in args {
             new_argv.push(arg?);
         }
+        let path = link.location.path()?;
         new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
         self.start_executable(
-            interpreter_path,
+            interpreter_link,
             &interpreter,
             &new_argv,
             envp,

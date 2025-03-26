@@ -26,8 +26,9 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, MsgHdr, OpenFlags, Pointer,
-                RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, InotifyMask, MsgHdr,
+                OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat,
+                Timespec, Whence,
             },
             traits::Abi,
         },
@@ -48,6 +49,7 @@ use futures::{
     FutureExt,
     future::{Either, select},
 };
+use inotify::Watchers;
 
 use crate::{
     error::{ErrorKind, Result},
@@ -56,7 +58,10 @@ use crate::{
 
 use super::{
     FileSystem,
-    node::procfs::{FdINode, ProcFs},
+    node::{
+        Link,
+        procfs::{FdINode, ProcFs},
+    },
     path::Path,
 };
 
@@ -65,6 +70,7 @@ pub mod dir;
 pub mod epoll;
 pub mod eventfd;
 pub mod file;
+pub mod inotify;
 pub mod path;
 pub mod pipe;
 mod std;
@@ -403,6 +409,7 @@ impl FileDescriptorTable {
             gid,
             StrongFileDescriptor::downgrade(&entry.fd),
             entry.file_lock_record.get().clone(),
+            entry.watchers.clone(),
         )))
     }
 
@@ -428,6 +435,7 @@ struct FileDescriptorTableEntry {
     fd: StrongFileDescriptor,
     flags: FdFlags,
     file_lock_record: LazyFileLockRecord,
+    watchers: Arc<Watchers>,
 }
 
 impl FileDescriptorTableEntry {
@@ -437,6 +445,7 @@ impl FileDescriptorTableEntry {
             fd,
             flags,
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Arc::new(Watchers::new()),
         }
     }
 }
@@ -715,7 +724,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
-    fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<DynINode> {
+    fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<Link> {
         let _ = ctx;
         bail!(NotDir)
     }
@@ -778,11 +787,22 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         self.ready(Events::WRITE).await;
     }
 
+    fn add_watch(&self, node: DynINode, mask: InotifyMask) -> Result<u32> {
+        let _ = node;
+        let _ = mask;
+        bail!(Inval)
+    }
+
+    fn rm_watch(&self, wd: u32) -> Result<()> {
+        let _ = wd;
+        bail!(Inval)
+    }
+
     fn file_lock(&self) -> Result<&FileLock>;
 
     /// For path file descriptors, this method should return the pointed to
-    /// path and INode.
-    fn path_fd_node(&self) -> Option<(Path, DynINode)> {
+    /// link.
+    fn path_fd_link(&self) -> Option<&Link> {
         None
     }
 

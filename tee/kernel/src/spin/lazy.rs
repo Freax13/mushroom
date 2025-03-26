@@ -32,6 +32,12 @@ impl<T> Lazy<T> {
     pub unsafe fn get_unchecked(&self) -> &T {
         unsafe { self.cell.get_unchecked() }
     }
+
+    /// Get the value if it's already been initialized.
+    #[inline]
+    pub fn try_get(&self) -> Option<&T> {
+        self.cell.get()
+    }
 }
 
 impl<T> Deref for Lazy<T> {

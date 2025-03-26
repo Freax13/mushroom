@@ -4,7 +4,7 @@ use crate::{
     error::{bail, ensure},
     fs::{
         FileSystem,
-        node::{DynINode, FileAccessContext, directory::Directory},
+        node::{FileAccessContext, Link, directory::Directory},
         path::Path,
     },
     spin::mutex::Mutex,
@@ -48,7 +48,7 @@ impl OpenFileDescription for DirectoryFileDescription {
     }
 
     fn path(&self) -> Result<Path> {
-        Directory::path(&*self.dir, &mut FileAccessContext::root())
+        self.dir.location().path()
     }
 
     fn read(&self, _: &mut dyn ReadBuf) -> Result<usize> {
@@ -87,8 +87,11 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.dir.fs()
     }
 
-    fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<DynINode> {
-        Ok(self.dir.clone())
+    fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<Link> {
+        Ok(Link {
+            location: self.dir.location().clone(),
+            node: self.dir.clone(),
+        })
     }
 
     fn getdents64(

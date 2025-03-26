@@ -16,7 +16,7 @@ use crate::{
             Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
             ReadBuf, WriteBuf, stream_buffer,
         },
-        node::FileAccessContext,
+        node::{FileAccessContext, LinkLocation},
         path::Path,
     },
     memory::page::KernelPage,
@@ -32,7 +32,7 @@ use super::CharDev;
 const MAJOR: u16 = 1;
 
 pub struct Null {
-    path: Path,
+    location: LinkLocation,
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
@@ -44,10 +44,15 @@ impl CharDev for Null {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 3;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
-            path,
+            location,
             flags,
             stat,
             fs,
@@ -63,7 +68,7 @@ impl OpenFileDescription for Null {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.location.path()
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -144,7 +149,7 @@ impl OpenFileDescription for Null {
 }
 
 pub struct Zero {
-    path: Path,
+    location: LinkLocation,
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
@@ -156,10 +161,15 @@ impl CharDev for Zero {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 5;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
-            path,
+            location,
             flags,
             stat,
             fs,
@@ -175,7 +185,7 @@ impl OpenFileDescription for Zero {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.location.path()
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -265,7 +275,7 @@ pub fn random_bytes() -> impl Iterator<Item = u8> {
 }
 
 pub struct Random {
-    path: Path,
+    location: LinkLocation,
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
@@ -277,10 +287,15 @@ impl CharDev for Random {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 8;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
-            path,
+            location,
             flags,
             stat,
             fs,
@@ -296,7 +311,7 @@ impl OpenFileDescription for Random {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.location.path()
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -375,7 +390,7 @@ impl OpenFileDescription for Random {
 }
 
 pub struct URandom {
-    path: Path,
+    location: LinkLocation,
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
@@ -387,10 +402,15 @@ impl CharDev for URandom {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 9;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
-            path,
+            location,
             flags,
             stat,
             fs,
@@ -406,7 +426,7 @@ impl OpenFileDescription for URandom {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.location.path()
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {

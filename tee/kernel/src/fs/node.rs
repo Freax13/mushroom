@@ -5,7 +5,7 @@ use core::{
 
 use crate::{
     error::{bail, ensure, err},
-    spin::lazy::Lazy,
+    spin::{lazy::Lazy, rwlock::RwLock},
     user::process::{
         Process,
         syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
@@ -15,6 +15,7 @@ use crate::{
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use async_trait::async_trait;
+use directory::Directory;
 use tmpfs::TmpFs;
 
 use crate::{
@@ -22,15 +23,12 @@ use crate::{
     user::process::syscall::args::{FileMode, FileType, Stat},
 };
 
-use self::{
-    directory::{Location, MountLocation},
-    tmpfs::TmpFsDir,
-};
+use self::tmpfs::TmpFsDir;
 
 use super::{
     FileSystem,
     fd::{
-        FileLockRecord, OpenFileDescriptionData, StrongFileDescriptor,
+        FileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
         unix_socket::StreamUnixSocket,
     },
     path::{FileName, Path, PathSegment},
@@ -45,7 +43,7 @@ pub mod tmpfs;
 pub static ROOT_NODE: Lazy<Arc<TmpFsDir>> = Lazy::new(|| {
     TmpFsDir::new(
         TmpFs::new(),
-        Location::root(),
+        LinkLocation::root(),
         FileMode::from_bits_truncate(0o755),
         Uid::SUPER_USER,
         Gid::SUPER_USER,
@@ -72,14 +70,14 @@ pub trait INode: Any + Send + Sync + 'static {
     fn stat(&self) -> Result<Stat>;
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor>;
+    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor>;
 
     async fn async_open(
         self: Arc<Self>,
-        path: Path,
+        location: LinkLocation,
         flags: OpenFlags,
     ) -> Result<StrongFileDescriptor> {
-        self.open(path, flags)
+        self.open(location, flags)
     }
 
     fn mode(&self) -> Result<FileMode> {
@@ -94,15 +92,7 @@ pub trait INode: Any + Send + Sync + 'static {
 
     // Directory related functions.
 
-    fn path(&self, _ctx: &mut FileAccessContext) -> Result<Path> {
-        bail!(NotDir)
-    }
-
-    fn parent(self: Arc<Self>) -> Result<DynINode> {
-        bail!(NotDir)
-    }
-
-    fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<DynINode> {
+    fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<Link> {
         let _ = file_name;
         let _ = ctx;
         bail!(NotDir)
@@ -115,7 +105,7 @@ pub trait INode: Any + Send + Sync + 'static {
         mode: FileMode,
         user: Uid,
         group: Gid,
-    ) -> Result<Result<DynINode, DynINode>> {
+    ) -> Result<Result<Link, Link>> {
         let _ = file_name;
         let _ = mode;
         let _ = user;
@@ -144,7 +134,7 @@ pub trait INode: Any + Send + Sync + 'static {
         uid: Uid,
         gid: Gid,
         create_new: bool,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         let _ = file_name;
         let _ = target;
         let _ = uid;
@@ -161,7 +151,7 @@ pub trait INode: Any + Send + Sync + 'static {
         mode: FileMode,
         uid: Uid,
         gid: Gid,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         let _ = file_name;
         let _ = major;
         let _ = minor;
@@ -203,9 +193,13 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
-    fn mount(&self, file_name: FileName<'static>, node: DynINode) -> Result<()> {
+    fn mount(
+        &self,
+        file_name: FileName<'static>,
+        create_dir: fn(LinkLocation) -> Result<Arc<dyn Directory>>,
+    ) -> Result<()> {
         let _ = file_name;
-        let _ = node;
+        let _ = create_dir;
         bail!(NotDir)
     }
 
@@ -267,15 +261,15 @@ pub trait INode: Any + Send + Sync + 'static {
 
     // Symlink related functions
 
-    /// Try to follow a symlink. Returns a tuple of where the parent directory
-    /// of the resolved node and the node.
-    /// Returns `None` if the node doesn't contain a symlink.
+    /// Try to follow a symlink. Returns `None` if the node doesn't contain a symlink.
     fn try_resolve_link(
         &self,
-        start_dir: DynINode,
+        start_dir: Link,
+        location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<(DynINode, DynINode)>> {
+    ) -> Result<Option<Link>> {
         let _ = start_dir;
+        let _ = location;
         let _ = ctx;
         Ok(None)
     }
@@ -290,18 +284,115 @@ pub trait INode: Any + Send + Sync + 'static {
     fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
         bail!(ConnRefused)
     }
+
+    fn watchers(&self) -> &Watchers;
+}
+
+#[derive(Clone)]
+pub struct Link {
+    /// The location of the link. The only link without a location is the root
+    /// directory.
+    pub location: LinkLocation,
+    pub node: DynINode,
+}
+
+impl Link {
+    pub fn root() -> Self {
+        Self {
+            location: LinkLocation::root(),
+            node: ROOT_NODE.clone(),
+        }
+    }
+
+    pub fn parent(&self) -> Self {
+        if let Some(loc) = self.location.0.as_ref() {
+            let guard = loc.read();
+            let node = guard.parent.clone();
+            let location = node.location().clone();
+            Self { location, node }
+        } else {
+            self.clone()
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LinkLocation(Option<Arc<RwLock<LinkLocationInternal>>>);
+
+impl LinkLocation {
+    pub fn root() -> Self {
+        Self(None)
+    }
+
+    pub fn new(parent: Arc<dyn Directory>, file_name: FileName<'static>) -> Self {
+        Self(Some(Arc::new(RwLock::new(LinkLocationInternal {
+            parent,
+            file_name,
+            unlinked: false,
+        }))))
+    }
+
+    pub fn path(&self) -> Result<Path> {
+        if let Some(loc) = self.0.as_ref() {
+            let guard = loc.read();
+            ensure!(!guard.unlinked, NoEnt);
+            let parent = guard.parent.clone();
+            let name = guard.file_name.clone();
+            drop(guard);
+            let path = parent.location().path()?;
+            path.join_segment(&name)
+        } else {
+            Ok(Path::root())
+        }
+    }
+
+    pub fn file_name(&self) -> Option<FileName<'static>> {
+        let loc = self.0.as_ref()?;
+        let guard = loc.read();
+        Some(guard.file_name.clone())
+    }
+
+    pub fn parent(&self) -> Option<Arc<dyn Directory>> {
+        if let Some(loc) = self.0.as_ref() {
+            let guard = loc.read();
+            if guard.unlinked {
+                return None;
+            }
+            Some(guard.parent.clone())
+        } else {
+            Some(ROOT_NODE.clone())
+        }
+    }
+
+    pub fn update(&self, parent: Arc<dyn Directory>, file_name: FileName<'static>) {
+        let mut guard = self.0.as_ref().unwrap().write();
+        guard.parent = parent;
+        guard.file_name = file_name;
+    }
+
+    pub fn unlink(&self) {
+        let mut guard = self.0.as_ref().unwrap().write();
+        assert!(!guard.unlinked);
+        guard.unlinked = true;
+    }
+}
+
+struct LinkLocationInternal {
+    // TODO: Should this use a weak reference?
+    parent: Arc<dyn Directory>,
+    file_name: FileName<'static>,
+    unlinked: bool,
 }
 
 /// Repeatedly follow symlinks until the end.
-fn resolve_links(
-    mut node: DynINode,
-    mut start_dir: DynINode,
-    ctx: &mut FileAccessContext,
-) -> Result<DynINode> {
-    while let Some(next) = node.try_resolve_link(start_dir.clone(), ctx)? {
-        (start_dir, node) = next;
+fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
+    while let Some(next) = link
+        .node
+        .try_resolve_link(link.parent(), link.location.clone(), ctx)?
+    {
+        link = next;
     }
-    Ok(node)
+    Ok(link)
 }
 
 #[derive(Clone)]
@@ -314,16 +405,6 @@ pub struct FileAccessContext {
 }
 
 impl FileAccessContext {
-    pub fn root() -> Self {
-        Self {
-            process: None,
-            symlink_recursion_limit: 16,
-            filesystem_user_id: Uid::SUPER_USER,
-            filesystem_group_id: Gid::SUPER_USER,
-            supplementary_group_ids: Arc::new([]),
-        }
-    }
-
     /// Record that a symlink was followed and return an error if the recursion
     /// limit was exceeded.
     pub fn follow_symlink(&mut self) -> Result<()> {
@@ -406,30 +487,15 @@ impl ExtractableThreadState for FileAccessContext {
     }
 }
 
-/// Find a node.
-pub fn lookup_node(
-    start_dir: DynINode,
-    path: &Path,
-    ctx: &mut FileAccessContext,
-) -> Result<DynINode> {
-    let (_, node) = lookup_node_with_parent(start_dir, path, ctx)?;
-    Ok(node)
-}
-
-// Find a node while taking recursion limits into account.
-fn lookup_node_with_parent(
-    start_dir: DynINode,
-    path: &Path,
-    ctx: &mut FileAccessContext,
-) -> Result<(DynINode, DynINode)> {
-    path.segments().try_fold(
-        (start_dir.clone(), start_dir),
-        |(start_dir, node), segment| -> Result<_> {
-            let node = resolve_links(node, start_dir.clone(), ctx)?;
+/// Find a node while taking recursion limits into account.
+pub fn lookup_link(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) -> Result<Link> {
+    path.segments()
+        .try_fold(start_dir, |start_dir, segment| -> Result<_> {
+            let start_dir = resolve_link(start_dir, ctx)?;
 
             if !matches!(segment, PathSegment::Root) {
                 // Make sure that the node is a directory.
-                let stat = node.stat()?;
+                let stat = start_dir.node.stat()?;
                 ensure!(stat.mode.ty() == FileType::Dir, NotDir);
                 if !matches!(segment, PathSegment::Dot) {
                     ctx.check_permissions(&stat, Permission::Execute)?;
@@ -437,36 +503,29 @@ fn lookup_node_with_parent(
             }
 
             match segment {
-                PathSegment::Root => Ok((ROOT_NODE.clone(), ROOT_NODE.clone())),
-                PathSegment::Empty | PathSegment::Dot => Ok((start_dir, node)),
-                PathSegment::DotDot => {
-                    let parent = node.parent()?;
-                    Ok((parent.clone(), parent))
-                }
-                PathSegment::FileName(file_name) => {
-                    let next_node = node.get_node(&file_name, ctx)?;
-                    Ok((node, next_node))
-                }
+                PathSegment::Root => Ok(Link::root()),
+                PathSegment::Empty | PathSegment::Dot => Ok(start_dir),
+                PathSegment::DotDot => Ok(start_dir.parent()),
+                PathSegment::FileName(file_name) => start_dir.node.get_node(&file_name, ctx),
             }
-        },
-    )
+        })
 }
 
 // Find a node and resolve links.
-pub fn lookup_and_resolve_node(
-    start_dir: DynINode,
+pub fn lookup_and_resolve_link(
+    start_dir: Link,
     path: &Path,
     ctx: &mut FileAccessContext,
-) -> Result<DynINode> {
-    let (dir, node) = lookup_node_with_parent(start_dir.clone(), path, ctx)?;
-    resolve_links(node, dir, ctx)
+) -> Result<Link> {
+    let link = lookup_link(start_dir, path, ctx)?;
+    resolve_link(link, ctx)
 }
 
 fn find_parent<'a>(
-    start_dir: DynINode,
+    start_dir: Link,
     path: &'a Path,
     ctx: &mut FileAccessContext,
-) -> Result<(DynINode, PathSegment<'a>, bool)> {
+) -> Result<(Link, PathSegment<'a>, bool)> {
     let mut segments = path.segments();
     let first = segments.next().ok_or(err!(Inval))?;
     let (parent, segment, trailing_slash) = segments.try_fold(
@@ -478,15 +537,15 @@ fn find_parent<'a>(
             }
 
             let dir = match segment {
-                PathSegment::Root => ROOT_NODE.clone(),
+                PathSegment::Root => Link::root(),
                 PathSegment::Empty | PathSegment::Dot => dir,
-                PathSegment::DotDot => dir.parent()?,
+                PathSegment::DotDot => dir.parent(),
                 PathSegment::FileName(ref file_name) => {
-                    let node = dir.get_node(file_name, ctx)?;
-                    resolve_links(node, dir, ctx)?
+                    let node = dir.node.get_node(file_name, ctx)?;
+                    resolve_link(node, ctx)?
                 }
             };
-            let stat = dir.stat()?;
+            let stat = dir.node.stat()?;
             ensure!(stat.mode.ty() == FileType::Dir, NotDir);
             ctx.check_permissions(&stat, Permission::Execute)?;
             Ok((dir, next_segment, false))
@@ -494,7 +553,7 @@ fn find_parent<'a>(
     )?;
 
     // Make sure that the parent is a directory.
-    let stat = parent.stat()?;
+    let stat = parent.node.stat()?;
     ensure!(stat.mode.ty() == FileType::Dir, NotDir);
     ctx.check_permissions(&stat, Permission::Execute)?;
 
@@ -502,28 +561,28 @@ fn find_parent<'a>(
 }
 
 pub fn create_file(
-    mut start_dir: DynINode,
+    mut start_dir: Link,
     mut path: Path,
     mode: FileMode,
     flags: OpenFlags,
     ctx: &mut FileAccessContext,
-) -> Result<DynINode> {
+) -> Result<Link> {
     loop {
-        let (dir, last, trailing_slash) = find_parent(start_dir, &path, ctx)?;
+        let (parent, last, trailing_slash) = find_parent(start_dir, &path, ctx)?;
         let PathSegment::FileName(file_name) = last else {
             bail!(IsDir);
         };
         ensure!(!trailing_slash, IsDir);
 
-        match dir.create_file(
+        match parent.node.create_file(
             file_name.into_owned(),
             mode,
             ctx.filesystem_user_id,
             ctx.filesystem_group_id,
         )? {
-            Ok(file) => return Ok(file),
+            Ok(link) => return Ok(link),
             Err(existing) => {
-                let stat = existing.stat()?;
+                let stat = existing.node.stat()?;
 
                 // If the node is a symlink start over with the destination
                 // path.
@@ -531,9 +590,9 @@ pub fn create_file(
                     ensure!(!flags.contains(OpenFlags::EXCL), Exist);
                     ensure!(!flags.contains(OpenFlags::NOFOLLOW), Loop);
 
-                    path = existing.read_link(ctx)?;
+                    path = existing.node.read_link(ctx)?;
                     ctx.follow_symlink()?;
-                    start_dir = dir;
+                    start_dir = parent;
                     continue;
                 }
 
@@ -557,17 +616,17 @@ pub fn create_file(
 }
 
 pub fn create_directory(
-    start_dir: DynINode,
+    start_dir: Link,
     path: &Path,
     mode: FileMode,
     ctx: &mut FileAccessContext,
 ) -> Result<DynINode> {
-    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     match last {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             bail!(Exist)
         }
-        PathSegment::FileName(file_name) => dir.create_dir(
+        PathSegment::FileName(file_name) => parent.node.create_dir(
             file_name.into_owned(),
             mode,
             ctx.filesystem_user_id,
@@ -577,20 +636,20 @@ pub fn create_directory(
 }
 
 pub fn create_link(
-    start_dir: DynINode,
+    start_dir: Link,
     path: &Path,
     target: Path,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (dir, last, trailing_slash) = find_parent(start_dir, path, ctx)?;
+    let (parent, last, trailing_slash) = find_parent(start_dir, path, ctx)?;
     let PathSegment::FileName(file_name) = last else {
         bail!(Exist);
     };
     if trailing_slash {
-        dir.get_node(&file_name, ctx)?;
+        parent.node.get_node(&file_name, ctx)?;
         bail!(Exist);
     }
-    dir.create_link(
+    parent.node.create_link(
         file_name.into_owned(),
         target,
         ctx.filesystem_user_id,
@@ -600,23 +659,23 @@ pub fn create_link(
     Ok(())
 }
 
-pub fn read_link(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<Path> {
-    let node = lookup_node(start_dir, path, ctx)?;
-    node.read_link(ctx)
+pub fn read_soft_link(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) -> Result<Path> {
+    let link = lookup_link(start_dir, path, ctx)?;
+    link.node.read_link(ctx)
 }
 
 pub fn create_fifo(
-    start_dir: DynINode,
+    start_dir: Link,
     path: &Path,
     mode: FileMode,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     match last {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             bail!(Exist)
         }
-        PathSegment::FileName(file_name) => dir.create_fifo(
+        PathSegment::FileName(file_name) => parent.node.create_fifo(
             file_name.into_owned(),
             mode,
             ctx.filesystem_user_id,
@@ -626,20 +685,20 @@ pub fn create_fifo(
 }
 
 pub fn create_char_dev(
-    start_dir: DynINode,
+    start_dir: Link,
     path: &Path,
     major: u16,
     minor: u8,
     mode: FileMode,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (dir, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     match last {
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             bail!(Exist)
         }
         PathSegment::FileName(file_name) => {
-            dir.create_char_dev(
+            parent.node.create_char_dev(
                 file_name.into_owned(),
                 major,
                 minor,
@@ -660,7 +719,7 @@ pub fn bind_socket(
     socket: &StreamUnixSocket,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (dir, last, _trailing_slash) = find_parent(ROOT_NODE.clone(), path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(Link::root(), path, ctx)?;
     ensure!(!_trailing_slash, IsDir);
     let file_name = match last {
         PathSegment::Root => todo!(),
@@ -669,7 +728,9 @@ pub fn bind_socket(
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    dir.bind_socket(file_name.into_owned(), mode, uid, gid, socket, path)?;
+    parent
+        .node
+        .bind_socket(file_name.into_owned(), mode, uid, gid, socket, path)?;
     Ok(())
 }
 
@@ -677,16 +738,16 @@ pub fn get_socket(
     path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
-    let node = lookup_and_resolve_node(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
-    node.get_socket()
+    let link = lookup_and_resolve_link(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
+    link.node.get_socket()
 }
 
 pub fn mount(
     path: &Path,
-    create_node: impl FnOnce(MountLocation) -> Result<DynINode>,
+    create_dir: fn(LinkLocation) -> Result<Arc<dyn Directory>>,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (dir, last, _trailing_slash) = find_parent(ROOT_NODE.clone(), path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(Link::root(), path, ctx)?;
     let file_name = match last {
         PathSegment::Root => todo!(),
         PathSegment::Empty => todo!(),
@@ -694,24 +755,22 @@ pub fn mount(
         PathSegment::DotDot => todo!(),
         PathSegment::FileName(file_name) => file_name,
     };
-    let location = MountLocation::new(Arc::downgrade(&dir), file_name.clone().into_owned());
-    let node = create_node(location)?;
-    dir.mount(file_name.into_owned(), node)?;
+    parent.node.mount(file_name.into_owned(), create_dir)?;
     Ok(())
 }
 
-pub fn unlink_file(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
+pub fn unlink_file(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
     let (parent, segment, trailing_slash) = find_parent(start_dir, path, ctx)?;
     let PathSegment::FileName(filename) = segment else {
         bail!(IsDir)
     };
     ensure!(!trailing_slash, IsDir);
-    let stat = parent.stat()?;
+    let stat = parent.node.stat()?;
     ctx.check_permissions(&stat, Permission::Write)?;
-    parent.delete_non_dir(filename.into_owned())
+    parent.node.delete_non_dir(filename.into_owned())
 }
 
-pub fn unlink_dir(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
+pub fn unlink_dir(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
     let (parent, segment, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     match segment {
         PathSegment::Root => bail!(NotEmpty),
@@ -719,17 +778,17 @@ pub fn unlink_dir(start_dir: DynINode, path: &Path, ctx: &mut FileAccessContext)
         PathSegment::Dot => bail!(Inval),
         PathSegment::DotDot => bail!(NotEmpty),
         PathSegment::FileName(filename) => {
-            let stat = parent.stat()?;
+            let stat = parent.node.stat()?;
             ctx.check_permissions(&stat, Permission::Write)?;
-            parent.delete_dir(filename.into_owned())
+            parent.node.delete_dir(filename.into_owned())
         }
     }
 }
 
 pub fn hard_link(
-    start_dir: DynINode,
+    start_dir: Link,
     start_path: &Path,
-    mut target_dir: DynINode,
+    mut target_dir: Link,
     mut target_path: Path,
     symlink_follow: bool,
     ctx: &mut FileAccessContext,
@@ -740,7 +799,7 @@ pub fn hard_link(
     };
     let new_filename = new_filename.into_owned();
 
-    let stat = new_parent.stat()?;
+    let stat = new_parent.node.stat()?;
     ctx.check_permissions(&stat, Permission::Write)?;
 
     loop {
@@ -751,10 +810,10 @@ pub fn hard_link(
             bail!(Perm);
         };
 
-        let new_path = old_parent.hard_link(
+        let new_path = old_parent.node.hard_link(
             old_filename.into_owned(),
             symlink_follow,
-            new_parent.clone(),
+            new_parent.node.clone(),
             new_filename.clone(),
         )?;
         if let Some(new_path) = new_path {
@@ -771,9 +830,9 @@ pub fn hard_link(
 }
 
 pub fn rename(
-    oldd: DynINode,
+    oldd: Link,
     old_path: &Path,
-    newd: DynINode,
+    newd: Link,
     new_path: &Path,
     no_replace: bool,
     ctx: &mut FileAccessContext,
@@ -793,16 +852,16 @@ pub fn rename(
         PathSegment::FileName(filename) => filename,
     };
 
-    let stat = old_parent.stat()?;
+    let stat = old_parent.node.stat()?;
     ctx.check_permissions(&stat, Permission::Write)?;
-    let stat = new_parent.stat()?;
+    let stat = new_parent.node.stat()?;
     ctx.check_permissions(&stat, Permission::Write)?;
 
     let check_is_dir = old_path.has_trailing_slash() || new_path.has_trailing_slash();
-    old_parent.rename(
+    old_parent.node.rename(
         old_name.into_owned(),
         check_is_dir,
-        new_parent,
+        new_parent.node,
         new_name.into_owned(),
         no_replace,
     )?;
@@ -811,9 +870,9 @@ pub fn rename(
 }
 
 pub fn exchange(
-    oldd: DynINode,
+    oldd: Link,
     old_path: &Path,
-    newd: DynINode,
+    newd: Link,
     new_path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
@@ -832,12 +891,16 @@ pub fn exchange(
         PathSegment::FileName(filename) => filename,
     };
 
-    let stat = old_parent.stat()?;
+    let stat = old_parent.node.stat()?;
     ctx.check_permissions(&stat, Permission::Write)?;
-    let stat = new_parent.stat()?;
+    let stat = new_parent.node.stat()?;
     ctx.check_permissions(&stat, Permission::Write)?;
 
-    old_parent.exchange(old_name.into_owned(), new_parent, new_name.into_owned())?;
+    old_parent.node.exchange(
+        old_name.into_owned(),
+        new_parent.node,
+        new_name.into_owned(),
+    )?;
 
     Ok(())
 }

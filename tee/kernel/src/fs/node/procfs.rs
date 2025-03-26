@@ -19,6 +19,7 @@ use crate::{
             WriteBuf,
             dir::open_dir,
             file::{File, open_file},
+            inotify::Watchers,
             unix_socket::StreamUnixSocket,
         },
         node::DirEntryName,
@@ -37,9 +38,9 @@ use crate::{
 };
 
 use super::{
-    DirEntry, DynINode, FileAccessContext, INode,
-    directory::{Directory, MountLocation, StaticLocation, dir_impls},
-    lookup_node_with_parent, new_dev, new_ino,
+    DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation,
+    directory::{Directory, dir_impls},
+    new_dev, new_ino,
 };
 
 pub struct ProcFs {
@@ -64,7 +65,7 @@ impl FileSystem for ProcFs {
     }
 }
 
-pub fn new(location: MountLocation) -> Result<DynINode> {
+pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
     let fs = Arc::new(ProcFs { dev: new_dev() });
     Ok(Arc::new_cyclic(|this| ProcFsRoot {
         this: this.clone(),
@@ -72,11 +73,13 @@ pub fn new(location: MountLocation) -> Result<DynINode> {
         ino: new_ino(),
         location,
         file_lock_record: LazyFileLockRecord::new(),
+        watchers: Watchers::new(),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
             fs: fs.clone(),
             ino: new_ino(),
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
         }),
         stat_file: StatFile::new(fs.clone()),
         uptime_file: UptimeFile::new(fs),
@@ -87,8 +90,9 @@ struct ProcFsRoot {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
-    location: MountLocation,
+    location: LinkLocation,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
     uptime_file: Arc<UptimeFile>,
@@ -119,7 +123,7 @@ impl INode for ProcFsRoot {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -136,15 +140,21 @@ impl INode for ProcFsRoot {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 impl Directory for ProcFsRoot {
-    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        self.location.get()
+    fn location(&self) -> &LinkLocation {
+        &self.location
     }
 
-    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
-        Ok(match file_name.as_bytes() {
+    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<Link> {
+        let location =
+            LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
+        let node: DynINode = match file_name.as_bytes() {
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
             b"uptime" => self.uptime_file.clone(),
@@ -153,16 +163,10 @@ impl Directory for ProcFsRoot {
                 let str = core::str::from_utf8(bytes).map_err(|_| err!(NoEnt))?;
                 let pid = str.parse().map_err(|_| err!(NoEnt))?;
                 let process = Process::find_by_pid(pid).ok_or(err!(NoEnt))?;
-                ProcessDir::new(
-                    StaticLocation::new(
-                        self.this.upgrade().unwrap(),
-                        file_name.clone().into_owned(),
-                    ),
-                    self.fs.clone(),
-                    Arc::downgrade(&process),
-                )
+                ProcessDir::new(location.clone(), self.fs.clone(), Arc::downgrade(&process))
             }
-        })
+        };
+        Ok(Link { location, node })
     }
 
     fn create_file(
@@ -171,7 +175,7 @@ impl Directory for ProcFsRoot {
         _: FileMode,
         _: Uid,
         _: Gid,
-    ) -> Result<Result<DynINode, DynINode>> {
+    ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
@@ -186,7 +190,7 @@ impl Directory for ProcFsRoot {
         _uid: Uid,
         _gid: Gid,
         _create_new: bool,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -198,7 +202,7 @@ impl Directory for ProcFsRoot {
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -234,8 +238,14 @@ impl Directory for ProcFsRoot {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent_entry() {
-            entries.push(entry);
+        if let Some(entry) = self.location.parent() {
+            if let Ok(stat) = entry.stat() {
+                entries.push(DirEntry {
+                    ino: stat.ino,
+                    ty: FileType::Dir,
+                    name: DirEntryName::DotDot,
+                });
+            }
         }
         entries.push(DirEntry {
             ino: self.self_link.ino,
@@ -310,6 +320,7 @@ struct SelfLink {
     fs: Arc<ProcFs>,
     ino: u64,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
 }
 
 impl INode for SelfLink {
@@ -335,7 +346,7 @@ impl INode for SelfLink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -360,28 +371,30 @@ impl INode for SelfLink {
 
     fn try_resolve_link(
         &self,
-        start_dir: DynINode,
+        _start_dir: Link,
+        _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<(DynINode, DynINode)>> {
+    ) -> Result<Option<Link>> {
         ctx.follow_symlink()?;
         let process = ctx.process.as_ref().ok_or(err!(Srch))?;
         let file_name = FileName::new(process.pid().to_string().as_bytes())
             .unwrap()
             .into_owned();
-        Ok(Some((
-            start_dir,
-            ProcessDir::new(
-                StaticLocation::new(self.parent.upgrade().unwrap(), file_name),
-                self.fs.clone(),
-                Arc::downgrade(process),
-            ),
-        )))
+        let location = LinkLocation::new(self.parent.upgrade().unwrap(), file_name.clone());
+        Ok(Some(Link {
+            location: location.clone(),
+            node: ProcessDir::new(location, self.fs.clone(), Arc::downgrade(process)),
+        }))
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -408,32 +421,38 @@ impl ProcessInos {
 
 struct ProcessDir {
     this: Weak<Self>,
-    location: StaticLocation<ProcFsRoot>,
+    location: LinkLocation,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
     fd_file_lock_record: LazyFileLockRecord,
+    fd_file_watchers: Arc<Watchers>,
     exe_link_lock_record: LazyFileLockRecord,
+    exe_link_watchers: Arc<Watchers>,
     maps_file_lock_record: LazyFileLockRecord,
+    maps_file_watchers: Arc<Watchers>,
     stat_file_lock_record: LazyFileLockRecord,
+    stat_file_watchers: Arc<Watchers>,
 }
 
 impl ProcessDir {
-    pub fn new(
-        location: StaticLocation<ProcFsRoot>,
-        fs: Arc<ProcFs>,
-        process: Weak<Process>,
-    ) -> Arc<Self> {
+    pub fn new(location: LinkLocation, fs: Arc<ProcFs>, process: Weak<Process>) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             location,
             fs,
             process,
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
             fd_file_lock_record: LazyFileLockRecord::new(),
+            fd_file_watchers: Arc::new(Watchers::new()),
             exe_link_lock_record: LazyFileLockRecord::new(),
+            exe_link_watchers: Arc::new(Watchers::new()),
             maps_file_lock_record: LazyFileLockRecord::new(),
+            maps_file_watchers: Arc::new(Watchers::new()),
             stat_file_lock_record: LazyFileLockRecord::new(),
+            stat_file_watchers: Arc::new(Watchers::new()),
         })
     }
 }
@@ -464,7 +483,7 @@ impl INode for ProcessDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -481,38 +500,49 @@ impl INode for ProcessDir {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 impl Directory for ProcessDir {
-    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        self.location.get()
+    fn location(&self) -> &LinkLocation {
+        &self.location
     }
 
-    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
-        Ok(match file_name.as_bytes() {
+    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<Link> {
+        let location =
+            LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
+        let node: DynINode = match file_name.as_bytes() {
             b"fd" => FdDir::new(
-                StaticLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned()),
+                location.clone(),
                 self.fs.clone(),
                 self.process.clone(),
                 self.fd_file_lock_record.get().clone(),
+                self.fd_file_watchers.clone(),
             ),
             b"exe" => ExeLink::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.exe_link_lock_record.get().clone(),
+                self.exe_link_watchers.clone(),
             ),
             b"maps" => MapsFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.maps_file_lock_record.get().clone(),
+                self.maps_file_watchers.clone(),
             ),
             b"stat" => ProcessStatFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.stat_file_lock_record.get().clone(),
+                self.stat_file_watchers.clone(),
             ),
             _ => bail!(NoEnt),
-        })
+        };
+        Ok(Link { location, node })
     }
 
     fn create_file(
@@ -521,7 +551,7 @@ impl Directory for ProcessDir {
         _: FileMode,
         _: Uid,
         _: Gid,
-    ) -> Result<Result<DynINode, DynINode>> {
+    ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
@@ -536,7 +566,7 @@ impl Directory for ProcessDir {
         _uid: Uid,
         _gid: Gid,
         _create_new: bool,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -548,7 +578,7 @@ impl Directory for ProcessDir {
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -585,8 +615,14 @@ impl Directory for ProcessDir {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent_entry() {
-            entries.push(entry);
+        if let Some(entry) = self.location.parent() {
+            if let Ok(stat) = entry.stat() {
+                entries.push(DirEntry {
+                    ino: stat.ino,
+                    ty: FileType::Dir,
+                    name: DirEntryName::DotDot,
+                });
+            }
         }
         entries.push(DirEntry {
             ino: process.inos.fd_dir,
@@ -652,18 +688,20 @@ impl Directory for ProcessDir {
 
 struct FdDir {
     this: Weak<Self>,
-    location: StaticLocation<ProcessDir>,
+    location: LinkLocation,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
 }
 
 impl FdDir {
     pub fn new(
-        location: StaticLocation<ProcessDir>,
+        location: LinkLocation,
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -671,6 +709,7 @@ impl FdDir {
             fs,
             process,
             file_lock_record,
+            watchers,
         })
     }
 }
@@ -701,7 +740,7 @@ impl INode for FdDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -718,15 +757,19 @@ impl INode for FdDir {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 impl Directory for FdDir {
-    fn location(&self) -> Result<Option<(DynINode, FileName<'static>)>> {
-        self.location.get()
+    fn location(&self) -> &LinkLocation {
+        &self.location
     }
 
-    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<DynINode> {
-        let file_name = file_name.as_bytes();
+    fn get_node(&self, name: &FileName, _ctx: &FileAccessContext) -> Result<Link> {
+        let file_name = name.as_bytes();
         let file_name = core::str::from_utf8(file_name).map_err(|_| err!(NoEnt))?;
         let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
         let fd_num = FdNum::new(fd_num);
@@ -739,7 +782,11 @@ impl Directory for FdDir {
 
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
-        fdtable.get_node(self.fs.clone(), fd_num, uid, gid)
+        let node = fdtable.get_node(self.fs.clone(), fd_num, uid, gid)?;
+        Ok(Link {
+            location: LinkLocation::new(self.this.upgrade().unwrap(), name.clone().into_owned()),
+            node,
+        })
     }
 
     fn create_file(
@@ -748,7 +795,7 @@ impl Directory for FdDir {
         _: FileMode,
         _: Uid,
         _: Gid,
-    ) -> Result<Result<DynINode, DynINode>> {
+    ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
@@ -763,7 +810,7 @@ impl Directory for FdDir {
         _uid: Uid,
         _gid: Gid,
         _create_new: bool,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -775,7 +822,7 @@ impl Directory for FdDir {
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
-    ) -> Result<DynINode> {
+    ) -> Result<()> {
         bail!(NoEnt)
     }
 
@@ -859,6 +906,7 @@ pub struct FdINode {
     gid: Gid,
     fd: FileDescriptor,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
 }
 
 impl FdINode {
@@ -869,6 +917,7 @@ impl FdINode {
         gid: Gid,
         fd: FileDescriptor,
         file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
     ) -> Self {
         Self {
             fs,
@@ -877,6 +926,7 @@ impl FdINode {
             gid,
             fd,
             file_lock_record,
+            watchers,
         }
     }
 }
@@ -904,7 +954,7 @@ impl INode for FdINode {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: Path, _: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -926,21 +976,27 @@ impl INode for FdINode {
 
     fn try_resolve_link(
         &self,
-        start_dir: DynINode,
+        _start_dir: Link,
+        location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<(DynINode, DynINode)>> {
+    ) -> Result<Option<Link>> {
         ctx.follow_symlink()?;
-        Ok(Some((
-            start_dir,
-            Arc::new(FollowedFdINode {
+        Ok(Some(Link {
+            location,
+            node: Arc::new(FollowedFdINode {
                 fd: self.fd.clone(),
                 file_lock_record: self.file_lock_record.clone(),
+                watchers: self.watchers.clone(),
             }),
-        )))
+        }))
     }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -948,35 +1004,36 @@ impl INode for FdINode {
 struct FollowedFdINode {
     fd: FileDescriptor,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
 }
 
 #[async_trait]
 impl INode for FollowedFdINode {
     fn stat(&self) -> Result<Stat> {
-        if let Some((_, node)) = self.fd.path_fd_node() {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the stat call to the pointed
-            // to node.
-            node.stat()
+            // to link.
+            link.node.stat()
         } else {
             self.fd.stat()
         }
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        if let Some((_, node)) = self.fd.path_fd_node() {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the open call to the pointed
-            // to node.
-            node.fs()
+            // to link.
+            link.node.fs()
         } else {
             self.fd.fs()
         }
     }
 
-    fn open(&self, _: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
-        if let Some((path, node)) = self.fd.path_fd_node() {
+    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the open call to the pointed
-            // to node.
-            node.open(path, flags)
+            // to link.
+            link.node.open(link.location.clone(), flags)
         } else {
             FileDescriptor::upgrade(&self.fd).ok_or(err!(BadF))
         }
@@ -984,23 +1041,26 @@ impl INode for FollowedFdINode {
 
     async fn async_open(
         self: Arc<Self>,
-        _: Path,
+        _: LinkLocation,
         flags: OpenFlags,
     ) -> Result<StrongFileDescriptor> {
-        if let Some((path, node)) = self.fd.path_fd_node() {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the open call to the pointed
-            // to node.
-            node.async_open(path, flags).await
+            // to link.
+            link.node
+                .clone()
+                .async_open(link.location.clone(), flags)
+                .await
         } else {
             FileDescriptor::upgrade(&self.fd).ok_or(err!(BadF))
         }
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        if let Some((_, node)) = self.fd.path_fd_node() {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the chmod call to the pointed
-            // to node, but rewrite ELOOP to EOPNOTSUPP.
-            node.chmod(mode, ctx).map_err(|err| {
+            // to link, but rewrite ELOOP to EOPNOTSUPP.
+            link.node.chmod(mode, ctx).map_err(|err| {
                 if err.kind() == ErrorKind::Loop {
                     err!(OpNotSupp)
                 } else {
@@ -1013,20 +1073,20 @@ impl INode for FollowedFdINode {
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        if let Some((_, node)) = self.fd.path_fd_node() {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the chown call to the pointed
-            // to node.
-            node.chown(uid, gid, ctx)
+            // to link.
+            link.node.chown(uid, gid, ctx)
         } else {
             self.fd.chown(uid, gid, ctx)
         }
     }
 
     fn update_times(&self, ctime: Timespec, mtime: Option<Timespec>, atime: Option<Timespec>) {
-        if let Some((_, node)) = self.fd.path_fd_node() {
+        if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the chmod call to the pointed
             // to node, but rewrite ELOOP to EOPNOTSUPP.
-            node.update_times(ctime, mtime, atime);
+            link.node.update_times(ctime, mtime, atime);
         } else {
             self.fd.update_times(ctime, mtime, atime);
         }
@@ -1035,12 +1095,17 @@ impl INode for FollowedFdINode {
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
 }
 
 struct ExeLink {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
 }
 
 impl ExeLink {
@@ -1048,11 +1113,13 @@ impl ExeLink {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             fs,
             process,
             file_lock_record,
+            watchers,
         })
     }
 }
@@ -1081,7 +1148,7 @@ impl INode for ExeLink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _path: Path, _flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -1098,22 +1165,26 @@ impl INode for ExeLink {
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let exe = process.exe();
-        Ok(exe)
+        exe.location.path()
     }
 
     fn try_resolve_link(
         &self,
-        start_dir: DynINode,
+        _start_dir: Link,
+        _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<(DynINode, DynINode)>> {
+    ) -> Result<Option<Link>> {
         ctx.follow_symlink()?;
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let exe = process.exe();
-        lookup_node_with_parent(start_dir, &exe, ctx).map(Some)
+        Ok(Some(process.exe()))
     }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -1122,6 +1193,7 @@ struct MapsFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
 }
 
 impl MapsFile {
@@ -1129,12 +1201,14 @@ impl MapsFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
             file_lock_record,
+            watchers,
         })
     }
 }
@@ -1163,8 +1237,8 @@ impl INode for MapsFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
-        open_file(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -1179,6 +1253,10 @@ impl INode for MapsFile {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -1216,6 +1294,7 @@ struct ProcessStatFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
 }
 
 impl ProcessStatFile {
@@ -1223,12 +1302,14 @@ impl ProcessStatFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
             file_lock_record,
+            watchers,
         })
     }
 }
@@ -1257,8 +1338,8 @@ impl INode for ProcessStatFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
-        open_file(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -1273,6 +1354,10 @@ impl INode for ProcessStatFile {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -1310,6 +1395,7 @@ struct StatFile {
     fs: Arc<ProcFs>,
     ino: u64,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
 }
 
 impl StatFile {
@@ -1319,6 +1405,7 @@ impl StatFile {
             fs,
             ino: new_ino(),
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
         })
     }
 
@@ -1363,8 +1450,8 @@ impl INode for StatFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
-        open_file(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -1379,6 +1466,10 @@ impl INode for StatFile {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
@@ -1414,6 +1505,7 @@ struct UptimeFile {
     fs: Arc<ProcFs>,
     ino: u64,
     file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
 }
 
 impl UptimeFile {
@@ -1423,6 +1515,7 @@ impl UptimeFile {
             fs,
             ino: new_ino(),
             file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
         })
     }
 
@@ -1476,8 +1569,8 @@ impl INode for UptimeFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, path: Path, flags: OpenFlags) -> Result<StrongFileDescriptor> {
-        open_file(path, self.this.upgrade().unwrap(), flags)
+    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -1492,6 +1585,10 @@ impl INode for UptimeFile {
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 

@@ -14,7 +14,8 @@ use crate::{
     exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
-        node::FileAccessContext,
+        node::{FileAccessContext, Link, LinkLocation},
+        path::FileName,
     },
     rt::{self, notify::Notify},
     spin::mutex::{Mutex, MutexGuard},
@@ -40,7 +41,7 @@ use x86_64::{VirtAddr, instructions::interrupts};
 
 use crate::{
     error::Result,
-    fs::{node::ROOT_NODE, path::Path},
+    fs::node::ROOT_NODE,
     rt::{oneshot, spawn},
 };
 
@@ -166,9 +167,12 @@ impl Thread {
                 tid,
                 Weak::new(),
                 None,
-                Path::new(b"/bin/init".to_vec()).unwrap(),
+                Link {
+                    location: LinkLocation::new(ROOT_NODE.clone(), FileName::new(b"init").unwrap()),
+                    node: ROOT_NODE.clone(), // This is nonsense.
+                },
                 Credentials::super_user(),
-                ROOT_NODE.clone(),
+                Link::root(),
                 ProcessGroup::new(tid, Arc::new(Session::new(tid))),
                 Limits::default(),
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
@@ -583,8 +587,8 @@ impl ThreadGuard<'_> {
 
     pub fn start_executable(
         &mut self,
-        path: Path,
-        file: &FileDescriptor,
+        link: Link,
+        fd: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
@@ -594,8 +598,8 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let (cpu_state, _path) = virtual_memory.start_executable(
-            path,
-            file,
+            link,
+            fd,
             argv,
             envp,
             ctx,

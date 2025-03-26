@@ -12,7 +12,7 @@ use crate::{
             Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
             WriteBuf, stream_buffer,
         },
-        node::FileAccessContext,
+        node::{FileAccessContext, LinkLocation},
         path::Path,
     },
     supervisor,
@@ -27,7 +27,7 @@ use super::CharDev;
 const MAJOR: u16 = 0xf00;
 
 pub struct Output {
-    path: Path,
+    location: LinkLocation,
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
@@ -39,10 +39,15 @@ impl CharDev for Output {
     const MAJOR: u16 = MAJOR;
     const MINOR: u8 = 0;
 
-    fn new(path: Path, flags: OpenFlags, stat: Stat, fs: Arc<dyn FileSystem>) -> Result<Self> {
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
         Ok(Self {
-            path,
+            location,
             flags,
             stat,
             fs,
@@ -58,7 +63,7 @@ impl OpenFileDescription for Output {
     }
 
     fn path(&self) -> Result<Path> {
-        Ok(self.path.clone())
+        self.location.path()
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
