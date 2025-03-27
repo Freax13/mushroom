@@ -35,6 +35,7 @@ use arrayvec::ArrayVec;
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
+use constants::{ApBitmap, AtomicApBitmap};
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
@@ -80,6 +81,7 @@ pub struct Thread {
     pub cpu_state: Mutex<CpuState>,
     // Rarely mutable state.
     pub fdtable: Mutex<Arc<FileDescriptorTable>>,
+    pub affinity: AtomicApBitmap, // TODO: Use this
     pub nice: AtomicCell<Nice>,
     pub inos: ThreadInos,
 }
@@ -110,6 +112,7 @@ impl Thread {
         fdtable: Arc<FileDescriptorTable>,
         vfork_done: Option<oneshot::Sender<()>>,
         cpu_state: CpuState,
+        affinity: ApBitmap,
         nice: Nice,
     ) -> Self {
         Self {
@@ -131,6 +134,7 @@ impl Thread {
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
+            affinity: AtomicApBitmap::new(affinity),
             nice: AtomicCell::new(nice),
             inos: ThreadInos::new(),
         }
@@ -188,6 +192,7 @@ impl Thread {
             Arc::new(FileDescriptorTable::with_standard_io()),
             None,
             CpuState::new(0, 0, 0),
+            ApBitmap::all(),
             Nice::DEFAULT,
         )
     }
@@ -478,6 +483,16 @@ impl Thread {
         self.fdtable.lock().dump(indent, write)?;
         Ok(())
     }
+
+    pub fn find_by_tid(tid: u32) -> Option<Arc<Self>> {
+        Process::all().find_map(|p| {
+            p.threads
+                .lock()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|t| t.tid() == tid)
+        })
+    }
 }
 
 pub struct ThreadGuard<'a> {
@@ -514,6 +529,7 @@ impl ThreadGuard<'_> {
             fdtable,
             vfork_done,
             cpu_state,
+            self.thread.affinity.get_all(),
             self.thread.nice.load(),
         );
 

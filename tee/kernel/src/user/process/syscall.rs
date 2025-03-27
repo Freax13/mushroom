@@ -7,8 +7,9 @@ use alloc::{
     vec::Vec,
 };
 use arrayvec::ArrayVec;
-use bit_field::BitArray;
+use bit_field::{BitArray, BitField};
 use bytemuck::{Zeroable, bytes_of, bytes_of_mut, checked};
+use constants::{ApBitmap, ApIndex};
 use futures::{
     FutureExt, StreamExt,
     future::{self, Either, Fuse},
@@ -222,6 +223,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGettid);
     handlers.register(SysTime);
     handlers.register(SysFutex);
+    handlers.register(SysSchedSetaffinity);
+    handlers.register(SysSchedGetaffinity);
     handlers.register(SysSetThreadArea);
     handlers.register(SysGetdents64);
     handlers.register(SysEpollCreate);
@@ -3252,8 +3255,79 @@ async fn futex(
     }
 }
 
+#[syscall(i386 = 241, amd64 = 203)]
+fn sched_setaffinity(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: u32,
+    cpusetsize: u64,
+    mask: Pointer<[u8]>,
+) -> SyscallResult {
+    let mut affinity = ApBitmap::empty();
+    let len = cmp::min(size_of_val(&affinity), usize_from(cpusetsize));
+    for idx in 0..len {
+        let mask_value: u8 = virtual_memory.read(mask.bytes_offset(idx).cast())?;
+        for bit in 0..8 {
+            let idx = idx * 8 + bit;
+            let Ok(idx) = u8::try_from(idx) else {
+                continue;
+            };
+            let Some(idx) = ApIndex::try_new(idx) else {
+                continue;
+            };
+            affinity.set(idx, mask_value.get_bit(bit));
+        }
+    }
+
+    if pid == 0 {
+        thread.thread.affinity.set_exact(affinity)
+    } else {
+        Thread::find_by_tid(pid)
+            .ok_or(err!(Srch))?
+            .affinity
+            .set_exact(affinity)
+    }
+
+    Ok(0)
+}
+
+#[syscall(i386 = 242, amd64 = 204)]
+fn sched_getaffinity(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: u32,
+    cpusetsize: u64,
+    mask: Pointer<[u8]>,
+) -> SyscallResult {
+    let affinity = if pid == 0 {
+        thread.thread.affinity.get_all()
+    } else {
+        Thread::find_by_tid(pid)
+            .ok_or(err!(Srch))?
+            .affinity
+            .get_all()
+    };
+    let len = cmp::min(size_of_val(&affinity), usize_from(cpusetsize));
+
+    for idx in 0..len {
+        let mut mask_value = 0u8;
+        for bit in 0..8 {
+            let idx = idx * 8 + bit;
+            let Ok(idx) = u8::try_from(idx) else {
+                continue;
+            };
+            let Some(idx) = ApIndex::try_new(idx) else {
+                continue;
+            };
+            mask_value.set_bit(bit, affinity.get(idx));
+        }
+        virtual_memory.write(mask.bytes_offset(idx).cast(), mask_value)?;
+    }
+    Ok(u64::from_usize(len))
+}
+
 #[syscall(i386 = 243, amd64 = 205)]
-pub fn set_thread_area(
+fn set_thread_area(
     thread: &mut ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     u_info: Pointer<UserDesc>,

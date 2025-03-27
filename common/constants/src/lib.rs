@@ -210,7 +210,11 @@ pub struct AtomicApBitmap(AtomicBitmapType);
 impl AtomicApBitmap {
     /// Create a new bitmap with all bits set to `false`.
     pub const fn empty() -> Self {
-        Self(AtomicBitmapType::new(0))
+        Self::new(ApBitmap::empty())
+    }
+
+    pub const fn new(value: ApBitmap) -> Self {
+        Self(AtomicBitmapType::new(value.0))
     }
 
     /// Returns the bit for the given AP.
@@ -232,6 +236,10 @@ impl AtomicApBitmap {
     /// Sets the bits for the given APs to `true`.
     pub fn set_all(&self, aps: ApBitmap) {
         self.0.fetch_or(aps.0, Ordering::SeqCst);
+    }
+
+    pub fn set_exact(&self, aps: ApBitmap) {
+        self.0.store(aps.0, Ordering::SeqCst);
     }
 
     /// Atomically clear the bit for the given AP and return its value.
