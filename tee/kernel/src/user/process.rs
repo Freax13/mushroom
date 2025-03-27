@@ -442,6 +442,14 @@ impl Process {
         self.stop_state.wait().await;
     }
 
+    pub fn threads(&self) -> Vec<Arc<Thread>> {
+        self.threads
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    }
+
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
         let process_group_guard = self.process_group.lock();

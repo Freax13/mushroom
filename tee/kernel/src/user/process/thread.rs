@@ -14,7 +14,7 @@ use crate::{
     exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
-        node::{FileAccessContext, Link, LinkLocation},
+        node::{FileAccessContext, Link, LinkLocation, procfs::ThreadInos},
         path::FileName,
     },
     rt::{self, notify::Notify},
@@ -81,6 +81,7 @@ pub struct Thread {
     // Rarely mutable state.
     pub fdtable: Mutex<Arc<FileDescriptorTable>>,
     pub nice: AtomicCell<Nice>,
+    pub inos: ThreadInos,
 }
 
 pub struct ThreadState {
@@ -131,6 +132,7 @@ impl Thread {
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
             nice: AtomicCell::new(nice),
+            inos: ThreadInos::new(),
         }
     }
 

@@ -33,7 +33,7 @@ use crate::{
         syscall::args::{
             ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, Thread, Uid},
     },
 };
 
@@ -404,6 +404,7 @@ pub struct ProcessInos {
     exe_link: u64,
     maps_file: u64,
     stat_file: u64,
+    task_dir: u64,
 }
 
 impl ProcessInos {
@@ -415,6 +416,7 @@ impl ProcessInos {
             exe_link: new_ino(),
             maps_file: new_ino(),
             stat_file: new_ino(),
+            task_dir: new_ino(),
         }
     }
 }
@@ -434,6 +436,8 @@ struct ProcessDir {
     maps_file_watchers: Arc<Watchers>,
     stat_file_lock_record: LazyFileLockRecord,
     stat_file_watchers: Arc<Watchers>,
+    task_dir_lock_record: LazyFileLockRecord,
+    task_dir_watchers: Arc<Watchers>,
 }
 
 impl ProcessDir {
@@ -453,6 +457,8 @@ impl ProcessDir {
             maps_file_watchers: Arc::new(Watchers::new()),
             stat_file_lock_record: LazyFileLockRecord::new(),
             stat_file_watchers: Arc::new(Watchers::new()),
+            task_dir_lock_record: LazyFileLockRecord::new(),
+            task_dir_watchers: Arc::new(Watchers::new()),
         })
     }
 }
@@ -539,6 +545,13 @@ impl Directory for ProcessDir {
                 self.process.clone(),
                 self.stat_file_lock_record.get().clone(),
                 self.stat_file_watchers.clone(),
+            ),
+            b"task" => ProcessTaskDir::new(
+                location.clone(),
+                self.fs.clone(),
+                self.process.clone(),
+                self.task_dir_lock_record.get().clone(),
+                self.task_dir_watchers.clone(),
             ),
             _ => bail!(NoEnt),
         };
@@ -643,6 +656,11 @@ impl Directory for ProcessDir {
             ino: process.inos.stat_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.task_dir,
+            ty: FileType::Dir,
+            name: DirEntryName::FileName(FileName::new(b"task").unwrap()),
         });
         Ok(entries)
     }
@@ -1374,6 +1392,569 @@ impl File for ProcessStatFile {
         let stat = &stat[offset..];
         let len = cmp::min(stat.len(), buf.buffer_len());
         buf.write(0, &stat[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+pub struct ThreadInos {
+    root_dir: u64,
+    comm_file: u64,
+}
+
+impl ThreadInos {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            root_dir: new_ino(),
+            comm_file: new_ino(),
+        }
+    }
+}
+
+struct ProcessTaskDir {
+    this: Weak<Self>,
+    location: LinkLocation,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl ProcessTaskDir {
+    pub fn new(
+        location: LinkLocation,
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            location,
+            fs,
+            process,
+            file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for ProcessTaskDir {
+    dir_impls!();
+
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.task_dir,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o555)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl Directory for ProcessTaskDir {
+    fn location(&self) -> &LinkLocation {
+        &self.location
+    }
+
+    fn create_file(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+    ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
+    fn create_link(
+        &self,
+        _: FileName<'static>,
+        _: Path,
+        _: Uid,
+        _: Gid,
+        _create_new: bool,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_char_dev(
+        &self,
+        _: FileName<'static>,
+        _major: u16,
+        _minor: u8,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_fifo(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_socket(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+        _: &StreamUnixSocket,
+        _: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+
+    fn list_entries(&self, _: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let mut entries = vec![DirEntry {
+            ino: process.inos.task_dir,
+            ty: FileType::Dir,
+            name: DirEntryName::Dot,
+        }];
+        if let Some(entry) = self.location.parent() {
+            if let Ok(stat) = entry.stat() {
+                entries.push(DirEntry {
+                    ino: stat.ino,
+                    ty: FileType::Dir,
+                    name: DirEntryName::DotDot,
+                });
+            }
+        }
+        for thread in process.threads() {
+            entries.push(DirEntry {
+                ino: thread.inos.root_dir,
+                ty: FileType::Dir,
+                name: DirEntryName::FileName(
+                    FileName::new(thread.tid().to_string().as_bytes())
+                        .unwrap()
+                        .into_owned(),
+                ),
+            });
+        }
+        Ok(entries)
+    }
+
+    fn get_node(&self, file_name: &FileName, _: &FileAccessContext) -> Result<Link> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let tid = core::str::from_utf8(file_name.as_bytes()).map_err(|_| err!(NoEnt))?;
+        let tid = tid.parse::<u32>().map_err(|_| err!(NoEnt))?;
+        let thread = process
+            .threads()
+            .into_iter()
+            .find(|t| t.tid() == tid)
+            .ok_or(err!(NoEnt))?;
+        let location =
+            LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
+        let node = TaskDir::new(location.clone(), self.fs.clone(), Arc::downgrade(&thread));
+        Ok(Link { location, node })
+    }
+
+    fn delete_non_dir(&self, _: FileName<'static>) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn delete_dir(&self, _: FileName<'static>) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn rename(
+        &self,
+        _oldname: FileName<'static>,
+        _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+        _no_replace: bool,
+    ) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn hard_link(
+        &self,
+        _oldname: FileName<'static>,
+        _follow_symlink: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
+        bail!(Perm)
+    }
+}
+
+struct TaskDir {
+    this: Weak<Self>,
+    location: LinkLocation,
+    fs: Arc<ProcFs>,
+    thread: Weak<Thread>,
+    file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
+    comm_file_lock_record: LazyFileLockRecord,
+    comm_file_watchers: Arc<Watchers>,
+}
+
+impl TaskDir {
+    pub fn new(location: LinkLocation, fs: Arc<ProcFs>, thread: Weak<Thread>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            location,
+            fs,
+            thread,
+            file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
+            comm_file_lock_record: LazyFileLockRecord::new(),
+            comm_file_watchers: Arc::new(Watchers::new()),
+        })
+    }
+}
+
+impl INode for TaskDir {
+    dir_impls!();
+
+    fn stat(&self) -> Result<Stat> {
+        let threads = self.thread.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: threads.inos.root_dir,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl Directory for TaskDir {
+    fn location(&self) -> &LinkLocation {
+        &self.location
+    }
+
+    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<Link> {
+        let location =
+            LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
+        let node: DynINode = match file_name.as_bytes() {
+            b"comm" => TaskCommFile::new(
+                self.fs.clone(),
+                self.thread.clone(),
+                self.comm_file_lock_record.get().clone(),
+                self.comm_file_watchers.clone(),
+            ),
+            _ => bail!(NoEnt),
+        };
+        Ok(Link { location, node })
+    }
+
+    fn create_file(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+    ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
+    fn create_link(
+        &self,
+        _file_name: FileName<'static>,
+        _target: Path,
+        _uid: Uid,
+        _gid: Gid,
+        _create_new: bool,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_char_dev(
+        &self,
+        _file_name: FileName<'static>,
+        _major: u16,
+        _minor: u8,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+
+    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
+        let process = self.thread.upgrade().ok_or(err!(Srch))?;
+        let mut entries = vec![DirEntry {
+            ino: process.inos.root_dir,
+            ty: FileType::Dir,
+            name: DirEntryName::Dot,
+        }];
+        if let Some(entry) = self.location.parent() {
+            if let Ok(stat) = entry.stat() {
+                entries.push(DirEntry {
+                    ino: stat.ino,
+                    ty: FileType::Dir,
+                    name: DirEntryName::DotDot,
+                });
+            }
+        }
+        entries.push(DirEntry {
+            ino: process.inos.comm_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"comm").unwrap()),
+        });
+        Ok(entries)
+    }
+
+    fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn rename(
+        &self,
+        _oldname: FileName<'static>,
+        _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+        _no_replace: bool,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn hard_link(
+        &self,
+        _oldname: FileName<'static>,
+        _follow_symlink: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
+        bail!(NoEnt)
+    }
+}
+
+struct TaskCommFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    thread: Weak<Thread>,
+    file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl TaskCommFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        thread: Weak<Thread>,
+        file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            thread,
+            file_lock_record,
+            watchers,
+        })
+    }
+
+    fn content(&self) -> Result<Vec<u8>> {
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        Ok(thread.lock().task_comm().to_vec())
+    }
+}
+
+impl INode for TaskCommFile {
+    fn stat(&self) -> Result<Stat> {
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: thread.inos.comm_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for TaskCommFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content()?;
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
         Ok(len)
     }
 
