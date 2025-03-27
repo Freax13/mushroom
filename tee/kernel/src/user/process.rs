@@ -60,7 +60,7 @@ pub mod syscall;
 pub mod thread;
 pub mod usage;
 
-const TASK_COMM_CAPACITY: usize = 16;
+pub const TASK_COMM_CAPACITY: usize = 15;
 
 pub struct Process {
     pid: u32,

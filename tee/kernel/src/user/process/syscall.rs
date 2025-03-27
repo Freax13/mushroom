@@ -6,6 +6,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use arrayvec::ArrayVec;
 use bit_field::BitArray;
 use bytemuck::{Zeroable, bytes_of, bytes_of_mut, checked};
 use futures::{
@@ -3074,7 +3075,15 @@ fn setpriority(thread: &mut ThreadGuard, which: Which, who: u32, prio: Nice) -> 
 }
 
 #[syscall(i386 = 172, amd64 = 157)]
-fn prctl(op: PrctlOp, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> SyscallResult {
+fn prctl(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    op: PrctlOp,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+) -> SyscallResult {
     match op {
         PrctlOp::SetDumpable => {
             let dumpable = arg2;
@@ -3085,6 +3094,22 @@ fn prctl(op: PrctlOp, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> SyscallResu
                 1 => {}
                 _ => bail!(Inval),
             }
+            Ok(0)
+        }
+        PrctlOp::SetName => {
+            let mut buf = [0; 15];
+            virtual_memory.read_bytes(VirtAddr::new(arg2), &mut buf)?;
+            let mut task_comm = ArrayVec::new();
+            task_comm.extend(buf.into_iter().take_while(|&b| b != 0));
+            thread.set_task_comm(task_comm);
+            Ok(0)
+        }
+        PrctlOp::GetName => {
+            let name = thread.task_comm();
+            let mut buf = Vec::with_capacity(16);
+            buf.extend_from_slice(&name);
+            buf.push(0);
+            virtual_memory.write_bytes(VirtAddr::new(arg2), &buf)?;
             Ok(0)
         }
     }
