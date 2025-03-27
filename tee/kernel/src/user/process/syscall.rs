@@ -268,6 +268,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRecvmmsg);
     handlers.register(SysPrlimit64);
     handlers.register(SysSendmmsg);
+    handlers.register(SysGetcpu);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
@@ -4672,6 +4673,24 @@ async fn sendmmsg(
         }
     };
     Ok(u64::from_usize(n))
+}
+
+#[syscall(amd64 = 309)]
+fn getcpu(
+    thread: &mut ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    cpu: Pointer<u32>,
+    node: Pointer<u32>,
+) -> SyscallResult {
+    if !cpu.is_null() {
+        // TODO: Get the real value.
+        let idx = thread.thread.affinity.get_all().into_iter().next().unwrap();
+        virtual_memory.write(cpu, u32::from(idx.as_u8()))?;
+    }
+    if !node.is_null() {
+        virtual_memory.write(cpu, 0)?;
+    }
+    Ok(0)
 }
 
 #[syscall(amd64 = 316)]
