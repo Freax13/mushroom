@@ -22,6 +22,7 @@ use nix::{
     libc::{SYS_exit, SYS_vfork, sigaltstack, siginfo_t, stack_t},
     sys::{
         mman::{ProtFlags, mprotect},
+        prctl,
         signal::{SaFlags, SigAction, SigSet, sigaction},
     },
 };
@@ -353,4 +354,16 @@ fn mkdir() {
     // Create directory with trailing slash.
     let src = &base.join("dir-2");
     create_dir(src.join("")).unwrap();
+}
+
+#[test]
+fn task_name() {
+    let default_name = prctl::get_name().unwrap();
+
+    prctl::set_name(c"my thread name");
+    assert_eq!(prctl::get_name().unwrap().as_c_str(), c"my thread name");
+    std::thread::spawn(move || {
+        assert_ne!(prctl::get_name().unwrap().as_c_str(), c"my thread name");
+        assert_ne!(prctl::get_name().unwrap(), default_name);
+    });
 }
