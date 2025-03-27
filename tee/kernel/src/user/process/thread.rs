@@ -14,7 +14,7 @@ use crate::{
     exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
-        node::{FileAccessContext, Link, LinkLocation},
+        node::{FileAccessContext, Link, LinkLocation, procfs::ThreadInos},
         path::FileName,
     },
     rt::{self, notify::Notify},
@@ -31,6 +31,7 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use arrayvec::ArrayVec;
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
@@ -46,7 +47,7 @@ use crate::{
 };
 
 use super::{
-    Process, ProcessGroup, Session,
+    Process, ProcessGroup, Session, TASK_COMM_CAPACITY,
     limits::{CurrentStackLimit, Limits},
     memory::{VirtualMemory, WriteToVec},
     syscall::{
@@ -80,6 +81,7 @@ pub struct Thread {
     // Rarely mutable state.
     pub fdtable: Mutex<Arc<FileDescriptorTable>>,
     pub nice: AtomicCell<Nice>,
+    pub inos: ThreadInos,
 }
 
 pub struct ThreadState {
@@ -94,6 +96,7 @@ pub struct ThreadState {
     pub sigaltstack: Stack,
     pub clear_child_tid: Pointer<u32>,
     pub vfork_done: Option<oneshot::Sender<()>>,
+    task_comm: Option<ArrayVec<u8, TASK_COMM_CAPACITY>>,
 }
 
 impl Thread {
@@ -124,10 +127,12 @@ impl Thread {
                 sigaltstack: Stack::default(),
                 clear_child_tid: Pointer::NULL,
                 vfork_done,
+                task_comm: None,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
             nice: AtomicCell::new(nice),
+            inos: ThreadInos::new(),
         }
     }
 
@@ -785,6 +790,16 @@ impl ThreadGuard<'_> {
         buffer.push(b'\n');
 
         buffer
+    }
+
+    pub fn task_comm(&self) -> ArrayVec<u8, TASK_COMM_CAPACITY> {
+        self.task_comm
+            .clone()
+            .unwrap_or_else(|| self.process().task_comm())
+    }
+
+    pub fn set_task_comm(&mut self, task_comm: ArrayVec<u8, TASK_COMM_CAPACITY>) {
+        self.task_comm = Some(task_comm);
     }
 }
 

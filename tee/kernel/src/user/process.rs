@@ -60,7 +60,7 @@ pub mod syscall;
 pub mod thread;
 pub mod usage;
 
-const TASK_COMM_CAPACITY: usize = 16;
+pub const TASK_COMM_CAPACITY: usize = 15;
 
 pub struct Process {
     pid: u32,
@@ -440,6 +440,14 @@ impl Process {
 
     pub async fn wait_until_not_stopped(&self) {
         self.stop_state.wait().await;
+    }
+
+    pub fn threads(&self) -> Vec<Arc<Thread>> {
+        self.threads
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
     }
 
     #[cfg(not(feature = "harden"))]
