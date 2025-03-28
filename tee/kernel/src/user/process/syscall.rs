@@ -44,7 +44,7 @@ use crate::{
         },
         path::Path,
     },
-    net::{tcp::TcpSocket, udp::UdpSocket},
+    net::{netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::oneshot,
     time::{self, now, sleep_until},
     user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
@@ -1342,6 +1342,9 @@ fn socket(
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
+        Domain::Netlink => {
+            fdtable.insert(NetlinkSocket::new(r#type, protocol)?, r#type, no_file_limit)?
+        }
     };
     Ok(fd.get() as u64)
 }
@@ -1587,7 +1590,7 @@ fn socketpair(
                 _ => bail!(Inval),
             }
         }
-        Domain::Inet => bail!(OpNotSupp),
+        Domain::Inet | Domain::Netlink => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.

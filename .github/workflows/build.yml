@@ -177,6 +177,7 @@ jobs:
       matrix:
         package:
           - coreutils
+          - libuv
         tee:
           - snp
           - tdx

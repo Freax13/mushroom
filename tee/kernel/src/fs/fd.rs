@@ -854,6 +854,7 @@ pub struct NonEmptyEvents(NonZeroU8);
 
 impl NonEmptyEvents {
     pub const READ: Self = Self::new(Events::READ).unwrap();
+    pub const WRITE: Self = Self::new(Events::WRITE).unwrap();
 
     pub const fn new(events: Events) -> Option<Self> {
         if let Some(bits) = NonZeroU8::new(events.bits()) {

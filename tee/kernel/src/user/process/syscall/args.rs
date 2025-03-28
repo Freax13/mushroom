@@ -999,6 +999,7 @@ enum_arg! {
     pub enum Domain {
         Unix = 1,
         Inet = 2,
+        Netlink = 16,
     }
 }
 
@@ -1573,7 +1574,6 @@ pub enum SocketAddr {
     #[expect(dead_code)]
     Unspecified(SocketAddrUnspecified) = 0,
     Inet(SocketAddrInet) = 2,
-    #[expect(dead_code)]
     Netlink(SocketAddrNetlink) = 16,
 }
 

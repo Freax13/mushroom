@@ -5,6 +5,7 @@ ARG NIXPKGS="nixpkgs/73cf49b8ad837ade2de76f87eb53fc85ed5d4680"
 
 # Create some files and directories needed by the build.
 RUN mkdir -p /build/bin/ /build/build/ /build/tmp/ /build/etc && \
+    chmod 777 /build/tmp/ && \
     echo "root:x:0:0:System administrator:/root:/bin/sh" > /build/etc/passwd && \
     echo "nixbld:x:1000:1000::/homeless-shelter:/bin/sh" >> /build/etc/passwd && \
     echo "root:x:0:" > /build/etc/group && \

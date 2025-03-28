@@ -38,7 +38,6 @@ fn main() -> Result<()> {
     // Unpack tar archive.
     let file = File::open("/dev/input").context("failed to open input file")?;
     let buf_reader = BufReader::new(file);
-    // let reader = GzDecoder::new(buf_reader);
     let mut archive = Archive::new(buf_reader);
     archive.unpack(root).context("failed to unpack image")?;
 
