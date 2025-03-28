@@ -85,6 +85,27 @@ impl<T> Receiver<T> {
         RecvFuture(self).await
     }
 
+    pub async fn readable(&self) {
+        struct ReadableFuture<'a, T>(&'a Receiver<T>);
+
+        impl<T> Future for ReadableFuture<'_, T> {
+            type Output = ();
+
+            fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                let mut guard = self.0.0.lock();
+
+                if !guard.values.is_empty() {
+                    return Poll::Ready(());
+                }
+
+                guard.wakers.push(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+
+        ReadableFuture(self).await
+    }
+
     pub fn sender(&self) -> Sender<T> {
         Sender(Arc::downgrade(&self.0))
     }
