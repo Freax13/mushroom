@@ -1857,7 +1857,9 @@ async fn execve(
     let link = lookup_and_resolve_link(cwd.clone(), &pathname, &mut ctx)?;
     let stat = link.node.stat()?;
     ctx.check_permissions(&stat, Permission::Execute)?;
-    let fd = link.node.open(link.location.clone(), OpenFlags::empty())?;
+    let fd = link
+        .node
+        .open(link.location.clone(), OpenFlags::empty(), &ctx)?;
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
@@ -3681,7 +3683,7 @@ async fn openat(
         let fd = link
             .node
             .clone()
-            .async_open(link.location.clone(), flags)
+            .async_open(link.location.clone(), flags, &ctx)
             .await?;
 
         link.node

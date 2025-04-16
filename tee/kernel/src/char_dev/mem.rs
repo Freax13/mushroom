@@ -14,7 +14,7 @@ use crate::{
         FileSystem,
         fd::{
             Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
-            ReadBuf, WriteBuf, stream_buffer,
+            ReadBuf, StrongFileDescriptor, WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, LinkLocation},
         path::Path,
@@ -49,15 +49,16 @@ impl CharDev for Null {
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<Self> {
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
-        Ok(Self {
+        Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
             file_lock: FileLock::new(RECORD.get().clone()),
-        })
+        }))
     }
 }
 
@@ -166,15 +167,16 @@ impl CharDev for Zero {
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<Self> {
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
-        Ok(Self {
+        Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
             file_lock: FileLock::new(RECORD.get().clone()),
-        })
+        }))
     }
 }
 
@@ -292,15 +294,16 @@ impl CharDev for Random {
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<Self> {
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
-        Ok(Self {
+        Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
             file_lock: FileLock::new(RECORD.get().clone()),
-        })
+        }))
     }
 }
 
@@ -407,15 +410,16 @@ impl CharDev for URandom {
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<Self> {
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
-        Ok(Self {
+        Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
             file_lock: FileLock::new(RECORD.get().clone()),
-        })
+        }))
     }
 }
 

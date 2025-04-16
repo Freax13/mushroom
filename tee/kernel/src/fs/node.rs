@@ -70,14 +70,20 @@ pub trait INode: Any + Send + Sync + 'static {
     fn stat(&self) -> Result<Stat>;
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor>;
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        ctx: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor>;
 
     async fn async_open(
         self: Arc<Self>,
         location: LinkLocation,
         flags: OpenFlags,
+        ctx: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        self.open(location, flags)
+        self.open(location, flags, ctx)
     }
 
     fn mode(&self) -> Result<FileMode> {
@@ -464,6 +470,16 @@ impl FileAccessContext {
         self.filesystem_user_id == Uid::SUPER_USER
             || self.filesystem_group_id == gid
             || self.supplementary_group_ids.contains(&gid)
+    }
+
+    pub fn root() -> Self {
+        Self {
+            process: None,
+            symlink_recursion_limit: 16,
+            filesystem_user_id: Uid::SUPER_USER,
+            filesystem_group_id: Gid::SUPER_USER,
+            supplementary_group_ids: Arc::new([]),
+        }
     }
 }
 

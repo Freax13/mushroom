@@ -5,8 +5,8 @@ use crate::{
     error::{Result, ensure, err},
     fs::{
         FileSystem,
-        fd::{OpenFileDescription, StrongFileDescriptor},
-        node::LinkLocation,
+        fd::StrongFileDescriptor,
+        node::{FileAccessContext, LinkLocation},
     },
     user::process::syscall::args::{OpenFlags, Stat},
 };
@@ -14,16 +14,18 @@ use crate::{
 pub mod mem;
 pub mod mushroom;
 
-pub trait CharDev: OpenFileDescription + Sized {
+pub trait CharDev {
     const MAJOR: u16;
     const MINOR: u8;
 
+    #[allow(clippy::new_ret_no_self)]
     fn new(
         location: LinkLocation,
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<Self>;
+        ctx: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor>;
 }
 
 pub fn open(
@@ -31,13 +33,14 @@ pub fn open(
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
+    ctx: &FileAccessContext,
 ) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), IsDir);
     let registration = REGISTRATIONS
         .iter()
         .find(|r| u64::from(r.rdev) == stat.rdev)
         .ok_or(err!(NoDev))?;
-    (registration.new)(location, flags, stat, fs)
+    (registration.new)(location, flags, stat, fs, ctx)
 }
 
 #[distributed_slice]
@@ -45,11 +48,13 @@ pub static REGISTRATIONS: [Registration];
 
 pub struct Registration {
     rdev: u32,
+    #[expect(clippy::type_complexity)]
     new: fn(
         location: LinkLocation,
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
+        ctx: &FileAccessContext,
     ) -> Result<StrongFileDescriptor>,
 }
 
@@ -64,9 +69,7 @@ impl Registration {
         let rdev = ((T::MAJOR as u32) << 8) | T::MINOR as u32;
         Self {
             rdev,
-            new: |location, flags, stat, fs| {
-                T::new(location, flags, stat, fs).map(StrongFileDescriptor::from)
-            },
+            new: |location, flags, stat, fs, ctx| T::new(location, flags, stat, fs, ctx),
         }
     }
 }

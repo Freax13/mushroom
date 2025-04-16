@@ -591,7 +591,9 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
         location: location.clone(),
         node: file.clone(),
     };
-    let fd = file.open(location, OpenFlags::empty()).unwrap();
+    let fd = file
+        .open(location, OpenFlags::empty(), &FileAccessContext::root())
+        .unwrap();
 
     guard
         .start_executable(

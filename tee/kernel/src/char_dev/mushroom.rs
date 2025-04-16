@@ -10,7 +10,7 @@ use crate::{
         FileSystem,
         fd::{
             Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
-            WriteBuf, stream_buffer,
+            StrongFileDescriptor, WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, LinkLocation},
         path::Path,
@@ -44,15 +44,16 @@ impl CharDev for Output {
         flags: OpenFlags,
         stat: Stat,
         fs: Arc<dyn FileSystem>,
-    ) -> Result<Self> {
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
-        Ok(Self {
+        Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
             file_lock: FileLock::new(RECORD.get().clone()),
-        })
+        }))
     }
 }
 

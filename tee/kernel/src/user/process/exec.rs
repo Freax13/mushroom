@@ -109,9 +109,10 @@ impl VirtualMemory {
                 Acces
             );
 
-            let file = interpreter_link
-                .node
-                .open(interpreter_link.location, OpenFlags::empty())?;
+            let file =
+                interpreter_link
+                    .node
+                    .open(interpreter_link.location, OpenFlags::empty(), ctx)?;
             let info = elf::load_elf::<E>(&file, self.modify(), info.base + 0x2000_0000)?;
 
             entrypoint = info.entry;
@@ -301,9 +302,11 @@ impl VirtualMemory {
                 .contains(FileMode::OTHER_EXECUTE),
             Acces
         );
-        let interpreter = interpreter_link
-            .node
-            .open(interpreter_link.location.clone(), OpenFlags::empty())?;
+        let interpreter = interpreter_link.node.open(
+            interpreter_link.location.clone(),
+            OpenFlags::empty(),
+            ctx,
+        )?;
 
         let mut new_argv = vec![interpreter_path_str];
         for arg in args {
