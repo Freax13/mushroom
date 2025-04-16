@@ -45,7 +45,7 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 
@@ -899,7 +899,13 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
         match cmd {
             0x8905 => {
                 // SIOCATMARK
@@ -915,10 +921,12 @@ impl OpenFileDescription for TcpSocket {
                         }
                     })
                     .unwrap_or_default();
-                virtual_memory.write(arg.cast(), u32::from(at_mark))?;
+                thread
+                    .virtual_memory()
+                    .write(arg.cast(), u32::from(at_mark))?;
                 Ok(0)
             }
-            _ => common_ioctl(self, virtual_memory, cmd, arg),
+            _ => common_ioctl(self, thread, cmd, arg, abi),
         }
     }
 

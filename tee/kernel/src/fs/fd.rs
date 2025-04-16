@@ -32,7 +32,7 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 use alloc::{
@@ -806,8 +806,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         None
     }
 
-    fn ioctl(&self, virtual_memory: &VirtualMemory, cmd: u32, arg: Pointer<c_void>) -> Result<u64> {
-        common_ioctl(self, virtual_memory, cmd, arg)
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
+        common_ioctl(self, thread, cmd, arg, abi)
     }
 
     #[cfg(not(feature = "harden"))]
@@ -818,9 +824,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
 pub fn common_ioctl<O>(
     fd: &O,
-    virtual_memory: &VirtualMemory,
+    thread: &mut ThreadGuard,
     cmd: u32,
     arg: Pointer<c_void>,
+    _: Abi,
 ) -> Result<u64>
 where
     O: OpenFileDescription + ?Sized,
@@ -829,7 +836,7 @@ where
         0x5421 => {
             // FIONBIO
             let addr = arg.cast::<u32>();
-            let val = virtual_memory.read(addr)? != 0;
+            let val = thread.virtual_memory().read(addr)? != 0;
             fd.set_non_blocking(val);
             Ok(0)
         }

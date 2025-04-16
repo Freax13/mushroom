@@ -825,14 +825,15 @@ fn rt_sigreturn(
 
 #[syscall(i386 = 54, amd64 = 16)]
 fn ioctl(
-    #[state] virtual_memory: Arc<VirtualMemory>,
+    abi: Abi,
+    thread: &mut ThreadGuard,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     cmd: u32,
     arg: Pointer<c_void>,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.ioctl(&virtual_memory, cmd, arg)
+    fd.ioctl(thread, cmd, arg, abi)
 }
 
 #[syscall(i386 = 180, amd64 = 17)]
