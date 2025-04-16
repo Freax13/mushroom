@@ -3694,6 +3694,21 @@ async fn openat(
             .async_open(link.location.clone(), flags, &ctx)
             .await?;
 
+        if !flags.contains(OpenFlags::NOCTTY) {
+            let session = thread.process().process_group().session();
+            // Check if the session still needs a controlling terminal.
+            if session.controlling_terminal.get().is_none() {
+                // Check if the process is the group leader.
+                if thread.process().pid() == session.sid {
+                    // Try to open the fd as a terminal.
+                    if let Some(tty) = fd.as_tty() {
+                        // Set the controlling terminal.
+                        session.controlling_terminal.call_once(|| tty);
+                    }
+                }
+            }
+        }
+
         link.node
             .watchers()
             .send_event(InotifyMask::OPEN, None, None);

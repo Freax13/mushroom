@@ -10,6 +10,7 @@ use core::{
 };
 
 use crate::{
+    char_dev::char::PtyData,
     error::{bail, ensure, err},
     fs::{
         node::{DirEntryName, DynINode, FileAccessContext, new_ino},
@@ -803,6 +804,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     /// For path file descriptors, this method should return the pointed to
     /// link.
     fn path_fd_link(&self) -> Option<&Link> {
+        None
+    }
+
+    fn as_tty(&self) -> Option<Arc<PtyData>> {
         None
     }
 

@@ -21,6 +21,7 @@ use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
 use crate::{
+    char_dev::char::PtyData,
     error::{Result, err},
     fs::{
         StaticFile,
@@ -33,7 +34,7 @@ use crate::{
         path::FileName,
     },
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
-    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
+    spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{now, sleep_until},
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
@@ -162,6 +163,10 @@ impl Process {
 
     pub fn sid(&self) -> u32 {
         self.process_group.lock().session.lock().sid
+    }
+
+    pub fn process_group(&self) -> Arc<ProcessGroup> {
+        self.process_group.lock().clone()
     }
 
     pub fn set_sid(&self) -> u32 {
@@ -577,6 +582,7 @@ impl ProcessGroup {
 pub struct Session {
     sid: u32,
     process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
+    controlling_terminal: Once<Arc<PtyData>>,
 }
 
 impl Session {
@@ -584,7 +590,12 @@ impl Session {
         Self {
             sid,
             process_groups: Mutex::new(Vec::new()),
+            controlling_terminal: Once::new(),
         }
+    }
+
+    pub fn controlling_terminal(&self) -> Option<Arc<PtyData>> {
+        self.controlling_terminal.get().cloned()
     }
 }
 

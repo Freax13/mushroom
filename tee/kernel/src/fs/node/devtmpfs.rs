@@ -3,6 +3,7 @@ use alloc::sync::Arc;
 use crate::{
     char_dev::{
         CharDev,
+        char::{DevPtsDirectory, Ptmx, Tty},
         mem::{Null, Random, URandom, Zero},
         mushroom::Output,
     },
@@ -88,6 +89,16 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         Gid::SUPER_USER,
     )?;
 
+    let ptmx_name = FileName::new(b"ptmx").unwrap();
+    tmp_fs_dir.create_char_dev(
+        ptmx_name,
+        Ptmx::MAJOR,
+        Ptmx::MINOR,
+        FileMode::ALL_READ_WRITE,
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+    )?;
+
     let fd_name = FileName::new(b"fd").unwrap();
     tmp_fs_dir.create_link(
         fd_name,
@@ -95,6 +106,21 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         Uid::SUPER_USER,
         Gid::SUPER_USER,
         true,
+    )?;
+
+    let pts_name = FileName::new(b"pts").unwrap();
+    super::INode::mount(&*tmp_fs_dir, pts_name, |location| {
+        Ok(DevPtsDirectory::new(location))
+    })?;
+
+    let tty_name = FileName::new(b"tty").unwrap();
+    tmp_fs_dir.create_char_dev(
+        tty_name,
+        Tty::MAJOR,
+        Tty::MINOR,
+        FileMode::ALL_READ_WRITE,
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
     )?;
 
     Ok(tmp_fs_dir)

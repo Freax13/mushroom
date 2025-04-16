@@ -11,6 +11,7 @@ use crate::{
     user::process::syscall::args::{OpenFlags, Stat},
 };
 
+pub mod char;
 pub mod mem;
 pub mod mushroom;
 
