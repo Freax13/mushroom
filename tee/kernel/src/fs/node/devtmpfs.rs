@@ -4,7 +4,7 @@ use crate::{
     char_dev::{
         CharDev,
         char::{DevPtsDirectory, Ptmx, Tty},
-        mem::{Null, Random, URandom, Zero},
+        mem::{Full, Null, Random, URandom, Zero},
         mushroom::Output,
     },
     fs::{StaticFile, path::Path},
@@ -65,6 +65,16 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         null_name,
         Zero::MAJOR,
         Zero::MINOR,
+        FileMode::ALL_READ_WRITE,
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+    )?;
+
+    let full_name = FileName::new(b"full").unwrap();
+    tmp_fs_dir.create_char_dev(
+        full_name,
+        Full::MAJOR,
+        Full::MINOR,
         FileMode::ALL_READ_WRITE,
         Uid::SUPER_USER,
         Gid::SUPER_USER,
