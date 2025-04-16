@@ -200,6 +200,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetpgid);
     handlers.register(SysGetppid);
     handlers.register(SysGetpgrp);
+    handlers.register(SysSetsid);
     handlers.register(SysSetreuid);
     handlers.register(SysSetregid);
     handlers.register(SysGetgroups);
@@ -825,14 +826,15 @@ fn rt_sigreturn(
 
 #[syscall(i386 = 54, amd64 = 16)]
 fn ioctl(
-    #[state] virtual_memory: Arc<VirtualMemory>,
+    abi: Abi,
+    thread: &mut ThreadGuard,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     cmd: u32,
     arg: Pointer<c_void>,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.ioctl(&virtual_memory, cmd, arg)
+    fd.ioctl(thread, cmd, arg, abi)
 }
 
 #[syscall(i386 = 180, amd64 = 17)]
@@ -1857,7 +1859,9 @@ async fn execve(
     let link = lookup_and_resolve_link(cwd.clone(), &pathname, &mut ctx)?;
     let stat = link.node.stat()?;
     ctx.check_permissions(&stat, Permission::Execute)?;
-    let fd = link.node.open(link.location.clone(), OpenFlags::empty())?;
+    let fd = link
+        .node
+        .open(link.location.clone(), OpenFlags::empty(), &ctx)?;
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
@@ -2662,6 +2666,12 @@ fn getppid(thread: &mut ThreadGuard) -> SyscallResult {
 fn getpgrp(thread: &mut ThreadGuard) -> SyscallResult {
     let pgrp = thread.process().pgrp();
     Ok(u64::from(pgrp))
+}
+
+#[syscall(i386 = 66, amd64 = 112)]
+fn setsid(thread: &mut ThreadGuard) -> SyscallResult {
+    let sid = thread.process().set_sid();
+    Ok(u64::from(sid))
 }
 
 #[syscall(i386 = 203, amd64 = 113)]
@@ -3681,8 +3691,23 @@ async fn openat(
         let fd = link
             .node
             .clone()
-            .async_open(link.location.clone(), flags)
+            .async_open(link.location.clone(), flags, &ctx)
             .await?;
+
+        if !flags.contains(OpenFlags::NOCTTY) {
+            let session = thread.process().process_group().session();
+            // Check if the session still needs a controlling terminal.
+            if session.controlling_terminal.get().is_none() {
+                // Check if the process is the group leader.
+                if thread.process().pid() == session.sid {
+                    // Try to open the fd as a terminal.
+                    if let Some(tty) = fd.as_tty() {
+                        // Set the controlling terminal.
+                        session.controlling_terminal.call_once(|| tty);
+                    }
+                }
+            }
+        }
 
         link.node
             .watchers()

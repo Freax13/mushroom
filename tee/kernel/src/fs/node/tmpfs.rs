@@ -170,7 +170,12 @@ impl INode for TmpFsDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -967,7 +972,12 @@ impl INode for TmpFsFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
@@ -1261,7 +1271,12 @@ impl INode for TmpFsSymlink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -1361,8 +1376,13 @@ impl INode for TmpFsCharDev {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
-        char_dev::open(location, flags, self.stat()?, self.fs.clone())
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        ctx: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        char_dev::open(location, flags, self.stat()?, self.fs.clone(), ctx)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -1437,7 +1457,12 @@ impl INode for TmpFsFifo {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         bail!(Perm)
     }
 
@@ -1445,6 +1470,7 @@ impl INode for TmpFsFifo {
         self: Arc<Self>,
         location: LinkLocation,
         flags: OpenFlags,
+        _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
         let link = Link {
             location,
@@ -1531,8 +1557,13 @@ impl INode for TmpFsSocket {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
-        bail!(XIo)
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        bail!(NxIo)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

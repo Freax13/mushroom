@@ -1823,3 +1823,27 @@ bitflags! {
         const MOVE_SELF = 1 << 11;
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct Termios {
+    pub input_modes: u32,
+    pub output_modes: u32,
+    pub control_modes: u32,
+    pub local_modes: u32,
+    pub special_characters: [u8; 20],
+}
+
+impl Default for Termios {
+    fn default() -> Self {
+        Self {
+            input_modes: 0x4100,
+            output_modes: 0x5,
+            control_modes: 0xbf,
+            local_modes: 0x8a3b,
+            special_characters: [
+                0, 0x3, 0x1c, 0x7f, 0x15, 0x4, 0, 0x1, 0, 0x11, 0x13, 0x1a, 0, 0x12, 0xf, 0x17,
+                0x16, 0, 0, 0,
+            ],
+        }
+    }
+}

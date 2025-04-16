@@ -123,7 +123,12 @@ impl INode for ProcFsRoot {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -346,7 +351,12 @@ impl INode for SelfLink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -489,7 +499,12 @@ impl INode for ProcessDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -758,7 +773,12 @@ impl INode for FdDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -972,7 +992,12 @@ impl INode for FdINode {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -1047,11 +1072,16 @@ impl INode for FollowedFdINode {
         }
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        ctx: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the open call to the pointed
             // to link.
-            link.node.open(link.location.clone(), flags)
+            link.node.open(link.location.clone(), flags, ctx)
         } else {
             FileDescriptor::upgrade(&self.fd).ok_or(err!(BadF))
         }
@@ -1061,13 +1091,14 @@ impl INode for FollowedFdINode {
         self: Arc<Self>,
         _: LinkLocation,
         flags: OpenFlags,
+        ctx: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
         if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the open call to the pointed
             // to link.
             link.node
                 .clone()
-                .async_open(link.location.clone(), flags)
+                .async_open(link.location.clone(), flags, ctx)
                 .await
         } else {
             FileDescriptor::upgrade(&self.fd).ok_or(err!(BadF))
@@ -1166,7 +1197,12 @@ impl INode for ExeLink {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, _: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         bail!(Loop)
     }
 
@@ -1255,7 +1291,12 @@ impl INode for MapsFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
@@ -1356,7 +1397,12 @@ impl INode for ProcessStatFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
@@ -1477,7 +1523,12 @@ impl INode for ProcessTaskDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -1698,7 +1749,12 @@ impl INode for TaskDir {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, _: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_dir(self.this.upgrade().unwrap(), flags)
     }
 
@@ -1921,7 +1977,12 @@ impl INode for TaskCommFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
@@ -2031,7 +2092,12 @@ impl INode for StatFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_file(self.this.upgrade().unwrap(), location, flags)
     }
 
@@ -2150,7 +2216,12 @@ impl INode for UptimeFile {
         Ok(self.fs.clone())
     }
 
-    fn open(&self, location: LinkLocation, flags: OpenFlags) -> Result<StrongFileDescriptor> {
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
         open_file(self.this.upgrade().unwrap(), location, flags)
     }
 

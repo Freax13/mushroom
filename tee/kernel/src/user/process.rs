@@ -21,6 +21,7 @@ use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 
 use crate::{
+    char_dev::char::PtyData,
     error::{Result, err},
     fs::{
         StaticFile,
@@ -33,7 +34,7 @@ use crate::{
         path::FileName,
     },
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
-    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
+    spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{now, sleep_until},
     user::process::syscall::args::{ExtractableThreadState, FileMode, OpenFlags},
@@ -162,6 +163,23 @@ impl Process {
 
     pub fn sid(&self) -> u32 {
         self.process_group.lock().session.lock().sid
+    }
+
+    pub fn process_group(&self) -> Arc<ProcessGroup> {
+        self.process_group.lock().clone()
+    }
+
+    pub fn set_sid(&self) -> u32 {
+        let mut process_group_guard = self.process_group.lock();
+
+        // Don't do anything if the process is already the process group leader.
+        if process_group_guard.pgid == self.pid {
+            return process_group_guard.session().sid;
+        }
+
+        // Create a new session and process group.
+        *process_group_guard = ProcessGroup::new(self.pid, Arc::new(Session::new(self.pid)));
+        self.pid
     }
 
     pub fn exe(&self) -> Link {
@@ -555,11 +573,16 @@ impl ProcessGroup {
         session.process_groups.lock().push(Arc::downgrade(&arc));
         arc
     }
+
+    pub fn session(&self) -> Arc<Session> {
+        self.session.lock().clone()
+    }
 }
 
 pub struct Session {
     sid: u32,
     process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
+    controlling_terminal: Once<Arc<PtyData>>,
 }
 
 impl Session {
@@ -567,7 +590,12 @@ impl Session {
         Self {
             sid,
             process_groups: Mutex::new(Vec::new()),
+            controlling_terminal: Once::new(),
         }
+    }
+
+    pub fn controlling_terminal(&self) -> Option<Arc<PtyData>> {
+        self.controlling_terminal.get().cloned()
     }
 }
 
@@ -591,7 +619,9 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
         location: location.clone(),
         node: file.clone(),
     };
-    let fd = file.open(location, OpenFlags::empty()).unwrap();
+    let fd = file
+        .open(location, OpenFlags::empty(), &FileAccessContext::root())
+        .unwrap();
 
     guard
         .start_executable(
