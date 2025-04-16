@@ -296,6 +296,35 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
     if failed == 0 { Ok(()) } else { Err(()) }
 }
 
+/// Try to write `count` zero bytes to `dest`.
+///
+/// If the write fails for some reason `Err(())` is returned.
+///
+/// # Safety
+///
+/// The caller has to ensure writing to `dest` doesn't invalidate any of Rust's
+/// rules.
+#[inline(always)]
+unsafe fn try_set_bytes_fast(dest: VirtAddr, count: usize, val: u8) -> Result<(), ()> {
+    let failed: u64;
+    unsafe {
+        asm!(
+            "66:",
+            "rep stosb",
+            "67:",
+            ".pushsection .recoverable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            in("al") val,
+            inout("rdi") dest.as_u64() => _,
+            inout("rcx") count => _,
+            inout("rdx") 0u64 => failed,
+        );
+    }
+    if failed == 0 { Ok(()) } else { Err(()) }
+}
+
 /// Check that the page is in the lower half.
 #[inline(always)]
 pub fn check_user_page(page: Page) -> Result<()> {
@@ -666,6 +695,23 @@ impl Pagetables {
         let _guard = self.activate();
 
         without_smap(|| unsafe { try_write_fast(src, dest) })
+    }
+
+    /// Write `count` zero bytes to `dest`.
+    ///
+    /// If the write fails for some reason `Err(())` is returned. If `src` isn't
+    /// user memory `Err(())` is returned.
+    #[inline(always)]
+    pub fn try_set_bytes_user_fast(&self, dest: VirtAddr, count: usize, val: u8) -> Result<(), ()> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        check_user_address(dest, count).map_err(|_| ())?;
+
+        let _guard = self.activate();
+
+        without_smap(|| unsafe { try_set_bytes_fast(dest, count, val) })
     }
 }
 

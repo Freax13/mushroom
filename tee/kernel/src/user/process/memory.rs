@@ -270,6 +270,32 @@ impl VirtualMemory {
         Ok(ret)
     }
 
+    pub fn set_bytes(&self, addr: VirtAddr, count: usize, byte: u8) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        check_user_address(addr, count)?;
+
+        for _ in 0..Self::ACCESS_RETRIES {
+            if self
+                .pagetables
+                .try_set_bytes_user_fast(addr, count, byte)
+                .is_ok()
+            {
+                return Ok(());
+            }
+
+            self.map_addrs(addr, count, PageTableFlags::WRITABLE)?;
+        }
+
+        self.pagetables
+            .try_set_bytes_user_fast(addr, count, byte)
+            .unwrap();
+
+        Ok(())
+    }
+
     pub fn write_bytes(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
         unsafe { self.write_bytes_volatile(addr, NonNull::from(bytes)) }
     }
