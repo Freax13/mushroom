@@ -200,6 +200,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetpgid);
     handlers.register(SysGetppid);
     handlers.register(SysGetpgrp);
+    handlers.register(SysSetsid);
     handlers.register(SysSetreuid);
     handlers.register(SysSetregid);
     handlers.register(SysGetgroups);
@@ -2665,6 +2666,12 @@ fn getppid(thread: &mut ThreadGuard) -> SyscallResult {
 fn getpgrp(thread: &mut ThreadGuard) -> SyscallResult {
     let pgrp = thread.process().pgrp();
     Ok(u64::from(pgrp))
+}
+
+#[syscall(i386 = 66, amd64 = 112)]
+fn setsid(thread: &mut ThreadGuard) -> SyscallResult {
+    let sid = thread.process().set_sid();
+    Ok(u64::from(sid))
 }
 
 #[syscall(i386 = 203, amd64 = 113)]

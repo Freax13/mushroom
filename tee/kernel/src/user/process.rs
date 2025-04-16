@@ -164,6 +164,19 @@ impl Process {
         self.process_group.lock().session.lock().sid
     }
 
+    pub fn set_sid(&self) -> u32 {
+        let mut process_group_guard = self.process_group.lock();
+
+        // Don't do anything if the process is already the process group leader.
+        if process_group_guard.pgid == self.pid {
+            return process_group_guard.session().sid;
+        }
+
+        // Create a new session and process group.
+        *process_group_guard = ProcessGroup::new(self.pid, Arc::new(Session::new(self.pid)));
+        self.pid
+    }
+
     pub fn exe(&self) -> Link {
         self.exe.read().clone()
     }
@@ -554,6 +567,10 @@ impl ProcessGroup {
         let arc = Arc::new(this);
         session.process_groups.lock().push(Arc::downgrade(&arc));
         arc
+    }
+
+    pub fn session(&self) -> Arc<Session> {
+        self.session.lock().clone()
     }
 }
 
