@@ -22,7 +22,7 @@ use crate::{
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::process::{
-        syscall::args::{FileMode, OpenFlags, Stat},
+        syscall::args::{FileMode, OpenFlags, Stat, Whence},
         thread::{Gid, Uid},
     },
 };
@@ -134,6 +134,10 @@ impl OpenFileDescription for Null {
         _len: usize,
     ) -> Result<Result<usize, PipeBlocked>> {
         Ok(Ok(0))
+    }
+
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
@@ -258,6 +262,134 @@ impl OpenFileDescription for Zero {
         })
     }
 
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        Ok(KernelPage::zeroed())
+    }
+
+    fn file_lock(&self) -> Result<&FileLock> {
+        Ok(&self.file_lock)
+    }
+}
+
+pub struct Full {
+    location: LinkLocation,
+    flags: OpenFlags,
+    stat: Stat,
+    fs: Arc<dyn FileSystem>,
+    file_lock: FileLock,
+}
+
+#[register]
+impl CharDev for Full {
+    const MAJOR: u16 = MAJOR;
+    const MINOR: u8 = 7;
+
+    fn new(
+        location: LinkLocation,
+        flags: OpenFlags,
+        stat: Stat,
+        fs: Arc<dyn FileSystem>,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        Ok(StrongFileDescriptor::from(Self {
+            location,
+            flags,
+            stat,
+            fs,
+            file_lock: FileLock::new(RECORD.get().clone()),
+        }))
+    }
+}
+
+#[async_trait]
+impl OpenFileDescription for Full {
+    fn flags(&self) -> OpenFlags {
+        self.flags
+    }
+
+    fn path(&self) -> Result<Path> {
+        self.location.path()
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        todo!()
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        todo!()
+    }
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(self.stat)
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
+    }
+
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events) {
+            events
+        } else {
+            pending().await
+        }
+    }
+
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        buf.fill(0)?;
+        Ok(buf.buffer_len())
+    }
+
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+        buf.fill(0)?;
+        Ok(buf.buffer_len())
+    }
+
+    fn write(&self, _: &dyn WriteBuf) -> Result<usize> {
+        bail!(NoSpc)
+    }
+
+    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf) -> Result<usize> {
+        bail!(NoSpc)
+    }
+
+    fn splice_from(
+        &self,
+        _read_half: &stream_buffer::ReadHalf,
+        _offset: Option<usize>,
+        _len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        bail!(NoSpc)
+    }
+
+    fn splice_to(
+        &self,
+        write_half: &stream_buffer::WriteHalf,
+        _offset: Option<usize>,
+        len: usize,
+    ) -> Result<Result<usize, PipeBlocked>> {
+        write_half.splice_from(len, |buffer, len| {
+            buffer.extend(repeat_n(0, len));
+        })
+    }
+
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
+    }
+
     fn truncate(&self, _length: usize) -> Result<()> {
         Ok(())
     }
@@ -379,6 +511,10 @@ impl OpenFileDescription for Random {
         })
     }
 
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
+    }
+
     fn truncate(&self, _length: usize) -> Result<()> {
         Ok(())
     }
@@ -493,6 +629,10 @@ impl OpenFileDescription for URandom {
         write_half.splice_from(len, |buffer, len| {
             buffer.extend(random_bytes().take(len));
         })
+    }
+
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {

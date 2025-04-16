@@ -197,6 +197,8 @@ impl VirtualMemory {
         unsafe { self.read_bytes_volatile(addr, NonNull::from(bytes)) }
     }
 
+    const ACCESS_RETRIES: usize = 8;
+
     pub unsafe fn read_bytes_volatile(&self, addr: VirtAddr, bytes: NonNull<[u8]>) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
@@ -204,11 +206,13 @@ impl VirtualMemory {
 
         check_user_address(addr, bytes.len())?;
 
-        if self.pagetables.try_read_user_fast(addr, bytes).is_ok() {
-            return Ok(());
-        }
+        for _ in 0..Self::ACCESS_RETRIES {
+            if self.pagetables.try_read_user_fast(addr, bytes).is_ok() {
+                return Ok(());
+            }
 
-        self.map_addrs(addr, bytes.len(), PageTableFlags::empty())?;
+            self.map_addrs(addr, bytes.len(), PageTableFlags::empty())?;
+        }
 
         self.pagetables.try_read_user_fast(addr, bytes).unwrap();
 
@@ -266,6 +270,32 @@ impl VirtualMemory {
         Ok(ret)
     }
 
+    pub fn set_bytes(&self, addr: VirtAddr, count: usize, byte: u8) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+
+        check_user_address(addr, count)?;
+
+        for _ in 0..Self::ACCESS_RETRIES {
+            if self
+                .pagetables
+                .try_set_bytes_user_fast(addr, count, byte)
+                .is_ok()
+            {
+                return Ok(());
+            }
+
+            self.map_addrs(addr, count, PageTableFlags::WRITABLE)?;
+        }
+
+        self.pagetables
+            .try_set_bytes_user_fast(addr, count, byte)
+            .unwrap();
+
+        Ok(())
+    }
+
     pub fn write_bytes(&self, addr: VirtAddr, bytes: &[u8]) -> Result<()> {
         unsafe { self.write_bytes_volatile(addr, NonNull::from(bytes)) }
     }
@@ -277,11 +307,13 @@ impl VirtualMemory {
 
         check_user_address(addr, bytes.len())?;
 
-        if self.pagetables.try_write_user_fast(bytes, addr).is_ok() {
-            return Ok(());
-        }
+        for _ in 0..Self::ACCESS_RETRIES {
+            if self.pagetables.try_write_user_fast(bytes, addr).is_ok() {
+                return Ok(());
+            }
 
-        self.map_addrs(addr, bytes.len(), PageTableFlags::WRITABLE)?;
+            self.map_addrs(addr, bytes.len(), PageTableFlags::WRITABLE)?;
+        }
 
         self.pagetables.try_write_user_fast(bytes, addr).unwrap();
 

@@ -125,10 +125,7 @@ impl ReadBuf for UserBuf<'_> {
     }
 
     fn fill(&mut self, byte: u8) -> Result<()> {
-        for i in 0..self.len {
-            self.vm
-                .write_bytes(self.pointer.bytes_offset(i).get(), &[byte])?;
-        }
+        self.vm.set_bytes(self.pointer.get(), self.len, byte)?;
         Ok(())
     }
 }
@@ -238,9 +235,8 @@ impl ReadBuf for VectoredUserBuf<'_> {
 
     fn fill(&mut self, byte: u8) -> Result<()> {
         for iv in self.iovec.iter_mut() {
-            for i in 0..iv.len {
-                self.vm.write(Pointer::new(iv.base + i), byte)?;
-            }
+            self.vm
+                .set_bytes(VirtAddr::new(iv.base), usize_from(iv.len), byte)?;
         }
         Ok(())
     }
