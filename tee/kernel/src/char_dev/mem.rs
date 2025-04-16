@@ -22,7 +22,7 @@ use crate::{
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::process::{
-        syscall::args::{FileMode, OpenFlags, Stat},
+        syscall::args::{FileMode, OpenFlags, Stat, Whence},
         thread::{Gid, Uid},
     },
 };
@@ -134,6 +134,10 @@ impl OpenFileDescription for Null {
         _len: usize,
     ) -> Result<Result<usize, PipeBlocked>> {
         Ok(Ok(0))
+    }
+
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
@@ -258,6 +262,10 @@ impl OpenFileDescription for Zero {
         })
     }
 
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
+    }
+
     fn truncate(&self, _length: usize) -> Result<()> {
         Ok(())
     }
@@ -376,6 +384,10 @@ impl OpenFileDescription for Full {
         write_half.splice_from(len, |buffer, len| {
             buffer.extend(repeat_n(0, len));
         })
+    }
+
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
@@ -499,6 +511,10 @@ impl OpenFileDescription for Random {
         })
     }
 
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
+    }
+
     fn truncate(&self, _length: usize) -> Result<()> {
         Ok(())
     }
@@ -613,6 +629,10 @@ impl OpenFileDescription for URandom {
         write_half.splice_from(len, |buffer, len| {
             buffer.extend(random_bytes().take(len));
         })
+    }
+
+    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+        Ok(0)
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
