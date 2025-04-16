@@ -1563,7 +1563,7 @@ impl INode for TmpFsSocket {
         _: OpenFlags,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        bail!(XIo)
+        bail!(NxIo)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

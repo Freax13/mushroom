@@ -73,7 +73,7 @@ pub enum ErrorKind {
     NoEnt = 2,
     Srch = 3,
     Intr = 4,
-    XIo = 6,
+    NxIo = 6,
     NoExec = 8,
     BadF = 9,
     Child = 10,

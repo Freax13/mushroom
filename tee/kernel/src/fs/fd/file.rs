@@ -322,7 +322,7 @@ impl OpenFileDescription for FileFileDescription {
             }
             Whence::Data => {
                 // Ensure that `offset` doesn't point past the file.
-                ensure!(offset < self.file.stat()?.size as usize, XIo);
+                ensure!(offset < self.file.stat()?.size as usize, NxIo);
 
                 // We don't support holes so we always jump to `offset`.
                 guard.cursor_idx = offset;
@@ -331,7 +331,7 @@ impl OpenFileDescription for FileFileDescription {
                 let size = usize::try_from(self.file.stat()?.size)?;
 
                 // Ensure that `offset` doesn't point past the file.
-                ensure!(offset < size, XIo);
+                ensure!(offset < size, NxIo);
 
                 // We don't support holes so we always jump to the end of the file.
                 guard.cursor_idx = size;
