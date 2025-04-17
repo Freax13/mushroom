@@ -37,6 +37,7 @@ impl VirtualMemory {
     #[allow(clippy::too_many_arguments)]
     pub fn start_executable(
         &self,
+        path: Path,
         link: Link,
         fd: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
@@ -75,7 +76,7 @@ impl VirtualMemory {
                 };
                 Ok((state, link))
             }
-            [b'#', b'!', ..] => self.start_shebang(link, &***fd, argv, envp, ctx, cwd, stack_limit),
+            [b'#', b'!', ..] => self.start_shebang(path, &***fd, argv, envp, ctx, cwd, stack_limit),
             _ => bail!(NoExec),
         }
     }
@@ -250,7 +251,7 @@ impl VirtualMemory {
     #[allow(clippy::too_many_arguments)]
     fn start_shebang(
         &self,
-        link: Link,
+        path: Path,
         file: &dyn OpenFileDescription,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
@@ -312,11 +313,11 @@ impl VirtualMemory {
         for arg in args {
             new_argv.push(arg?);
         }
-        let path = link.location.path()?;
         new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
 
         self.start_executable(
+            interpreter_path,
             interpreter_link,
             &interpreter,
             &new_argv,
