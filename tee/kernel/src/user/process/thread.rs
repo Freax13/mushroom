@@ -15,7 +15,7 @@ use crate::{
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
         node::{FileAccessContext, Link, LinkLocation, procfs::ThreadInos},
-        path::FileName,
+        path::{FileName, Path},
     },
     rt::{self, notify::Notify},
     spin::mutex::{Mutex, MutexGuard},
@@ -606,8 +606,10 @@ impl ThreadGuard<'_> {
         guard.saved_set_group_id = guard.effective_group_id;
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn start_executable(
         &mut self,
+        path: Path,
         link: Link,
         fd: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
@@ -619,6 +621,7 @@ impl ThreadGuard<'_> {
 
         // Load the elf.
         let (cpu_state, _path) = virtual_memory.start_executable(
+            path,
             link,
             fd,
             argv,

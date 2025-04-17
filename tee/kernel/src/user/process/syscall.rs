@@ -1865,8 +1865,16 @@ async fn execve(
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let (cpu_state, exe) =
-        virtual_memory.start_executable(link, &fd, &args, &envs, &mut ctx, cwd, stack_limit)?;
+    let (cpu_state, exe) = virtual_memory.start_executable(
+        pathname,
+        link,
+        &fd,
+        &args,
+        &envs,
+        &mut ctx,
+        cwd,
+        stack_limit,
+    )?;
 
     // Everything was successful, no errors can occour after this point.
 

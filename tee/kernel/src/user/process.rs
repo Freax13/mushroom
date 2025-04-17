@@ -31,7 +31,7 @@ use crate::{
             procfs::ProcessInos,
             tmpfs::{TmpFs, TmpFsFile},
         },
-        path::FileName,
+        path::{FileName, Path},
     },
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
@@ -625,6 +625,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
 
     guard
         .start_executable(
+            Path::new(b"/init".to_vec()).unwrap(),
             link,
             &fd,
             &[c"/init"],
