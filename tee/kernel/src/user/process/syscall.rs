@@ -1029,7 +1029,7 @@ async fn select_impl(
     let mut result_writefds = req_writefds
         .as_ref()
         .map(|req_writefds| vec![0; req_writefds.len()]);
-    let result_exceptfds = req_exceptfds
+    let mut result_exceptfds = req_exceptfds
         .as_ref()
         .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
 
@@ -1074,6 +1074,10 @@ async fn select_impl(
             }
             if ready_events.contains(Events::WRITE) {
                 result_writefds.as_mut().unwrap().set_bit(i, true);
+                set += 1;
+            }
+            if ready_events.contains(Events::PRI) {
+                result_exceptfds.as_mut().unwrap().set_bit(i, true);
                 set += 1;
             }
 
