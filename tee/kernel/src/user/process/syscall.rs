@@ -2188,9 +2188,11 @@ fn getcwd(
     size: u64,
 ) -> SyscallResult {
     let cwd = thread.process().cwd().location.path()?;
-    let len = cwd.as_bytes().len();
-    ensure!(len < usize_from(size), Range);
-    virtual_memory.write(path, cwd)?;
+    let mut bytes = cwd.as_bytes().to_vec();
+    bytes.push(0); // Add null terminator.
+    let len = bytes.len();
+    ensure!(len <= usize_from(size), Range);
+    virtual_memory.write_bytes(path.get(), &bytes)?;
     Ok(u64::from_usize(len))
 }
 
