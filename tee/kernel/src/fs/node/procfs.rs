@@ -74,6 +74,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         location,
         file_lock_record: LazyFileLockRecord::new(),
         watchers: Watchers::new(),
+        cpuinfo_file: CpuinfoFile::new(fs.clone()),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
             fs: fs.clone(),
@@ -93,6 +94,7 @@ struct ProcFsRoot {
     location: LinkLocation,
     file_lock_record: LazyFileLockRecord,
     watchers: Watchers,
+    cpuinfo_file: Arc<CpuinfoFile>,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
     uptime_file: Arc<UptimeFile>,
@@ -160,6 +162,7 @@ impl Directory for ProcFsRoot {
         let location =
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
+            b"cpuinfo" => self.cpuinfo_file.clone(),
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
             b"uptime" => self.uptime_file.clone(),
@@ -253,6 +256,11 @@ impl Directory for ProcFsRoot {
             }
         }
         entries.push(DirEntry {
+            ino: self.cpuinfo_file.ino,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"cpuinfo").unwrap()),
+        });
+        entries.push(DirEntry {
             ino: self.self_link.ino,
             ty: FileType::Link,
             name: DirEntryName::FileName(FileName::new(b"self").unwrap()),
@@ -317,6 +325,113 @@ impl Directory for ProcFsRoot {
         _newname: FileName<'static>,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
+    }
+}
+
+struct CpuinfoFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
+}
+
+impl CpuinfoFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        for i in 0..MAX_APS_COUNT {
+            writeln!(buffer, "processor	: {i}").unwrap();
+            writeln!(buffer).unwrap();
+        }
+        buffer
+    }
+}
+
+impl INode for CpuinfoFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for CpuinfoFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
     }
 }
 
