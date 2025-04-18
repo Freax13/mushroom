@@ -178,6 +178,7 @@ jobs:
         package:
           - coreutils
           - libuv
+          - dejagnu
         tee:
           - snp
           - tdx
