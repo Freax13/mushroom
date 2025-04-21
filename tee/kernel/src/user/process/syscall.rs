@@ -1124,7 +1124,7 @@ async fn select_impl(
 async fn sched_yield() -> SyscallResult {
     let (tx, rx) = oneshot::new();
     crate::rt::spawn(async move {
-        tx.send(()).unwrap();
+        let _ = tx.send(());
     });
     rx.recv().await.unwrap();
     Ok(0)
