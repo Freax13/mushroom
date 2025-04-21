@@ -6,16 +6,14 @@ use core::{
 
 use alloc::{
     boxed::Box,
-    collections::{
-        btree_map::{BTreeMap, Entry},
-        vec_deque::VecDeque,
-    },
+    collections::btree_map::{BTreeMap, Entry},
     format,
     string::ToString,
     sync::{Arc, Weak},
     vec,
     vec::Vec,
 };
+use arrayvec::ArrayVec;
 use async_trait::async_trait;
 use kernel_macros::register;
 
@@ -43,8 +41,8 @@ use crate::{
         limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                ExtractableThreadState, FileMode, FileType, FileTypeAndMode, OpenFlags, Pointer,
-                Stat, Termios, Timespec,
+                ExtractableThreadState, FileMode, FileType, FileTypeAndMode, InputMode, LocalMode,
+                OpenFlags, OutputMode, Pointer, Stat, Termios, Timespec,
             },
             traits::Abi,
         },
@@ -91,8 +89,9 @@ impl CharDev for Ptmx {
                         master_closed: false,
                         num_slaves: 0,
                         termios: Termios::default(),
-                        slave_buffer: VecDeque::new(),
-                        master_buffer: VecDeque::new(),
+                        input_buffer: ArrayVec::new(),
+                        output_buffer: ArrayVec::new(),
+                        column_pointer: 0,
                     }),
                     notify: Notify::new(),
                     watchers: Arc::new(Watchers::new()),
@@ -134,16 +133,12 @@ struct PtyDataInternal {
     num_slaves: usize,
 
     termios: Termios,
-
-    /// The buffer containing bytes sent to the slave.
-    slave_buffer: VecDeque<u8>,
-    /// The buffer containing bytes sent to the master.
-    master_buffer: VecDeque<u8>,
+    input_buffer: ArrayVec<u8, 4095>,
+    output_buffer: ArrayVec<u8, 4096>,
+    column_pointer: usize,
 }
 
 impl Pty {
-    const PTY_CAPACITY: usize = 0x4000;
-
     pub fn new_slave(data: Arc<PtyData>, flags: OpenFlags) -> Result<Self> {
         // Increment the reference count for the slave.
         let mut guard = data.internal.lock();
@@ -210,21 +205,31 @@ impl OpenFileDescription for Pty {
         if self.master {
             ready_events.set(
                 Events::READ,
-                !guard.master_buffer.is_empty() || guard.num_slaves == 0,
+                !guard.output_buffer.is_empty() || guard.num_slaves == 0,
             );
             ready_events.set(
                 Events::WRITE,
-                guard.slave_buffer.len() < Self::PTY_CAPACITY
-                    || !guard.slave_buffer.contains(&b'\n'),
+                guard.input_buffer.len() < guard.input_buffer.capacity()
+                    || guard
+                        .input_buffer
+                        .iter()
+                        .copied()
+                        .all(|c| !guard.is_line_end(c)),
             );
         } else {
             ready_events.set(
                 Events::READ,
-                guard.slave_buffer.contains(&b'\n') || guard.master_closed,
+                guard
+                    .input_buffer
+                    .iter()
+                    .copied()
+                    .any(|c| guard.is_line_end(c))
+                    || guard.master_closed,
             );
             ready_events.set(
                 Events::WRITE,
-                guard.master_buffer.len() < Self::PTY_CAPACITY || guard.master_closed,
+                guard.output_buffer.len() < guard.output_buffer.capacity() - 1
+                    || guard.master_closed,
             );
         }
         NonEmptyEvents::new(ready_events & events)
@@ -245,7 +250,7 @@ impl OpenFileDescription for Pty {
 
         let mut guard = self.data.internal.lock();
         if self.master {
-            if guard.master_buffer.is_empty() {
+            if guard.output_buffer.is_empty() {
                 if guard.num_slaves == 0 {
                     bail!(Io);
                 } else {
@@ -253,52 +258,59 @@ impl OpenFileDescription for Pty {
                 }
             }
 
-            let count = cmp::min(guard.master_buffer.len(), buffer_len);
-            let (half1, half2) = guard.master_buffer.as_slices();
-            if let Some(buffer) = half1.get(..count) {
-                buf.write(0, buffer)?;
-            } else {
-                buf.write(0, half1)?;
-                buf.write(half1.len(), &half2[..count - half1.len()])?;
-            }
-            guard.master_buffer.drain(..count);
+            let len = cmp::min(buffer_len, guard.output_buffer.len());
+            buf.write(0, &guard.output_buffer[..len])?;
+            drop(guard.output_buffer.drain(..len));
             drop(guard);
 
             self.data.notify.notify();
 
-            Ok(count)
+            Ok(len)
         } else {
-            // Find the last newline character and add 1.
-            let Some(available_count) = guard
-                .slave_buffer
-                .iter()
-                .copied()
-                .enumerate()
-                .rev()
-                .find(|(_, b)| *b == b'\n')
-                .map(|(idx, _)| idx + 1)
-            else {
-                if guard.master_closed {
-                    return Ok(0);
+            // Read input data for the slave.
+            if guard.termios.local_modes.contains(LocalMode::ICANON) {
+                let Some((line_end_idx, line_end_char)) = guard
+                    .input_buffer
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .find(|&(_, c)| guard.is_line_end(c))
+                else {
+                    if guard.master_closed {
+                        return Ok(0);
+                    } else {
+                        bail!(Again);
+                    }
+                };
+                let read_len = if line_end_char != guard.termios.special_characters.eof {
+                    line_end_idx + 1
                 } else {
-                    bail!(Again);
-                }
-            };
+                    line_end_idx
+                };
+                let len = cmp::min(buffer_len, read_len);
+                buf.write(0, &guard.input_buffer[..len])?;
 
-            let count = cmp::min(available_count, buffer_len);
-            let (half1, half2) = guard.slave_buffer.as_slices();
-            if let Some(buffer) = half1.get(..count) {
-                buf.write(0, buffer)?;
+                let remove_len = if len == read_len {
+                    line_end_idx + 1
+                } else {
+                    len
+                };
+                drop(guard.input_buffer.drain(..remove_len));
+                drop(guard);
+
+                self.data.notify.notify();
+
+                Ok(len)
             } else {
-                buf.write(0, half1)?;
-                buf.write(half1.len(), &half2[..count - half1.len()])?;
+                let len = cmp::min(buffer_len, guard.input_buffer.len());
+                buf.write(0, &guard.input_buffer[..len])?;
+                drop(guard.input_buffer.drain(..len));
+                drop(guard);
+
+                self.data.notify.notify();
+
+                Ok(len)
             }
-            guard.slave_buffer.drain(..count);
-            drop(guard);
-
-            self.data.notify.notify();
-
-            Ok(count)
         }
     }
 
@@ -309,110 +321,35 @@ impl OpenFileDescription for Pty {
         }
 
         let mut guard = self.data.internal.lock();
-        if self.master {
-            // Up to `PTY_CAPACITY - 1` can always be written to normally.
-            let len = cmp::min(
-                buffer_len,
-                (Self::PTY_CAPACITY - 1).saturating_sub(guard.slave_buffer.len()),
-            );
 
-            let start_idx = guard.slave_buffer.len();
-            // Reserve some space for the new bytes.
-            guard.slave_buffer.resize(start_idx + len, 0);
+        let mut chunk = [0; 128];
+        for i in (0..buffer_len).step_by(chunk.len()) {
+            let chunk_len = cmp::min(chunk.len(), buffer_len - i);
+            let chunk = &mut chunk[..chunk_len];
+            buf.read(i, chunk)?;
 
-            let (first, second) = guard.slave_buffer.as_mut_slices();
-            let res = if second.len() >= len {
-                let second_len = second.len();
-                buf.read(0, &mut second[second_len - len..])
-            } else {
-                let first_write_len = len - second.len();
-                let first_len = first.len();
-                buf.read(0, &mut first[first_len - first_write_len..])
-                    .and_then(|_| buf.read(first_write_len, second))
-            };
-
-            // Rollback all bytes if an error occured.
-            // FIXME: We should not roll back all bytes.
-            if res.is_err() {
-                guard.slave_buffer.truncate(start_idx);
-            }
-
-            let mut written = len;
-            // The last byte in the buffer can only be a newline. If there's
-            // still some bytes left to be processed and if there's still space
-            // for a newline, try to find one.
-            if buffer_len > len && guard.slave_buffer.len() < Self::PTY_CAPACITY {
-                // The behavior depends on whether or not the buffer already contains a newline.
-                if guard.slave_buffer.contains(&b'\n') {
-                    // If the buffer contains a newline, fill the buffer up to the last byte and then block.
-                    if buffer_len > written {
-                        let mut byte = 0;
-                        buf.read(written, core::array::from_mut(&mut byte))?;
-                        guard.slave_buffer.push_back(byte);
-                        written += 1;
-                    }
-                    ensure!(written > 0, Again);
+            for (i, c) in (i..).zip(chunk.iter().copied()) {
+                let res = if self.master {
+                    guard.write_byte_to_input(c)
                 } else {
-                    // If the buffer doesn't already contain a newline, try to
-                    // find a newline and put it in the last byte.
-                    let mut has_newline = false;
-                    let mut buffer = [0; 512];
-                    for i in (len..buffer_len).step_by(buffer.len()) {
-                        let chunk_size = cmp::min(buffer.len(), buffer_len - i);
-                        let buffer = &mut buffer[..chunk_size];
-                        buf.read(i, buffer)?;
-                        if buffer.contains(&b'\n') {
-                            has_newline = true;
-                            break;
+                    guard.write_byte_to_output(c)
+                };
+                match res {
+                    Ok(()) => self.data.notify.notify(),
+                    Err(err) => {
+                        // If no bytes have been written yet, return the error,
+                        // otherwise return how many bytes have been written.
+                        if i == 0 {
+                            return Err(err);
+                        } else {
+                            return Ok(i);
                         }
                     }
-                    if has_newline {
-                        guard.slave_buffer.push_back(b'\n');
-                    }
-
-                    // Always report that all bytes have been written, even if some
-                    // bytes didn't fit into the buffer.
-                    written = buffer_len;
                 }
             }
-            drop(guard);
-
-            self.data.notify.notify();
-
-            Ok(written)
-        } else {
-            ensure!(!guard.master_closed, Io);
-
-            let remaining_capacity = Self::PTY_CAPACITY - guard.master_buffer.len();
-            ensure!(remaining_capacity > 0, Again);
-            let len = cmp::min(buffer_len, remaining_capacity);
-
-            let start_idx = guard.master_buffer.len();
-            // Reserve some space for the new bytes.
-            guard.master_buffer.resize(start_idx + len, 0);
-
-            let (first, second) = guard.master_buffer.as_mut_slices();
-            let res = if second.len() >= len {
-                let second_len = second.len();
-                buf.read(0, &mut second[second_len - len..])
-            } else {
-                let first_write_len = len - second.len();
-                let first_len = first.len();
-                buf.read(0, &mut first[first_len - first_write_len..])
-                    .and_then(|_| buf.read(first_write_len, second))
-            };
-
-            // Rollback all bytes if an error occured.
-            // FIXME: We should not roll back all bytes.
-            if res.is_err() {
-                guard.master_buffer.truncate(start_idx);
-            }
-            drop(guard);
-
-            self.data.notify.notify();
-
-            Ok(len)
         }
+
+        Ok(buffer_len)
     }
 
     fn splice_from(
@@ -511,6 +448,159 @@ impl Drop for Pty {
         drop(guard);
 
         self.data.notify.notify();
+    }
+}
+
+impl PtyDataInternal {
+    fn write_byte_to_input(&mut self, mut c: u8) -> Result<()> {
+        // "If ISTRIP is set, valid input bytes shall first be stripped to
+        // seven bits; otherwise, all eight bits shall be processed."
+        if self.termios.input_modes.contains(InputMode::STRIP) {
+            c &= 0b0111_1111;
+        }
+
+        // "If ECHO is set, input characters shall be echoed back to the
+        // terminal."
+        if self.termios.local_modes.contains(LocalMode::ECHO) {
+            let _ = self.write_byte_to_output(c);
+        } else if c == b'\n' && self.termios.local_modes.contains(LocalMode::ECHONL) {
+            // "If ECHONL and ICANON are set, the <newline> character shall be
+            // echoed even if ECHO is not set."
+            let _ = self.write_byte_to_output(c);
+        }
+
+        // "If INLCR is set, a received NL character shall be translated into a
+        // CR character."
+        if self.termios.input_modes.contains(InputMode::NLCR) && c == b'\n' {
+            return self.queue_input_char(b'\r');
+        }
+
+        // "If IGNCR is set, a received CR character shall be ignored (not
+        // read)."
+        if self.termios.input_modes.contains(InputMode::GNCR) && c == b'\r' {
+            return Ok(());
+        }
+
+        // "If IGNCR is not set and ICRNL is set, a received CR character shall
+        // be translated into an NL character."
+        if !self.termios.input_modes.contains(InputMode::GNCR)
+            && self.termios.input_modes.contains(InputMode::CRNL)
+            && c == b'\r'
+        {
+            return self.queue_input_char(b'\n');
+        }
+
+        self.queue_input_char(c)
+    }
+
+    fn queue_input_char(&mut self, c: u8) -> Result<()> {
+        if !self.termios.local_modes.contains(LocalMode::ICANON) {
+            if self.input_buffer.len() < self.input_buffer.capacity() - 2 {
+                self.input_buffer.push(c);
+            }
+            return Ok(());
+        }
+
+        assert_ne!(c, 0);
+
+        if self.is_line_end(c) {
+            self.input_buffer.try_push(c).map_err(|_| err!(Again))?;
+            return Ok(());
+        } else if c == self.termios.special_characters.erase {
+            todo!()
+        } else if c == self.termios.special_characters.intr {
+            todo!()
+        } else if c == self.termios.special_characters.kill {
+            todo!()
+        } else if c == self.termios.special_characters.lnext {
+            todo!()
+        } else if c == self.termios.special_characters.quit {
+            todo!()
+        } else if c == self.termios.special_characters.reprint {
+            todo!()
+        } else if c == self.termios.special_characters.start {
+            todo!()
+        } else if c == self.termios.special_characters.stop {
+            todo!()
+        } else if c == self.termios.special_characters.susp {
+            todo!()
+        } else if c == self.termios.special_characters.werase {
+            todo!()
+        } else if self.input_buffer.len() < self.input_buffer.capacity() - 2 {
+            self.input_buffer.push(c);
+        }
+
+        Ok(())
+    }
+
+    fn is_line_end(&self, c: u8) -> bool {
+        c == b'\n'
+            || c == self.termios.special_characters.eol
+            || c == self.termios.special_characters.eol2
+            || c == self.termios.special_characters.eof
+    }
+
+    fn write_byte_to_output(&mut self, c: u8) -> Result<()> {
+        if !self.termios.output_modes.contains(OutputMode::POST) {
+            return self.queue_output_char(c, false);
+        }
+
+        // "If ONLCR is set, the NL character shall be transmitted as the CR-NL
+        // character pair."
+        if self.termios.output_modes.contains(OutputMode::NLCR) && c == b'\n' {
+            self.queue_output_char(b'\r', false)?;
+            self.queue_output_char(b'\n', true).unwrap();
+            return Ok(());
+        }
+
+        // "If OCRNL is set, the CR character shall be transmitted as the NL character."
+        if self.termios.output_modes.contains(OutputMode::CRNL) && c == b'\r' {
+            return self.queue_output_char(b'\n', false);
+        }
+
+        // "If ONOCR is set, no CR character shall be transmitted when at
+        // column 0 (first position)."
+        if self.termios.output_modes.contains(OutputMode::NOCR)
+            && c == b'\r'
+            && self.column_pointer == 0
+        {
+            return Ok(());
+        }
+
+        self.queue_output_char(c, false)
+    }
+
+    fn queue_output_char(&mut self, c: u8, extra_capacity: bool) -> Result<()> {
+        // Some characters need to be queue in pairs. We need to avoid the
+        // situation, where only one the first byte in the pair can be queued.
+        // The last index can only be used for the second byte in a pair.
+        if !extra_capacity {
+            ensure!(
+                self.output_buffer.len() < self.output_buffer.capacity() - 1,
+                Again
+            );
+        }
+        self.output_buffer.try_push(c).map_err(|_| err!(Again))?;
+
+        // "The column pointer shall also be set to 0 if the CR character is
+        // actually transmitted."
+        if c == b'\r' {
+            self.column_pointer = 0;
+        } else if c == b'\n' {
+            // "If ONLRET is set, the NL character is assumed to do the
+            // carriage-return function; the column pointer shall be set to 0
+            // and the delays specified for CR shall be used."
+            if self.termios.output_modes.contains(OutputMode::NLRET) {
+                self.column_pointer = 0;
+            } else {
+                // "Otherwise, the NL character is assumed to do just the line-
+                // feed function; the column pointer remains unchanged."
+            }
+        } else {
+            self.column_pointer += 1;
+        }
+
+        Ok(())
     }
 }
 

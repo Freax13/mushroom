@@ -33,9 +33,9 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, FdNum, Iovec, Linger, LinuxDirent64, LongOffset, MMsgHdr, MsgHdr, Offset,
-    PSelectSigsetArg, Pointer, RLimit, Rusage, SocketAddr, Stat, SysInfo, Termios, Time, Timespec,
-    Timeval, WStatus,
+    CmsgHdr, ControlMode, FdNum, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset,
+    MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SocketAddr,
+    Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2116,11 +2116,11 @@ pub struct Termios64 {
 impl From<Termios> for Termios32 {
     fn from(value: Termios) -> Self {
         Self {
-            input_modes: value.input_modes,
-            output_modes: value.output_modes,
-            control_modes: value.control_modes,
-            local_modes: value.local_modes,
-            special_characters: value.special_characters,
+            input_modes: value.input_modes.bits(),
+            output_modes: value.output_modes.bits(),
+            control_modes: value.control_modes.bits(),
+            local_modes: value.local_modes.bits(),
+            special_characters: value.special_characters.into(),
         }
     }
 }
@@ -2128,11 +2128,11 @@ impl From<Termios> for Termios32 {
 impl From<Termios> for Termios64 {
     fn from(value: Termios) -> Self {
         Self {
-            input_modes: value.input_modes,
-            output_modes: value.output_modes,
-            control_modes: value.control_modes,
-            local_modes: value.local_modes,
-            special_characters: value.special_characters,
+            input_modes: value.input_modes.bits(),
+            output_modes: value.output_modes.bits(),
+            control_modes: value.control_modes.bits(),
+            local_modes: value.local_modes.bits(),
+            special_characters: value.special_characters.into(),
         }
     }
 }
@@ -2140,11 +2140,11 @@ impl From<Termios> for Termios64 {
 impl From<Termios32> for Termios {
     fn from(value: Termios32) -> Self {
         Self {
-            input_modes: value.input_modes,
-            output_modes: value.output_modes,
-            control_modes: value.control_modes,
-            local_modes: value.local_modes,
-            special_characters: value.special_characters,
+            input_modes: InputMode::from_bits_retain(value.input_modes),
+            output_modes: OutputMode::from_bits_retain(value.output_modes),
+            control_modes: ControlMode::from_bits_retain(value.control_modes),
+            local_modes: LocalMode::from_bits_retain(value.local_modes),
+            special_characters: value.special_characters.into(),
         }
     }
 }
@@ -2152,11 +2152,11 @@ impl From<Termios32> for Termios {
 impl From<Termios64> for Termios {
     fn from(value: Termios64) -> Self {
         Self {
-            input_modes: value.input_modes,
-            output_modes: value.output_modes,
-            control_modes: value.control_modes,
-            local_modes: value.local_modes,
-            special_characters: value.special_characters,
+            input_modes: InputMode::from_bits_retain(value.input_modes),
+            output_modes: OutputMode::from_bits_retain(value.output_modes),
+            control_modes: ControlMode::from_bits_retain(value.control_modes),
+            local_modes: LocalMode::from_bits_retain(value.local_modes),
+            special_characters: value.special_characters.into(),
         }
     }
 }

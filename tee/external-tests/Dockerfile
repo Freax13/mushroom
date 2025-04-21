@@ -11,7 +11,8 @@ RUN mkdir -p /build/bin/ /build/build/ /build/tmp/ /build/etc && \
     echo "root:x:0:" > /build/etc/group && \
     echo "users:x:1000:" >> /build/etc/group && \
     echo "127.0.0.1 localhost" > /build/etc/hosts && \
-    echo "::1 localhost" >> /build/etc/hosts
+    echo "::1 localhost" >> /build/etc/hosts && \
+    echo "127.0.0.2 host" >> /build/etc/hosts
 
 # Enable nix flakes and install bash into the store.
 RUN echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf && \

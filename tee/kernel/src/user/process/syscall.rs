@@ -1061,10 +1061,6 @@ async fn select_impl(
             events.set(Events::WRITE, write);
             events.set(Events::PRI, except);
 
-            if events.is_empty() {
-                continue;
-            }
-
             let fd = fdtable.get(FdNum::new(i as i32))?;
             let ready_events = fd.poll_ready(events).map_or(Events::empty(), Events::from);
 
@@ -1128,7 +1124,7 @@ async fn select_impl(
 async fn sched_yield() -> SyscallResult {
     let (tx, rx) = oneshot::new();
     crate::rt::spawn(async move {
-        tx.send(()).unwrap();
+        let _ = tx.send(());
     });
     rx.recv().await.unwrap();
     Ok(0)
