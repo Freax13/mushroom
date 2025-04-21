@@ -6,6 +6,5 @@ edition.workspace = true
 [dependencies]
 anyhow = "1.0.81"
 flate2 = "1.0.28"
-include_optional = "1.0.1"
 nix = { version = "0.29.0", default-features = false, features = ["mount"] }
 tar = "0.4.40"
