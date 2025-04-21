@@ -1827,24 +1827,254 @@ bitflags! {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Termios {
-    pub input_modes: u32,
-    pub output_modes: u32,
-    pub control_modes: u32,
-    pub local_modes: u32,
-    pub special_characters: [u8; 20],
+    pub input_modes: InputMode,
+    pub output_modes: OutputMode,
+    pub control_modes: ControlMode,
+    pub local_modes: LocalMode,
+    pub special_characters: SpecialCharacters,
 }
 
 impl Default for Termios {
     fn default() -> Self {
         Self {
-            input_modes: 0x4100,
-            output_modes: 0x5,
-            control_modes: 0xbf,
-            local_modes: 0x8a3b,
-            special_characters: [
-                0, 0x3, 0x1c, 0x7f, 0x15, 0x4, 0, 0x1, 0, 0x11, 0x13, 0x1a, 0, 0x12, 0xf, 0x17,
-                0x16, 0, 0, 0,
-            ],
+            input_modes: InputMode::CRNL | InputMode::UTF8,
+            output_modes: OutputMode::POST | OutputMode::NLCR,
+            control_modes: ControlMode::B38400 | ControlMode::S8 | ControlMode::READ,
+            local_modes: LocalMode::ISIG
+                | LocalMode::ICANON
+                | LocalMode::ECHO
+                | LocalMode::ECHOE
+                | LocalMode::ECHOK
+                | LocalMode::ECHOCTL
+                | LocalMode::ECHOKE
+                | LocalMode::IEXTEN,
+            special_characters: SpecialCharacters {
+                intr: 0x00,
+                quit: 0x03,
+                erase: 0x1c,
+                kill: 0x7f,
+                eof: 0x15,
+                time: 0x04,
+                min: 0x00,
+                swtc: 0x01,
+                start: 0x00,
+                stop: 0x11,
+                susp: 0x13,
+                eol: 0x1a,
+                reprint: 0x00,
+                discard: 0x12,
+                werase: 0x0f,
+                lnext: 0x17,
+                eol2: 0x16,
+                padding: [0x00, 0x00, 0x00],
+            },
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct InputMode: u32 {
+        const GNBRK = 1 << 0;
+        const BRKINT = 1 << 1;
+        const GNPAR = 1 << 2;
+        const PARMRK = 1 << 3;
+        const NPCK = 1 << 4;
+        const STRIP = 1 << 5;
+        const NLCR = 1 << 6;
+        const GNCR = 1 << 7;
+        const CRNL = 1 << 8;
+        const UCLC = 1 << 9;
+        const XON = 1 << 10;
+        const XANY = 1 << 11;
+        const XOFF = 1 << 12;
+        const MAXBEL = 1 << 13;
+        const UTF8 = 1 << 14;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct OutputMode: u32 {
+        const POST = 1 << 0;
+        const LCUC = 1 << 1;
+        const NLCR = 1 << 2;
+        const CRNL = 1 << 3;
+        const NOCR = 1 << 4;
+        const NLRET = 1 << 5;
+        const FILL = 1 << 6;
+        const FDEL = 1 << 7;
+        const NLDLY = 1 << 8;
+        // const NL0 = 0;
+        const NL1 = 1 << 8;
+        const CRDLY = 3 << 9;
+        // const CR0 = 0x00000;
+        const CR1 = 1 << 9;
+        const CR2 = 1 << 10;
+        const CR3 = 3 << 9;
+        const TABDLY = 3 << 11;
+        // const TAB0 = 0;
+        const TAB1 = 1 << 11;
+        const TAB2 = 1 << 12;
+        const TAB3 = 3 << 11;
+        const XTABS = 3 << 11;
+        const BSDLY = 1 << 13;
+        // const BS0 = 0x00000;
+        const BS1 = 1 << 13;
+        const VTDLY = 1 << 14;
+        // const VT0 = 0;
+        const VT1 = 1 << 14;
+        const FFDLY = 1 << 15;
+        // const FF0 = 0;
+        const FF1 = 1 << 15;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct ControlMode: u32 {
+        // const S5 = 0x00000000;
+        const S6 = 1 << 4;
+        const S7 = 2 << 4;
+        const S8 = 3 << 4;
+        const STOPB = 1 << 6;
+        const READ = 1 << 7;
+        const PARENB = 1 << 8;
+        const PARODD = 1 << 9;
+        const HUPCL = 1 << 10;
+        const LOCAL = 1 << 11;
+        const BAUDEX = 1 << 12;
+        const ADDRB = 1 << 29;
+        const MSPAR = 1 << 30;
+        const RTSCTS = 1 << 31;
+
+        // const B0 = 0x0;
+        const B50 = 0x1;
+        const B75 = 0x2;
+        const B110 = 0x3;
+        const B134 = 0x4;
+        const B150 = 0x5;
+        const B200 = 0x6;
+        const B300 = 0x7;
+        const B600 = 0x8;
+        const B1200 = 0x9;
+        const B1800 = 0xa;
+        const B2400 = 0xb;
+        const B4800 = 0xc;
+        const B9600 = 0xd;
+        const B19200 = 0xe;
+        const B38400 = 0xf;
+        const BOTHER = 0x00001000;
+        const B57600 = 0x00001001;
+        const B115200 = 0x00001002;
+        const B230400 = 0x00001003;
+        const B460800 = 0x00001004;
+        const B500000 = 0x00001005;
+        const B576000 = 0x00001006;
+        const B921600 = 0x00001007;
+        const B1000000 = 0x00001008;
+        const B1152000 = 0x00001009;
+        const B1500000 = 0x0000100a;
+        const B2000000 = 0x0000100b;
+        const B2500000 = 0x0000100c;
+        const B3000000 = 0x0000100d;
+        const B3500000 = 0x0000100e;
+        const B4000000 = 0x0000100f;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct LocalMode: u32 {
+        const ISIG = 1 << 0;
+        const ICANON = 1 << 1;
+        const XCASE = 1 << 2;
+        const ECHO = 1 << 3;
+        const ECHOE = 1 << 4;
+        const ECHOK = 1 << 5;
+        const ECHONL = 1 << 6;
+        const NOFLSH = 1 << 7;
+        const TOSTOP = 1 << 8;
+        const ECHOCTL = 1 << 9;
+        const ECHOPRT = 1 << 10;
+        const ECHOKE = 1 << 11;
+        const FLUSHO = 1 << 12;
+        const PENDIN = 1 << 14;
+        const IEXTEN = 1 << 15;
+        const EXTPROC = 1 << 16;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SpecialCharacters {
+    pub intr: u8,
+    pub quit: u8,
+    pub erase: u8,
+    pub kill: u8,
+    pub eof: u8,
+    pub time: u8,
+    pub min: u8,
+    pub swtc: u8,
+    pub start: u8,
+    pub stop: u8,
+    pub susp: u8,
+    pub eol: u8,
+    pub reprint: u8,
+    pub discard: u8,
+    pub werase: u8,
+    pub lnext: u8,
+    pub eol2: u8,
+    padding: [u8; 3],
+}
+
+impl From<SpecialCharacters> for [u8; 20] {
+    fn from(value: SpecialCharacters) -> Self {
+        [
+            value.intr,
+            value.quit,
+            value.erase,
+            value.kill,
+            value.eof,
+            value.time,
+            value.min,
+            value.swtc,
+            value.start,
+            value.stop,
+            value.susp,
+            value.eol,
+            value.reprint,
+            value.discard,
+            value.werase,
+            value.lnext,
+            value.eol2,
+            value.padding[0],
+            value.padding[1],
+            value.padding[2],
+        ]
+    }
+}
+
+impl From<[u8; 20]> for SpecialCharacters {
+    fn from(value: [u8; 20]) -> Self {
+        Self {
+            intr: value[0],
+            quit: value[1],
+            erase: value[2],
+            kill: value[3],
+            eof: value[4],
+            time: value[5],
+            min: value[6],
+            swtc: value[7],
+            start: value[8],
+            stop: value[9],
+            susp: value[10],
+            eol: value[11],
+            reprint: value[12],
+            discard: value[13],
+            werase: value[14],
+            lnext: value[15],
+            eol2: value[16],
+            padding: [value[17], value[18], value[19]],
         }
     }
 }
