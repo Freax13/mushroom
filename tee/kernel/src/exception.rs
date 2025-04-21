@@ -161,103 +161,99 @@ pub fn load_idt() {
     IDT.load();
 }
 
-#[naked]
+#[unsafe(naked)]
 extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
-    unsafe {
-        naked_asm!(
-            "cld",
-            // Check whether the exception happened in userspace.
-            "test word ptr [rsp+8], 3",
-            "je {kernel_divide_error_handler}",
+    naked_asm!(
+        "cld",
+        // Check whether the exception happened in userspace.
+        "test word ptr [rsp+8], 3",
+        "je {kernel_divide_error_handler}",
 
-            // Userspace code path:
-            "swapgs",
-            // Store the error code.
-            "mov byte ptr gs:[{VECTOR_OFFSET}], 0x0",
-            // Jump to the userspace exit point.
-            "jmp {exception_entry}",
+        // Userspace code path:
+        "swapgs",
+        // Store the error code.
+        "mov byte ptr gs:[{VECTOR_OFFSET}], 0x0",
+        // Jump to the userspace exit point.
+        "jmp {exception_entry}",
 
-            kernel_divide_error_handler = sym kernel_divide_error_handler,
-            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            exception_entry = sym exception_entry,
-        );
-    }
+        kernel_divide_error_handler = sym kernel_divide_error_handler,
+        VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        exception_entry = sym exception_entry,
+    );
 }
 
 extern "x86-interrupt" fn kernel_divide_error_handler(frame: InterruptStackFrame) {
     panic!("divide error {frame:x?}");
 }
 
-#[naked]
+#[unsafe(naked)]
 extern "x86-interrupt" fn page_fault_handler(
     frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
-    unsafe {
-        naked_asm!(
-            "cld",
-            // Check whether the exception happened in userspace.
-            "test word ptr [rsp+16], 3",
-            "je 66f",
+    naked_asm!(
+        "cld",
+        // Check whether the exception happened in userspace.
+        "test word ptr [rsp+16], 3",
+        "je 66f",
 
-            // Userspace code path:
-            "swapgs",
-            // Store the error code.
-            "mov byte ptr gs:[{VECTOR_OFFSET}], 0xe",
-            "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
-            // Jump to the userspace exit point.
-            "jmp {exception_entry}",
+        // Userspace code path:
+        "swapgs",
+        // Store the error code.
+        "mov byte ptr gs:[{VECTOR_OFFSET}], 0xe",
+        "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
+        // Jump to the userspace exit point.
+        "jmp {exception_entry}",
 
-            // Kernel code path:
-            "66:",
-            // Check if we can recover from the exception.
-            "push rax",
-            "push rbx",
-            "push rcx",
-            // Loop setup
-            "mov rbx, [rsp+8+24]",
-            "lea rax, [rip+__recoverable_start]",
-            "lea rcx, [rip+__recoverable_end]",
-            "sub rcx, rax",
-            "shr rcx, 4",
-            "test rcx, rcx",
-            "je 68f",
+        // Kernel code path:
+        "66:",
+        // Check if we can recover from the exception.
+        "push rax",
+        "push rbx",
+        "push rcx",
+        // Loop setup
+        "mov rbx, [rsp+8+24]",
+        "lea rax, [rip+__recoverable_start]",
+        "lea rcx, [rip+__recoverable_end]",
+        "sub rcx, rax",
+        "shr rcx, 4",
+        "test rcx, rcx",
+        "je 68f",
 
-            // Loop body.
-            "67:",
-            "cmp [rax], rbx",
-            "je 69f",
-            "add rax, 16",
-            "loop 67b",
+        // Loop body.
+        "67:",
+        "cmp [rax], rbx",
+        "je 69f",
+        "add rax, 16",
+        "loop 67b",
 
-            // We couldn't recover from the exception.
-            "68:",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
+        // We couldn't recover from the exception.
+        "68:",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
 
-            // Jump to the kernel page fault handler.
-            "jmp {kernel_page_fault_handler}",
+        // Jump to the kernel page fault handler.
+        "jmp {kernel_page_fault_handler}",
 
-            // Recover from the exception.
-            "69:",
-            "mov rax, [rax+8]",
-            "mov [rsp+8+24], rax",
+        // Recover from the exception.
+        "69:",
+        "mov rax, [rax+8]",
+        "mov [rsp+8+24], rax",
 
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
 
-            "mov rdx, 1",
-            "add rsp, 8",
-            "iretq",
+        "mov rdx, 1",
+        "add rsp, 8",
+        "iretq",
 
-            kernel_page_fault_handler = sym kernel_page_fault_handler,
-            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
-            exception_entry = sym exception_entry,
-        );
-    }
+        kernel_page_fault_handler = sym kernel_page_fault_handler,
+        VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
+        exception_entry = sym exception_entry,
+    );
 }
 
 extern "x86-interrupt" fn kernel_page_fault_handler(
@@ -293,32 +289,30 @@ fn page_fault_handler_impl(frame: InterruptStackFrame, error_code: PageFaultErro
     );
 }
 
-#[naked]
+#[unsafe(naked)]
 extern "x86-interrupt" fn general_protection_fault_handler(
     frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    unsafe {
-        naked_asm!(
-            "cld",
-            // Check whether the exception happened in userspace.
-            "test word ptr [rsp+16], 3",
-            "je {kernel_general_protection_fault_handler}",
+    naked_asm!(
+        "cld",
+        // Check whether the exception happened in userspace.
+        "test word ptr [rsp+16], 3",
+        "je {kernel_general_protection_fault_handler}",
 
-            // Userspace code path:
-            "swapgs",
-            // Store the error code.
-            "mov byte ptr gs:[{VECTOR_OFFSET}], 0xd",
-            "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
-            // Jump to the userspace exit point.
-            "jmp {exception_entry}",
+        // Userspace code path:
+        "swapgs",
+        // Store the error code.
+        "mov byte ptr gs:[{VECTOR_OFFSET}], 0xd",
+        "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
+        // Jump to the userspace exit point.
+        "jmp {exception_entry}",
 
-            kernel_general_protection_fault_handler = sym kernel_general_protection_fault_handler,
-            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
-            exception_entry = sym exception_entry,
-        );
-    }
+        kernel_general_protection_fault_handler = sym kernel_general_protection_fault_handler,
+        VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
+        exception_entry = sym exception_entry,
+    );
 }
 
 extern "x86-interrupt" fn kernel_general_protection_fault_handler(
@@ -332,28 +326,26 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
     panic!("double fault {frame:x?} {code:x?}");
 }
 
-#[naked]
+#[unsafe(naked)]
 extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
-    unsafe {
-        naked_asm!(
-            "cld",
-            // Check whether the irq happened in userspace.
-            "test word ptr [rsp+8], 3",
-            "je {kernel_timer_handler}",
+    naked_asm!(
+        "cld",
+        // Check whether the irq happened in userspace.
+        "test word ptr [rsp+8], 3",
+        "je {kernel_timer_handler}",
 
-            // Userspace code path:
-            "swapgs",
-            // Store the error code.
-            "mov byte ptr gs:[{VECTOR_OFFSET}], {TIMER_VECTOR}",
-            // Jump to the userspace exit point.
-            "jmp {interrupt_entry}",
+        // Userspace code path:
+        "swapgs",
+        // Store the error code.
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {TIMER_VECTOR}",
+        // Jump to the userspace exit point.
+        "jmp {interrupt_entry}",
 
-            kernel_timer_handler = sym kernel_timer_handler,
-            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            TIMER_VECTOR = const TIMER_VECTOR,
-            interrupt_entry = sym interrupt_entry,
-        );
-    }
+        kernel_timer_handler = sym kernel_timer_handler,
+        VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        TIMER_VECTOR = const TIMER_VECTOR,
+        interrupt_entry = sym interrupt_entry,
+    );
 }
 
 extern "x86-interrupt" fn kernel_timer_handler(_: InterruptStackFrame) {
@@ -361,20 +353,18 @@ extern "x86-interrupt" fn kernel_timer_handler(_: InterruptStackFrame) {
     eoi();
 }
 
-#[naked]
+#[unsafe(naked)]
 extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
     // The code that entered userspace stored addresses where execution should
     // continue when userspace exits.
-    unsafe {
-        naked_asm!(
-            "cld",
-            "swapgs",
-            "mov byte ptr gs:[{VECTOR_OFFSET}], 0x80",
-            "jmp {exception_entry}",
-            VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-            exception_entry = sym exception_entry,
-        );
-    }
+    naked_asm!(
+        "cld",
+        "swapgs",
+        "mov byte ptr gs:[{VECTOR_OFFSET}], 0x80",
+        "jmp {exception_entry}",
+        VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        exception_entry = sym exception_entry,
+    );
 }
 
 /// Signal EOI.

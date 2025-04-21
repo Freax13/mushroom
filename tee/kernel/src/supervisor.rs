@@ -45,29 +45,23 @@ static SUPERVISOR_CALL_FN: Lazy<SupervisorCallFn> = Lazy::new(|| {
     panic!("couldn't determine hypervisor interface");
 });
 
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn tdx_supervisor_call() {
-    unsafe {
-        naked_asm!("vmcall", "ret");
-    }
+    naked_asm!("vmcall", "ret");
 }
 
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn snp_supervisor_call() {
-    unsafe {
-        naked_asm!("vmmcall", "ret");
-    }
+    naked_asm!("vmmcall", "ret");
 }
 
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn insecure_supervisor_call() {
-    unsafe {
-        naked_asm!(
-            "out {port}, al",
-            "ret",
-            port = const INSECURE_SUPERVISOR_CALL_PORT,
-        );
-    }
+    naked_asm!(
+        "out {port}, al",
+        "ret",
+        port = const INSECURE_SUPERVISOR_CALL_PORT,
+    );
 }
 
 pub unsafe fn start_next_ap() {

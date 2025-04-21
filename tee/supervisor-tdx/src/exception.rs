@@ -46,41 +46,39 @@ struct VeStackFrame {
     rip: u64,
 }
 
-#[naked]
+#[unsafe(naked)]
 extern "x86-interrupt" fn virtualization_handler(_frame: InterruptStackFrame) {
-    unsafe {
-        naked_asm!(
-            "endbr64",
-            "cld",
-            "push r11",
-            "push r10",
-            "push r9",
-            "push r8",
-            "push rdi",
-            "push rsi",
-            "push rdx",
-            "push rcx",
-            "push rbx",
-            "push rax",
-            "mov rdi, rsp",
-            "sub rsp, 8",
-            // TODO: make sure alignment is correct.
-            "call {virtualization_handler_impl}",
-            "add rsp, 8",
-            "pop rax",
-            "pop rbx",
-            "pop rcx",
-            "pop rdx",
-            "pop rsi",
-            "pop rdi",
-            "pop r8",
-            "pop r9",
-            "pop r10",
-            "pop r11",
-            "iretq",
-            virtualization_handler_impl = sym virtualization_handler_impl,
-        );
-    }
+    naked_asm!(
+        "endbr64",
+        "cld",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
+        "mov rdi, rsp",
+        "sub rsp, 8",
+        // TODO: make sure alignment is correct.
+        "call {virtualization_handler_impl}",
+        "add rsp, 8",
+        "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "iretq",
+        virtualization_handler_impl = sym virtualization_handler_impl,
+    );
 }
 
 extern "C" fn virtualization_handler_impl(frame: &mut VeStackFrame) {
