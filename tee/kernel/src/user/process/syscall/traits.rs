@@ -197,7 +197,7 @@ impl SyscallHandlers {
             );
         }
 
-        let mut slot = SyscallHandlerSlot::new();
+        let slot = SyscallHandlerSlot::new();
         let slot = pin!(slot);
         let placed = (handler.create_future)(slot, thread.clone(), args);
         let res = placed.await;

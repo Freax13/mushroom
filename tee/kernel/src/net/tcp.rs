@@ -599,7 +599,7 @@ impl OpenFileDescription for TcpSocket {
                 let this_entry = ports
                     .entries
                     .iter_mut()
-                    .find(|e| e.mode.as_ptr() == Arc::as_ptr(&bound.mode))
+                    .find(|e| core::ptr::eq(e.mode.as_ptr(), Arc::as_ptr(&bound.mode)))
                     .unwrap();
                 this_entry.local_ip = Some(local_ip);
                 this_entry.remote_addr = Some(remote_addr);
