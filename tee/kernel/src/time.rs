@@ -186,7 +186,7 @@ pub fn try_fire_clocks() {
         // now.
         return;
     };
-    guard.fire_clocks();
+    guard.refresh();
 }
 
 pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
