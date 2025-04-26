@@ -17,7 +17,7 @@ use crate::{
         node::{FileAccessContext, Link, LinkLocation, procfs::ThreadInos},
         path::{FileName, Path},
     },
-    rt::{self, notify::Notify},
+    rt::{PreemptionState, notify::Notify},
     spin::mutex::{Mutex, MutexGuard},
     time,
     user::process::{
@@ -226,7 +226,7 @@ impl Thread {
 
     pub async fn run(self: Arc<Self>) {
         self.process.add_thread(Arc::downgrade(&self));
-
+        let mut preemption_state = PreemptionState::new();
         loop {
             let exit_action = {
                 let running_state = self.watch();
@@ -269,11 +269,10 @@ impl Thread {
 
                                 // Re-enable interrupts.
                                 interrupts::enable();
-
-                                // Yield to the scheduler.
-                                rt::r#yield().await;
                             }
                         }
+
+                        preemption_state.check().await;
                     }
                 };
 

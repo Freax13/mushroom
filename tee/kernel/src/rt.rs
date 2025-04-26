@@ -6,7 +6,7 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::{per_cpu::PerCpu, spin::mutex::Mutex, user::schedule_vcpu};
+use crate::{per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu};
 use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
@@ -186,4 +186,33 @@ pub async fn r#yield() {
     }
 
     Yield { polled: false }.await
+}
+
+pub struct PreemptionState {
+    last_resumed: u64,
+}
+
+impl PreemptionState {
+    /// The duration after which threads should be preempted.
+    const TIME_SLICE: u64 = 25_000_000;
+
+    pub fn new() -> Self {
+        Self {
+            last_resumed: time::refresh_backend_offset(),
+        }
+    }
+
+    pub async fn check(&mut self) {
+        // Don't do anything if sufficient time hasn't passed.
+        let now = time::refresh_backend_offset();
+        if now - self.last_resumed < Self::TIME_SLICE {
+            return;
+        }
+
+        // Yield to the scheduler.
+        r#yield().await;
+
+        // Record when the thread was resumed.
+        self.last_resumed = time::refresh_backend_offset();
+    }
 }
