@@ -45,7 +45,7 @@ use crate::{
         path::Path,
     },
     net::{netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
-    rt::oneshot,
+    rt::{oneshot, r#yield},
     time::{self, now, sleep_until},
     user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
 };
@@ -1122,11 +1122,7 @@ async fn select_impl(
 
 #[syscall(i386 = 158, amd64 = 24)]
 async fn sched_yield() -> SyscallResult {
-    let (tx, rx) = oneshot::new();
-    crate::rt::spawn(async move {
-        let _ = tx.send(());
-    });
-    rx.recv().await.unwrap();
+    r#yield().await;
     Ok(0)
 }
 

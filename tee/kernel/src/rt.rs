@@ -1,11 +1,12 @@
 use core::{
+    cell::Cell,
     fmt::{self, Debug},
     panic::Location,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
 
-use crate::{spin::mutex::Mutex, user::schedule_vcpu};
+use crate::{per_cpu::PerCpu, spin::mutex::Mutex, user::schedule_vcpu};
 use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
@@ -64,6 +65,13 @@ impl Task {
             // Mark the task as done if the future has finished.
             if res.is_ready() {
                 self.state.store(TaskState::Done);
+                return;
+            }
+
+            // If the thread yielded voluntarily, put it at the end of the queue.
+            if PerCpu::get().scheduler_data.yielded.take() {
+                self.state.store(TaskState::Scheduled);
+                SCHEDULED_THREADS.push(self.clone());
                 return;
             }
 
@@ -140,6 +148,18 @@ enum TaskState {
     Done,
 }
 
+pub struct SchedulerData {
+    yielded: Cell<bool>,
+}
+
+impl SchedulerData {
+    pub const fn new() -> Self {
+        Self {
+            yielded: Cell::new(false),
+        }
+    }
+}
+
 pub async fn r#yield() {
     struct Yield {
         polled: bool,
@@ -150,12 +170,18 @@ pub async fn r#yield() {
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             if self.polled {
-                Poll::Ready(())
-            } else {
-                self.polled = true;
-                cx.waker().wake_by_ref();
-                Poll::Pending
+                return Poll::Ready(());
             }
+
+            // Tell the scheduler that the task wants to yield.
+            PerCpu::get().scheduler_data.yielded.set(true);
+
+            // Wake the waker and then yield. Note that this will only work
+            // if the `Pending` bubbles all the way up to the scheduler.
+            self.polled = true;
+            cx.waker().wake_by_ref();
+
+            Poll::Pending
         }
     }
 

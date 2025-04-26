@@ -16,6 +16,7 @@ use x86_64::{
 
 use crate::{
     memory::{frame, pagetable::PagetablesAllocations},
+    rt::SchedulerData,
     user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
 };
 
@@ -23,6 +24,7 @@ static COUNT: AtomicUsize = AtomicUsize::new(0);
 static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
     [const { PerCpu::new() }; MAX_APS_COUNT as usize];
 
+#[repr(align(64))]
 pub struct PerCpu {
     this: *mut PerCpu,
     pub idx: ApIndex,
@@ -36,6 +38,7 @@ pub struct PerCpu {
     pub error_code: Cell<u64>,
     pub last_pagetables: RefCell<Option<Arc<PagetablesAllocations>>>,
     pub private_allocator_state: RefCell<Option<frame::PrivateState>>,
+    pub scheduler_data: SchedulerData,
 }
 
 impl PerCpu {
@@ -53,9 +56,11 @@ impl PerCpu {
             error_code: Cell::new(0),
             last_pagetables: RefCell::new(None),
             private_allocator_state: RefCell::new(None),
+            scheduler_data: SchedulerData::new(),
         }
     }
 
+    // TODO: This isn't safe to call from an exception/IRQ handler.
     pub fn get() -> &'static Self {
         let addr: u64;
         unsafe {
