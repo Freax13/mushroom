@@ -1,19 +1,24 @@
 //! This module is responsible for handling CPU exceptions.
 
 use core::mem::offset_of;
+use core::sync::atomic::{AtomicU64, Ordering};
 use core::{
     alloc::Layout,
     arch::{asm, naked_asm},
     ptr::null_mut,
 };
 
-use crate::memory::pagetable::flush::tlb_shootdown_handler;
+use crate::memory::pagetable::flush;
+use crate::per_cpu::PerCpuSync;
 use crate::spin::lazy::Lazy;
 use crate::time;
 use crate::user::process::syscall::cpu_state::{exception_entry, interrupt_entry};
 use alloc::alloc::alloc;
 use constants::{TIMER_VECTOR, TLB_VECTOR};
+use crossbeam_utils::atomic::AtomicCell;
 use log::{debug, error, trace};
+use x86_64::instructions::interrupts::{self, without_interrupts};
+use x86_64::registers::control::{Cr8, PriorityClass};
 use x86_64::registers::model_specific::Msr;
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::{
@@ -327,6 +332,54 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code:
 }
 
 #[unsafe(naked)]
+extern "x86-interrupt" fn tlb_shootdown_handler(frame: InterruptStackFrame) {
+    naked_asm!(
+        "cld",
+
+        // swap gs if the irq happened in userspace.
+        "test word ptr [rsp+8], 3",
+        "je 55f",
+        "swapgs",
+        "55:",
+
+        // Save registers.
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+
+        // Jump to the handler.
+        "call {tlb_shootdown_handler}",
+
+        // Restore registers.
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+
+        // swap gs back if the irq happened in userspace.
+        "test word ptr [rsp+8], 3",
+        "je 66f",
+        "swapgs",
+        "66:",
+
+        "iretq",
+
+        tlb_shootdown_handler = sym flush::tlb_shootdown_handler,
+    );
+}
+
+#[unsafe(naked)]
 extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
     naked_asm!(
         "cld",
@@ -349,8 +402,13 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn kernel_timer_handler(_: InterruptStackFrame) {
-    time::try_fire_clocks();
-    eoi();
+    debug_assert!(!interrupts::are_enabled());
+    interrupts::enable();
+
+    start_interrupt_handler(Interrupt::Timer, time::try_fire_clocks);
+
+    debug_assert!(interrupts::are_enabled());
+    interrupts::disable();
 }
 
 #[unsafe(naked)]
@@ -371,5 +429,184 @@ extern "x86-interrupt" fn int0x80_handler(frame: InterruptStackFrame) {
 pub fn eoi() {
     unsafe {
         Msr::new(0x80b).write(0);
+    }
+}
+
+const RAW_TIMER_PRIORITY_CLASS: u8 = TIMER_VECTOR >> 4;
+const TIMER_PRIORITY_CLASS: PriorityClass = PriorityClass::new(RAW_TIMER_PRIORITY_CLASS).unwrap();
+
+pub struct InterruptData {
+    current_interrupt: AtomicCell<Option<Interrupt>>,
+    disable_all_interrupts_counter: AtomicU64,
+    disable_timer_interrupt_counter: AtomicU64,
+}
+
+impl InterruptData {
+    pub const fn new() -> Self {
+        Self {
+            current_interrupt: AtomicCell::new(None),
+            disable_all_interrupts_counter: AtomicU64::new(0),
+            disable_timer_interrupt_counter: AtomicU64::new(0),
+        }
+    }
+
+    pub fn check_max_interrupt(&self, max: Option<Interrupt>) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+
+        let current = self.current_interrupt.load();
+        match (current, max) {
+            (None, _) => {}
+            (Some(current), None) => {
+                panic!(
+                    "We shouldn't be in an interrupt handler, but we're currently executing the {current:?} interrupt handler"
+                );
+            }
+            (Some(current), Some(max)) => {
+                if current < max {
+                    panic!(
+                        "We shouldn't be in an interrupt handler with a priority higher than {max:?}, but we're currently executing the {current:?} interrupt handler"
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub fn start_interrupt_handler(interrupt: Interrupt, handler: impl FnOnce()) {
+    let prev = PerCpuSync::get()
+        .interrupt_data
+        .current_interrupt
+        .fetch_update(|current| {
+            // Fail if the current interrupt has a higher or equal
+            // priority.
+            if current.is_some_and(|current| current <= interrupt) {
+                return None;
+            }
+
+            Some(Some(interrupt))
+        })
+        .unwrap();
+
+    handler();
+
+    without_interrupts(|| {
+        let prev = PerCpuSync::get()
+            .interrupt_data
+            .current_interrupt
+            .swap(prev);
+
+        debug_assert_eq!(prev, Some(interrupt));
+
+        eoi();
+    });
+}
+
+/// A list of interrupts ordered by their priority (highest priority first).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Interrupt {
+    TlbShootdown,
+    Timer,
+}
+
+pub trait InterruptGuard {
+    fn new() -> Self;
+}
+
+/// An interrupt guard that blocks out no interrupts. This can't be used from an interrupt.
+pub struct NoInterruptGuard {}
+
+impl InterruptGuard for NoInterruptGuard {
+    #[track_caller]
+    fn new() -> Self {
+        PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+        Self {}
+    }
+}
+
+/// An interrupt guard that blocks out all interrupts.
+pub struct DisableAllInterruptsGuard {}
+
+impl InterruptGuard for DisableAllInterruptsGuard {
+    fn new() -> Self {
+        // Disable interrupts. This does nothing if interrupts are already
+        // disabled.
+        interrupts::disable();
+
+        // Increase the counter.
+        let interrupt_data = &PerCpuSync::get().interrupt_data;
+        interrupt_data
+            .disable_all_interrupts_counter
+            .fetch_add(1, Ordering::Relaxed);
+
+        Self {}
+    }
+}
+
+impl Drop for DisableAllInterruptsGuard {
+    fn drop(&mut self) {
+        // Decrease the counter.
+        let interrupt_data = &PerCpuSync::get().interrupt_data;
+        let prev = interrupt_data
+            .disable_all_interrupts_counter
+            .fetch_sub(1, Ordering::Relaxed);
+
+        // Enable interrupts if the counter hit 0.
+        if prev == 1 {
+            interrupts::enable();
+        }
+    }
+}
+
+/// An interrupt guard that blocks out timer interrupts.
+pub struct TimerInterruptGuard {}
+
+impl InterruptGuard for TimerInterruptGuard {
+    #[track_caller]
+    fn new() -> Self {
+        PerCpuSync::get()
+            .interrupt_data
+            .check_max_interrupt(Some(Interrupt::Timer));
+
+        without_interrupts(|| {
+            // Run without interrupts enabled to prevent a race condition
+            // between the CR8 and counter updates.
+
+            // Update the task priority if timer interrupts are currently allowed.
+            let requires_update =
+                Cr8::read().is_none_or(|pc| pc as u8 > (RAW_TIMER_PRIORITY_CLASS));
+            if requires_update {
+                Cr8::write(Some(TIMER_PRIORITY_CLASS));
+            }
+
+            // Increase the counter.
+            let interrupt_data = &PerCpuSync::get().interrupt_data;
+            interrupt_data
+                .disable_timer_interrupt_counter
+                .fetch_add(1, Ordering::Relaxed);
+        });
+        Self {}
+    }
+}
+
+impl Drop for TimerInterruptGuard {
+    fn drop(&mut self) {
+        without_interrupts(|| {
+            // Run without interrupts enabled to prevent a race condition
+            // between the CR8 and counter updates.
+
+            // Decrease the counter.
+            let interrupt_data = &PerCpuSync::get().interrupt_data;
+            let prev = interrupt_data
+                .disable_timer_interrupt_counter
+                .fetch_sub(1, Ordering::Relaxed);
+
+            // Unmask all external interupts if the counter hit zero. Note that
+            // this assumes that we only use CR8 for timer interrupts.
+            if prev == 1 {
+                Cr8::write(None);
+            }
+        });
     }
 }

@@ -2,6 +2,7 @@ use core::cmp;
 
 use crate::{
     error::{Result, bail, err},
+    exception::TimerInterruptGuard,
     spin::{lazy::Lazy, mutex::Mutex},
     user::process::syscall::args::ClockId,
 };
@@ -24,7 +25,7 @@ mod real;
 #[cfg(feature = "real-time")]
 use real as backend;
 
-static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::new()));
+static STATE: Lazy<Mutex<State, TimerInterruptGuard>> = Lazy::new(|| Mutex::new(State::new()));
 
 pub fn advance_time() -> Result<(), NoTimeoutScheduledError> {
     debug!("advancing simulated time");
@@ -198,7 +199,7 @@ pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
 
 struct Timeout {
     time: i64,
-    sender: oneshot::Sender<()>,
+    sender: oneshot::Sender<(), TimerInterruptGuard>,
 }
 
 impl Timeout {

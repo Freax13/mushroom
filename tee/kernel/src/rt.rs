@@ -6,7 +6,9 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::{per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu};
+use crate::{
+    exception::TimerInterruptGuard, per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu,
+};
 use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_utils::atomic::AtomicCell;
 use intrusive_collections::{XorLinkedList, XorLinkedListAtomicLink, intrusive_adapter};
@@ -18,7 +20,7 @@ pub mod notify;
 pub mod once;
 pub mod oneshot;
 
-static SCHEDULED_THREADS: Mutex<XorLinkedList<TaskAdapter>> =
+static SCHEDULED_THREADS: Mutex<XorLinkedList<TaskAdapter>, TimerInterruptGuard> =
     Mutex::new(XorLinkedList::new(TaskAdapter::NEW));
 
 #[track_caller]

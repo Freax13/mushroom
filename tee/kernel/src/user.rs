@@ -3,6 +3,7 @@ use process::syscall;
 use x86_64::instructions::interrupts::without_interrupts;
 
 use crate::{
+    exception::TimerInterruptGuard,
     memory::{frame, pagetable::flush},
     per_cpu::PerCpu,
     rt::poll,
@@ -67,7 +68,7 @@ struct LastRunningVcpuError;
 
 pub static SCHEDULER: Scheduler = Scheduler::new();
 
-pub struct Scheduler(Mutex<SchedulerState>);
+pub struct Scheduler(Mutex<SchedulerState, TimerInterruptGuard>);
 
 struct SchedulerState {
     /// One bit for every vCPU.

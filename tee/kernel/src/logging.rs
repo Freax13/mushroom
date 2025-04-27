@@ -3,12 +3,12 @@ use core::fmt::Write;
 use log::{Log, Metadata, Record};
 use log_types::{LogBuffer, LogWriter};
 
-use crate::spin::mutex::Mutex;
+use crate::{exception::TimerInterruptGuard, spin::mutex::Mutex};
 
 #[unsafe(link_section = ".log_buffer")]
 static LOG_BUFFER: LogBuffer = LogBuffer::new();
 
-static WRITER: Mutex<LogWriter> = Mutex::new(LogWriter::new(&LOG_BUFFER));
+static WRITER: Mutex<LogWriter, TimerInterruptGuard> = Mutex::new(LogWriter::new(&LOG_BUFFER));
 
 pub struct FastLogger;
 

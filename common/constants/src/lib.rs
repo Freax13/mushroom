@@ -341,8 +341,8 @@ impl IntoIterator for PageRange<PhysFrame> {
 }
 
 // Irq vectors used in the kernel.
-pub const TLB_VECTOR: u8 = 0x20;
-pub const TIMER_VECTOR: u8 = 0x21;
+pub const TIMER_VECTOR: u8 = 0x20;
+pub const TLB_VECTOR: u8 = 0x30;
 
 #[cfg(test)]
 fn check_ranges<T>(ranges: &[PageRange<T>])
