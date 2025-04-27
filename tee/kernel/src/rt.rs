@@ -8,8 +8,8 @@ use core::{
 
 use crate::{per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu};
 use alloc::{boxed::Box, sync::Arc, task::Wake};
-use crossbeam_queue::SegQueue;
 use crossbeam_utils::atomic::AtomicCell;
+use intrusive_collections::{XorLinkedList, XorLinkedListAtomicLink, intrusive_adapter};
 use log::warn;
 
 pub mod mpmc;
@@ -18,7 +18,8 @@ pub mod notify;
 pub mod once;
 pub mod oneshot;
 
-static SCHEDULED_THREADS: SegQueue<Arc<Task>> = SegQueue::new();
+static SCHEDULED_THREADS: Mutex<XorLinkedList<TaskAdapter>> =
+    Mutex::new(XorLinkedList::new(TaskAdapter::NEW));
 
 #[track_caller]
 pub fn spawn(future: impl Future<Output = ()> + Send + 'static) {
@@ -26,7 +27,7 @@ pub fn spawn(future: impl Future<Output = ()> + Send + 'static) {
 }
 
 pub fn poll() -> bool {
-    let Some(thread) = SCHEDULED_THREADS.pop() else {
+    let Some(thread) = SCHEDULED_THREADS.lock().pop_front() else {
         return false;
     };
     thread.poll();
@@ -34,15 +35,19 @@ pub fn poll() -> bool {
 }
 
 struct Task {
+    link: XorLinkedListAtomicLink,
     state: AtomicCell<TaskState>,
     future: Mutex<Pin<Box<dyn Future<Output = ()> + Send>>>,
     spawn_location: &'static Location<'static>,
 }
 
+intrusive_adapter!(TaskAdapter = Arc<Task>: Task { link: XorLinkedListAtomicLink });
+
 impl Task {
     #[track_caller]
     fn new(future: impl Future<Output = ()> + Send + 'static) -> Arc<Self> {
         Arc::new(Self {
+            link: XorLinkedListAtomicLink::new(),
             state: AtomicCell::new(TaskState::Waiting),
             future: Mutex::new(Box::pin(future)),
             spawn_location: Location::caller(),
@@ -71,7 +76,7 @@ impl Task {
             // If the thread yielded voluntarily, put it at the end of the queue.
             if PerCpu::get().scheduler_data.yielded.take() {
                 self.state.store(TaskState::Scheduled);
-                SCHEDULED_THREADS.push(self.clone());
+                SCHEDULED_THREADS.lock().push_back(self.clone());
                 return;
             }
 
@@ -113,7 +118,7 @@ impl Wake for Task {
 
         // Schedule the task if necessary.
         if matches!(prev_state, TaskState::Waiting) {
-            SCHEDULED_THREADS.push(self);
+            SCHEDULED_THREADS.lock().push_back(self);
             schedule_vcpu();
         }
     }
