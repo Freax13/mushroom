@@ -39,7 +39,7 @@ use constants::{ApBitmap, AtomicApBitmap};
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
-use x86_64::{VirtAddr, instructions::interrupts};
+use x86_64::VirtAddr;
 
 use crate::{
     error::Result,
@@ -266,9 +266,6 @@ impl Thread {
 
                                 // Signal that we're done handling the interrupt.
                                 eoi();
-
-                                // Re-enable interrupts.
-                                interrupts::enable();
                             }
                         }
 

@@ -1,6 +1,7 @@
 use core::{
     cell::UnsafeCell,
     cmp,
+    marker::PhantomData,
     num::Wrapping,
     ops::{Deref, DerefMut},
     panic::Location,
@@ -9,29 +10,37 @@ use core::{
 
 use log::warn;
 
+use crate::exception::{InterruptGuard, NoInterruptGuard};
+
 const RELOAD_LIMIT: i64 = i64::MIN / 2;
 
 /// A spin locked based read-write mutex to create unique references to shared values.
-pub struct RwLock<T> {
+pub struct RwLock<T, I = NoInterruptGuard> {
     cell: UnsafeCell<T>,
     ///  0 -> Unlocked
     /// \>0 -> Read-locked
     /// <0 -> Write-locked
     state: AtomicI64,
+    _marker: PhantomData<I>,
 }
 
-impl<T> RwLock<T> {
+impl<T, I> RwLock<T, I> {
     /// Wrap a value.
     pub const fn new(value: T) -> Self {
         Self {
             cell: UnsafeCell::new(value),
             state: AtomicI64::new(0),
+            _marker: PhantomData,
         }
     }
 
     /// Try to acquire the lock for a read guard without spinnning.
     #[inline]
-    pub fn try_read(&self) -> Option<ReadRwLockGuard<T>> {
+    pub fn try_read(&self) -> Option<ReadRwLockGuard<T, I>>
+    where
+        I: InterruptGuard,
+    {
+        let interrupt_guard = I::new();
         // fetch_add is faster than compare_exchange, so we optimistically add
         // 1 to the state to registers a read guard. This will obviously behave
         // correctly if the lock is not taken or taken by other read guards.
@@ -46,7 +55,10 @@ impl<T> RwLock<T> {
         // but still avoid bugs.
         let value = self.state.fetch_add(1, Ordering::Relaxed);
         match value {
-            0.. => Some(ReadRwLockGuard { lock: self }),
+            0.. => Some(ReadRwLockGuard {
+                lock: self,
+                _interrupt_guard: interrupt_guard,
+            }),
             ..=RELOAD_LIMIT => {
                 self.reload();
                 None
@@ -84,7 +96,10 @@ impl<T> RwLock<T> {
     /// Acquire the lock for a read guard.
     #[inline]
     #[track_caller]
-    pub fn read(&self) -> ReadRwLockGuard<T> {
+    pub fn read(&self) -> ReadRwLockGuard<T, I>
+    where
+        I: InterruptGuard,
+    {
         if let Some(guard) = self.try_read() {
             return guard;
         }
@@ -94,7 +109,10 @@ impl<T> RwLock<T> {
     #[inline(never)]
     #[cold]
     #[track_caller]
-    fn read_slow_path(&self) -> ReadRwLockGuard<'_, T> {
+    fn read_slow_path(&self) -> ReadRwLockGuard<'_, T, I>
+    where
+        I: InterruptGuard,
+    {
         let mut counter = Wrapping(0u32);
         loop {
             core::hint::spin_loop();
@@ -111,17 +129,27 @@ impl<T> RwLock<T> {
 
     /// Try to acquire the lock for a write guard without spinnning.
     #[inline]
-    pub fn try_write(&self) -> Option<WriteRwLockGuard<T>> {
+    pub fn try_write(&self) -> Option<WriteRwLockGuard<T, I>>
+    where
+        I: InterruptGuard,
+    {
+        let interrupt_guard = I::new();
         self.state
             .compare_exchange(0, i64::MIN, Ordering::Acquire, Ordering::Relaxed)
             .ok()
-            .map(|_| WriteRwLockGuard { lock: self })
+            .map(|_| WriteRwLockGuard {
+                lock: self,
+                _interrupt_guard: interrupt_guard,
+            })
     }
 
     /// Acquire the lock for a write guard.
     #[inline]
     #[track_caller]
-    pub fn write(&self) -> WriteRwLockGuard<T> {
+    pub fn write(&self) -> WriteRwLockGuard<T, I>
+    where
+        I: InterruptGuard,
+    {
         if let Some(guard) = self.try_write() {
             return guard;
         }
@@ -131,7 +159,10 @@ impl<T> RwLock<T> {
     #[inline(never)]
     #[cold]
     #[track_caller]
-    fn write_slow_path(&self) -> WriteRwLockGuard<'_, T> {
+    fn write_slow_path(&self) -> WriteRwLockGuard<'_, T, I>
+    where
+        I: InterruptGuard,
+    {
         let mut counter = Wrapping(0u32);
         loop {
             core::hint::spin_loop();
@@ -152,7 +183,10 @@ impl<T> RwLock<T> {
     pub fn write_two<'a>(
         &'a self,
         other: &'a Self,
-    ) -> (WriteRwLockGuard<'a, T>, WriteRwLockGuard<'a, T>) {
+    ) -> (WriteRwLockGuard<'a, T, I>, WriteRwLockGuard<'a, T, I>)
+    where
+        I: InterruptGuard,
+    {
         // Compare the pointers of the mutexes to get a determinstic ordering.
         let self_ptr = self as *const Self;
         let other_ptr = other as *const Self;
@@ -185,14 +219,15 @@ impl<T> RwLock<T> {
     }
 }
 
-unsafe impl<T> Send for RwLock<T> where T: Send {}
-unsafe impl<T> Sync for RwLock<T> where T: Send + Sync {}
+unsafe impl<T, I> Send for RwLock<T, I> where T: Send {}
+unsafe impl<T, I> Sync for RwLock<T, I> where T: Send + Sync {}
 
-pub struct ReadRwLockGuard<'a, T> {
-    lock: &'a RwLock<T>,
+pub struct ReadRwLockGuard<'a, T, I = NoInterruptGuard> {
+    lock: &'a RwLock<T, I>,
+    _interrupt_guard: I,
 }
 
-impl<T> Deref for ReadRwLockGuard<'_, T> {
+impl<T, I> Deref for ReadRwLockGuard<'_, T, I> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -200,17 +235,18 @@ impl<T> Deref for ReadRwLockGuard<'_, T> {
     }
 }
 
-impl<T> Drop for ReadRwLockGuard<'_, T> {
+impl<T, I> Drop for ReadRwLockGuard<'_, T, I> {
     fn drop(&mut self) {
         self.lock.state.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
-pub struct WriteRwLockGuard<'a, T> {
-    lock: &'a RwLock<T>,
+pub struct WriteRwLockGuard<'a, T, I = NoInterruptGuard> {
+    lock: &'a RwLock<T, I>,
+    _interrupt_guard: I,
 }
 
-impl<T> Deref for WriteRwLockGuard<'_, T> {
+impl<T, I> Deref for WriteRwLockGuard<'_, T, I> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -218,13 +254,13 @@ impl<T> Deref for WriteRwLockGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for WriteRwLockGuard<'_, T> {
+impl<T, I> DerefMut for WriteRwLockGuard<'_, T, I> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.lock.cell.get() }
     }
 }
 
-impl<T> Drop for WriteRwLockGuard<'_, T> {
+impl<T, I> Drop for WriteRwLockGuard<'_, T, I> {
     fn drop(&mut self) {
         self.lock.state.store(0, Ordering::Release);
     }

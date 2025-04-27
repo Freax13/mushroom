@@ -5,7 +5,10 @@
 
 use core::arch::{asm, naked_asm, x86_64::__cpuid};
 
-use crate::spin::{lazy::Lazy, mutex::Mutex};
+use crate::{
+    exception::TimerInterruptGuard,
+    spin::{lazy::Lazy, mutex::Mutex},
+};
 use arrayvec::ArrayVec;
 use constants::{ApIndex, INSECURE_SUPERVISOR_CALL_PORT, physical_address::DYNAMIC_2MIB};
 use supervisor_services::{SlotIndex, SupervisorCallNr};
@@ -196,7 +199,7 @@ fn deallocate(slot_idx: SlotIndex) {
 pub static ALLOCATOR: Allocator = Allocator::new();
 
 pub struct Allocator {
-    state: Mutex<AllocatorState>,
+    state: Mutex<AllocatorState, TimerInterruptGuard>,
 }
 
 impl Allocator {

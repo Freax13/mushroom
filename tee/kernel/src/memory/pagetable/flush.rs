@@ -11,10 +11,14 @@ use x86_64::{
         control::{Cr3, Cr4, Cr4Flags},
         model_specific::Msr,
     },
-    structures::{idt::InterruptStackFrame, paging::Page},
+    structures::paging::Page,
 };
 
-use crate::{exception::eoi, per_cpu::PerCpu, spin::lazy::Lazy};
+use crate::{
+    exception::{Interrupt, start_interrupt_handler},
+    per_cpu::{PerCpu, PerCpuSync},
+    spin::lazy::Lazy,
+};
 
 use super::ActivePageTableGuard;
 
@@ -33,12 +37,12 @@ pub fn pre_halt() {
 }
 
 pub fn post_halt() {
-    let idx = PerCpu::get().idx;
-    ACTIVE_APS.set(idx);
-    process_flushes(idx);
+    ACTIVE_APS.set(PerCpu::get().idx);
+    process_flushes();
 }
 
-fn process_flushes(idx: ApIndex) {
+fn process_flushes() {
+    let idx = PerCpuSync::get().idx;
     let need_global_flush = PENDING_GLOBAL_TLB_SHOOTDOWN.take(idx);
     let need_non_global_flush = PENDING_TLB_SHOOTDOWN.take(idx);
     if need_global_flush {
@@ -63,22 +67,8 @@ fn process_flushes(idx: ApIndex) {
     }
 }
 
-pub extern "x86-interrupt" fn tlb_shootdown_handler(_: InterruptStackFrame) {
-    // This handler is only used for TDX. The value returned by `rdpid` can be
-    // controlled by the host on SNP, so if we ever need to use this handler on
-    // SNP, we'll have to use something else.
-    let ap_id: u64;
-    unsafe {
-        asm!(
-            "rdpid {}",
-            out(reg) ap_id,
-        );
-    }
-    let idx = ApIndex::new(ap_id as u8);
-
-    process_flushes(idx);
-
-    eoi();
+pub extern "C" fn tlb_shootdown_handler() {
+    start_interrupt_handler(Interrupt::TlbShootdown, process_flushes);
 }
 
 fn send_tlb_ipis(aps: ApBitmap) {
