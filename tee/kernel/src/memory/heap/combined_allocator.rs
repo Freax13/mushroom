@@ -4,6 +4,8 @@ use core::{
     ptr::{NonNull, null_mut},
 };
 
+use crate::per_cpu::PerCpuSync;
+
 use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSizeAllocator};
 
 macro_rules! with_buckets {
@@ -57,16 +59,22 @@ where
     A: Allocator,
 {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
         let res = self.allocator.allocate(layout);
         res.map_or(null_mut(), |ptr| ptr.as_ptr().cast())
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
         let ptr = unsafe { NonNull::new_unchecked(ptr) };
         unsafe { self.allocator.deallocate(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
         let Ok(new_layout) = Layout::from_size_align(new_size, layout.align()) else {
             return null_mut();
         };

@@ -2,7 +2,7 @@
 
 use crate::{
     error::{Result, ensure, err},
-    per_cpu::PerCpu,
+    per_cpu::{PerCpu, PerCpuSync},
     spin::{mutex::Mutex, rwlock::RwLock},
     user::process::memory::without_smap,
 };
@@ -441,6 +441,8 @@ impl Pagetables {
 
     #[must_use]
     fn activate(&self) -> ActivePageTableGuard {
+        PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
         let allocations = &self.allocations;
 
         let per_cpu = PerCpu::get();
