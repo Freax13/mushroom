@@ -3,10 +3,16 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::spin::mutex::Mutex;
+use crate::{
+    exception::{InterruptGuard, NoInterruptGuard},
+    spin::mutex::Mutex,
+};
 use alloc::sync::Arc;
 
-pub fn new<T>() -> (Sender<T>, Receiver<T>) {
+pub fn new<T, I>() -> (Sender<T, I>, Receiver<T, I>)
+where
+    I: InterruptGuard,
+{
     let state = Arc::new(Mutex::new(State::Empty));
     (Sender(state.clone()), Receiver(state))
 }
@@ -18,19 +24,15 @@ enum State<T> {
     Closed,
 }
 
-pub struct Sender<T>(Arc<Mutex<State<T>>>);
+pub struct Sender<T, I: InterruptGuard = NoInterruptGuard>(Arc<Mutex<State<T>, I>>);
 
 #[derive(Debug)]
 pub struct SendError<T>(T);
 
-impl<T> Sender<T> {
-    /// Returns whether the sender can still send a value.
-    /// This is not the case if the receive half has been dropped.
-    pub fn can_send(&self) -> bool {
-        let guard = self.0.lock();
-        !matches!(&*guard, State::Closed)
-    }
-
+impl<T, I> Sender<T, I>
+where
+    I: InterruptGuard,
+{
     pub fn send(self, value: T) -> Result<(), SendError<T>> {
         let mut guard = self.0.lock();
 
@@ -58,7 +60,10 @@ impl<T> Sender<T> {
     }
 }
 
-impl<T> Drop for Sender<T> {
+impl<T, I> Drop for Sender<T, I>
+where
+    I: InterruptGuard,
+{
     fn drop(&mut self) {
         let mut guard = self.0.lock();
 
@@ -79,16 +84,24 @@ impl<T> Drop for Sender<T> {
     }
 }
 
-pub struct Receiver<T>(Arc<Mutex<State<T>>>);
+pub struct Receiver<T, I: InterruptGuard>(Arc<Mutex<State<T>, I>>);
 
 #[derive(Debug)]
 pub struct RecvError;
 
-impl<T> Receiver<T> {
+impl<T, I> Receiver<T, I>
+where
+    I: InterruptGuard,
+{
     pub async fn recv(self) -> Result<T, RecvError> {
-        struct RecvFuture<T>(Receiver<T>);
+        struct RecvFuture<T, I>(Receiver<T, I>)
+        where
+            I: InterruptGuard;
 
-        impl<T> Future for RecvFuture<T> {
+        impl<T, I> Future for RecvFuture<T, I>
+        where
+            I: InterruptGuard,
+        {
             type Output = Result<T, RecvError>;
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -117,7 +130,10 @@ impl<T> Receiver<T> {
     }
 }
 
-impl<T> Drop for Receiver<T> {
+impl<T, I> Drop for Receiver<T, I>
+where
+    I: InterruptGuard,
+{
     fn drop(&mut self) {
         let mut guard = self.0.lock();
         *guard = State::Closed;

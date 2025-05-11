@@ -94,7 +94,7 @@ pub fn run_vcpu() -> ! {
                 // Set VGIF.
                 vintr_ctrl.set_bit(9, true);
                 // Set V_INTR_PRIO.
-                vintr_ctrl.set_bits(16..=19, 2);
+                vintr_ctrl.set_bits(16..=19, u64::from(constants::TIMER_VECTOR >> 4));
                 // Clear V_IGN_TPR.
                 vintr_ctrl.set_bit(20, false);
                 // Set V_INTR_VECTOR.

@@ -153,6 +153,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const_fn"
+version = "0.4.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f8a2ca5ac02d09563609681103aada9e1777d54fc57a5acd7a41404f9c93b6e"
+
+[[package]]
 name = "constants"
 version = "0.1.0"
 dependencies = [
@@ -182,15 +188,6 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
-
-[[package]]
-name = "crossbeam-queue"
-version = "0.3.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f58bbc28f91df819d0aa2a2c00cd19754769c2fad90579b3592b1c9ba7a3115"
-dependencies = [
- "crossbeam-utils",
-]
 
 [[package]]
 name = "crossbeam-utils"
@@ -409,6 +406,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "intrusive-collections"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "189d0897e4cbe8c75efedf3502c18c887b05046e59d28404d4d8e46cbc4d1e86"
+dependencies = [
+ "memoffset",
+]
+
+[[package]]
 name = "io"
 version = "0.1.0"
 dependencies = [
@@ -426,9 +432,9 @@ dependencies = [
  "bitflags",
  "bytemuck",
  "constants",
- "crossbeam-queue",
  "crossbeam-utils",
  "futures",
+ "intrusive-collections",
  "kernel-macros",
  "linkme",
  "log",
@@ -939,10 +945,11 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "x86_64"
 version = "0.15.2"
-source = "git+https://github.com/rust-osdev/x86_64.git?rev=59ac07c#59ac07c97c90f0cf8f02512cb1ed6e4accbdbb40"
+source = "git+https://github.com/rust-osdev/x86_64.git?rev=7ae7da5#7ae7da5f0ef1b2a927a687538095163f32d72c85"
 dependencies = [
  "bit_field",
  "bitflags",
+ "const_fn",
  "rustversion",
  "volatile 0.4.6",
 ]

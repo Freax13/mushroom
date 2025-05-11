@@ -1,6 +1,7 @@
 use core::{
     cell::UnsafeCell,
     cmp,
+    marker::PhantomData,
     num::Wrapping,
     ops::{Deref, DerefMut},
     panic::Location,
@@ -9,34 +10,49 @@ use core::{
 
 use log::warn;
 
+use crate::exception::{InterruptGuard, NoInterruptGuard};
+
 /// A spin locked based mutex to create unique references to shared values.
-pub struct Mutex<T> {
+pub struct Mutex<T, I = NoInterruptGuard> {
     locked: AtomicBool,
     cell: UnsafeCell<T>,
+    _marker: PhantomData<I>,
 }
 
-impl<T> Mutex<T> {
+impl<T, I> Mutex<T, I> {
     #[inline]
     pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
             cell: UnsafeCell::new(value),
+            _marker: PhantomData,
         }
     }
 
     /// Try to acquire the mutex.
     #[inline]
-    pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, T, I>>
+    where
+        I: InterruptGuard,
+    {
+        let interrupt_guard = I::new();
+
         self.locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .ok()
-            .map(|_| MutexGuard { mutex: self })
+            .map(|_| MutexGuard {
+                mutex: self,
+                _interrupt_guard: interrupt_guard,
+            })
     }
 
     /// Acquire the mutex.
     #[inline]
     #[track_caller]
-    pub fn lock(&self) -> MutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T, I>
+    where
+        I: InterruptGuard,
+    {
         if let Some(guard) = self.try_lock() {
             return guard;
         }
@@ -46,7 +62,10 @@ impl<T> Mutex<T> {
     #[inline(never)]
     #[cold]
     #[track_caller]
-    fn lock_slow_path(&self) -> MutexGuard<'_, T> {
+    fn lock_slow_path(&self) -> MutexGuard<'_, T, I>
+    where
+        I: InterruptGuard,
+    {
         let mut counter = Wrapping(0u32);
         loop {
             core::hint::spin_loop();
@@ -70,7 +89,10 @@ impl<T> Mutex<T> {
     /// Lock two mutexes. This method avoids deadlocks with other threads
     /// trying to acquire the same Mutexes.
     #[track_caller]
-    pub fn lock_two<'a>(&'a self, other: &'a Self) -> (MutexGuard<'a, T>, MutexGuard<'a, T>) {
+    pub fn lock_two<'a>(&'a self, other: &'a Self) -> (MutexGuard<'a, T, I>, MutexGuard<'a, T, I>)
+    where
+        I: InterruptGuard,
+    {
         // Compare the pointers of the mutexes to get a determinstic ordering.
         let self_ptr = self as *const Self;
         let other_ptr = other as *const Self;
@@ -101,19 +123,20 @@ impl<T> Mutex<T> {
     }
 }
 
-unsafe impl<T> Send for Mutex<T> where T: Send {}
-unsafe impl<T> Sync for Mutex<T> where T: Send {}
+unsafe impl<T, I> Send for Mutex<T, I> where T: Send {}
+unsafe impl<T, I> Sync for Mutex<T, I> where T: Send {}
 
-impl<T> Clone for Mutex<T>
+impl<T, I> Clone for Mutex<T, I>
 where
     T: Clone,
+    I: InterruptGuard,
 {
     fn clone(&self) -> Self {
         Self::new(self.lock().clone())
     }
 }
 
-impl<T> Default for Mutex<T>
+impl<T, I> Default for Mutex<T, I>
 where
     T: Default,
 {
@@ -122,11 +145,12 @@ where
     }
 }
 
-pub struct MutexGuard<'a, T> {
-    mutex: &'a Mutex<T>,
+pub struct MutexGuard<'a, T, I = NoInterruptGuard> {
+    mutex: &'a Mutex<T, I>,
+    _interrupt_guard: I,
 }
 
-impl<T> Deref for MutexGuard<'_, T> {
+impl<T, I> Deref for MutexGuard<'_, T, I> {
     type Target = T;
 
     #[inline]
@@ -139,7 +163,7 @@ impl<T> Deref for MutexGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for MutexGuard<'_, T> {
+impl<T, I> DerefMut for MutexGuard<'_, T, I> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
@@ -150,7 +174,7 @@ impl<T> DerefMut for MutexGuard<'_, T> {
     }
 }
 
-impl<T> Drop for MutexGuard<'_, T> {
+impl<T, I> Drop for MutexGuard<'_, T, I> {
     #[inline]
     fn drop(&mut self) {
         self.mutex.locked.store(false, Ordering::Release);
