@@ -33,13 +33,6 @@ impl<T, I> Sender<T, I>
 where
     I: InterruptGuard,
 {
-    /// Returns whether the sender can still send a value.
-    /// This is not the case if the receive half has been dropped.
-    pub fn can_send(&self) -> bool {
-        let guard = self.0.lock();
-        !matches!(&*guard, State::Closed)
-    }
-
     pub fn send(self, value: T) -> Result<(), SendError<T>> {
         let mut guard = self.0.lock();
 

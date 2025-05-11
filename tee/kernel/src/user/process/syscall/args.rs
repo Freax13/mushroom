@@ -889,7 +889,7 @@ enum_arg! {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timespec {
-    pub tv_sec: i32,
+    pub tv_sec: i32, // TODO: Is this always positive????
     pub tv_nsec: u32,
 }
 
@@ -901,6 +901,17 @@ impl Timespec {
 
     pub const UTIME_NOW: u32 = 0x3FFFFFFF;
     pub const UTIME_OMIT: u32 = 0x3FFFFFFE;
+
+    pub fn from_ms(ms: i64) -> Self {
+        Self::from_ns(ms * 1_000_000)
+    }
+
+    pub fn from_ns(ns: i64) -> Self {
+        Timespec {
+            tv_sec: i32::try_from(ns / 1_000_000_000).unwrap(),
+            tv_nsec: u32::try_from(ns % 1_000_000_000).unwrap(),
+        }
+    }
 
     pub fn saturating_add(self, rhs: Self) -> Self {
         let mut tv_sec = self.tv_sec.saturating_add(rhs.tv_sec);

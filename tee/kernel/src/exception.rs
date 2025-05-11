@@ -402,7 +402,7 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn kernel_timer_handler(_: InterruptStackFrame) {
-    start_interrupt_handler(Interrupt::Timer, time::try_fire_clocks);
+    start_interrupt_handler(Interrupt::Timer, time::expire_timers);
 }
 
 #[unsafe(naked)]
