@@ -405,7 +405,7 @@ extern "x86-interrupt" fn kernel_timer_handler(_: InterruptStackFrame) {
     debug_assert!(!interrupts::are_enabled());
     interrupts::enable();
 
-    start_interrupt_handler(Interrupt::Timer, time::try_fire_clocks);
+    start_interrupt_handler(Interrupt::Timer, time::expire_timers);
 
     debug_assert!(interrupts::are_enabled());
     interrupts::disable();

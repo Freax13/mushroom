@@ -3,7 +3,7 @@ use process::syscall;
 use x86_64::instructions::interrupts::without_interrupts;
 
 use crate::{
-    exception::TimerInterruptGuard,
+    exception::{InterruptGuard, TimerInterruptGuard},
     memory::{frame, pagetable::flush},
     per_cpu::PerCpu,
     rt::poll,
@@ -25,10 +25,10 @@ pub fn run() -> ! {
         frame::release_private();
 
         let res = halt();
-        if res.is_err() {
+        if let Err(guard) = res {
             // We're the last vCPU running.
             // Advance simulated time.
-            let res = advance_time();
+            let res = advance_time(guard);
 
             if res.is_err() {
                 // There are no futures than are ready to be polled.
@@ -45,26 +45,38 @@ pub fn run() -> ! {
 
 /// Halt this vcpu.
 #[inline(never)]
-fn halt() -> Result<(), LastRunningVcpuError> {
-    SCHEDULER.halt()?;
+fn halt() -> Result<(), LastRunningVcpuGuard> {
+    let _guard = TimerInterruptGuard::new();
 
-    #[cfg(feature = "profiling")]
-    crate::profiler::flush();
+    loop {
+        SCHEDULER.halt()?;
 
-    flush::pre_halt();
+        #[cfg(feature = "profiling")]
+        crate::profiler::flush();
 
-    supervisor::halt();
+        flush::pre_halt();
 
-    flush::post_halt();
+        supervisor::halt();
 
-    SCHEDULER.resume();
+        flush::post_halt();
+
+        if SCHEDULER.resume() {
+            break;
+        }
+    }
 
     Ok(())
 }
 
 /// An error that is returned when the last running vCPU request to be halted.
-#[derive(Debug, Clone, Copy)]
-struct LastRunningVcpuError;
+#[derive(Debug)]
+pub struct LastRunningVcpuGuard(());
+
+impl Drop for LastRunningVcpuGuard {
+    fn drop(&mut self) {
+        SCHEDULER.0.lock().skipping = false;
+    }
+}
 
 pub static SCHEDULER: Scheduler = Scheduler::new();
 
@@ -73,6 +85,7 @@ pub struct Scheduler(Mutex<SchedulerState, TimerInterruptGuard>);
 struct SchedulerState {
     /// One bit for every vCPU.
     bits: ApBitmap,
+    skipping: bool,
     /// The number of vCPUs that have finished being launched.
     launched: u8,
     /// Whether a vCPU is being launched right now.
@@ -86,6 +99,7 @@ impl Scheduler {
 
         Self(Mutex::new(SchedulerState {
             bits,
+            skipping: false,
             launched: 0,
             is_launching: true,
         }))
@@ -112,21 +126,26 @@ impl Scheduler {
         })
     }
 
-    fn halt(&self) -> Result<(), LastRunningVcpuError> {
+    fn halt(&self) -> Result<(), LastRunningVcpuGuard> {
         let mut state = self.0.lock();
         let mut new_bits = state.bits;
         new_bits.set(PerCpu::get().idx, false);
         // Ensure that this vCPU isn't the last one running.
         if new_bits.is_empty() {
-            return Err(LastRunningVcpuError);
+            state.skipping = true;
+            return Err(LastRunningVcpuGuard(()));
         }
         state.bits = new_bits;
         Ok(())
     }
 
-    fn resume(&self) {
+    fn resume(&self) -> bool {
         let mut state = self.0.lock();
+        if state.skipping {
+            return false;
+        }
         state.bits.set(PerCpu::get().idx, true);
+        true
     }
 
     pub fn finish_launch(&self) {

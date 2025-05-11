@@ -262,7 +262,7 @@ impl Thread {
                             Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
                             Exit::Timer => {
                                 // Handle the timer interrupt.
-                                time::try_fire_clocks();
+                                time::expire_timers();
 
                                 // Signal that we're done handling the interrupt.
                                 eoi();
@@ -295,9 +295,9 @@ impl Thread {
     fn run_userspace(&self) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
         let mut guard = self.cpu_state.lock();
-        let start = time::refresh_backend_offset();
+        let start = time::backend_offset();
         let exit = guard.run_user(&virtual_memory)?;
-        let end = time::refresh_backend_offset();
+        let end = time::backend_offset();
         drop(guard);
 
         self.usage.record_user_execution_time(end - start);

@@ -205,13 +205,13 @@ impl PreemptionState {
 
     pub fn new() -> Self {
         Self {
-            last_resumed: time::refresh_backend_offset(),
+            last_resumed: time::backend_offset(),
         }
     }
 
     pub async fn check(&mut self) {
         // Don't do anything if sufficient time hasn't passed.
-        let now = time::refresh_backend_offset();
+        let now = time::backend_offset();
         if now - self.last_resumed < Self::TIME_SLICE {
             return;
         }
@@ -220,6 +220,6 @@ impl PreemptionState {
         r#yield().await;
 
         // Record when the thread was resumed.
-        self.last_resumed = time::refresh_backend_offset();
+        self.last_resumed = time::backend_offset();
     }
 }
