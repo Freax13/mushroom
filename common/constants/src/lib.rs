@@ -5,7 +5,7 @@
 use core::{
     fmt::{self, Debug, Display},
     marker::PhantomData,
-    ops::{BitAnd, BitAndAssign, BitOrAssign, Index, RangeInclusive},
+    ops::{BitAnd, BitAndAssign, BitOrAssign, Index, Not, RangeInclusive},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -170,6 +170,14 @@ impl BitAnd for ApBitmap {
 impl BitAndAssign for ApBitmap {
     fn bitand_assign(&mut self, rhs: Self) {
         *self = *self & rhs;
+    }
+}
+
+impl Not for ApBitmap {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self(!self.0) & Self::all()
     }
 }
 

@@ -27,6 +27,7 @@ static INVLPGB: Lazy<Option<Invlpgb>> = Lazy::new(Invlpgb::new);
 static ACTIVE_APS: AtomicApBitmap = AtomicApBitmap::empty();
 static PENDING_TLB_SHOOTDOWN: AtomicApBitmap = AtomicApBitmap::empty();
 static PENDING_GLOBAL_TLB_SHOOTDOWN: AtomicApBitmap = AtomicApBitmap::empty();
+static LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN: AtomicApBitmap = AtomicApBitmap::empty();
 
 pub fn init() {
     post_halt();
@@ -43,7 +44,8 @@ pub fn post_halt() {
 
 fn process_flushes() {
     let idx = PerCpuSync::get().idx;
-    let need_global_flush = PENDING_GLOBAL_TLB_SHOOTDOWN.take(idx);
+    let need_global_flush =
+        PENDING_GLOBAL_TLB_SHOOTDOWN.take(idx) | LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN.take(idx);
     let need_non_global_flush = PENDING_TLB_SHOOTDOWN.take(idx);
     if need_global_flush {
         if Cr4::read().contains(Cr4Flags::PCID) {
@@ -272,7 +274,6 @@ impl FlushGuard for GlobalFlushGuard {
 
         let mut all_other_aps = ApBitmap::all();
         all_other_aps.set(PerCpu::get().idx, false);
-        PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(all_other_aps);
 
         // If the hypervisor supports Hyper-V hypercalls, use them.
         if let Some(hyper_v) = *HYPER_V {
@@ -283,8 +284,26 @@ impl FlushGuard for GlobalFlushGuard {
             return;
         }
 
+        // For all other active APs, set the bit in `PENDING_GLOBAL_TLB_SHOOTDOWN`.
+        // We'll send an IPI to those and expect them to process the flush
+        // request right away. For all other inactive APs, set the bit in
+        // `LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN` and don't send an IPI. We expect
+        // them to flush this once they wake up. Note that we only need to poll
+        // from `PENDING_GLOBAL_TLB_SHOOTDOWN` to read back if the flushed have
+        // finished. It's important that we don't set any bits in
+        // `PENDING_GLOBAL_TLB_SHOOTDOWN` if we're not also sending an IPI. If
+        // we set the bit without sending an IPI, there's a chance that another
+        // thread is waiting for the bit to be cleared, but the AP is actually
+        // clearing the bit, but then we're setting it again without sending an
+        // IPI, so the other thread thinks that the bit was never cleared and
+        // it won't get cleared again because we didn't set another IPI.
+        let active_aps = ACTIVE_APS.get_all();
+        let other_active_aps = active_aps & all_other_aps;
+        let inactive_aps = !active_aps & all_other_aps;
+        PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(other_active_aps);
+        LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(inactive_aps);
+
         // Send IPIs to all other currently active APs.
-        let other_active_aps = ACTIVE_APS.get_all() & all_other_aps;
         send_tlb_ipis(other_active_aps);
 
         // Flush the local TLB entry.
