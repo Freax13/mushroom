@@ -31,6 +31,7 @@ impl ApIndex {
     ///
     /// This function panics if `idx` exceeds [`MAX_APS_COUNT`].
     #[must_use]
+    #[inline]
     pub const fn new(idx: u8) -> Self {
         assert!(idx < MAX_APS_COUNT);
         Self(idx)
@@ -39,6 +40,7 @@ impl ApIndex {
     /// Create a new `ApIndex` from an integer or return `None` if `idx`
     /// exceeds [`MAX_APS_COUNT`].
     #[must_use]
+    #[inline]
     pub const fn try_new(idx: u8) -> Option<Self> {
         if idx < MAX_APS_COUNT {
             Some(Self::new(idx))
@@ -49,11 +51,13 @@ impl ApIndex {
 
     /// Returns `true` for the first AP that starts running.
     #[must_use]
+    #[inline]
     pub const fn is_first(&self) -> bool {
         self.0 == 0
     }
 
     #[must_use]
+    #[inline]
     pub fn as_u8(&self) -> u8 {
         self.0
     }
@@ -74,6 +78,7 @@ impl Debug for ApIndex {
 impl<T> Index<ApIndex> for [T; MAX_APS_COUNT as usize] {
     type Output = T;
 
+    #[inline]
     fn index(&self, index: ApIndex) -> &Self::Output {
         unsafe { self.get_unchecked(usize::from(index.as_u8())) }
     }
@@ -97,12 +102,14 @@ pub struct ApBitmap(BitmapType);
 impl ApBitmap {
     /// Create a new bitmap with all bits set to `false`.
     #[must_use]
+    #[inline]
     pub const fn empty() -> Self {
         Self(0)
     }
 
     /// Create a new bitmap with all bits set to `true`.
     #[must_use]
+    #[inline]
     pub const fn all() -> Self {
         let mut bits = 0;
         let mut i = 0;
@@ -115,12 +122,14 @@ impl ApBitmap {
 
     /// Returns the bit for the given AP.
     #[must_use]
+    #[inline]
     pub const fn get(&self, idx: ApIndex) -> bool {
         self.0 & (1 << idx.0) != 0
     }
 
     /// Sets the bit for the given AP.
     #[cfg(feature = "nightly")] // TODO: Remove this when Rust 1.83 is released.
+    #[inline]
     pub const fn set(&mut self, idx: ApIndex, value: bool) {
         if value {
             self.0 |= 1 << idx.0;
@@ -131,6 +140,7 @@ impl ApBitmap {
 
     /// Sets the bit for the given AP.
     #[cfg(not(feature = "nightly"))] // TODO: Remove this when Rust 1.83 is released.
+    #[inline]
     pub fn set(&mut self, idx: ApIndex, value: bool) {
         if value {
             self.0 |= 1 << idx.0;
@@ -141,12 +151,14 @@ impl ApBitmap {
 
     /// Returns whether all bits are `false`.
     #[must_use]
+    #[inline]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
     }
 
     /// Returns the index of the first AP whose bit is not set.
     #[must_use]
+    #[inline]
     pub fn first_unset(&self) -> Option<ApIndex> {
         let idx = self.0.trailing_ones() as u8;
         ApIndex::try_new(idx)
@@ -154,6 +166,7 @@ impl ApBitmap {
 }
 
 impl BitOrAssign for ApBitmap {
+    #[inline]
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
     }
@@ -162,12 +175,14 @@ impl BitOrAssign for ApBitmap {
 impl BitAnd for ApBitmap {
     type Output = Self;
 
+    #[inline]
     fn bitand(self, rhs: Self) -> Self::Output {
         Self(self.0 & rhs.0)
     }
 }
 
 impl BitAndAssign for ApBitmap {
+    #[inline]
     fn bitand_assign(&mut self, rhs: Self) {
         *self = *self & rhs;
     }
@@ -176,6 +191,7 @@ impl BitAndAssign for ApBitmap {
 impl Not for ApBitmap {
     type Output = Self;
 
+    #[inline]
     fn not(self) -> Self::Output {
         Self(!self.0) & Self::all()
     }
@@ -186,6 +202,7 @@ impl IntoIterator for ApBitmap {
     type IntoIter = ApBitmapIter;
 
     /// Returns the indicies of all APs whose bit is `true`.
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         ApBitmapIter(self)
     }
@@ -197,6 +214,7 @@ pub struct ApBitmapIter(ApBitmap);
 impl Iterator for ApBitmapIter {
     type Item = ApIndex;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let idx = self.0.0.trailing_zeros();
         let idx = ApIndex::try_new(idx as u8)?;
@@ -217,46 +235,55 @@ pub struct AtomicApBitmap(AtomicBitmapType);
 
 impl AtomicApBitmap {
     /// Create a new bitmap with all bits set to `false`.
+    #[inline]
     pub const fn empty() -> Self {
         Self::new(ApBitmap::empty())
     }
 
+    #[inline]
     pub const fn new(value: ApBitmap) -> Self {
         Self(AtomicBitmapType::new(value.0))
     }
 
     /// Returns the bit for the given AP.
+    #[inline]
     pub fn get(&self, idx: ApIndex) -> bool {
         self.0.load(Ordering::SeqCst) & (1 << idx.0) != 0
     }
 
     /// Returns a copy of all bits.
+    #[inline]
     pub fn get_all(&self) -> ApBitmap {
         ApBitmap(self.0.load(Ordering::SeqCst))
     }
 
     /// Sets the bit for the given AP to `true`.
+    #[inline]
     pub fn set(&self, idx: ApIndex) -> bool {
         let mask = 1 << idx.0;
         self.0.fetch_or(mask, Ordering::SeqCst) & mask != 0
     }
 
     /// Sets the bits for the given APs to `true`.
+    #[inline]
     pub fn set_all(&self, aps: ApBitmap) {
         self.0.fetch_or(aps.0, Ordering::SeqCst);
     }
 
+    #[inline]
     pub fn set_exact(&self, aps: ApBitmap) {
         self.0.store(aps.0, Ordering::SeqCst);
     }
 
     /// Atomically clear the bit for the given AP and return its value.
+    #[inline]
     pub fn take(&self, idx: ApIndex) -> bool {
         let mask = 1 << idx.0;
         self.0.fetch_and(!mask, Ordering::SeqCst) & mask != 0
     }
 
     /// Atomically clears the bits for all APs and return their values.
+    #[inline]
     pub fn take_all(&self) -> ApBitmap {
         ApBitmap(self.0.swap(0, Ordering::SeqCst))
     }
