@@ -19,14 +19,17 @@ supervisor-services = { path = "../common/supervisor-services" }
 edition = "2024"
 
 [profile.kernel]
-inherits = "release"
-opt-level = 3
+inherits = "kernel-release"
 debug-assertions = true
 overflow-checks = true
+
+[profile.kernel-release]
+inherits = "release"
+opt-level = 3
 rustflags = ["-Ctarget-cpu=znver3"]
 
 [profile.kernel-profiling]
-inherits = "kernel"
+inherits = "kernel-release"
 # LTO may cause multiple `mcount` calls per function.
 lto = "off"
 
