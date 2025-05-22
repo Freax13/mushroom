@@ -20,7 +20,7 @@ mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
 mkfile_dir := $(dir $(mkfile_path))
 
 KERNEL_development = tee/target/x86_64-unknown-none/kernel/kernel
-KERNEL_release     = $(KERNEL_development)
+KERNEL_release     = tee/target/x86_64-unknown-none/kernel-release/kernel
 KERNEL_kasan       = $(KERNEL_development)
 KERNEL_profiling   = tee/target/x86_64-unknown-none/kernel-profiling/kernel
 export KERNEL ?= $(mkfile_dir)/$(KERNEL_$(PROFILE))

@@ -1,7 +1,7 @@
 include ../../config.mk
 
 CARGO_PROFILE_development = kernel
-CARGO_PROFILE_release     = kernel
+CARGO_PROFILE_release     = kernel-release
 CARGO_PROFILE_kasan       = $(CARGO_PROFILE_development)
 CARGO_PROFILE_profiling   = kernel-profiling
 CARGO_PROFILE = $(CARGO_PROFILE_$(PROFILE))
