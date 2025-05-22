@@ -2,7 +2,8 @@ use core::{
     arch::asm,
     cell::{Cell, OnceCell, RefCell},
     mem::offset_of,
-    ptr::null_mut,
+    ops::Deref,
+    ptr::{addr_of, null_mut},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -15,6 +16,7 @@ use x86_64::{
 };
 
 use crate::{
+    exception::InterruptData,
     memory::{frame, pagetable::PagetablesAllocations},
     rt::SchedulerData,
     user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
@@ -27,7 +29,7 @@ static mut STORAGE: [PerCpu; MAX_APS_COUNT as usize] =
 #[repr(align(64))]
 pub struct PerCpu {
     this: *mut PerCpu,
-    pub idx: ApIndex,
+    sync: PerCpuSync,
     pub kernel_registers: Cell<KernelRegisters>,
     pub new_userspace_registers: Cell<Registers>,
     pub tss: OnceCell<TaskStateSegment>,
@@ -45,7 +47,7 @@ impl PerCpu {
     pub const fn new() -> Self {
         Self {
             this: null_mut(),
-            idx: ApIndex::new(0),
+            sync: PerCpuSync::new(),
             kernel_registers: Cell::new(KernelRegisters::ZERO),
             new_userspace_registers: Cell::new(Registers::ZERO),
             tss: OnceCell::new(),
@@ -60,8 +62,8 @@ impl PerCpu {
         }
     }
 
-    // TODO: This isn't safe to call from an exception/IRQ handler.
-    pub fn get() -> &'static Self {
+    #[inline]
+    pub fn get_raw() -> *const Self {
         let addr: u64;
         unsafe {
             // SAFETY: If the GS segment wasn't programmed yet, this will cause
@@ -73,7 +75,17 @@ impl PerCpu {
                 options(pure, nomem, preserves_flags, nostack),
             );
         }
-        let ptr = addr as *const Self;
+        addr as *const Self
+    }
+
+    #[track_caller]
+    pub fn get() -> &'static Self {
+        // Make sure that `PerCpu` can't get be used in an interrupt handler.
+        // Interrupt handler are considered additional threads and PerCpu is
+        // not thread-safe.
+        PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
+        let ptr = Self::get_raw();
         unsafe { &*ptr }
     }
 
@@ -84,11 +96,47 @@ impl PerCpu {
         let idx = COUNT.fetch_add(1, Ordering::SeqCst);
         let ptr = unsafe { &mut STORAGE[idx] };
         ptr.this = ptr;
-        ptr.idx = ApIndex::new(u8::try_from(idx).unwrap());
+        ptr.sync.idx = ApIndex::new(u8::try_from(idx).unwrap());
 
         let addr = VirtAddr::from_ptr(ptr);
         unsafe {
             GS::write_base(addr);
         }
+    }
+}
+
+// Make it easy to access the `Sync` data as well.
+impl Deref for PerCpu {
+    type Target = PerCpuSync;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sync
+    }
+}
+
+/// Data associated with a CPU that's safe to access from another thread e.g.
+/// an interrupt handler.
+pub struct PerCpuSync {
+    pub idx: ApIndex,
+    pub interrupt_data: InterruptData,
+}
+
+impl PerCpuSync {
+    pub const fn new() -> Self {
+        // Assert that `Self` is indeed Sync.
+        const fn assert_sync<T: Sync>() {}
+        assert_sync::<Self>();
+
+        Self {
+            idx: ApIndex::new(0),
+            interrupt_data: InterruptData::new(),
+        }
+    }
+
+    #[inline]
+    pub fn get() -> &'static Self {
+        let raw = PerCpu::get_raw();
+        let raw = unsafe { addr_of!((*raw).sync) };
+        unsafe { &*raw }
     }
 }

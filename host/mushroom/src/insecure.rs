@@ -325,9 +325,18 @@ fn run_kernel_vcpu(
     while !run_state.is_stopped() {
         // Check if we need to inject a timer interrupt.
         if !in_service_timer_irq && last_timer_injection.elapsed() >= TIMER_PERIOD {
-            if map_field!(kvm_run.ready_for_interrupt_injection).read() != 0 {
+            let cr8 = map_field!(kvm_run.cr8).read();
+            if cr8 != 0 && cr8 <= u64::from(TIMER_VECTOR >> 4) {
+                // The interrupt has been blocked out by the TPR. Don't ask to
+                // be notified about the interrupt window for now.
+                map_field!(kvm_run.request_interrupt_window).write(0);
+            } else if map_field!(kvm_run.ready_for_interrupt_injection).read() != 0 {
+                // The interrupt is ready.
+
+                // Stop asking for the interrupt window.
                 map_field!(kvm_run.request_interrupt_window).write(0);
 
+                // Inject the interrupt.
                 ap.interrupt(TIMER_VECTOR)?;
 
                 last_timer_injection = Instant::now();
@@ -442,6 +451,7 @@ fn run_kernel_vcpu(
             },
             KvmExit::IrqWindowOpen => {}
             KvmExit::Interrupted => {}
+            KvmExit::SetTpr => {}
             exit => {
                 let regs = ap.get_regs()?;
                 println!("{:x}", regs.rip);

@@ -14,7 +14,11 @@ use crossbeam_utils::atomic::AtomicCell;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
 
-use crate::{limited_index::LimitedIndex, per_cpu::PerCpu, supervisor};
+use crate::{
+    limited_index::LimitedIndex,
+    per_cpu::{PerCpu, PerCpuSync},
+    supervisor,
+};
 
 // The dynamic physical memory space is organized into a hierachy:
 // Level 0 (L0): A "chunk" is a 2MiB array of 4KiB pages that fit.
@@ -54,6 +58,8 @@ static REVERSE_MAP: ReverseMap = ReverseMap::new();
 
 /// Allocate a 4KiB frame.
 pub fn allocate_frame() -> PhysFrame {
+    PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
     let mut guard = PerCpu::get().private_allocator_state.borrow_mut();
 
     loop {
@@ -111,6 +117,8 @@ pub fn allocate_frame() -> PhysFrame {
 /// The caller has to ensure that the frame was originally allocated using
 /// [`allocate_frame`] and that it is no longer in use.
 pub unsafe fn deallocate_frame(frame: PhysFrame) {
+    PerCpuSync::get().interrupt_data.check_max_interrupt(None);
+
     // Get the group, chunk and frame indices.
     let frame_2mib = PhysFrame::containing_address(frame.start_address());
     let slot_idx = SlotIndex::from(frame_2mib);

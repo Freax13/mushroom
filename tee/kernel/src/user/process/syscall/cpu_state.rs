@@ -853,17 +853,12 @@ global_asm!(
     // Enter usermode.
     "iretq",
 
-    // Exit point for an exception.
-    // Note that `swapgs` was already executed by the exception/interrupt handler.
+    // Exit point for an interrupt/exception.
+    // Note that `swapgs` was already executed by the interrupt/exception handler.
     ".global interrupt_entry",
     "interrupt_entry:",
-    // Clear the IF flag in the kernel's RFLAGS registers.
-    "and dword ptr gs:[{K_RFLAGS_OFFSET}], ~{INTERRUPT_FLAG}",
-
-    // Fall through to exception_entry.
-
-    // Exit point for an interrupt.
-    // Note that `swapgs` was already executed by the exception/interrupt handler.
+    // Exit point for an exception.
+    // Note that `swapgs` was already executed by the exception handler.
     ".global exception_entry",
     "exception_entry:",
     // Record the exit reason.
@@ -933,7 +928,7 @@ global_asm!(
     "mov r13, gs:[{K_R13_OFFSET}]",
     "mov r14, gs:[{K_R14_OFFSET}]",
     "mov r15, gs:[{K_R15_OFFSET}]",
-    // Restore RFLAGS.
+    // Restore RFLAGS. This implicitly enables interrupts.
     "mov rax, gs:[{K_RFLAGS_OFFSET}]",
     "push rax",
     "popfq",
@@ -976,5 +971,4 @@ global_asm!(
     U_FS_BASE_OFFSET = const userspace_reg_offset!(fs_base),
     U_GS_OFFSET = const userspace_reg_offset!(gs),
     U_SS_OFFSET = const userspace_reg_offset!(ss),
-    INTERRUPT_FLAG = const RFlags::INTERRUPT_FLAG.bits(),
 );
