@@ -168,6 +168,17 @@ impl KernelPage {
         unsafe { NonNull::new_unchecked(offset) }
     }
 
+    pub fn read(&self, index: usize, buf: &mut [u8]) {
+        let ptr = self.index(index..index + buf.len());
+        unsafe {
+            core::intrinsics::volatile_copy_nonoverlapping_memory(
+                buf.as_mut_ptr(),
+                ptr.as_ptr().cast(),
+                buf.len(),
+            );
+        }
+    }
+
     pub fn frame(&self) -> PhysFrame {
         let vaddr = self.content.as_ptr() as u64;
         let paddr = DYNAMIC.start.start_address() + (vaddr - 0xffff_8080_0000_0000);

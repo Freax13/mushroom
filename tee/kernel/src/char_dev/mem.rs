@@ -22,6 +22,7 @@ use crate::{
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::process::{
+        futex::Futexes,
         syscall::args::{FileMode, OpenFlags, Stat, Whence},
         thread::{Gid, Uid},
     },
@@ -274,6 +275,10 @@ impl OpenFileDescription for Zero {
         Ok(KernelPage::zeroed())
     }
 
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        Some(Arc::new(Futexes::new()))
+    }
+
     fn file_lock(&self) -> Result<&FileLock> {
         Ok(&self.file_lock)
     }
@@ -396,6 +401,10 @@ impl OpenFileDescription for Full {
 
     fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         Ok(KernelPage::zeroed())
+    }
+
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        Some(Arc::new(Futexes::new()))
     }
 
     fn file_lock(&self) -> Result<&FileLock> {

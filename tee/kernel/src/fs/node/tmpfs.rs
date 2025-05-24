@@ -18,9 +18,10 @@ use crate::{
         ownership::Ownership,
     },
     memory::page::{Buffer, KernelPage},
-    spin::{mutex::Mutex, rwlock::RwLock},
+    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     time::now,
     user::process::{
+        futex::Futexes,
         syscall::args::{ClockId, InotifyMask, OpenFlags, UnixAddr},
         thread::{Gid, Uid},
     },
@@ -906,6 +907,7 @@ pub struct TmpFsFile {
     internal: RwLock<TmpFsFileInternal>,
     file_lock_record: LazyFileLockRecord,
     watchers: Watchers,
+    futexes: Lazy<Arc<Futexes>>,
 }
 
 struct TmpFsFileInternal {
@@ -935,6 +937,7 @@ impl TmpFsFile {
             }),
             file_lock_record: LazyFileLockRecord::new(),
             watchers: Watchers::new(),
+            futexes: Lazy::new(|| Arc::new(Futexes::new())),
         })
     }
 
@@ -1013,6 +1016,10 @@ impl File for TmpFsFile {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
         let mut guard = self.internal.write();
         guard.buffer.get_page(page_idx, shared)
+    }
+
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        Some(self.futexes.clone())
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize> {

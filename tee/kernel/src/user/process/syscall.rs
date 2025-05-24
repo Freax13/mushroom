@@ -54,6 +54,7 @@ use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
 
 use super::{
     Process, WaitFilter,
+    futex::FutexScope,
     limits::{CurrentNoFileLimit, CurrentStackLimit},
     memory::{Bias, VirtualMemory},
     thread::{
@@ -92,9 +93,9 @@ impl ThreadGuard<'_> {
 
         let clear_child_tid = core::mem::take(&mut self.clear_child_tid);
         if !clear_child_tid.is_null() {
-            let _ = self.virtual_memory().write(clear_child_tid, 0u32);
-
-            self.process().futexes.wake(clear_child_tid, 1, None);
+            let virtual_memory = self.virtual_memory();
+            let _ = virtual_memory.write(clear_child_tid, 0u32);
+            let _ = virtual_memory.futex_wake(clear_child_tid, 1, FutexScope::Global, None);
         }
     }
 }
@@ -3216,21 +3217,20 @@ async fn futex(
     uaddr2: Pointer<c_void>,
     val3: u64,
 ) -> SyscallResult {
+    let scope = if op.flags.contains(FutexFlags::PRIVATE_FLAG) {
+        FutexScope::Process(thread.process().pid())
+    } else {
+        FutexScope::Global
+    };
+
     match op.op {
         FutexOp::Wait => {
             assert!(utime.is_null());
-
-            thread
-                .process()
-                .futexes
-                .clone()
-                .wait(uaddr, val, None, None, virtual_memory)
-                .await?;
-
+            virtual_memory.futex_wait(uaddr, val, scope, None).await?;
             Ok(0)
         }
         FutexOp::Wake => {
-            let woken = thread.process().futexes.wake(uaddr, val, None);
+            let woken = virtual_memory.futex_wake(uaddr, val, scope, None)?;
             Ok(u64::from(woken))
         }
         FutexOp::Fd => bail!(NoSys),
@@ -3241,32 +3241,36 @@ async fn futex(
         FutexOp::UnlockPi => bail!(NoSys),
         FutexOp::TrylockPi => bail!(NoSys),
         FutexOp::WaitBitset => {
+            // Set up a future that waits for the futex to be ready.
             let bitset = NonZeroU32::try_from(val3 as u32)?;
+            let wait_for_futex = virtual_memory.futex_wait(uaddr, val, scope, Some(bitset));
 
-            let deadline = if !utime.is_null() {
+            // Set up a future that waits for a timeout.
+            let sleep_fut;
+            let wait_for_deadline = if !utime.is_null() {
                 let deadline = virtual_memory.read_with_abi(utime, abi)?;
                 let clock_id = if op.flags.contains(FutexFlags::CLOCK_REALTIME) {
                     ClockId::Realtime
                 } else {
                     ClockId::Monotonic
                 };
-                Some((deadline, clock_id))
+                sleep_fut = sleep_until(deadline, clock_id);
+                sleep_fut.fuse()
             } else {
-                None
+                Fuse::terminated()
             };
+            let mut wait_for_deadline = pin!(wait_for_deadline);
 
-            thread
-                .process()
-                .futexes
-                .clone()
-                .wait(uaddr, val, Some(bitset), deadline, virtual_memory)
-                .await?;
+            select_biased! {
+                res = wait_for_futex.fuse() => res?,
+                _ = wait_for_deadline => bail!(TimedOut),
+            }
 
             Ok(0)
         }
         FutexOp::WakeBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
-            let woken = thread.process().futexes.wake(uaddr, val, Some(bitset));
+            let woken = virtual_memory.futex_wake(uaddr, val, scope, Some(bitset))?;
             Ok(u64::from(woken))
         }
         FutexOp::WaitRequeuePi => bail!(NoSys),
