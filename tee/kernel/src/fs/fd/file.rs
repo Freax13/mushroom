@@ -10,6 +10,7 @@ use crate::{
     memory::page::KernelPage,
     spin::mutex::Mutex,
     user::process::{
+        futex::Futexes,
         syscall::args::{InotifyMask, OpenFlags, Timespec},
         thread::{Gid, Uid},
     },
@@ -29,6 +30,9 @@ use super::{
 
 pub trait File: INode {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        None
+    }
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize>;
     fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize>;
     /// Returns a tuple of `(bytes_written, file_length)`.
@@ -362,6 +366,10 @@ impl OpenFileDescription for FileFileDescription {
 
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
         self.file.get_page(page_idx, shared)
+    }
+
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        self.file.futexes()
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {

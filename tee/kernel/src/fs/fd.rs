@@ -23,6 +23,7 @@ use crate::{
         mutex::{Mutex, MutexGuard},
     },
     user::process::{
+        futex::Futexes,
         limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::{
@@ -747,6 +748,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = page_idx;
         let _ = shared;
         bail!(Acces)
+    }
+
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        None
     }
 
     async fn epoll_wait(&self, max_events: usize) -> Result<Vec<EpollEvent>> {

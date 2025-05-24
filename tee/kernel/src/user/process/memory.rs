@@ -6,6 +6,7 @@ use core::{
     fmt::{self, Display, Write},
     iter::Step,
     mem::{MaybeUninit, needs_drop},
+    num::NonZeroU32,
     ops::Bound,
     ptr::{NonNull, drop_in_place},
 };
@@ -22,7 +23,7 @@ use crate::{
         mutex::Mutex,
         rwlock::{RwLock, WriteRwLockGuard},
     },
-    user::process::syscall::args::Stat,
+    user::process::{futex::Futexes, syscall::args::Stat},
 };
 use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
@@ -43,6 +44,7 @@ use crate::{
 };
 
 use super::{
+    futex::FutexScope,
     syscall::{
         args::{
             Pointer, ProtFlags,
@@ -376,6 +378,79 @@ impl VirtualMemory {
             .sum::<usize>()
             * 0x1000
     }
+
+    pub async fn futex_wait(
+        &self,
+        uaddr: Pointer<u32>,
+        val: u32,
+        scope: FutexScope,
+        bitset: Option<NonZeroU32>,
+    ) -> Result<()> {
+        let uaddr = uaddr.get();
+        ensure!(uaddr.is_aligned(4u64), Inval);
+        let page = Page::containing_address(uaddr);
+
+        let state = self.state.read();
+
+        // Find the mapping.
+        let (&mapping_page, mapping) = state
+            .mappings
+            .range(..=page)
+            .next_back()
+            .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
+
+        let mut guard = mapping.lock();
+        let futexes = guard.futexes.clone();
+
+        // Offset into the mapping.
+        let offset = page - mapping_page;
+        // Offset into the mapping's backing.
+        let abs_offset = usize_from(uaddr - (mapping_page - guard.page_offset).start_address());
+
+        // Populate and get the page.
+        let user_page = guard.get_page(offset, &self.usage)?;
+
+        // Start the wait operation.
+        let wait = futexes.wait(abs_offset, val, scope, bitset, user_page)?;
+
+        // Release all locks.
+        drop(guard);
+        drop(state);
+
+        // Wait for the futex to be woken up.
+        wait.await;
+
+        Ok(())
+    }
+
+    pub fn futex_wake(
+        &self,
+        uaddr: Pointer<u32>,
+        num_waiters: u32,
+        scope: FutexScope,
+        bitset: Option<NonZeroU32>,
+    ) -> Result<u32> {
+        let uaddr = uaddr.get();
+        ensure!(uaddr.is_aligned(4u64), Inval);
+        let page = Page::containing_address(uaddr);
+
+        let state = self.state.read();
+
+        // Find the mapping.
+        let (&mapping_page, mapping) = state
+            .mappings
+            .range(..=page)
+            .next_back()
+            .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
+
+        let guard = mapping.lock();
+
+        // Offset into the mapping's backing.
+        let abs_offset = usize_from(uaddr - (mapping_page - guard.page_offset).start_address());
+
+        // Wake the futexes.
+        Ok(guard.futexes.wake(abs_offset, num_waiters, scope, bitset))
+    }
 }
 
 impl Default for VirtualMemory {
@@ -400,6 +475,7 @@ pub struct VirtualMemoryWriteGuard<'a> {
 }
 
 impl VirtualMemoryWriteGuard<'_> {
+    #[allow(clippy::too_many_arguments)]
     fn mmap(
         &mut self,
         bias: Bias,
@@ -408,6 +484,7 @@ impl VirtualMemoryWriteGuard<'_> {
         backing: impl Backing,
         page_offset: u64,
         shared: bool,
+        futexes: Arc<Futexes>,
     ) -> VirtAddr {
         assert_ne!(len, 0);
 
@@ -433,6 +510,7 @@ impl VirtualMemoryWriteGuard<'_> {
                 permissions,
                 pages,
                 shared,
+                futexes,
             }),
         );
 
@@ -452,7 +530,15 @@ impl VirtualMemoryWriteGuard<'_> {
             }
         }
 
-        self.mmap(bias, len, permissions, ZeroBacking, 0, false)
+        self.mmap(
+            bias,
+            len,
+            permissions,
+            ZeroBacking,
+            0,
+            false,
+            Arc::new(Futexes::new()),
+        )
     }
 
     pub fn mmap_file(
@@ -533,6 +619,11 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         let stat = file.stat()?;
+        let futexes = if shared {
+            file.futexes().expect("TODO")
+        } else {
+            Arc::new(Futexes::new())
+        };
         let addr = self.mmap(
             bias,
             mem_sz,
@@ -546,6 +637,7 @@ impl VirtualMemoryWriteGuard<'_> {
             },
             page_offset,
             shared,
+            futexes,
         );
         Ok(addr)
     }
@@ -603,6 +695,7 @@ impl VirtualMemoryWriteGuard<'_> {
             TrampolineCode,
             0,
             false,
+            Arc::new(Futexes::new()),
         );
     }
 
@@ -973,6 +1066,7 @@ pub struct Mapping {
     permissions: MemoryPermissions,
     shared: bool,
     pages: SplitVec<Option<UserPage>>,
+    futexes: Arc<Futexes>,
 }
 
 impl Mapping {
@@ -1012,6 +1106,7 @@ impl Mapping {
             permissions: self.permissions,
             pages,
             shared: self.shared,
+            futexes: self.futexes.clone(),
         }
     }
 
@@ -1022,12 +1117,19 @@ impl Mapping {
             *pages.get_mut(i).unwrap() = Some(page.clone()?);
         }
 
+        let futexes = if self.shared {
+            self.futexes.clone()
+        } else {
+            Arc::new(Futexes::new())
+        };
+
         Ok(Self {
             backing: self.backing.clone(),
             page_offset: self.page_offset,
             permissions: self.permissions,
             pages,
             shared: self.shared,
+            futexes,
         })
     }
 

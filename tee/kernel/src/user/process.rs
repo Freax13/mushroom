@@ -41,7 +41,6 @@ use crate::{
 };
 
 use self::{
-    futex::Futexes,
     memory::VirtualMemory,
     syscall::{
         args::{Signal, WStatus},
@@ -54,7 +53,7 @@ use self::{
 };
 
 mod exec;
-mod futex;
+pub mod futex;
 pub mod limits;
 pub mod memory;
 pub mod syscall;
@@ -66,7 +65,6 @@ pub const TASK_COMM_CAPACITY: usize = 15;
 pub struct Process {
     pid: u32,
     start_time: Timespec,
-    futexes: Arc<Futexes>,
     exit_status: OnceCell<WStatus>,
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
@@ -116,7 +114,6 @@ impl Process {
         let this = Self {
             pid: first_tid,
             start_time: now(ClockId::Monotonic),
-            futexes: Arc::new(Futexes::new()),
             exit_status: OnceCell::new(),
             parent: parent.clone(),
             children: Mutex::new(Vec::new()),
