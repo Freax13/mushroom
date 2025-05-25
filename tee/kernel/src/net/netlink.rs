@@ -36,6 +36,8 @@ use crate::{
 
 mod route;
 
+pub use route::{lo_interface_flags, lo_mtu};
+
 pub struct NetlinkSocket {
     flags: OpenFlags,
     family: NetlinkFamily,
