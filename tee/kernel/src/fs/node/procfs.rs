@@ -75,6 +75,10 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         file_lock_record: LazyFileLockRecord::new(),
         watchers: Watchers::new(),
         cpuinfo_file: CpuinfoFile::new(fs.clone()),
+        net_dir_ino: new_ino(),
+        net_dir_file_lock_record: Arc::new(FileLockRecord::new()),
+        net_dir_watchers: Arc::new(Watchers::new()),
+        net_dev_file: NetDevFile::new(fs.clone()),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
             fs: fs.clone(),
@@ -95,6 +99,10 @@ struct ProcFsRoot {
     file_lock_record: LazyFileLockRecord,
     watchers: Watchers,
     cpuinfo_file: Arc<CpuinfoFile>,
+    net_dir_ino: u64,
+    net_dir_file_lock_record: Arc<FileLockRecord>,
+    net_dir_watchers: Arc<Watchers>,
+    net_dev_file: Arc<NetDevFile>,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
     uptime_file: Arc<UptimeFile>,
@@ -163,6 +171,13 @@ impl Directory for ProcFsRoot {
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
             b"cpuinfo" => self.cpuinfo_file.clone(),
+            b"net" => NetDir::new(
+                location.clone(),
+                self.fs.clone(),
+                self.net_dir_file_lock_record.clone(),
+                self.net_dir_watchers.clone(),
+                self.net_dev_file.clone(),
+            ),
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
             b"uptime" => self.uptime_file.clone(),
@@ -259,6 +274,11 @@ impl Directory for ProcFsRoot {
             ino: self.cpuinfo_file.ino,
             ty: FileType::Link,
             name: DirEntryName::FileName(FileName::new(b"cpuinfo").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.net_dir_ino,
+            ty: FileType::Dir,
+            name: DirEntryName::FileName(FileName::new(b"net").unwrap()),
         });
         entries.push(DirEntry {
             ino: self.self_link.ino,
@@ -409,6 +429,326 @@ impl INode for CpuinfoFile {
 }
 
 impl File for CpuinfoFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+struct NetDir {
+    this: Weak<Self>,
+    location: LinkLocation,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
+    net_dev_file: Arc<NetDevFile>,
+}
+
+impl NetDir {
+    pub fn new(
+        location: LinkLocation,
+        fs: Arc<ProcFs>,
+        file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
+        net_dev_file: Arc<NetDevFile>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            location,
+            fs: fs.clone(),
+            ino: new_ino(),
+            file_lock_record,
+            watchers,
+            net_dev_file,
+        })
+    }
+}
+
+impl INode for NetDir {
+    dir_impls!();
+
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o555)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl Directory for NetDir {
+    fn location(&self) -> &LinkLocation {
+        &self.location
+    }
+
+    fn create_file(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+    ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
+    fn create_link(
+        &self,
+        _: FileName<'static>,
+        _: Path,
+        _: Uid,
+        _: Gid,
+        _create_new: bool,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_char_dev(
+        &self,
+        _: FileName<'static>,
+        _major: u16,
+        _minor: u8,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_fifo(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_socket(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+        _: &StreamUnixSocket,
+        _: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+
+    fn list_entries(&self, _: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
+        let mut entries = vec![DirEntry {
+            ino: self.ino,
+            ty: FileType::Dir,
+            name: DirEntryName::Dot,
+        }];
+        if let Some(entry) = self.location.parent() {
+            if let Ok(stat) = entry.stat() {
+                entries.push(DirEntry {
+                    ino: stat.ino,
+                    ty: FileType::Dir,
+                    name: DirEntryName::DotDot,
+                });
+            }
+        }
+        Ok(entries)
+    }
+
+    fn get_node(&self, file_name: &FileName, _ctx: &FileAccessContext) -> Result<Link> {
+        let location =
+            LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
+        let node: DynINode = match file_name.as_bytes() {
+            b"dev" => self.net_dev_file.clone(),
+            _ => bail!(NoEnt),
+        };
+        Ok(Link { location, node })
+    }
+
+    fn delete_non_dir(&self, _: FileName<'static>) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn delete_dir(&self, _: FileName<'static>) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn rename(
+        &self,
+        _oldname: FileName<'static>,
+        _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+        _no_replace: bool,
+    ) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn hard_link(
+        &self,
+        _oldname: FileName<'static>,
+        _follow_symlink: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+    ) -> Result<Option<Path>> {
+        bail!(Perm)
+    }
+}
+
+struct NetDevFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
+}
+
+impl NetDevFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(
+            b"Inter-|   Receive                                                |  Transmit\n",
+        );
+        buffer.extend_from_slice(b" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
+        buffer.extend_from_slice(b"    lo: 2512365769 15037767    0    0    0     0          0         0 2512365769 15037767    0    0    0     0       0          0\n");
+        buffer
+    }
+}
+
+impl INode for NetDevFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for NetDevFile {
     fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
