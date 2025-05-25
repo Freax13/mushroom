@@ -224,12 +224,12 @@ impl OpenFileDescription for Zero {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        buf.fill(0)?;
+        buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
     fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
-        buf.fill(0)?;
+        buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
@@ -354,12 +354,12 @@ impl OpenFileDescription for Full {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        buf.fill(0)?;
+        buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
     fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
-        buf.fill(0)?;
+        buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
