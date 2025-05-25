@@ -1344,6 +1344,7 @@ fn socket(
         Domain::Netlink => {
             fdtable.insert(NetlinkSocket::new(r#type, protocol)?, r#type, no_file_limit)?
         }
+        Domain::Unspec => bail!(OpNotSupp),
     };
     Ok(fd.get() as u64)
 }
@@ -1589,7 +1590,7 @@ fn socketpair(
                 _ => bail!(Inval),
             }
         }
-        Domain::Inet | Domain::Netlink => bail!(OpNotSupp),
+        Domain::Unspec | Domain::Inet | Domain::Netlink => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.
