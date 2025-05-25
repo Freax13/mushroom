@@ -19,7 +19,8 @@ pub trait ReadBuf {
     fn buffer_len(&self) -> usize;
     fn write(&mut self, offset: usize, bytes: &[u8]) -> Result<()>;
     unsafe fn write_volatile(&mut self, offset: usize, bytes: NonNull<[u8]>) -> Result<()>;
-    fn fill(&mut self, byte: u8) -> Result<()>;
+    fn fill(&mut self, offset: usize, len: usize, byte: u8) -> Result<()>;
+    fn fill_all(&mut self, byte: u8) -> Result<()>;
 }
 
 pub trait WriteBuf {
@@ -58,7 +59,12 @@ impl ReadBuf for KernelReadBuf<'_> {
         Ok(())
     }
 
-    fn fill(&mut self, byte: u8) -> Result<()> {
+    fn fill(&mut self, offset: usize, len: usize, byte: u8) -> Result<()> {
+        self.0[offset..][..len].fill(byte);
+        Ok(())
+    }
+
+    fn fill_all(&mut self, byte: u8) -> Result<()> {
         self.0.fill(byte);
         Ok(())
     }
@@ -124,7 +130,14 @@ impl ReadBuf for UserBuf<'_> {
         unsafe { self.vm.write_bytes_volatile(addr, bytes) }
     }
 
-    fn fill(&mut self, byte: u8) -> Result<()> {
+    fn fill(&mut self, offset: usize, len: usize, byte: u8) -> Result<()> {
+        assert!(self.len >= offset + len);
+        self.vm
+            .set_bytes(self.pointer.bytes_offset(offset).get(), len, byte)?;
+        Ok(())
+    }
+
+    fn fill_all(&mut self, byte: u8) -> Result<()> {
         self.vm.set_bytes(self.pointer.get(), self.len, byte)?;
         Ok(())
     }
@@ -233,7 +246,30 @@ impl ReadBuf for VectoredUserBuf<'_> {
         unreachable!("wrote too many bytes to buffer")
     }
 
-    fn fill(&mut self, byte: u8) -> Result<()> {
+    fn fill(&mut self, mut offset: usize, mut len: usize, byte: u8) -> Result<()> {
+        for iv in self.iovec.iter_mut() {
+            let iv_len = usize_from(iv.len);
+            if let Some(chunk_len) = iv_len.checked_sub(offset).filter(|&len| len > 0) {
+                let chunk_len = cmp::max(chunk_len, len);
+                self.vm.set_bytes(
+                    VirtAddr::new(iv.base + u64::from_usize(offset)),
+                    chunk_len,
+                    byte,
+                )?;
+                offset = 0;
+                len -= chunk_len;
+                if len == 0 {
+                    break;
+                }
+            } else {
+                offset -= iv_len;
+            }
+        }
+        assert_eq!(len, 0);
+        Ok(())
+    }
+
+    fn fill_all(&mut self, byte: u8) -> Result<()> {
         for iv in self.iovec.iter_mut() {
             self.vm
                 .set_bytes(VirtAddr::new(iv.base), usize_from(iv.len), byte)?;
