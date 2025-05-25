@@ -19,7 +19,6 @@ pub trait ReadBuf {
     fn buffer_len(&self) -> usize;
     fn write(&mut self, offset: usize, bytes: &[u8]) -> Result<()>;
     unsafe fn write_volatile(&mut self, offset: usize, bytes: NonNull<[u8]>) -> Result<()>;
-    #[expect(dead_code)]
     fn fill(&mut self, offset: usize, len: usize, byte: u8) -> Result<()>;
     fn fill_all(&mut self, byte: u8) -> Result<()>;
 }
