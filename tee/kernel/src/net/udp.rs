@@ -1,5 +1,6 @@
 use core::{
     cmp,
+    ffi::c_void,
     net::{Ipv4Addr, SocketAddrV4},
     ops::Not,
 };
@@ -22,6 +23,7 @@ use crate::{
         fd::{
             Events, FileDescriptorTable, FileLock, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
+            common_ioctl,
         },
         node::FileAccessContext,
         path::Path,
@@ -38,9 +40,11 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
+
+use super::netlink::{lo_interface_flags, lo_mtu};
 
 const MAX_BUFFER_SIZE: usize = 65507;
 
@@ -550,6 +554,38 @@ impl OpenFileDescription for UdpSocket {
 
     fn file_lock(&self) -> Result<&FileLock> {
         todo!()
+    }
+
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
+        match cmd {
+            0x8913 => {
+                // SIOCGIFFLAGS
+                thread.virtual_memory().write(
+                    arg.cast().bytes_offset(16),
+                    lo_interface_flags().bits() as u16,
+                )?;
+                Ok(0)
+            }
+            0x8921 => {
+                // SIOCGIFMTU
+                thread
+                    .virtual_memory()
+                    .write(arg.cast().bytes_offset(16), lo_mtu())?;
+                Ok(0)
+            }
+            0x8946 => {
+                // SIOCETHTOOL
+                // TODO
+                bail!(OpNotSupp)
+            }
+            _ => common_ioctl(self, thread, cmd, arg, abi),
+        }
     }
 }
 

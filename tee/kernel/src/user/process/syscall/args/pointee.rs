@@ -292,6 +292,9 @@ where
 impl Pointee for u8 {}
 impl PrimitivePointee for u8 {}
 
+impl Pointee for u16 {}
+impl PrimitivePointee for u16 {}
+
 impl Pointee for u32 {}
 impl PrimitivePointee for u32 {}
 

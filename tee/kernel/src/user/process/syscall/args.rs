@@ -1008,6 +1008,7 @@ impl From<Timespec> for Timeval {
 
 enum_arg! {
     pub enum Domain {
+        Unspec = 0,
         Unix = 1,
         Inet = 2,
         Netlink = 16,
