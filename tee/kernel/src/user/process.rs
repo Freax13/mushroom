@@ -302,7 +302,7 @@ impl Process {
         &self,
         filter: WaitFilter,
         no_hang: bool,
-    ) -> Result<Option<(u32, WStatus)>> {
+    ) -> Result<Option<(u32, WStatus, Rusage)>> {
         self.child_death_notify
             .wait_until(|| {
                 let mut guard = self.children.lock();
@@ -337,7 +337,7 @@ impl Process {
                 drop(guard);
 
                 let status = *child.exit_status.try_get().unwrap();
-                Some(Ok(Some((child.pid, status))))
+                Some(Ok(Some((child.pid, status, usage))))
             })
             .await
     }

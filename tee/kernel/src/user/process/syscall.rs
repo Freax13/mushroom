@@ -1898,16 +1898,13 @@ async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
 #[syscall(i386 = 114, amd64 = 61, interruptable, restartable)]
 async fn wait4(
     thread: Arc<Thread>,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     pid: i32,
-    wstatus: Pointer<WStatus>, // FIXME: use correct type
+    wstatus: Pointer<WStatus>,
     options: WaitOptions,
-    rusage: Pointer<c_void>, // FIXME: use correct type
+    rusage: Pointer<Rusage>,
 ) -> SyscallResult {
-    if !rusage.is_null() {
-        todo!()
-    }
-
     let no_hang = options.contains(WaitOptions::NOHANG);
     let pid = match pid {
         ..=-2 => WaitFilter::ExactPgid(-pid as u32),
@@ -1917,14 +1914,17 @@ async fn wait4(
     };
 
     let opt = thread.process().wait_for_child_death(pid, no_hang).await?;
-    let Some((tid, status)) = opt else {
+    let Some((tid, status, usage)) = opt else {
         return Ok(0);
     };
 
     if !wstatus.is_null() {
         let addr = wstatus.get();
-
         virtual_memory.write_bytes(addr, bytes_of(&status))?;
+    }
+
+    if !rusage.is_null() {
+        virtual_memory.write_with_abi(rusage, usage, abi)?;
     }
 
     Ok(u64::from(tid))
