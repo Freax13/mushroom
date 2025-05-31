@@ -612,7 +612,7 @@ pub fn create_file(
                     continue;
                 }
 
-                ensure!(stat.mode.ty() != FileType::Dir, Exist);
+                ensure!(stat.mode.ty() != FileType::Dir, IsDir);
                 ensure!(!flags.contains(OpenFlags::EXCL), Exist);
 
                 // Check that the existing file can be opened.
