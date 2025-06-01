@@ -133,5 +133,8 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         Gid::SUPER_USER,
     )?;
 
+    let output_name = FileName::new(b"shm").unwrap();
+    tmp_fs_dir.create_dir(output_name, FileMode::ALL, Uid::SUPER_USER, Gid::SUPER_USER)?;
+
     Ok(tmp_fs_dir)
 }
