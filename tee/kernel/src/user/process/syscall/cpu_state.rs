@@ -443,6 +443,7 @@ impl CpuState {
             mcontext,
             sigmask,
         };
+        self.registers.rsp = align_down(self.registers.rsp, 16);
         self.registers.rsp -= u64::from_usize(ucontext.size(abi));
         let ucontext_ptr = Pointer::new(self.registers.rsp);
         vm.write_with_abi(ucontext_ptr, ucontext, abi)?;
@@ -460,14 +461,10 @@ impl CpuState {
                 )?;
             }
             Abi::Amd64 => {
+                self.registers.rax = 0;
                 self.registers.rdi = u64::from_usize(sig_info.signal.get());
                 self.registers.rsi = sig_info_ptr.get().as_u64();
                 self.registers.rdx = ucontext_ptr.get().as_u64();
-
-                // Also write ucontext to the stack, so that it's easier to restore.
-                self.registers.rsp = align_down(self.registers.rsp, 16);
-                self.registers.rsp -= 16;
-                vm.write_with_abi(Pointer::new(self.registers.rsp + 8), ucontext_ptr, abi)?;
             }
         }
 
@@ -484,8 +481,13 @@ impl CpuState {
         vm: &VirtualMemory,
         abi: Abi,
     ) -> Result<(Stack, Sigset)> {
-        let ucontext_ptr_ptr = Pointer::<Pointer<UContext>>::new(self.registers.rsp + 8);
-        let ucontext_ptr = vm.read_with_abi(ucontext_ptr_ptr, abi)?;
+        let ucontext_ptr: Pointer<UContext> = match abi {
+            Abi::I386 => {
+                let ucontext_ptr_ptr = Pointer::new(self.registers.rsp + 8);
+                vm.read_with_abi(ucontext_ptr_ptr, abi)?
+            }
+            Abi::Amd64 => Pointer::new(self.registers.rsp),
+        };
         let ucontext = vm.read_with_abi(ucontext_ptr, abi)?;
         self.load_sig_context(&ucontext.mcontext);
 
