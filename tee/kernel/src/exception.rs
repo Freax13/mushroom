@@ -354,6 +354,12 @@ extern "x86-interrupt" fn kernel_invalid_opcode_handler(frame: InterruptStackFra
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code: u64) -> ! {
+    if frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        unsafe {
+            asm!("swapgs");
+        }
+    }
+
     panic!("double fault {frame:x?} {code:x?}");
 }
 
