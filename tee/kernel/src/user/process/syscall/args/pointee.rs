@@ -325,7 +325,7 @@ impl WritablePointee for CStr {
 
 impl Pointee for CString {
     fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
-        CStr::display(f, addr, thread)
+        <CStr as Pointee>::display(f, addr, thread)
     }
 }
 
@@ -333,7 +333,7 @@ impl AbiAgnosticPointee for CString {}
 
 impl Pointee for Path {
     fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
-        CStr::display(f, addr, thread)
+        <CStr as Pointee>::display(f, addr, thread)
     }
 }
 

@@ -657,10 +657,10 @@ impl OpenFileDescription for TcpSocket {
                 let new_send_buffer_size = optval as usize * 2;
                 let new_send_buffer_size = cmp::max(new_send_buffer_size, 2048); // 2048 is the minimum
                 guard.send_buffer_size = new_send_buffer_size;
-                if let Some(bound) = self.bound_socket.get() {
-                    if let Some(Mode::Active(active)) = bound.mode.get() {
-                        active.write_half.set_buffer_capacity(new_send_buffer_size);
-                    }
+                if let Some(bound) = self.bound_socket.get()
+                    && let Some(Mode::Active(active)) = bound.mode.get()
+                {
+                    active.write_half.set_buffer_capacity(new_send_buffer_size);
                 }
                 Ok(())
             }
@@ -850,10 +850,10 @@ impl OpenFileDescription for TcpSocket {
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mode = loop {
             let wait = self.activate_notify.wait();
-            if let Some(bound) = self.bound_socket.get() {
-                if let Some(mode) = bound.mode.get() {
-                    break mode;
-                }
+            if let Some(bound) = self.bound_socket.get()
+                && let Some(mode) = bound.mode.get()
+            {
+                break mode;
             }
             wait.await;
         };

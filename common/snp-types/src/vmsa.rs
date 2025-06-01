@@ -80,7 +80,7 @@ macro_rules! vmsa_def {
             $($ident: [u8; size_of::<$ty>()],)*
         }
 
-        #[expect(dead_code, clippy::missing_transmute_annotations, clippy::transmute_num_to_bytes)]
+        #[expect(dead_code, clippy::missing_transmute_annotations, unnecessary_transmutes)]
         impl Vmsa {
             pub const fn new() -> Self {
                 Self {

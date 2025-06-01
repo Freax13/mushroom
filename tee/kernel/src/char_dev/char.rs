@@ -767,14 +767,14 @@ impl Directory for DevPtsDirectory {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent() {
-            if let Ok(stat) = entry.stat() {
-                entries.push(DirEntry {
-                    ino: stat.ino,
-                    ty: FileType::Dir,
-                    name: DirEntryName::DotDot,
-                });
-            }
+        if let Some(entry) = self.location.parent()
+            && let Ok(stat) = entry.stat()
+        {
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
         }
 
         let guard = PTYS.lock();

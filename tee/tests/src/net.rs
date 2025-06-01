@@ -594,7 +594,7 @@ fn socket_shutdown_both() -> Result<()> {
     assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
     assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
 
-    shutdown(fd2, socket::Shutdown::Both).unwrap();
+    shutdown(sock2.as_raw_fd(), socket::Shutdown::Both).unwrap();
 
     // Writes to the other half should continue to work after shutdown.
     assert_eq!(nix::unistd::write(&sock1, b"90ab"), Ok(4));
@@ -604,15 +604,15 @@ fn socket_shutdown_both() -> Result<()> {
     let mut buffer = [0; 16];
     // Reads from the other half should yield the data written before the
     // shutdown and then return 0.
-    assert_eq!(nix::unistd::read(fd1, &mut buffer), Ok(4));
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(4));
     assert_eq!(buffer[0..4], *b"5678");
-    assert_eq!(nix::unistd::read(fd1, &mut buffer), Ok(0));
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(0));
     // Reads from the shutdown half should yield the data written before the
     // shutdown and then return 0. They should not yield the data written after
     // the shutdown.
-    assert_eq!(nix::unistd::read(fd2, &mut buffer), Ok(4));
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(4));
     assert_eq!(buffer[0..4], *b"1234");
-    assert_eq!(nix::unistd::read(fd2, &mut buffer), Ok(0));
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
 
     Ok(())
 }

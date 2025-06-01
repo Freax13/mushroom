@@ -264,14 +264,14 @@ impl Directory for ProcFsRoot {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent() {
-            if let Ok(stat) = entry.stat() {
-                entries.push(DirEntry {
-                    ino: stat.ino,
-                    ty: FileType::Dir,
-                    name: DirEntryName::DotDot,
-                });
-            }
+        if let Some(entry) = self.location.parent()
+            && let Ok(stat) = entry.stat()
+        {
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
         }
         entries.push(DirEntry {
             ino: self.cpuinfo_file.ino,
@@ -728,14 +728,14 @@ impl Directory for NetDir {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent() {
-            if let Ok(stat) = entry.stat() {
-                entries.push(DirEntry {
-                    ino: stat.ino,
-                    ty: FileType::Dir,
-                    name: DirEntryName::DotDot,
-                });
-            }
+        if let Some(entry) = self.location.parent()
+            && let Ok(stat) = entry.stat()
+        {
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
         }
         Ok(entries)
     }
@@ -1220,14 +1220,14 @@ impl Directory for ProcessDir {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent() {
-            if let Ok(stat) = entry.stat() {
-                entries.push(DirEntry {
-                    ino: stat.ino,
-                    ty: FileType::Dir,
-                    name: DirEntryName::DotDot,
-                });
-            }
+        if let Some(entry) = self.location.parent()
+            && let Ok(stat) = entry.stat()
+        {
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
         }
         entries.push(DirEntry {
             ino: process.inos.fd_dir,
@@ -2197,14 +2197,14 @@ impl Directory for ProcessTaskDir {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent() {
-            if let Ok(stat) = entry.stat() {
-                entries.push(DirEntry {
-                    ino: stat.ino,
-                    ty: FileType::Dir,
-                    name: DirEntryName::DotDot,
-                });
-            }
+        if let Some(entry) = self.location.parent()
+            && let Ok(stat) = entry.stat()
+        {
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
         }
         for thread in process.threads() {
             entries.push(DirEntry {
@@ -2444,14 +2444,14 @@ impl Directory for TaskDir {
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
-        if let Some(entry) = self.location.parent() {
-            if let Ok(stat) = entry.stat() {
-                entries.push(DirEntry {
-                    ino: stat.ino,
-                    ty: FileType::Dir,
-                    name: DirEntryName::DotDot,
-                });
-            }
+        if let Some(entry) = self.location.parent()
+            && let Ok(stat) = entry.stat()
+        {
+            entries.push(DirEntry {
+                ino: stat.ino,
+                ty: FileType::Dir,
+                name: DirEntryName::DotDot,
+            });
         }
         entries.push(DirEntry {
             ino: process.inos.comm_file,

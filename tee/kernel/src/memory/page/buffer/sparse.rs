@@ -129,11 +129,11 @@ impl SparseBuffer {
         let mut cursor = self.pages.lower_bound_mut(Bound::Included(&page_index));
 
         // If `len` isn't on a page boundary, clear the content towards the end.
-        if page_offset > 0 {
-            if let Some((_, page)) = cursor.peek_next().filter(|&(idx, _)| *idx == page_index) {
-                page.zero_range(page_offset.., true)?;
-                cursor.next();
-            }
+        if page_offset > 0
+            && let Some((_, page)) = cursor.peek_next().filter(|&(idx, _)| *idx == page_index)
+        {
+            page.zero_range(page_offset.., true)?;
+            cursor.next();
         }
 
         // Remove all pages after `len`.
