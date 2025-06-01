@@ -249,6 +249,16 @@ impl Thread {
                                 self.queue_signal_or_die(sig_info);
                             }
                             Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+                            Exit::InvalidOpcode => {
+                                let sig_info = SigInfo {
+                                    signal: Signal::ILL,
+                                    code: SigInfoCode::ILL_ILLOPN,
+                                    fields: SigFields::SigFault(SigFault {
+                                        addr: self.cpu_state.lock().faulting_instruction(),
+                                    }),
+                                };
+                                self.queue_signal_or_die(sig_info);
+                            }
                             Exit::GeneralProtectionFault => {
                                 let sig_info = SigInfo {
                                     signal: Signal::SEGV,
@@ -466,6 +476,7 @@ impl Thread {
                         }
                     }
                     Exit::DivideError
+                    | Exit::InvalidOpcode
                     | Exit::GeneralProtectionFault
                     | Exit::PageFault(_)
                     | Exit::Timer => writeln!(write, "{:indent$}{exit:?}", "")?,
@@ -1035,6 +1046,7 @@ impl SigInfoCode {
     pub const FPE_INTDIV: Self = Self(1);
     pub const SEGV_MAPERR: Self = Self(1);
     pub const SEGV_ACCERR: Self = Self(2);
+    pub const ILL_ILLOPN: Self = Self(2);
     pub const KERNEL: Self = Self(0x80);
 }
 
