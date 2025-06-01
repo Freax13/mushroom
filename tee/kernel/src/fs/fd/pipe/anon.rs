@@ -119,14 +119,14 @@ impl OpenFileDescription for ReadHalf {
         let guard = self.internal.lock();
         Ok(Stat {
             dev: 0,
-            ino: 0,
+            ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Fifo, guard.ownership.mode()),
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
             rdev: 0,
             size: 0,
-            blksize: 0,
+            blksize: 0x1000,
             blocks: 0,
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
@@ -191,14 +191,14 @@ impl OpenFileDescription for WriteHalf {
         let guard = self.internal.lock();
         Ok(Stat {
             dev: 0,
-            ino: 0,
+            ino: self.ino,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Fifo, guard.ownership.mode()),
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
             rdev: 0,
             size: 0,
-            blksize: 0,
+            blksize: 0x1000,
             blocks: 0,
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
