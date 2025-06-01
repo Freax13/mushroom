@@ -405,13 +405,11 @@ impl WriteHalf {
             guard.bytes.truncate(start_idx);
         }
 
-        if oob {
-            if let Some(remaining_length) = guard.bytes.len().checked_sub(1) {
-                guard.oob_mark_state = OobMarkState::Pending {
-                    remaining_length,
-                    read: false,
-                };
-            }
+        if oob && let Some(remaining_length) = guard.bytes.len().checked_sub(1) {
+            guard.oob_mark_state = OobMarkState::Pending {
+                remaining_length,
+                read: false,
+            };
         }
 
         drop(guard);

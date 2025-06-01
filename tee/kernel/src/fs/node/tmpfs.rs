@@ -759,10 +759,8 @@ impl Directory for TmpFsDir {
         if core::ptr::eq(self, &*new_dir) {
             let mut guard = self.internal.lock();
             let entry = guard.items.get(&oldname).ok_or(err!(NoEnt))?;
-            if follow_symlink {
-                if let TmpFsDirEntry::Symlink(_, symlink) = &entry {
-                    return Ok(Some(symlink.target.clone()));
-                }
+            if follow_symlink && let TmpFsDirEntry::Symlink(_, symlink) = &entry {
+                return Ok(Some(symlink.target.clone()));
             }
 
             let entry = entry.clone(LinkLocation::new(
@@ -781,10 +779,8 @@ impl Directory for TmpFsDir {
             let (old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
             let entry = old_guard.items.get(&oldname).ok_or(err!(NoEnt))?;
 
-            if follow_symlink {
-                if let TmpFsDirEntry::Symlink(_, symlink) = &entry {
-                    return Ok(Some(symlink.target.clone()));
-                }
+            if follow_symlink && let TmpFsDirEntry::Symlink(_, symlink) = &entry {
+                return Ok(Some(symlink.target.clone()));
             }
 
             match new_guard.items.entry(newname) {

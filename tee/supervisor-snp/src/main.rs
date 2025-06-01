@@ -4,7 +4,6 @@
     abi_x86_interrupt,
     core_intrinsics,
     lazy_get,
-    naked_functions,
     pointer_is_aligned_to,
     sync_unsafe_cell
 )]

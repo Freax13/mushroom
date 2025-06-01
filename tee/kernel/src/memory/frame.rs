@@ -145,10 +145,10 @@ pub unsafe fn deallocate_frame(frame: PhysFrame) {
 
         // If the chunk is now completly unused, try to take ownership of the
         // group, so that the chunk can be released.
-        if usize::from(free) + 1 == CHUNK_SIZE {
-            if let Ok((free, allocated_bitmask)) = L2.groups[group_idx].claim(|_| true) {
-                drop(unsafe { PrivateState::new(group_idx, free, allocated_bitmask) });
-            }
+        if usize::from(free) + 1 == CHUNK_SIZE
+            && let Ok((free, allocated_bitmask)) = L2.groups[group_idx].claim(|_| true)
+        {
+            drop(unsafe { PrivateState::new(group_idx, free, allocated_bitmask) });
         }
     }
 }

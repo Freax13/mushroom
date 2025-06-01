@@ -138,10 +138,10 @@ impl DenseBuffer {
             // after `len`.
             let page_offset = len % 0x1000;
             let page_index = len / 0x1000;
-            if page_offset != 0 {
-                if let Some(page) = self.pages.get_mut(page_index) {
-                    page.zero_range(page_offset.., true)?;
-                }
+            if page_offset != 0
+                && let Some(page) = self.pages.get_mut(page_index)
+            {
+                page.zero_range(page_offset.., true)?;
             }
         }
 

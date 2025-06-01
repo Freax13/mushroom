@@ -269,20 +269,20 @@ impl Process {
         }
         drop(threads);
 
-        if let Some(termination_signal) = self.termination_signal {
-            if let Some(parent) = self.parent.upgrade() {
-                parent.queue_signal(SigInfo {
-                    signal: termination_signal,
-                    code: SigInfoCode::CLD_EXITED,
-                    fields: SigFields::SigChld(SigChld {
-                        pid: self.pid as i32,
-                        uid: 0,
-                        status: exit_status,
-                        utime: 0,
-                        stime: 0,
-                    }),
-                });
-            }
+        if let Some(termination_signal) = self.termination_signal
+            && let Some(parent) = self.parent.upgrade()
+        {
+            parent.queue_signal(SigInfo {
+                signal: termination_signal,
+                code: SigInfoCode::CLD_EXITED,
+                fields: SigFields::SigChld(SigChld {
+                    pid: self.pid as i32,
+                    uid: 0,
+                    status: exit_status,
+                    utime: 0,
+                    stime: 0,
+                }),
+            });
         }
 
         if let Some(parent) = self.parent.upgrade() {
