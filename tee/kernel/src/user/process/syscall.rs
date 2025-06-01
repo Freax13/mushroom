@@ -258,6 +258,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchmodat);
     handlers.register(SysFaccessat);
     handlers.register(SysPselect6);
+    handlers.register(SysPpoll);
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
@@ -511,7 +512,16 @@ async fn poll(
             now(ClockId::Monotonic) + Timespec::from_ms(timeout.into()),
         )),
     };
+    poll_impl(virtual_memory, fdtable, fds, nfds, deadline).await
+}
 
+async fn poll_impl(
+    virtual_memory: Arc<VirtualMemory>,
+    fdtable: Arc<FileDescriptorTable>,
+    fds: Pointer<Pollfd>,
+    nfds: u64,
+    deadline: Option<Option<Timespec>>,
+) -> SyscallResult {
     // Read the pollfds.
     let mut pollfds = (0..usize_from(nfds))
         .map(|i| virtual_memory.read(fds.bytes_offset(i * size_of::<Pollfd>())))
@@ -4166,6 +4176,53 @@ async fn pselect6(
                 exceptfds,
                 timeout,
             ),
+            false,
+        )
+        .await;
+
+    // Restore the signal mask.
+    if let Some(sigmask) = sigmask.as_mut() {
+        let mut guard = thread.lock();
+        core::mem::swap(sigmask, &mut guard.sigmask);
+    }
+
+    res
+}
+
+#[syscall(i386 = 309, amd64 = 271)]
+async fn ppoll(
+    thread: Arc<Thread>,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fds: Pointer<Pollfd>,
+    nfds: u64,
+    timeout: Pointer<Timespec>,
+    sigmask: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let mut sigmask = if !sigmask.is_null() {
+        let sigmask = virtual_memory.read_with_abi(sigmask, abi)?;
+        Some(sigmask)
+    } else {
+        None
+    };
+
+    // Update the signal mask.
+    if let Some(sigmask) = sigmask.as_mut() {
+        let mut guard = thread.lock();
+        core::mem::swap(sigmask, &mut guard.sigmask);
+    }
+
+    let deadline = if !timeout.is_null() {
+        Some(Some(virtual_memory.read_with_abi(timeout, abi)?))
+    } else {
+        Some(None)
+    };
+
+    let res = thread
+        .interruptable(
+            poll_impl(virtual_memory, fdtable, fds, nfds, deadline),
             false,
         )
         .await;
