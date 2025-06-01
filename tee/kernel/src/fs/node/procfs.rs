@@ -8,7 +8,7 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
-use constants::MAX_APS_COUNT;
+use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
 
 use crate::{
     error::{ErrorKind, Result, bail, ensure, err},
@@ -75,6 +75,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         file_lock_record: LazyFileLockRecord::new(),
         watchers: Watchers::new(),
         cpuinfo_file: CpuinfoFile::new(fs.clone()),
+        meminfo_file: MeminfoFile::new(fs.clone()),
         net_dir_ino: new_ino(),
         net_dir_file_lock_record: Arc::new(FileLockRecord::new()),
         net_dir_watchers: Arc::new(Watchers::new()),
@@ -99,6 +100,7 @@ struct ProcFsRoot {
     file_lock_record: LazyFileLockRecord,
     watchers: Watchers,
     cpuinfo_file: Arc<CpuinfoFile>,
+    meminfo_file: Arc<MeminfoFile>,
     net_dir_ino: u64,
     net_dir_file_lock_record: Arc<FileLockRecord>,
     net_dir_watchers: Arc<Watchers>,
@@ -171,6 +173,7 @@ impl Directory for ProcFsRoot {
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
             b"cpuinfo" => self.cpuinfo_file.clone(),
+            b"meminfo" => self.meminfo_file.clone(),
             b"net" => NetDir::new(
                 location.clone(),
                 self.fs.clone(),
@@ -272,8 +275,13 @@ impl Directory for ProcFsRoot {
         }
         entries.push(DirEntry {
             ino: self.cpuinfo_file.ino,
-            ty: FileType::Link,
+            ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"cpuinfo").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.meminfo_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"meminfo").unwrap()),
         });
         entries.push(DirEntry {
             ino: self.net_dir_ino,
@@ -435,6 +443,114 @@ impl INode for CpuinfoFile {
 }
 
 impl File for CpuinfoFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+}
+
+struct MeminfoFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
+}
+
+impl MeminfoFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let total = (DYNAMIC.end.start_address() - DYNAMIC.start.start_address()) / 1024;
+        let free = total / 2; // TODO
+
+        let mut buffer = Vec::new();
+        writeln!(buffer, "MemTotal: {total:14} kB").unwrap();
+        writeln!(buffer, "MemFree:  {free:14} kB").unwrap();
+        buffer
+    }
+}
+
+impl INode for MeminfoFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for MeminfoFile {
     fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }
