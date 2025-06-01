@@ -1210,6 +1210,7 @@ unsafe impl CheckedBitPattern for UserDescFlags {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Offset(#[allow(dead_code)] pub i64);
 
 #[derive(Clone, Copy, Pod, Zeroable)]

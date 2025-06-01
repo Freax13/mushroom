@@ -1229,6 +1229,8 @@ fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
 
 #[syscall(i386 = 187, amd64 = 40)]
 async fn sendfile(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     out: FdNum,
     r#in: FdNum,
@@ -1239,9 +1241,13 @@ async fn sendfile(
     let r#in = fdtable.get(r#in)?;
     let count = usize_from(count);
 
-    if !offset.is_null() {
-        todo!();
-    }
+    let mut offset_value = if !offset.is_null() {
+        let offset_value = virtual_memory.read_with_abi(offset, abi)?;
+        let offset_value = usize::try_from(offset_value.0)?;
+        Some(offset_value)
+    } else {
+        None
+    };
 
     let mut buffer = [0; 8192];
     let mut total_len = 0;
@@ -1250,7 +1256,11 @@ async fn sendfile(
         let buffer = &mut buffer[..chunk_len];
 
         let len = do_io(&**r#in, Events::READ, || {
-            r#in.read(&mut KernelReadBuf::new(buffer))
+            if let Some(offset_value) = offset_value {
+                r#in.pread(offset_value, &mut KernelReadBuf::new(buffer))
+            } else {
+                r#in.read(&mut KernelReadBuf::new(buffer))
+            }
         })
         .await?;
         let buffer = &buffer[..len];
@@ -1258,6 +1268,9 @@ async fn sendfile(
             break;
         }
         total_len += buffer.len();
+        if let Some(offset_value) = &mut offset_value {
+            *offset_value += buffer.len();
+        }
 
         let mut buffer = buffer;
         while !buffer.is_empty() {
@@ -1267,6 +1280,12 @@ async fn sendfile(
             .await?;
             buffer = &buffer[n..];
         }
+    }
+
+    if !offset.is_null() {
+        let offset_value = i64::try_from(offset_value.unwrap())?;
+        let offset_value = Offset(offset_value);
+        virtual_memory.write_with_abi(offset, offset_value, abi)?;
     }
 
     let len = u64::from_usize(total_len);
@@ -1275,48 +1294,23 @@ async fn sendfile(
 
 #[syscall(i386 = 239)]
 async fn sendfile64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     out: FdNum,
     r#in: FdNum,
     offset: Pointer<LongOffset>,
     count: u64,
 ) -> SyscallResult {
-    let out = fdtable.get(out)?;
-    let r#in = fdtable.get(r#in)?;
-    let count = usize_from(count);
-
-    if !offset.is_null() {
-        todo!();
-    }
-
-    let mut buffer = [0; 8192];
-    let mut total_len = 0;
-    while total_len < count {
-        let chunk_len = cmp::min(count - total_len, buffer.len());
-        let buffer = &mut buffer[..chunk_len];
-
-        let len = do_io(&**r#in, Events::READ, || {
-            r#in.read(&mut KernelReadBuf::new(buffer))
-        })
-        .await?;
-        let buffer = &buffer[..len];
-        if buffer.is_empty() {
-            break;
-        }
-        total_len += buffer.len();
-
-        let mut buffer = buffer;
-        while !buffer.is_empty() {
-            let n = do_write_io(&**r#in, buffer.len(), || {
-                out.write(&KernelWriteBuf::new(buffer))
-            })
-            .await?;
-            buffer = &buffer[n..];
-        }
-    }
-
-    let len = u64::from_usize(total_len);
-    Ok(len)
+    sendfile(
+        Abi::Amd64,
+        virtual_memory,
+        fdtable,
+        out,
+        r#in,
+        offset.cast(),
+        count,
+    )
+    .await
 }
 
 #[syscall(i386 = 359, amd64 = 41)]

@@ -892,6 +892,20 @@ impl From<Offset64> for Offset {
     }
 }
 
+impl TryFrom<Offset> for Offset32 {
+    type Error = Error;
+
+    fn try_from(value: Offset) -> Result<Self> {
+        Ok(Self(i32::try_from(value.0)?))
+    }
+}
+
+impl From<Offset> for Offset64 {
+    fn from(value: Offset) -> Self {
+        Self(value.0)
+    }
+}
+
 impl Pointee for LongOffset {}
 
 impl PrimitivePointee for LongOffset {}
