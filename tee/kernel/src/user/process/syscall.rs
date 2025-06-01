@@ -210,6 +210,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetresuid);
     handlers.register(SysSetresgid);
     handlers.register(SysGetresgid);
+    handlers.register(SysGetpgid);
     handlers.register(SysSetfsuid);
     handlers.register(SysSetfsgid);
     handlers.register(SysGetsid);
@@ -2890,6 +2891,16 @@ fn getresgid(
     virtual_memory.write(egid, credentials.effective_group_id)?;
     virtual_memory.write(sgid, credentials.saved_set_group_id)?;
     Ok(0)
+}
+
+#[syscall(i386 = 132, amd64 = 121)]
+fn getpgid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
+    let pgid = if pid == 0 {
+        thread.process().pgrp()
+    } else {
+        Process::find_by_pid(pid).ok_or(err!(Srch))?.pgrp()
+    };
+    Ok(u64::from(pgid))
 }
 
 #[syscall(i386 = 215, amd64 = 122)]
