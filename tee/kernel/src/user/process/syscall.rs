@@ -212,6 +212,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetresgid);
     handlers.register(SysSetfsuid);
     handlers.register(SysSetfsgid);
+    handlers.register(SysGetsid);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -2919,6 +2920,16 @@ fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
     );
     credentials.filesystem_group_id = fsgid;
     Ok(0)
+}
+
+#[syscall(i386 = 147, amd64 = 124)]
+fn getsid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
+    let sid = if pid == 0 {
+        thread.process().sid()
+    } else {
+        Process::find_by_pid(pid).ok_or(err!(Srch))?.sid()
+    };
+    Ok(u64::from(sid))
 }
 
 #[syscall(i386 = 179, amd64 = 130)]
