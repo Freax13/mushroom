@@ -371,6 +371,12 @@ impl CpuinfoFile {
         let mut buffer = Vec::new();
         for i in 0..MAX_APS_COUNT {
             writeln!(buffer, "processor	: {i}").unwrap();
+            writeln!(buffer, "physical id: 0").unwrap();
+            writeln!(buffer, "siblings : {MAX_APS_COUNT}").unwrap();
+            writeln!(buffer, "core id : {i}").unwrap();
+            writeln!(buffer, "cpu cores : {MAX_APS_COUNT}").unwrap();
+            writeln!(buffer, "apicid : {i}").unwrap();
+            writeln!(buffer, "initial apicid : {i}").unwrap();
             writeln!(buffer).unwrap();
         }
         buffer
