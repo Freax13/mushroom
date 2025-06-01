@@ -491,7 +491,7 @@ fn cache_file_name(params: VcekParameters) -> String {
 async fn load_vcek_from_cache(params: VcekParameters) -> Result<Option<Vcek>> {
     use tracing::debug;
 
-    let dirs = xdg::BaseDirectories::with_prefix("mushroom")?;
+    let dirs = xdg::BaseDirectories::with_prefix("mushroom");
     let Some(file) = dirs.find_cache_file(cache_file_name(params)) else {
         debug!(%params, "cache miss");
         return Ok(None);
@@ -509,7 +509,7 @@ async fn load_vcek_from_cache(params: VcekParameters) -> Result<Option<Vcek>> {
 
 #[cfg(feature = "snp")]
 async fn save_vcek_to_cache(params: VcekParameters, vcek: &Vcek) -> Result<()> {
-    let dirs = xdg::BaseDirectories::with_prefix("mushroom")?;
+    let dirs = xdg::BaseDirectories::with_prefix("mushroom");
     let file = dirs.place_cache_file(cache_file_name(params))?;
     tokio::fs::write(file, vcek.raw())
         .await

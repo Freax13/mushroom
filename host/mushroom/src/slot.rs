@@ -2,7 +2,7 @@ use std::{
     ffi::c_void,
     mem::size_of,
     num::NonZeroUsize,
-    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     ptr::{NonNull, copy_nonoverlapping},
     sync::Arc,
 };
@@ -63,13 +63,8 @@ impl Slot {
                 let fd = vm
                     .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
                     .context("failed to create guest memfd")?;
-                fallocate(
-                    fd.as_raw_fd(),
-                    FallocateFlags::FALLOC_FL_KEEP_SIZE,
-                    0,
-                    len as i64,
-                )
-                .context("failed to reserve memory")?;
+                fallocate(&fd, FallocateFlags::FALLOC_FL_KEEP_SIZE, 0, len as i64)
+                    .context("failed to reserve memory")?;
                 Result::<_>::Ok(fd)
             })
             .transpose()?;

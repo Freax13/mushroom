@@ -29,12 +29,12 @@ fn path_server_stat() {
         None,
     )
     .unwrap();
-    let unbound_stat = fstat(socket.as_raw_fd()).unwrap();
+    let unbound_stat = fstat(&socket).unwrap();
 
     let path = "socket-stat";
     bind(socket.as_raw_fd(), &UnixAddr::new(path).unwrap()).unwrap();
 
-    let bound_stat = fstat(socket.as_raw_fd()).unwrap();
+    let bound_stat = fstat(&socket).unwrap();
 
     assert_eq!(unbound_stat, bound_stat);
 
@@ -50,7 +50,7 @@ fn path_double_bind() {
         None,
     )
     .unwrap();
-    let unbound_stat = fstat(sock.as_raw_fd()).unwrap();
+    let unbound_stat = fstat(&sock).unwrap();
 
     // Sockets start out as unnamed sockets.
     let addr = getsockname::<UnixAddr>(sock.as_raw_fd()).unwrap();
@@ -336,7 +336,7 @@ fn sendmsg_recv() {
 
     // Make sure that reading the pipe blocks.
     let mut buf = [0; 8];
-    assert_eq!(read(read_half.as_raw_fd(), &mut buf), Err(Errno::EAGAIN));
+    assert_eq!(read(&read_half, &mut buf), Err(Errno::EAGAIN));
 
     // Send the write half over the socket.
     assert_eq!(
@@ -353,7 +353,7 @@ fn sendmsg_recv() {
     drop(write_half);
 
     // Make sure that reading the pipe still blocks.
-    assert_eq!(read(read_half.as_raw_fd(), &mut buf), Err(Errno::EAGAIN));
+    assert_eq!(read(&read_half, &mut buf), Err(Errno::EAGAIN));
 
     // Receive the data. This implicitely closes the fd.
     assert_eq!(
@@ -362,7 +362,7 @@ fn sendmsg_recv() {
     );
 
     // Make sure that the pipe is blocked.
-    assert_eq!(read(read_half.as_raw_fd(), &mut buf).unwrap(), 0);
+    assert_eq!(read(&read_half, &mut buf).unwrap(), 0);
 }
 
 #[test]
@@ -424,20 +424,20 @@ fn shutdown_read_write() {
     let mut buffer = &mut [0; 4];
 
     assert_eq!(write(&sock1, b"1111"), Ok(4));
-    assert_eq!(read(sock2.as_raw_fd(), buffer), Ok(4));
+    assert_eq!(read(&sock2, buffer), Ok(4));
     assert_eq!(buffer, b"1111");
 
     assert_eq!(write(&sock2, b"2222"), Ok(4));
-    assert_eq!(read(sock1.as_raw_fd(), buffer), Ok(4));
+    assert_eq!(read(&sock1, buffer), Ok(4));
     assert_eq!(buffer, b"2222");
 
     shutdown(sock1.as_raw_fd(), Shutdown::Write).unwrap();
 
     assert_eq!(write(&sock1, b"3333"), Err(Errno::EPIPE));
-    assert_eq!(read(sock2.as_raw_fd(), buffer), Ok(0));
+    assert_eq!(read(&sock2, buffer), Ok(0));
 
     assert_eq!(write(&sock2, b"4444"), Ok(4));
-    assert_eq!(read(sock1.as_raw_fd(), buffer), Ok(4));
+    assert_eq!(read(&sock1, buffer), Ok(4));
     assert_eq!(buffer, b"4444");
 
     assert_eq!(write(&sock2, b"5555"), Ok(4));
@@ -445,9 +445,9 @@ fn shutdown_read_write() {
     shutdown(sock1.as_raw_fd(), Shutdown::Read).unwrap();
 
     assert_eq!(write(&sock2, b"6666"), Err(Errno::EPIPE));
-    assert_eq!(read(sock1.as_raw_fd(), buffer), Ok(4));
+    assert_eq!(read(&sock1, buffer), Ok(4));
     assert_eq!(buffer, b"5555");
-    assert_eq!(read(sock1.as_raw_fd(), buffer), Ok(0));
+    assert_eq!(read(&sock1, buffer), Ok(0));
     assert_eq!(buffer, b"5555");
 }
 
