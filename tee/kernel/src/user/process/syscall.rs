@@ -1837,25 +1837,29 @@ async fn execve(
     let pathname = virtual_memory.read(pathname)?;
 
     let mut args = Vec::new();
-    loop {
-        let (len, argp) = virtual_memory.read_sized_with_abi(argv, abi)?;
-        argv = argv.bytes_offset(len);
+    if !argv.is_null() {
+        loop {
+            let (len, argp) = virtual_memory.read_sized_with_abi(argv, abi)?;
+            argv = argv.bytes_offset(len);
 
-        if argp.is_null() {
-            break;
+            if argp.is_null() {
+                break;
+            }
+            args.push(virtual_memory.read_cstring(argp, 0x20000)?);
         }
-        args.push(virtual_memory.read_cstring(argp, 0x20000)?);
     }
 
     let mut envs = Vec::new();
-    loop {
-        let (len, envp2) = virtual_memory.read_sized_with_abi(envp, abi)?;
-        envp = envp.bytes_offset(len);
+    if !envp.is_null() {
+        loop {
+            let (len, envp2) = virtual_memory.read_sized_with_abi(envp, abi)?;
+            envp = envp.bytes_offset(len);
 
-        if envp2.is_null() {
-            break;
+            if envp2.is_null() {
+                break;
+            }
+            envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
         }
-        envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
     }
 
     // Open the executable.
