@@ -85,47 +85,40 @@ impl DenseBuffer {
             return Ok(Err(NotDenseError));
         }
 
-        // Add as many pages as required to pad to `offset`.
-        if self.pages.len() < start_page {
-            self.pages.resize_with(start_page, KernelPage::zeroed);
-        }
-
         let len = buf.buffer_len();
-        if len == 0 {
-            return Ok(Ok(0));
-        }
+        if len > 0 {
+            // Add as many pages as required for the write.
+            let end = offset + len - 1;
+            let end_page = (end + 1).div_ceil(0x1000);
+            if self.pages.len() < end_page {
+                self.pages.resize_with(end_page, KernelPage::zeroed);
+            }
 
-        // Add as many pages as required for the write.
-        let end = offset + len - 1;
-        let end_page = (end + 1).div_ceil(0x1000);
-        if self.pages.len() < end_page {
-            self.pages.resize_with(end_page, KernelPage::zeroed);
-        }
+            for (i, page) in self
+                .pages
+                .iter_mut()
+                .enumerate()
+                .take(end_page)
+                .skip(start_page)
+            {
+                // Calcuate the start and end indices of `page` in `self`.
+                let page_start = i * 0x1000;
+                let page_end = (i + 1) * 0x1000 - 1;
 
-        for (i, page) in self
-            .pages
-            .iter_mut()
-            .enumerate()
-            .take(end_page)
-            .skip(start_page)
-        {
-            // Calcuate the start and end indices of `page` in `self`.
-            let page_start = i * 0x1000;
-            let page_end = (i + 1) * 0x1000 - 1;
+                // Calculate the start and end indices in `self` for the copy operation.
+                let copy_start = cmp::max(page_start, start);
+                let copy_end = cmp::min(page_end, end);
 
-            // Calculate the start and end indices in `self` for the copy operation.
-            let copy_start = cmp::max(page_start, start);
-            let copy_end = cmp::min(page_end, end);
+                // Calculate the start and end indices in `page` for the copy operation.
+                let page_copy_start = copy_start - page_start;
+                let page_copy_end = copy_end - page_start;
+                page.make_mut(true)?;
+                let dst = page.index(page_copy_start..=page_copy_end);
 
-            // Calculate the start and end indices in `page` for the copy operation.
-            let page_copy_start = copy_start - page_start;
-            let page_copy_end = copy_end - page_start;
-            page.make_mut(true)?;
-            let dst = page.index(page_copy_start..=page_copy_end);
-
-            let buf_copy_start = copy_start - offset;
-            unsafe {
-                buf.read_volatile(buf_copy_start, dst)?;
+                let buf_copy_start = copy_start - offset;
+                unsafe {
+                    buf.read_volatile(buf_copy_start, dst)?;
+                }
             }
         }
 
@@ -162,7 +155,7 @@ impl DenseBuffer {
         page_idx: usize,
         shared: bool,
     ) -> Result<Result<KernelPage, NotDenseError>> {
-        ensure!(page_idx < self.pages.len(), Acces);
+        ensure!(page_idx * 0x1000 < self.len, Acces);
 
         // Get the page. If it hasn't been allocated yet, it hasn't been
         // written to yet and accesses are likely not dense.

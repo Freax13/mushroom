@@ -115,9 +115,12 @@ impl OpenFileDescription for Epoll {
         Path::new(b"anon_inode:[eventpoll]".to_vec())
     }
 
-    async fn epoll_wait(&self, _maxevents: usize) -> Result<Vec<EpollEvent>> {
+    async fn epoll_wait(&self, maxevents: usize) -> Result<Vec<EpollEvent>> {
         let (first, more) = self.poll().await;
-        let events = core::iter::once(first).chain(more).collect();
+        let events = core::iter::once(first)
+            .chain(more)
+            .take(maxevents)
+            .collect();
         Ok(events)
     }
 

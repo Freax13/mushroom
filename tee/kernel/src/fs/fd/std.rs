@@ -4,9 +4,11 @@ use alloc::{boxed::Box, format, sync::Arc, vec};
 use async_trait::async_trait;
 use log::debug;
 
-use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription, WriteBuf, pipe::anon::PIPE_FS};
+use super::{
+    Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf, pipe::anon::PIPE_FS,
+};
 use crate::{
-    error::Result,
+    error::{Result, ensure},
     fs::{
         FileSystem,
         node::{FileAccessContext, new_ino},
@@ -50,6 +52,16 @@ impl OpenFileDescription for Stdin {
 
     fn path(&self) -> Result<Path> {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
+    }
+
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        ensure!(buf.buffer_len() == 0, Inval);
+        Ok(0)
+    }
+
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+        ensure!(buf.buffer_len() == 0, Inval);
+        Ok(0)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

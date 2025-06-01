@@ -210,8 +210,10 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetresuid);
     handlers.register(SysSetresgid);
     handlers.register(SysGetresgid);
+    handlers.register(SysGetpgid);
     handlers.register(SysSetfsuid);
     handlers.register(SysSetfsgid);
+    handlers.register(SysGetsid);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -256,6 +258,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchmodat);
     handlers.register(SysFaccessat);
     handlers.register(SysPselect6);
+    handlers.register(SysPpoll);
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
@@ -509,7 +512,16 @@ async fn poll(
             now(ClockId::Monotonic) + Timespec::from_ms(timeout.into()),
         )),
     };
+    poll_impl(virtual_memory, fdtable, fds, nfds, deadline).await
+}
 
+async fn poll_impl(
+    virtual_memory: Arc<VirtualMemory>,
+    fdtable: Arc<FileDescriptorTable>,
+    fds: Pointer<Pollfd>,
+    nfds: u64,
+    deadline: Option<Option<Timespec>>,
+) -> SyscallResult {
     // Read the pollfds.
     let mut pollfds = (0..usize_from(nfds))
         .map(|i| virtual_memory.read(fds.bytes_offset(i * size_of::<Pollfd>())))
@@ -1217,6 +1229,8 @@ fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
 
 #[syscall(i386 = 187, amd64 = 40)]
 async fn sendfile(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     out: FdNum,
     r#in: FdNum,
@@ -1227,9 +1241,13 @@ async fn sendfile(
     let r#in = fdtable.get(r#in)?;
     let count = usize_from(count);
 
-    if !offset.is_null() {
-        todo!();
-    }
+    let mut offset_value = if !offset.is_null() {
+        let offset_value = virtual_memory.read_with_abi(offset, abi)?;
+        let offset_value = usize::try_from(offset_value.0)?;
+        Some(offset_value)
+    } else {
+        None
+    };
 
     let mut buffer = [0; 8192];
     let mut total_len = 0;
@@ -1238,7 +1256,11 @@ async fn sendfile(
         let buffer = &mut buffer[..chunk_len];
 
         let len = do_io(&**r#in, Events::READ, || {
-            r#in.read(&mut KernelReadBuf::new(buffer))
+            if let Some(offset_value) = offset_value {
+                r#in.pread(offset_value, &mut KernelReadBuf::new(buffer))
+            } else {
+                r#in.read(&mut KernelReadBuf::new(buffer))
+            }
         })
         .await?;
         let buffer = &buffer[..len];
@@ -1246,6 +1268,9 @@ async fn sendfile(
             break;
         }
         total_len += buffer.len();
+        if let Some(offset_value) = &mut offset_value {
+            *offset_value += buffer.len();
+        }
 
         let mut buffer = buffer;
         while !buffer.is_empty() {
@@ -1255,6 +1280,12 @@ async fn sendfile(
             .await?;
             buffer = &buffer[n..];
         }
+    }
+
+    if !offset.is_null() {
+        let offset_value = i64::try_from(offset_value.unwrap())?;
+        let offset_value = Offset(offset_value);
+        virtual_memory.write_with_abi(offset, offset_value, abi)?;
     }
 
     let len = u64::from_usize(total_len);
@@ -1263,48 +1294,23 @@ async fn sendfile(
 
 #[syscall(i386 = 239)]
 async fn sendfile64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     out: FdNum,
     r#in: FdNum,
     offset: Pointer<LongOffset>,
     count: u64,
 ) -> SyscallResult {
-    let out = fdtable.get(out)?;
-    let r#in = fdtable.get(r#in)?;
-    let count = usize_from(count);
-
-    if !offset.is_null() {
-        todo!();
-    }
-
-    let mut buffer = [0; 8192];
-    let mut total_len = 0;
-    while total_len < count {
-        let chunk_len = cmp::min(count - total_len, buffer.len());
-        let buffer = &mut buffer[..chunk_len];
-
-        let len = do_io(&**r#in, Events::READ, || {
-            r#in.read(&mut KernelReadBuf::new(buffer))
-        })
-        .await?;
-        let buffer = &buffer[..len];
-        if buffer.is_empty() {
-            break;
-        }
-        total_len += buffer.len();
-
-        let mut buffer = buffer;
-        while !buffer.is_empty() {
-            let n = do_write_io(&**r#in, buffer.len(), || {
-                out.write(&KernelWriteBuf::new(buffer))
-            })
-            .await?;
-            buffer = &buffer[n..];
-        }
-    }
-
-    let len = u64::from_usize(total_len);
-    Ok(len)
+    sendfile(
+        Abi::Amd64,
+        virtual_memory,
+        fdtable,
+        out,
+        r#in,
+        offset.cast(),
+        count,
+    )
+    .await
 }
 
 #[syscall(i386 = 359, amd64 = 41)]
@@ -1831,25 +1837,29 @@ async fn execve(
     let pathname = virtual_memory.read(pathname)?;
 
     let mut args = Vec::new();
-    loop {
-        let (len, argp) = virtual_memory.read_sized_with_abi(argv, abi)?;
-        argv = argv.bytes_offset(len);
+    if !argv.is_null() {
+        loop {
+            let (len, argp) = virtual_memory.read_sized_with_abi(argv, abi)?;
+            argv = argv.bytes_offset(len);
 
-        if argp.is_null() {
-            break;
+            if argp.is_null() {
+                break;
+            }
+            args.push(virtual_memory.read_cstring(argp, 0x20000)?);
         }
-        args.push(virtual_memory.read_cstring(argp, 0x20000)?);
     }
 
     let mut envs = Vec::new();
-    loop {
-        let (len, envp2) = virtual_memory.read_sized_with_abi(envp, abi)?;
-        envp = envp.bytes_offset(len);
+    if !envp.is_null() {
+        loop {
+            let (len, envp2) = virtual_memory.read_sized_with_abi(envp, abi)?;
+            envp = envp.bytes_offset(len);
 
-        if envp2.is_null() {
-            break;
+            if envp2.is_null() {
+                break;
+            }
+            envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
         }
-        envs.push(virtual_memory.read_cstring(envp2, 0x20000)?);
     }
 
     // Open the executable.
@@ -1898,16 +1908,13 @@ async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
 #[syscall(i386 = 114, amd64 = 61, interruptable, restartable)]
 async fn wait4(
     thread: Arc<Thread>,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     pid: i32,
-    wstatus: Pointer<WStatus>, // FIXME: use correct type
+    wstatus: Pointer<WStatus>,
     options: WaitOptions,
-    rusage: Pointer<c_void>, // FIXME: use correct type
+    rusage: Pointer<Rusage>,
 ) -> SyscallResult {
-    if !rusage.is_null() {
-        todo!()
-    }
-
     let no_hang = options.contains(WaitOptions::NOHANG);
     let pid = match pid {
         ..=-2 => WaitFilter::ExactPgid(-pid as u32),
@@ -1917,14 +1924,17 @@ async fn wait4(
     };
 
     let opt = thread.process().wait_for_child_death(pid, no_hang).await?;
-    let Some((tid, status)) = opt else {
+    let Some((tid, status, usage)) = opt else {
         return Ok(0);
     };
 
     if !wstatus.is_null() {
         let addr = wstatus.get();
-
         virtual_memory.write_bytes(addr, bytes_of(&status))?;
+    }
+
+    if !rusage.is_null() {
+        virtual_memory.write_with_abi(rusage, usage, abi)?;
     }
 
     Ok(u64::from(tid))
@@ -2055,7 +2065,8 @@ fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
-        FcntlCmd::SetLkW
+        FcntlCmd::SetLk
+        | FcntlCmd::SetLkW
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
@@ -2099,7 +2110,8 @@ fn fcntl64(
             fd.set_flags(flags);
             Ok(0)
         }
-        FcntlCmd::SetLkW
+        FcntlCmd::SetLk
+        | FcntlCmd::SetLkW
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
@@ -2891,6 +2903,16 @@ fn getresgid(
     Ok(0)
 }
 
+#[syscall(i386 = 132, amd64 = 121)]
+fn getpgid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
+    let pgid = if pid == 0 {
+        thread.process().pgrp()
+    } else {
+        Process::find_by_pid(pid).ok_or(err!(Srch))?.pgrp()
+    };
+    Ok(u64::from(pgid))
+}
+
 #[syscall(i386 = 215, amd64 = 122)]
 fn setfsuid(thread: &mut ThreadGuard, fsuid: Uid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
@@ -2919,6 +2941,16 @@ fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
     );
     credentials.filesystem_group_id = fsgid;
     Ok(0)
+}
+
+#[syscall(i386 = 147, amd64 = 124)]
+fn getsid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
+    let sid = if pid == 0 {
+        thread.process().sid()
+    } else {
+        Process::find_by_pid(pid).ok_or(err!(Srch))?.sid()
+    };
+    Ok(u64::from(sid))
 }
 
 #[syscall(i386 = 179, amd64 = 130)]
@@ -4144,6 +4176,53 @@ async fn pselect6(
                 exceptfds,
                 timeout,
             ),
+            false,
+        )
+        .await;
+
+    // Restore the signal mask.
+    if let Some(sigmask) = sigmask.as_mut() {
+        let mut guard = thread.lock();
+        core::mem::swap(sigmask, &mut guard.sigmask);
+    }
+
+    res
+}
+
+#[syscall(i386 = 309, amd64 = 271)]
+async fn ppoll(
+    thread: Arc<Thread>,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fds: Pointer<Pollfd>,
+    nfds: u64,
+    timeout: Pointer<Timespec>,
+    sigmask: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let mut sigmask = if !sigmask.is_null() {
+        let sigmask = virtual_memory.read_with_abi(sigmask, abi)?;
+        Some(sigmask)
+    } else {
+        None
+    };
+
+    // Update the signal mask.
+    if let Some(sigmask) = sigmask.as_mut() {
+        let mut guard = thread.lock();
+        core::mem::swap(sigmask, &mut guard.sigmask);
+    }
+
+    let deadline = if !timeout.is_null() {
+        Some(Some(virtual_memory.read_with_abi(timeout, abi)?))
+    } else {
+        Some(None)
+    };
+
+    let res = thread
+        .interruptable(
+            poll_impl(virtual_memory, fdtable, fds, nfds, deadline),
             false,
         )
         .await;

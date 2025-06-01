@@ -417,6 +417,7 @@ bitflags! {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
         const EXEC = 1 << 2;
+        const GROWSDOWN = 1 << 24;
     }
 }
 
@@ -429,6 +430,7 @@ bitflags! {
         const ANONYMOUS = 1 << 5;
         const DENYWRITE = 1 << 11;
         const LOCKED = 1 << 13;
+        const NORESERVE = 1 << 14;
         const STACK = 1 << 17;
     }
 }
@@ -547,6 +549,7 @@ enum_arg! {
         SetFd = 2,
         GetFl = 3,
         SetFl = 4,
+        SetLk = 6,
         SetLkW = 7,
         SetOwn = 8,
         GetOwn = 9,
@@ -1210,6 +1213,7 @@ unsafe impl CheckedBitPattern for UserDescFlags {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Offset(#[allow(dead_code)] pub i64);
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1304,6 +1308,7 @@ pub struct Signal(u8);
 impl Signal {
     pub const HUP: Self = Self(1);
     pub const INT: Self = Self(2);
+    pub const ILL: Self = Self(4);
     pub const ABRT: Self = Self(6);
     pub const FPE: Self = Self(8);
     pub const KILL: Self = Self(9);

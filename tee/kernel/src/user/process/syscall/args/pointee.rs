@@ -305,7 +305,7 @@ impl Pointee for CStr {
     fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
         let res = thread
             .virtual_memory()
-            .read_cstring(Pointer::from(addr), 128);
+            .read_cstring(Pointer::from(addr), 1024);
         match res {
             Ok(value) => write!(f, "{value:?}"),
             Err(_) => write!(f, "{:#x} (invalid ptr)", addr.as_u64()),
@@ -888,6 +888,20 @@ impl From<Offset32> for Offset {
 
 impl From<Offset64> for Offset {
     fn from(value: Offset64) -> Self {
+        Self(value.0)
+    }
+}
+
+impl TryFrom<Offset> for Offset32 {
+    type Error = Error;
+
+    fn try_from(value: Offset) -> Result<Self> {
+        Ok(Self(i32::try_from(value.0)?))
+    }
+}
+
+impl From<Offset> for Offset64 {
+    fn from(value: Offset) -> Self {
         Self(value.0)
     }
 }

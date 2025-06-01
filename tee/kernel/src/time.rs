@@ -569,9 +569,8 @@ impl ManagementLock {
     }
 
     unsafe fn remove(&mut self, node: Arc<Node>) {
-        let prev = node.state.swap(NodeState::Removed);
-
-        match prev {
+        let state = node.state.load();
+        match state {
             NodeState::Uninit => return, // The node was never inserted.
             NodeState::InsertedLeft => {
                 debug_assert!(self.rb_tree_left.iter().any(|n| core::ptr::eq(n, &*node)));
@@ -586,7 +585,7 @@ impl ManagementLock {
             _ => {}
         }
 
-        let preferred_flip_flop = match prev {
+        let preferred_flip_flop = match state {
             NodeState::Uninit => unreachable!(),
             NodeState::InsertedLeft => Some(false),
             NodeState::InsertedRight => Some(true),
@@ -627,10 +626,11 @@ impl ManagementLock {
             break;
         }
 
+        let prev = node.state.swap(NodeState::Removed);
         match (prev, state.flip_flop()) {
             (NodeState::InsertedLeft, false) => {
                 let half = unsafe { &mut *self.lists.left.get() };
-                debug_assert!(half.pending.iter().any(|n| core::ptr::eq(n, &*node)));
+                debug_assert!(half.pending.iter().any(|n| core::ptr::eq(n, &*node))); // this fails
                 let mut cursor = unsafe { half.pending.cursor_mut_from_ptr(&*node) };
                 cursor.remove();
             }
