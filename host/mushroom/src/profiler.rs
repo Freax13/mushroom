@@ -5,6 +5,7 @@ use std::{
     mem::size_of,
     path::Path,
     process::{Command, Stdio},
+    ptr::addr_of,
     sync::{Arc, Condvar, Mutex},
 };
 
@@ -214,11 +215,12 @@ fn collector_thread(
         };
 
         let bytes = if !header.lost {
-            let range = header.start_idx..header.start_idx + header.len;
             let entries = unsafe {
                 // SAFETY: The kernel won't touch this before we unset the notify
                 // flag, so there can't be a data race.
-                &(*profiler_buffers)[idx].entries[range]
+                let ptr = addr_of!((*profiler_buffers)[idx].entries);
+                let ptr = ptr.cast::<Entry>().add(header.start_idx);
+                core::slice::from_raw_parts(ptr, header.len)
             };
 
             // Calculate the timestamp scale.
