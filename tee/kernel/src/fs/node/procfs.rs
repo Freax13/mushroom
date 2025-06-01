@@ -2519,6 +2519,10 @@ impl StatFile {
             )
             .unwrap();
         }
+        buffer.extend_from_slice(b"intr 4 2 1 1\n");
+        buffer.extend_from_slice(b"ctxt 1477882447\n");
+        buffer.extend_from_slice(b"btime 1147679732\n");
+        buffer.extend_from_slice(b"softirq 4 2 1 1\n");
 
         buffer
     }
