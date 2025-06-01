@@ -2065,7 +2065,8 @@ fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
-        FcntlCmd::SetLkW
+        FcntlCmd::SetLk
+        | FcntlCmd::SetLkW
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
@@ -2109,7 +2110,8 @@ fn fcntl64(
             fd.set_flags(flags);
             Ok(0)
         }
-        FcntlCmd::SetLkW
+        FcntlCmd::SetLk
+        | FcntlCmd::SetLkW
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx

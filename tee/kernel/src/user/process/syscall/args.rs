@@ -547,6 +547,7 @@ enum_arg! {
         SetFd = 2,
         GetFl = 3,
         SetFl = 4,
+        SetLk = 6,
         SetLkW = 7,
         SetOwn = 8,
         GetOwn = 9,
