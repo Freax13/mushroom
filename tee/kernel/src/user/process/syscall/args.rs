@@ -417,6 +417,7 @@ bitflags! {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
         const EXEC = 1 << 2;
+        const GROWSDOWN = 1 << 24;
     }
 }
 
@@ -429,6 +430,7 @@ bitflags! {
         const ANONYMOUS = 1 << 5;
         const DENYWRITE = 1 << 11;
         const LOCKED = 1 << 13;
+        const NORESERVE = 1 << 14;
         const STACK = 1 << 17;
     }
 }
