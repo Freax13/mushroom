@@ -4,7 +4,7 @@ use core::{
     cmp,
     ffi::c_void,
     num::NonZeroU8,
-    ops::{BitOr, BitOrAssign, Deref},
+    ops::{BitOr, BitOrAssign, Deref, Not},
     pin::pin,
     sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
@@ -1054,7 +1054,7 @@ impl FileLock {
 
     pub async fn lock_exclusive(&self, non_blocking: bool) -> Result<()> {
         loop {
-            let wait = non_blocking.then(|| self.record.notify.wait());
+            let wait = non_blocking.not().then(|| self.record.notify.wait());
 
             let mut guard = self.state.lock();
             self.unlock_internal(&mut guard);
