@@ -124,8 +124,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         });
         let thread = needs_thread.then(|| {
             quote! {
-                let mut thread = thread.lock();
-                let thread = &mut thread;
+                let thread = ThreadArg::get(&thread);
             }
         });
 

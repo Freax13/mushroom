@@ -21,7 +21,7 @@ use crate::{
     },
     user::process::{
         memory::VirtualMemory,
-        thread::{Gid, Sigset, ThreadGuard, Uid},
+        thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
     },
 };
 
@@ -58,6 +58,23 @@ impl ExtractableThreadState for Arc<FileDescriptorTable> {
 impl ExtractableThreadState for Arc<VirtualMemory> {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
         guard.virtual_memory().clone()
+    }
+}
+
+pub trait ThreadArg<'a> {
+    fn get(thread: &'a Arc<Thread>) -> Self;
+}
+
+impl<'a> ThreadArg<'a> for ThreadGuard<'a> {
+    #[track_caller]
+    fn get(thread: &'a Arc<Thread>) -> Self {
+        thread.lock()
+    }
+}
+
+impl<'a> ThreadArg<'a> for &'a Thread {
+    fn get(thread: &'a Arc<Thread>) -> Self {
+        thread
     }
 }
 
