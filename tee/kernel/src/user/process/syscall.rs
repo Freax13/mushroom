@@ -391,7 +391,7 @@ fn close(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult
 
 #[syscall(i386 = 106, amd64 = 4)]
 fn stat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
@@ -410,7 +410,7 @@ fn stat(
 
 #[syscall(i386 = 195)]
 fn stat64(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     filename: Pointer<Path>,
@@ -461,7 +461,7 @@ fn fstat64(
 
 #[syscall(i386 = 107, amd64 = 6)]
 fn lstat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
@@ -480,7 +480,7 @@ fn lstat(
 
 #[syscall(i386 = 196)]
 fn lstat64(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     filename: Pointer<Path>,
@@ -740,7 +740,7 @@ fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallRe
 
 #[syscall(i386 = 174, amd64 = 13)]
 fn rt_sigaction(
-    thread: &mut ThreadGuard,
+    thread: ThreadGuard,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     signum: u64,
@@ -828,7 +828,7 @@ impl Syscall for SysRtSigprocmask {
 
 #[syscall(i386 = 173, amd64 = 15)]
 fn rt_sigreturn(
-    thread: &mut ThreadGuard,
+    mut thread: ThreadGuard,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
 ) -> SyscallResult {
@@ -840,14 +840,14 @@ fn rt_sigreturn(
 #[syscall(i386 = 54, amd64 = 16)]
 fn ioctl(
     abi: Abi,
-    thread: &mut ThreadGuard,
+    mut thread: ThreadGuard,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     cmd: u32,
     arg: Pointer<c_void>,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.ioctl(thread, cmd, arg, abi)
+    fd.ioctl(&mut thread, cmd, arg, abi)
 }
 
 #[syscall(i386 = 180, amd64 = 17)]
@@ -937,7 +937,7 @@ async fn writev(
 
 #[syscall(i386 = 33, amd64 = 21)]
 fn access(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -1212,7 +1212,7 @@ async fn nanosleep(
 }
 
 #[syscall(i386 = 27, amd64 = 37)]
-fn alarm(thread: &mut ThreadGuard, seconds: u32) -> SyscallResult {
+fn alarm(thread: &Thread, seconds: u32) -> SyscallResult {
     let remaining = if seconds != 0 {
         thread.process().schedule_alarm(seconds)
     } else {
@@ -1222,7 +1222,7 @@ fn alarm(thread: &mut ThreadGuard, seconds: u32) -> SyscallResult {
 }
 
 #[syscall(i386 = 20, amd64 = 39)]
-fn getpid(thread: &mut ThreadGuard) -> SyscallResult {
+fn getpid(thread: &Thread) -> SyscallResult {
     let pid = thread.process().pid;
     Ok(u64::from(pid))
 }
@@ -1941,7 +1941,7 @@ async fn wait4(
 }
 
 #[syscall(i386 = 37, amd64 = 62)]
-fn kill(thread: &mut ThreadGuard, pid: i32, signal: Option<Signal>) -> SyscallResult {
+fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
     let sig_info = signal.map(|signal| SigInfo {
         signal,
         code: SigInfoCode::USER,
@@ -2192,7 +2192,7 @@ fn getdents(
 
 #[syscall(i386 = 17, amd64 = 79)]
 fn getcwd(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     path: Pointer<Path>,
     size: u64,
@@ -2208,7 +2208,7 @@ fn getcwd(
 
 #[syscall(i386 = 12, amd64 = 80)]
 fn chdir(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     path: Pointer<Path>,
@@ -2221,7 +2221,7 @@ fn chdir(
 
 #[syscall(i386 = 133, amd64 = 81)]
 fn fchdir(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
     fd: FdNum,
@@ -2233,7 +2233,7 @@ fn fchdir(
 
 #[syscall(i386 = 38, amd64 = 82)]
 fn rename(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2254,7 +2254,7 @@ fn rename(
 
 #[syscall(i386 = 39, amd64 = 83)]
 fn mkdir(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2274,7 +2274,7 @@ fn mkdir(
 
 #[syscall(i386 = 40, amd64 = 84)]
 fn rmdir(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     pathname: Pointer<Path>,
@@ -2310,7 +2310,7 @@ async fn creat(
 
 #[syscall(i386 = 9, amd64 = 86)]
 fn link(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2332,7 +2332,7 @@ fn link(
 
 #[syscall(i386 = 10, amd64 = 87)]
 fn unlink(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2351,7 +2351,7 @@ fn unlink(
 
 #[syscall(i386 = 83, amd64 = 88)]
 fn symlink(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2371,7 +2371,7 @@ fn symlink(
 
 #[syscall(i386 = 85, amd64 = 89)]
 fn readlink(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2393,7 +2393,7 @@ fn readlink(
 
 #[syscall(i386 = 15, amd64 = 90)]
 fn chmod(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2427,7 +2427,7 @@ fn fchmod(
 
 #[syscall(i386 = 212, amd64 = 92)]
 fn chown(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2463,7 +2463,7 @@ fn fchown(
 
 #[syscall(i386 = 198, amd64 = 94)]
 fn lchown(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2485,7 +2485,7 @@ fn lchown(
 }
 
 #[syscall(i386 = 60, amd64 = 95)]
-fn umask(thread: &mut ThreadGuard, mask: u64) -> SyscallResult {
+fn umask(thread: &Thread, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
     let old = core::mem::replace(&mut *thread.process().umask.lock(), umask);
     SyscallResult::Ok(old.bits())
@@ -2513,7 +2513,7 @@ fn gettimeofday(
 
 #[syscall(i386 = 76, amd64 = 97)]
 fn getrlimit(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     resource: Resource,
@@ -2582,21 +2582,21 @@ fn sysinfo(
 }
 
 #[syscall(i386 = 199, amd64 = 102)]
-fn getuid(thread: &mut ThreadGuard) -> SyscallResult {
+fn getuid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
         thread.process().credentials.lock().real_user_id.get(),
     ))
 }
 
 #[syscall(i386 = 200, amd64 = 104)]
-fn getgid(thread: &mut ThreadGuard) -> SyscallResult {
+fn getgid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
         thread.process().credentials.lock().real_group_id.get(),
     ))
 }
 
 #[syscall(i386 = 213, amd64 = 105)]
-fn setuid(thread: &mut ThreadGuard, uid: Uid) -> SyscallResult {
+fn setuid(thread: &Thread, uid: Uid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
@@ -2609,7 +2609,7 @@ fn setuid(thread: &mut ThreadGuard, uid: Uid) -> SyscallResult {
 }
 
 #[syscall(i386 = 214, amd64 = 106)]
-fn setgid(thread: &mut ThreadGuard, gid: Gid) -> SyscallResult {
+fn setgid(thread: &Thread, gid: Gid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
@@ -2622,21 +2622,21 @@ fn setgid(thread: &mut ThreadGuard, gid: Gid) -> SyscallResult {
 }
 
 #[syscall(i386 = 201, amd64 = 107)]
-fn geteuid(thread: &mut ThreadGuard) -> SyscallResult {
+fn geteuid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
         thread.process().credentials.lock().effective_user_id.get(),
     ))
 }
 
 #[syscall(i386 = 202, amd64 = 108)]
-fn getegid(thread: &mut ThreadGuard) -> SyscallResult {
+fn getegid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
         thread.process().credentials.lock().effective_group_id.get(),
     ))
 }
 
 #[syscall(i386 = 57, amd64 = 109)]
-fn setpgid(thread: &mut ThreadGuard, pid: u32, pgid: u32) -> SyscallResult {
+fn setpgid(thread: &Thread, pid: u32, pgid: u32) -> SyscallResult {
     let pid = if pid == 0 {
         thread.process().pid()
     } else {
@@ -2677,25 +2677,25 @@ fn setpgid(thread: &mut ThreadGuard, pid: u32, pgid: u32) -> SyscallResult {
 }
 
 #[syscall(i386 = 64, amd64 = 110)]
-fn getppid(thread: &mut ThreadGuard) -> SyscallResult {
+fn getppid(thread: &Thread) -> SyscallResult {
     let ppid = thread.process().ppid();
     Ok(u64::from(ppid))
 }
 
 #[syscall(i386 = 65, amd64 = 111)]
-fn getpgrp(thread: &mut ThreadGuard) -> SyscallResult {
+fn getpgrp(thread: &Thread) -> SyscallResult {
     let pgrp = thread.process().pgrp();
     Ok(u64::from(pgrp))
 }
 
 #[syscall(i386 = 66, amd64 = 112)]
-fn setsid(thread: &mut ThreadGuard) -> SyscallResult {
+fn setsid(thread: &Thread) -> SyscallResult {
     let sid = thread.process().set_sid();
     Ok(u64::from(sid))
 }
 
 #[syscall(i386 = 203, amd64 = 113)]
-fn setreuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid) -> SyscallResult {
+fn setreuid(thread: &Thread, ruid: Uid, euid: Uid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
@@ -2731,7 +2731,7 @@ fn setreuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid) -> SyscallResult {
 }
 
 #[syscall(i386 = 204, amd64 = 114)]
-fn setregid(thread: &mut ThreadGuard, rguid: Gid, eguid: Gid) -> SyscallResult {
+fn setregid(thread: &Thread, rguid: Gid, eguid: Gid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
@@ -2768,7 +2768,7 @@ fn setregid(thread: &mut ThreadGuard, rguid: Gid, eguid: Gid) -> SyscallResult {
 
 #[syscall(i386 = 205, amd64 = 115)]
 fn getgroups(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     size: i32,
     list: Pointer<Gid>,
@@ -2791,7 +2791,7 @@ fn getgroups(
 
 #[syscall(i386 = 206, amd64 = 116)]
 fn setgroups(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     size: i32,
     list: Pointer<Gid>,
@@ -2818,7 +2818,7 @@ fn setgroups(
 }
 
 #[syscall(i386 = 208, amd64 = 117)]
-fn setresuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid, suid: Uid) -> SyscallResult {
+fn setresuid(thread: &Thread, ruid: Uid, euid: Uid, suid: Uid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
@@ -2847,7 +2847,7 @@ fn setresuid(thread: &mut ThreadGuard, ruid: Uid, euid: Uid, suid: Uid) -> Sysca
 
 #[syscall(i386 = 209, amd64 = 118)]
 fn getresuid(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     ruid: Pointer<Uid>,
     euid: Pointer<Uid>,
@@ -2861,7 +2861,7 @@ fn getresuid(
 }
 
 #[syscall(i386 = 210, amd64 = 119)]
-fn setresgid(thread: &mut ThreadGuard, rgid: Gid, egid: Gid, sgid: Gid) -> SyscallResult {
+fn setresgid(thread: &Thread, rgid: Gid, egid: Gid, sgid: Gid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     let mut new_credentials = credentials.clone();
 
@@ -2890,7 +2890,7 @@ fn setresgid(thread: &mut ThreadGuard, rgid: Gid, egid: Gid, sgid: Gid) -> Sysca
 
 #[syscall(i386 = 211, amd64 = 120)]
 fn getresgid(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     rgid: Pointer<Gid>,
     egid: Pointer<Gid>,
@@ -2904,7 +2904,7 @@ fn getresgid(
 }
 
 #[syscall(i386 = 132, amd64 = 121)]
-fn getpgid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
+fn getpgid(thread: &Thread, pid: u32) -> SyscallResult {
     let pgid = if pid == 0 {
         thread.process().pgrp()
     } else {
@@ -2914,7 +2914,7 @@ fn getpgid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
 }
 
 #[syscall(i386 = 215, amd64 = 122)]
-fn setfsuid(thread: &mut ThreadGuard, fsuid: Uid) -> SyscallResult {
+fn setfsuid(thread: &Thread, fsuid: Uid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
@@ -2929,7 +2929,7 @@ fn setfsuid(thread: &mut ThreadGuard, fsuid: Uid) -> SyscallResult {
 }
 
 #[syscall(i386 = 216, amd64 = 123)]
-fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
+fn setfsgid(thread: &Thread, fsgid: Gid) -> SyscallResult {
     let mut credentials = thread.process().credentials.lock();
     ensure!(
         credentials.is_super_user()
@@ -2944,7 +2944,7 @@ fn setfsgid(thread: &mut ThreadGuard, fsgid: Gid) -> SyscallResult {
 }
 
 #[syscall(i386 = 147, amd64 = 124)]
-fn getsid(thread: &mut ThreadGuard, pid: u32) -> SyscallResult {
+fn getsid(thread: &Thread, pid: u32) -> SyscallResult {
     let sid = if pid == 0 {
         thread.process().sid()
     } else {
@@ -2980,7 +2980,7 @@ async fn rt_sigsuspend(
 
 #[syscall(i386 = 186, amd64 = 131)]
 fn sigaltstack(
-    thread: &mut ThreadGuard,
+    mut thread: ThreadGuard,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     ss: Pointer<Stack>,
@@ -3008,7 +3008,7 @@ fn sigaltstack(
 
 #[syscall(i386 = 14, amd64 = 133)]
 fn mknod(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -3031,7 +3031,7 @@ fn mknod(
 #[syscall(i386 = 99, amd64 = 137)]
 fn statfs(
     abi: Abi,
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] mut ctx: FileAccessContext,
     pathname: Pointer<Path>,
@@ -3059,11 +3059,7 @@ fn fstatfs(
     Ok(0)
 }
 
-fn find_priority_targets(
-    thread: &mut ThreadGuard,
-    which: Which,
-    who: u32,
-) -> Result<Vec<Arc<Thread>>> {
+fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<Arc<Thread>>> {
     let credentials_guard = thread.process().credentials.lock();
     let caller_euid = credentials_guard.effective_user_id;
     let caller_ruid = credentials_guard.real_user_id;
@@ -3112,7 +3108,7 @@ fn find_priority_targets(
 }
 
 #[syscall(i386 = 96, amd64 = 140)]
-fn getpriority(thread: &mut ThreadGuard, which: Which, who: u32) -> SyscallResult {
+fn getpriority(thread: &Thread, which: Which, who: u32) -> SyscallResult {
     let targets = find_priority_targets(thread, which, who)?;
     let min = targets
         .into_iter()
@@ -3123,7 +3119,7 @@ fn getpriority(thread: &mut ThreadGuard, which: Which, who: u32) -> SyscallResul
 }
 
 #[syscall(i386 = 97, amd64 = 141)]
-fn setpriority(thread: &mut ThreadGuard, which: Which, who: u32, prio: Nice) -> SyscallResult {
+fn setpriority(thread: &Thread, which: Which, who: u32, prio: Nice) -> SyscallResult {
     let targets = find_priority_targets(thread, which, who)?;
     for thread in targets {
         thread.nice.store(prio);
@@ -3133,7 +3129,7 @@ fn setpriority(thread: &mut ThreadGuard, which: Which, who: u32, prio: Nice) -> 
 
 #[syscall(i386 = 172, amd64 = 157)]
 fn prctl(
-    thread: &mut ThreadGuard,
+    mut thread: ThreadGuard,
     #[state] virtual_memory: Arc<VirtualMemory>,
     op: PrctlOp,
     arg2: u64,
@@ -3173,18 +3169,10 @@ fn prctl(
 }
 
 #[syscall(i386 = 384, amd64 = 158)]
-fn arch_prctl(
-    thread: &mut ThreadGuard,
-    code: ArchPrctlCode,
-    addr: Pointer<c_void>,
-) -> SyscallResult {
+fn arch_prctl(thread: &Thread, code: ArchPrctlCode, addr: Pointer<c_void>) -> SyscallResult {
     match code {
         ArchPrctlCode::SetFs => {
-            thread
-                .thread
-                .cpu_state
-                .lock()
-                .set_fs_base(addr.get().as_u64());
+            thread.cpu_state.lock().set_fs_base(addr.get().as_u64());
             Ok(0)
         }
     }
@@ -3216,7 +3204,7 @@ fn mount(
 }
 
 #[syscall(i386 = 224, amd64 = 186)]
-fn gettid(thread: &mut ThreadGuard) -> SyscallResult {
+fn gettid(thread: &Thread) -> SyscallResult {
     let tid = thread.tid();
     Ok(u64::from(tid))
 }
@@ -3314,7 +3302,7 @@ async fn futex(
 
 #[syscall(i386 = 241, amd64 = 203)]
 fn sched_setaffinity(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     pid: u32,
     cpusetsize: u64,
@@ -3337,7 +3325,7 @@ fn sched_setaffinity(
     }
 
     if pid == 0 {
-        thread.thread.affinity.set_exact(affinity)
+        thread.affinity.set_exact(affinity)
     } else {
         Thread::find_by_tid(pid)
             .ok_or(err!(Srch))?
@@ -3350,14 +3338,14 @@ fn sched_setaffinity(
 
 #[syscall(i386 = 242, amd64 = 204)]
 fn sched_getaffinity(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     pid: u32,
     cpusetsize: u64,
     mask: Pointer<[u8]>,
 ) -> SyscallResult {
     let affinity = if pid == 0 {
-        thread.thread.affinity.get_all()
+        thread.affinity.get_all()
     } else {
         Thread::find_by_tid(pid)
             .ok_or(err!(Srch))?
@@ -3385,14 +3373,14 @@ fn sched_getaffinity(
 
 #[syscall(i386 = 243, amd64 = 205)]
 fn set_thread_area(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     u_info: Pointer<UserDesc>,
 ) -> SyscallResult {
     let u_info_pointer = u_info;
     let mut u_info = virtual_memory.read(u_info_pointer)?;
 
-    let mut cpu_state = thread.thread.cpu_state.lock();
+    let mut cpu_state = thread.cpu_state.lock();
     let new_entry_number = cpu_state.add_user_desc(u_info)?;
     drop(cpu_state);
 
@@ -3434,7 +3422,7 @@ fn getdents64(
 }
 
 #[syscall(i386 = 258, amd64 = 218)]
-fn set_tid_address(thread: &mut ThreadGuard, tidptr: Pointer<u32>) -> SyscallResult {
+fn set_tid_address(mut thread: ThreadGuard, tidptr: Pointer<u32>) -> SyscallResult {
     thread.clear_child_tid = tidptr;
     Ok(u64::from(thread.tid()))
 }
@@ -3633,7 +3621,7 @@ fn inotify_init(
 
 #[syscall(i386 = 292, amd64 = 254)]
 fn inotify_add_watch(
-    #[state] thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -3661,7 +3649,7 @@ fn inotify_rm_watch(
 
 /// Find the start directory for resolving `path`.
 fn start_dir_for_path(
-    thread: &ThreadGuard,
+    thread: &Thread,
     fdtable: &FileDescriptorTable,
     dfd: FdNum,
     path: &Path,
@@ -3691,7 +3679,7 @@ async fn openat(
     mode: u64,
 ) -> SyscallResult {
     let filename = virtual_memory.read(filename)?;
-    let start_dir = start_dir_for_path(&thread.lock(), &fdtable, dfd, &filename, &mut ctx)?;
+    let start_dir = start_dir_for_path(&thread, &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let link = if flags.contains(OpenFlags::NOFOLLOW) {
@@ -3771,7 +3759,7 @@ async fn openat(
 
 #[syscall(i386 = 296, amd64 = 258)]
 fn mkdirat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -3790,7 +3778,7 @@ fn mkdirat(
 
 #[syscall(i386 = 297, amd64 = 259)]
 fn mknodat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -3842,7 +3830,7 @@ fn mknodat(
 
 #[syscall(i386 = 298, amd64 = 260)]
 fn fchownat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -3867,7 +3855,7 @@ fn fchownat(
 
 #[syscall(i386 = 299, amd64 = 261)]
 fn futimesat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -3900,7 +3888,7 @@ fn futimesat(
 
 #[syscall(amd64 = 262)]
 fn newfstatat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -3945,7 +3933,7 @@ fn newfstatat(
 
 #[syscall(i386 = 301, amd64 = 263)]
 fn unlinkat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -3967,7 +3955,7 @@ fn unlinkat(
 
 #[syscall(i386 = 302, amd64 = 264)]
 fn renameat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -3991,7 +3979,7 @@ fn renameat(
 
 #[syscall(i386 = 303, amd64 = 265)]
 fn linkat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -4020,7 +4008,7 @@ fn linkat(
 
 #[syscall(i386 = 304, amd64 = 266)]
 fn symlinkat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -4039,7 +4027,7 @@ fn symlinkat(
 
 #[syscall(i386 = 305, amd64 = 267)]
 fn readlinkat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -4068,7 +4056,7 @@ fn readlinkat(
 
 #[syscall(i386 = 306, amd64 = 268)]
 fn fchmodat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -4090,7 +4078,7 @@ fn fchmodat(
 
 #[syscall(i386 = 307, amd64 = 269)]
 fn faccessat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -4376,7 +4364,7 @@ async fn splice(
 
 #[syscall(i386 = 320, amd64 = 280)]
 fn utimensat(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -4714,7 +4702,7 @@ async fn recvmmsg(
 
 #[syscall(i386 = 340, amd64 = 302)]
 fn prlimit64(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     pid: u32,
     resource: Resource,
@@ -4795,14 +4783,14 @@ async fn sendmmsg(
 
 #[syscall(amd64 = 309)]
 fn getcpu(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     cpu: Pointer<u32>,
     node: Pointer<u32>,
 ) -> SyscallResult {
     if !cpu.is_null() {
         // TODO: Get the real value.
-        let idx = thread.thread.affinity.get_all().into_iter().next().unwrap();
+        let idx = thread.affinity.get_all().into_iter().next().unwrap();
         virtual_memory.write(cpu, u32::from(idx.as_u8()))?;
     }
     if !node.is_null() {
@@ -4813,7 +4801,7 @@ fn getcpu(
 
 #[syscall(amd64 = 316)]
 fn renameat2(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -4909,7 +4897,7 @@ fn copy_file_range(
 
 #[syscall(i386 = 452, amd64 = 452)]
 fn fchmodat2(
-    thread: &mut ThreadGuard,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
