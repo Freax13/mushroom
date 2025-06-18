@@ -42,7 +42,7 @@ use crate::{
         syscall::{
             args::{
                 ExtractableThreadState, FileMode, FileType, FileTypeAndMode, InputMode, LocalMode,
-                OpenFlags, OutputMode, Pointer, Stat, Termios, Timespec,
+                OpenFlags, OutputMode, Pointer, Stat, Termios, Timespec, WinSize,
             },
             traits::Abi,
         },
@@ -92,6 +92,7 @@ impl CharDev for Ptmx {
                         input_buffer: ArrayVec::new(),
                         output_buffer: ArrayVec::new(),
                         column_pointer: 0,
+                        win_size: WinSize::default(),
                     }),
                     notify: Notify::new(),
                     watchers: Arc::new(Watchers::new()),
@@ -136,6 +137,8 @@ struct PtyDataInternal {
     input_buffer: ArrayVec<u8, 4095>,
     output_buffer: ArrayVec<u8, 4096>,
     column_pointer: usize,
+
+    win_size: WinSize,
 }
 
 impl Pty {
@@ -432,6 +435,18 @@ impl OpenFileDescription for Pty {
                 // already a controlling terminal.
                 ensure!(session.set_controlling_terminal(&self.data), Perm);
 
+                Ok(0)
+            }
+            0x5413 => {
+                // TIOCGWINSZ
+                let win_size = self.data.internal.lock().win_size;
+                thread.virtual_memory().write(arg.cast(), win_size)?;
+                Ok(0)
+            }
+            0x5414 => {
+                // TIOCSWINSZ
+                let win_size = thread.virtual_memory().read(arg.cast())?;
+                self.data.internal.lock().win_size = win_size;
                 Ok(0)
             }
             0x5441 => {

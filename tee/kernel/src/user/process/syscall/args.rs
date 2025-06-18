@@ -2116,3 +2116,12 @@ impl From<[u8; 20]> for SpecialCharacters {
         }
     }
 }
+
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct WinSize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+}
