@@ -334,3 +334,31 @@ impl WriteBuf for VectoredUserBuf<'_> {
         unreachable!("read too many bytes from buffer")
     }
 }
+
+pub struct OffsetBuf<'a, B> {
+    buffer: &'a B,
+    offset: usize,
+}
+
+impl<'a, B> OffsetBuf<'a, B> {
+    pub fn new(buffer: &'a B, offset: usize) -> Self {
+        Self { buffer, offset }
+    }
+}
+
+impl<B> WriteBuf for OffsetBuf<'_, B>
+where
+    B: WriteBuf,
+{
+    fn buffer_len(&self) -> usize {
+        self.buffer.buffer_len() - self.offset
+    }
+
+    fn read(&self, offset: usize, bytes: &mut [u8]) -> Result<()> {
+        self.buffer.read(offset + self.offset, bytes)
+    }
+
+    unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()> {
+        unsafe { self.buffer.read_volatile(offset + self.offset, bytes) }
+    }
+}

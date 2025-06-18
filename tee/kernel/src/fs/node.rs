@@ -727,7 +727,31 @@ pub fn create_char_dev(
     }
 }
 
+pub fn create_socket(
+    start_dir: Link,
+    path: &Path,
+    mode: FileMode,
+    uid: Uid,
+    gid: Gid,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(Exist)
+        }
+        PathSegment::FileName(file_name) => {
+            let (_fd, socket) = StreamUnixSocket::new(OpenFlags::empty(), uid, gid);
+            parent
+                .node
+                .bind_socket(file_name.into_owned(), mode, uid, gid, &socket, path)?;
+            Ok(())
+        }
+    }
+}
+
 pub fn bind_socket(
+    start_dir: Link,
     path: &Path,
     mode: FileMode,
     uid: Uid,
@@ -735,7 +759,7 @@ pub fn bind_socket(
     socket: &StreamUnixSocket,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (parent, last, _trailing_slash) = find_parent(Link::root(), path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     ensure!(!_trailing_slash, IsDir);
     let file_name = match last {
         PathSegment::Root => todo!(),

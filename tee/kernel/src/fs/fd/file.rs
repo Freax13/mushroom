@@ -11,7 +11,7 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         futex::Futexes,
-        syscall::args::{InotifyMask, OpenFlags, Timespec},
+        syscall::args::{FallocateMode, InotifyMask, OpenFlags, Timespec},
         thread::{Gid, Uid},
     },
 };
@@ -75,6 +75,7 @@ pub trait File: INode {
         bail!(OpNotSupp)
     }
     fn truncate(&self, length: usize) -> Result<()>;
+    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
 }
 
 pub fn open_file(
@@ -305,6 +306,15 @@ impl OpenFileDescription for FileFileDescription {
             BadF
         );
         self.file.truncate(length)
+    }
+
+    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+        let guard = self.internal.lock();
+        ensure!(
+            guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
+            BadF
+        );
+        self.file.allocate(mode, offset, len)
     }
 
     fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {

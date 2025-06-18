@@ -28,9 +28,9 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, InotifyMask, MsgHdr,
-                OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat,
-                Timespec, Whence,
+                Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, InotifyMask,
+                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
+                Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -79,7 +79,9 @@ mod std;
 pub mod stream_buffer;
 pub mod unix_socket;
 
-pub use buf::{KernelReadBuf, KernelWriteBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf};
+pub use buf::{
+    KernelReadBuf, KernelWriteBuf, OffsetBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf,
+};
 
 pub struct OpenFileDescriptionData<T: ?Sized> {
     /// This reference count counts how many times the file descriptor is
@@ -183,6 +185,24 @@ impl StrongFileDescriptor {
                 ofd: f(this),
             }
         })))
+    }
+
+    pub fn new_cyclic_with_data<T>(
+        f: impl FnOnce(&Weak<OpenFileDescriptionData<T>>) -> T,
+    ) -> (Self, Arc<OpenFileDescriptionData<T>>)
+    where
+        T: OpenFileDescription,
+    {
+        let mut weak = None;
+        let this = Self(FileDescriptor(Arc::new_cyclic(|this| {
+            weak = Some(this.clone());
+            OpenFileDescriptionData {
+                reference_count: AtomicUsize::new(1),
+                ofd: f(this),
+            }
+        })));
+        let typed = weak.unwrap().upgrade().unwrap();
+        (this, typed)
     }
 
     pub fn downgrade(this: &Self) -> FileDescriptor {
@@ -583,6 +603,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn truncate(&self, length: usize) -> Result<()> {
         let _ = length;
         bail!(Inval)
+    }
+
+    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+        let _ = mode;
+        let _ = offset;
+        let _ = len;
+        bail!(BadF)
     }
 
     fn bind(
