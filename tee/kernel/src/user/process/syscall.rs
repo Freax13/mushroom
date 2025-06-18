@@ -3258,8 +3258,30 @@ async fn futex(
 
     match op.op {
         FutexOp::Wait => {
-            assert!(utime.is_null());
-            virtual_memory.futex_wait(uaddr, val, scope, None).await?;
+            // Set up a future that waits for the futex to be ready.
+            let wait_for_futex = virtual_memory.futex_wait(uaddr, val, scope, None);
+
+            // Set up a future that waits for a timeout.
+            let sleep_fut;
+            let wait_for_deadline = if !utime.is_null() {
+                let deadline = virtual_memory.read_with_abi(utime, abi)?;
+                let clock_id = if op.flags.contains(FutexFlags::CLOCK_REALTIME) {
+                    ClockId::Realtime
+                } else {
+                    ClockId::Monotonic
+                };
+                sleep_fut = sleep_until(deadline, clock_id);
+                sleep_fut.fuse()
+            } else {
+                Fuse::terminated()
+            };
+            let mut wait_for_deadline = pin!(wait_for_deadline);
+
+            select_biased! {
+                res = wait_for_futex.fuse() => res?,
+                _ = wait_for_deadline => bail!(TimedOut),
+            }
+
             Ok(0)
         }
         FutexOp::Wake => {
