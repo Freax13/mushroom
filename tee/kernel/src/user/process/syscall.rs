@@ -138,7 +138,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysNanosleep);
+    handlers.register(SysGetitimer);
     handlers.register(SysAlarm);
+    handlers.register(SysSetitimer);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
@@ -1203,6 +1205,19 @@ async fn nanosleep(
     Ok(0)
 }
 
+#[syscall(i386 = 105, amd64 = 36)]
+fn getitimer(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    which: ITimerWhich,
+    curr_value: Pointer<ITimerval>,
+) -> SyscallResult {
+    let current = thread.process().get_itimer(which);
+    virtual_memory.write_with_abi(curr_value, current, abi)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 27, amd64 = 37)]
 fn alarm(thread: &Thread, seconds: u32) -> SyscallResult {
     let remaining = if seconds != 0 {
@@ -1211,6 +1226,27 @@ fn alarm(thread: &Thread, seconds: u32) -> SyscallResult {
         thread.process().cancel_alarm()
     };
     Ok(u64::from(remaining))
+}
+
+#[syscall(i386 = 104, amd64 = 38)]
+fn setitimer(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    which: ITimerWhich,
+    new_value: Pointer<ITimerval>,
+    old_value: Pointer<ITimerval>,
+) -> SyscallResult {
+    let new_value = if !new_value.is_null() {
+        virtual_memory.read_with_abi(new_value, abi)?
+    } else {
+        ITimerval::default()
+    };
+    let old = thread.process().set_itimer(which, new_value);
+    if !old_value.is_null() {
+        virtual_memory.write_with_abi(old_value, old, abi)?;
+    }
+    Ok(0)
 }
 
 #[syscall(i386 = 20, amd64 = 39)]

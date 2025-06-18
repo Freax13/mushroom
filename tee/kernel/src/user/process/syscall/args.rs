@@ -930,7 +930,7 @@ impl Timespec {
     pub fn from_ns(ns: i64) -> Self {
         Timespec {
             tv_sec: i32::try_from(ns / 1_000_000_000).unwrap(),
-            tv_nsec: u32::try_from(ns % 1_000_000_000).unwrap(),
+            tv_nsec: (ns % 1_000_000_000) as u32,
         }
     }
 
@@ -963,6 +963,20 @@ impl Timespec {
             tv_sec: 0,
             tv_nsec: 0,
         })
+    }
+
+    pub fn saturating_mul(self, rhs: u64) -> Self {
+        let mut acc = Timespec::ZERO;
+        // This implements multiplication with double-and-add (similar to
+        // square-and-multiply).
+        // TODO: Replace this with something more efficient.
+        for i in (0..64).rev() {
+            acc = acc.saturating_add(acc);
+            if rhs.get_bit(i) {
+                acc = acc.saturating_add(self);
+            }
+        }
+        acc
     }
 
     pub fn kernel_ticks(&self) -> u64 {
@@ -2128,4 +2142,18 @@ pub struct WinSize {
 
 bitflags! {
     pub struct FallocateMode {}
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ITimerval {
+    pub interval: Timeval,
+    pub value: Timeval,
+}
+
+enum_arg! {
+    pub enum ITimerWhich {
+        Real = 0,
+        Virtual = 1,
+        Prof = 2,
+    }
 }

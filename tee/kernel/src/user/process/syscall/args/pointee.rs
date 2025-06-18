@@ -33,9 +33,9 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, ControlMode, FdNum, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset,
-    MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SocketAddr,
-    Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus, WinSize,
+    CmsgHdr, ControlMode, FdNum, ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode,
+    LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage,
+    SocketAddr, Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2192,3 +2192,59 @@ impl From<Termios64> for Termios {
 
 impl Pointee for WinSize {}
 impl PrimitivePointee for WinSize {}
+
+impl Pointee for ITimerval {}
+impl AbiDependentPointee for ITimerval {
+    type I386 = ITimerval32;
+    type Amd64 = ITimerval64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerval32 {
+    pub interval: Timeval32,
+    pub value: Timeval32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerval64 {
+    pub interval: Timeval64,
+    pub value: Timeval64,
+}
+
+impl From<ITimerval32> for ITimerval {
+    fn from(value: ITimerval32) -> Self {
+        Self {
+            interval: Timeval::from(value.interval),
+            value: Timeval::from(value.value),
+        }
+    }
+}
+
+impl From<ITimerval> for ITimerval32 {
+    fn from(value: ITimerval) -> Self {
+        Self {
+            interval: Timeval32::from(value.interval),
+            value: Timeval32::from(value.value),
+        }
+    }
+}
+
+impl From<ITimerval64> for ITimerval {
+    fn from(value: ITimerval64) -> Self {
+        Self {
+            interval: Timeval::from(value.interval),
+            value: Timeval::from(value.value),
+        }
+    }
+}
+
+impl From<ITimerval> for ITimerval64 {
+    fn from(value: ITimerval) -> Self {
+        Self {
+            interval: Timeval64::from(value.interval),
+            value: Timeval64::from(value.value),
+        }
+    }
+}
