@@ -406,12 +406,16 @@ impl OpenFileDescription for Pty {
                     .write_with_abi(arg.cast(), termios, abi)?;
                 Ok(0)
             }
+            0x5402 => {
+                // TCSETS
+                let termios = thread.virtual_memory().read_with_abi(arg.cast(), abi)?;
+                self.data.internal.lock().termios = termios;
+                Ok(0)
+            }
             0x5403 => {
                 // TCSADRAIN
                 // TODO: Implement this correctly.
-                let termios = thread
-                    .virtual_memory()
-                    .read_with_abi(arg.cast::<Termios>(), abi)?;
+                let termios = thread.virtual_memory().read_with_abi(arg.cast(), abi)?;
                 self.data.internal.lock().termios = termios;
                 Ok(0)
             }
