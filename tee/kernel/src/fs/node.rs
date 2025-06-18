@@ -751,6 +751,7 @@ pub fn create_socket(
 }
 
 pub fn bind_socket(
+    start_dir: Link,
     path: &Path,
     mode: FileMode,
     uid: Uid,
@@ -758,7 +759,7 @@ pub fn bind_socket(
     socket: &StreamUnixSocket,
     ctx: &mut FileAccessContext,
 ) -> Result<()> {
-    let (parent, last, _trailing_slash) = find_parent(Link::root(), path, ctx)?;
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
     ensure!(!_trailing_slash, IsDir);
     let file_name = match last {
         PathSegment::Root => todo!(),

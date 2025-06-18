@@ -420,7 +420,10 @@ impl OpenFileDescription for StreamUnixSocket {
         match addr {
             UnixAddr::Pathname(path) => {
                 let guard = self.internal.lock();
+
+                let cwd = ctx.process.as_ref().unwrap().cwd();
                 bind_socket(
+                    cwd,
                     &path,
                     guard.ownership.mode(),
                     guard.ownership.uid(),
