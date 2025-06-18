@@ -591,8 +591,16 @@ impl Session {
         }
     }
 
+    pub fn sid(&self) -> u32 {
+        self.sid
+    }
+
     pub fn controlling_terminal(&self) -> Option<Arc<PtyData>> {
         self.controlling_terminal.get().cloned()
+    }
+
+    pub fn set_controlling_terminal(&self, tty: &Arc<PtyData>) -> bool {
+        self.controlling_terminal.init(|| tty.clone()).is_ok()
     }
 }
 

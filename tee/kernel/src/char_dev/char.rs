@@ -419,6 +419,21 @@ impl OpenFileDescription for Pty {
                 self.data.internal.lock().termios = termios;
                 Ok(0)
             }
+            0x540e => {
+                // TIOCSCTTY
+
+                ensure!(arg.is_null(), Perm);
+
+                // Check that the process is the group leader.
+                let session = thread.process().process_group().session();
+                ensure!(thread.process().pid() == session.sid(), Perm);
+
+                // Set the controlling terminal. This will fail if there's
+                // already a controlling terminal.
+                ensure!(session.set_controlling_terminal(&self.data), Perm);
+
+                Ok(0)
+            }
             0x5441 => {
                 // TIOCGPTPEER
                 let flags = arg.get().as_u64();
