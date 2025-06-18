@@ -7,7 +7,7 @@ use core::{
     iter::Step,
     mem::{MaybeUninit, needs_drop},
     num::NonZeroU32,
-    ops::Bound,
+    ops::{Bound, Range},
     ptr::{NonNull, drop_in_place},
 };
 
@@ -27,6 +27,7 @@ use crate::{
 };
 use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
+use either::Either;
 use log::debug;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{
@@ -501,7 +502,7 @@ impl VirtualMemoryWriteGuard<'_> {
         self.unmap(addr, len);
 
         let size = usize_from(end_page - start_page) + 1;
-        let pages = SplitVec::new(size);
+        let pages = SparseSplitVec::new(size);
         self.guard.mappings.insert(
             start_page,
             Mutex::new(Mapping {
@@ -846,9 +847,7 @@ impl VirtualMemoryWriteGuard<'_> {
             ensure!(usize_from(start_offset) <= mapping.pages.len(), NoMem);
             let end_offset = cmp::min(end_page - page, u64::from_usize(mapping.pages.len()));
 
-            for offset in start_offset..end_offset {
-                mapping.discard_page(offset, &self.virtual_memory.usage)?;
-            }
+            mapping.discard_range(start_offset, end_offset, &self.virtual_memory.usage);
 
             start_page = page + end_offset;
         }
@@ -951,7 +950,7 @@ impl VirtualMemoryState {
             let mapping_end = page + u64::from_usize(mapping.pages.len());
 
             // If `size` fits between this mapping and the previous mapping (or
-            // the base), we found an fitting address.
+            // the base), we found a fitting address.
             if last_address >= mapping_end.start_address() {
                 let free = last_address - mapping_end.start_address();
                 if free >= size {
@@ -1065,7 +1064,7 @@ pub struct Mapping {
     page_offset: u64,
     permissions: MemoryPermissions,
     shared: bool,
-    pages: SplitVec<Option<UserPage>>,
+    pages: SparseSplitVec<UserPage>,
     futexes: Arc<Futexes>,
 }
 
@@ -1111,9 +1110,8 @@ impl Mapping {
     }
 
     pub fn clone(&mut self) -> Result<Self> {
-        let mut pages = SplitVec::new(self.pages.len());
-        for (i, page) in self.pages.iter_mut().enumerate() {
-            let Some(page) = page else { continue };
+        let mut pages = SparseSplitVec::new(self.pages.len());
+        for (i, page) in self.pages.iter_mut() {
             *pages.get_mut(i).unwrap() = Some(page.clone()?);
         }
 
@@ -1135,25 +1133,18 @@ impl Mapping {
 
     fn set_perms(&mut self, permissions: MemoryPermissions) {
         self.permissions = permissions;
-        for page in self.pages.iter_mut().flatten() {
+        for (_, page) in self.pages.iter_mut() {
             page.set_perms(permissions);
         }
     }
 
-    pub fn discard_page(&mut self, page_offset: u64, usage: &MemoryUsage) -> Result<()> {
-        let page = self
-            .pages
-            .get_mut(usize_from(page_offset))
-            .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
-        if page.is_some() {
-            usage.decrease_rss(1);
-        }
-        page.take();
-        Ok(())
+    pub fn discard_range(&mut self, start: u64, end: u64, usage: &MemoryUsage) {
+        let removed = self.pages.remove_range(usize_from(start)..usize_from(end));
+        usage.decrease_rss(removed);
     }
 
     pub fn record_unmapping(mut self, usage: &MemoryUsage) {
-        let delta = self.pages.iter_mut().filter(|page| page.is_some()).count();
+        let delta = self.pages.iter_mut().count();
         usage.decrease_rss(delta);
     }
 }
@@ -1233,6 +1224,151 @@ impl<T> Drop for SplitVec<T> {
                 unsafe {
                     drop_in_place(entry.as_ptr().cast::<T>().cast_mut());
                 }
+            }
+        }
+    }
+}
+
+/// SparseSplitVec's exceeding this threshold store entries in a BTreeMap
+/// instead of a contiguous array. Excessively large mappings can create large
+/// arrays, but most entries will always be empty. This wastes a lot of memory.
+/// Using a BTreeMap is slower, but way more space efficient.
+const SPARSE_THRESHOLD: usize = 8192;
+
+enum SparseSplitVec<T> {
+    Dense(SplitVec<Option<T>>),
+    Sparse {
+        entries: BTreeMap<usize, Option<T>>,
+        offset: usize,
+        len: usize,
+    },
+}
+
+impl<T> SparseSplitVec<T> {
+    pub fn new(len: usize) -> Self {
+        if len < SPARSE_THRESHOLD {
+            Self::Dense(SplitVec::new(len))
+        } else {
+            Self::Sparse {
+                entries: BTreeMap::new(),
+                offset: 0,
+                len,
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match *self {
+            SparseSplitVec::Dense(ref split_vec) => split_vec.len(),
+            SparseSplitVec::Sparse { len, .. } => len,
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &'_ mut T)> + '_ {
+        match *self {
+            SparseSplitVec::Dense(ref mut split_vec) => Either::Left(
+                split_vec
+                    .iter_mut()
+                    .enumerate()
+                    .filter_map(|(i, entry)| entry.as_mut().map(|entry| (i, entry))),
+            ),
+            SparseSplitVec::Sparse {
+                ref mut entries,
+                offset,
+                ..
+            } => Either::Right(
+                entries
+                    .iter_mut()
+                    .filter_map(|(i, entry)| entry.as_mut().map(|entry| (i, entry)))
+                    .map(move |(i, entry)| (i - offset, entry)),
+            ),
+        }
+    }
+
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut Option<T>> {
+        match *self {
+            SparseSplitVec::Dense(ref mut split_vec) => split_vec.get_mut(idx),
+            SparseSplitVec::Sparse {
+                ref mut entries,
+                offset,
+                len,
+            } => {
+                if idx < len {
+                    Some(entries.entry(offset + idx).or_default())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Removes entries in the given range. Returns the number of removed entries.
+    pub fn remove_range(&mut self, range: Range<usize>) -> usize {
+        match *self {
+            SparseSplitVec::Dense(ref mut split_vec) => split_vec
+                .iter_mut()
+                .take(range.end)
+                .skip(range.start)
+                .filter_map(Option::take)
+                .count(),
+            SparseSplitVec::Sparse {
+                ref mut entries,
+                offset,
+                ..
+            } => {
+                let start_len = entries.len();
+                let mut cursor = entries.lower_bound_mut(Bound::Excluded(&(range.start + offset)));
+                while cursor
+                    .peek_next()
+                    .is_some_and(|(&idx, _)| idx < range.end + offset)
+                {
+                    cursor.remove_next();
+                }
+                start_len - entries.len()
+            }
+        }
+    }
+
+    pub fn split_off(&mut self, at: usize) -> Self {
+        match self {
+            SparseSplitVec::Dense(split_vec) => Self::Dense(split_vec.split_off(at)),
+            SparseSplitVec::Sparse {
+                entries,
+                offset,
+                len,
+            } => {
+                // This is a good opportunity to get rid of `None` entries in
+                // the map.
+                entries.retain(|_, value| value.is_some());
+
+                let new_entries = entries.split_off(&(*offset + at));
+                let mut new = Self::Sparse {
+                    entries: new_entries,
+                    offset: *offset + at,
+                    len: *len - at,
+                };
+                *len = at;
+
+                // Now that the entries have been split in two, there's a
+                // chance that either (or both) halves are completely empty. If
+                // that's the case, recreate the instance. This gives the
+                // halves another chance of being dense instead of sparse.
+                if entries.is_empty() {
+                    *self = Self::new(*len);
+                }
+                let Self::Sparse {
+                    entries: ref new_entries,
+                    len: new_len,
+                    ..
+                } = new
+                else {
+                    unreachable!();
+                };
+                if new_entries.is_empty() {
+                    new = Self::new(new_len);
+                }
+
+                new
             }
         }
     }
