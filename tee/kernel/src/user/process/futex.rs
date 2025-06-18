@@ -1,13 +1,22 @@
-use core::num::NonZeroU32;
+use core::{
+    num::NonZeroU32,
+    pin::Pin,
+    sync::atomic::{AtomicBool, Ordering},
+    task::{Context, Poll},
+};
 
 use crate::{error::ensure, memory::page::KernelPage, spin::mutex::Mutex};
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{collections::BTreeMap, sync::Arc};
 use bytemuck::bytes_of_mut;
+use futures::task::AtomicWaker;
+use intrusive_collections::{LinkedList, LinkedListAtomicLink, intrusive_adapter};
 
-use crate::{error::Result, rt::oneshot};
+use crate::error::Result;
+
+intrusive_adapter!(ListAdapter = Arc<FutexWaiter>: FutexWaiter { link: LinkedListAtomicLink });
 
 pub struct Futexes {
-    futexes: Mutex<BTreeMap<usize, Vec<FutexWaiter>>>,
+    futexes: Mutex<BTreeMap<usize, LinkedList<ListAdapter>>>,
 }
 
 impl Futexes {
@@ -18,7 +27,7 @@ impl Futexes {
     }
 
     pub fn wait(
-        &self,
+        self: &Arc<Self>,
         offset: usize,
         val: u32,
         scope: FutexScope,
@@ -32,22 +41,74 @@ impl Futexes {
         page.read(page_offset, bytes_of_mut(&mut current_value));
         ensure!(current_value == val, Again);
 
+        let node = Arc::new(FutexWaiter {
+            link: LinkedListAtomicLink::new(),
+            waker: AtomicWaker::new(),
+            woken: AtomicBool::new(false),
+            scope,
+            bitset,
+        });
+
         let mut guard = self.futexes.lock();
 
         // Now that we've taken the lock, we need to check again.
         page.read(page_offset, bytes_of_mut(&mut current_value));
         ensure!(current_value == val, Again);
 
-        let (sender, receiver) = oneshot::new();
-        guard.entry(offset).or_default().push(FutexWaiter {
-            sender,
-            scope,
-            bitset,
-        });
+        guard.entry(offset).or_default().push_back(node.clone());
         drop(guard);
 
-        Ok(async move {
-            receiver.recv().await.unwrap();
+        struct WaitFuture {
+            futexes: Arc<Futexes>,
+            offset: usize,
+            node: Arc<FutexWaiter>,
+            ready: bool,
+        }
+
+        impl Future for WaitFuture {
+            type Output = ();
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                self.node.waker.register(cx.waker());
+                if self.node.woken.load(Ordering::SeqCst) {
+                    self.ready = true;
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+
+        impl Drop for WaitFuture {
+            fn drop(&mut self) {
+                // If the node was woken up, it has already been removed from
+                // the list. Check once, before taking the lock.
+                if self.ready || self.node.woken.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                let mut guard = self.futexes.futexes.lock();
+
+                // Check again after taking the lock.
+                if self.node.woken.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                let list = guard.get_mut(&self.offset).unwrap();
+                let ptr = Arc::as_ptr(&self.node);
+                let mut cursor = unsafe {
+                    // SAFETY: The node hasn't been woken up, so it must still be on the list.
+                    list.cursor_mut_from_ptr(ptr)
+                };
+                cursor.remove();
+            }
+        }
+
+        Ok(WaitFuture {
+            futexes: self.clone(),
+            offset,
+            node,
+            ready: false,
         })
     }
 
@@ -63,15 +124,23 @@ impl Futexes {
         }
 
         let mut woken = 0;
-
         let mut guard = self.futexes.lock();
         if let Some(waiters) = guard.get_mut(&offset) {
-            for waiter in waiters.extract_if(.., |waiter| waiter.matches(scope, bitset)) {
-                // Wake up the thread.
-                if waiter.sender.send(()).is_err() {
-                    // The thread has already canceled the operation.
+            let mut cursor = waiters.front_mut();
+            while let Some(node) = cursor.get() {
+                // Skip nodes that haven't had their requirements satisfied.
+                if !node.matches(scope, bitset) {
+                    cursor.move_next();
                     continue;
                 }
+
+                // Wake the node up.
+                node.woken.store(true, Ordering::SeqCst);
+                node.waker.wake();
+
+                // Remove the node from the list.
+                cursor.remove();
+
                 // Record that the thread was woken up.
                 woken += 1;
                 if woken >= num_waiters {
@@ -79,13 +148,14 @@ impl Futexes {
                 }
             }
         }
-
         woken
     }
 }
 
 struct FutexWaiter {
-    sender: oneshot::Sender<()>,
+    link: LinkedListAtomicLink,
+    waker: AtomicWaker,
+    woken: AtomicBool,
     scope: FutexScope,
     bitset: Option<NonZeroU32>,
 }
