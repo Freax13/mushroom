@@ -27,7 +27,7 @@ use crate::{
     fs::{
         StatFs,
         fd::{
-            Events, FdFlags, FileDescriptorTable, KernelReadBuf, KernelWriteBuf,
+            Events, FdFlags, FileDescriptorTable, KernelReadBuf, KernelWriteBuf, OffsetBuf,
             StrongFileDescriptor, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
@@ -301,30 +301,21 @@ async fn read(
     Ok(len)
 }
 
-#[syscall(i386 = 4, amd64 = 1)]
-async fn write(
+async fn write_impl(
     thread: Arc<Thread>,
-    #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] fdtable: Arc<FileDescriptorTable>,
+    fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
-    buf: Pointer<[u8]>,
-    count: u64,
+    buf: impl WriteBuf,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
-    let count = usize_from(count);
+    let count = buf.buffer_len();
 
     // Start writing to the file descriptor. This first write can be
     // interrupted and restarted. Any errors that occur are report to
     // userspace.
     let res = thread
-        .interruptable(
-            do_write_io(&**fd, count, || {
-                let buf = UserBuf::new(&virtual_memory, buf, count);
-                fd.write(&buf)
-            }),
-            true,
-        )
+        .interruptable(do_write_io(&**fd, count, || fd.write(&buf)), true)
         .await;
     if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
         let sig_info = SigInfo {
@@ -344,8 +335,7 @@ async fn write(
         let res = thread
             .interruptable(
                 do_write_io(&**fd, count - written, || {
-                    let buf =
-                        UserBuf::new(&virtual_memory, buf.bytes_offset(written), count - written);
+                    let buf = OffsetBuf::new(&buf, written);
                     fd.write(&buf)
                 }),
                 false,
@@ -359,6 +349,20 @@ async fn write(
 
     let len = u64::from_usize(written);
     Ok(len)
+}
+
+#[syscall(i386 = 4, amd64 = 1)]
+async fn write(
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+) -> SyscallResult {
+    let count = usize_from(count);
+    let buf = UserBuf::new(&virtual_memory, buf, count);
+    write_impl(thread, fdtable, fd, buf).await
 }
 
 #[syscall(i386 = 5, amd64 = 2, interruptable, restartable)]
@@ -918,24 +922,8 @@ async fn writev(
     vec: Pointer<Iovec>,
     vlen: u64,
 ) -> SyscallResult {
-    if vlen == 0 {
-        return SyscallResult::Ok(0);
-    }
-    let vlen = usize_from(vlen);
-
-    let mut iovec = Iovec { base: 0, len: 0 };
-    let mut vec = vec;
-    for _ in 0..vlen {
-        let (len, iovec_value) = virtual_memory.read_sized_with_abi(vec, abi)?;
-        vec = vec.bytes_offset(len);
-        if iovec_value.len != 0 {
-            iovec = iovec_value;
-            break;
-        }
-    }
-
-    let addr = Pointer::parse(iovec.base, abi)?;
-    write(thread, virtual_memory, fdtable, fd, addr, iovec.len).await
+    let buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
+    write_impl(thread, fdtable, fd, buf).await
 }
 
 #[syscall(i386 = 33, amd64 = 21)]

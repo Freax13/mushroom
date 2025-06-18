@@ -79,7 +79,9 @@ mod std;
 pub mod stream_buffer;
 pub mod unix_socket;
 
-pub use buf::{KernelReadBuf, KernelWriteBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf};
+pub use buf::{
+    KernelReadBuf, KernelWriteBuf, OffsetBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf,
+};
 
 pub struct OpenFileDescriptionData<T: ?Sized> {
     /// This reference count counts how many times the file descriptor is
