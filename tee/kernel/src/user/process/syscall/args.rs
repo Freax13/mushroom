@@ -1253,6 +1253,7 @@ enum_arg! {
     pub enum Resource {
         Stack = 3,
         NoFile = 7,
+        As = 9,
     }
 }
 

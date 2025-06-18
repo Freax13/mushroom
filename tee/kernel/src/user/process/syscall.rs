@@ -221,6 +221,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFstatfs);
     handlers.register(SysGetpriority);
     handlers.register(SysSetpriority);
+    handlers.register(SysMlock);
+    handlers.register(SysMunlock);
     handlers.register(SysPrctl);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -3124,6 +3126,16 @@ fn setpriority(thread: &Thread, which: Which, who: u32, prio: Nice) -> SyscallRe
     for thread in targets {
         thread.nice.store(prio);
     }
+    Ok(0)
+}
+
+#[syscall(i386 = 150, amd64 = 149)]
+fn mlock(start: Pointer<c_void>, len: u64) -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 151, amd64 = 150)]
+fn munlock(start: Pointer<c_void>, len: u64) -> SyscallResult {
     Ok(0)
 }
 

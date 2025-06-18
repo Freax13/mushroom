@@ -12,6 +12,7 @@ use super::{
 pub struct Limits {
     stack: RLimit,
     no_file: RLimit,
+    address_space: RLimit,
 }
 
 impl Limits {
@@ -25,6 +26,10 @@ impl Limits {
                 rlim_cur: 1024,
                 rlim_max: 65536,
             },
+            address_space: RLimit {
+                rlim_cur: RLimit::INFINITY,
+                rlim_max: RLimit::INFINITY,
+            },
         }
     }
 }
@@ -36,6 +41,7 @@ impl Index<Resource> for Limits {
         match index {
             Resource::Stack => &self.stack,
             Resource::NoFile => &self.no_file,
+            Resource::As => &self.address_space,
         }
     }
 }
@@ -45,6 +51,7 @@ impl IndexMut<Resource> for Limits {
         match index {
             Resource::Stack => &mut self.stack,
             Resource::NoFile => &mut self.no_file,
+            Resource::As => &mut self.address_space,
         }
     }
 }
