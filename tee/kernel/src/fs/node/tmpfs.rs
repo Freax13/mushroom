@@ -132,6 +132,7 @@ impl TmpFsDir {
                 let location = LinkLocation::new(self.this.upgrade().unwrap(), entry.key().clone());
                 let node = TmpFsFile::new(self.fs.clone(), mode, uid, gid);
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
+                guard.update_times();
                 drop(guard);
 
                 self.watchers()
@@ -181,11 +182,17 @@ impl INode for TmpFsDir {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chmod(mode, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chown(uid, gid, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn mount(
@@ -195,10 +202,9 @@ impl INode for TmpFsDir {
     ) -> Result<()> {
         let location = LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone());
         let node = create_dir(location)?;
-        self.internal
-            .lock()
-            .items
-            .insert(file_name, TmpFsDirEntry::Mount(node));
+        let mut guard = self.internal.lock();
+        guard.items.insert(file_name, TmpFsDirEntry::Mount(node));
+        guard.update_times();
         Ok(())
     }
 
@@ -250,6 +256,7 @@ impl Directory for TmpFsDir {
                 let location = LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone());
                 let dir = TmpFsDir::new(self.fs.clone(), location, mode, uid, gid);
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
+                guard.update_times();
                 Ok(dir)
             }
             Entry::Occupied(_) => bail!(Exist),
@@ -303,11 +310,13 @@ impl Directory for TmpFsDir {
         match entry {
             Entry::Vacant(entry) => {
                 entry.insert(create_link());
+                guard.update_times();
                 Ok(())
             }
             Entry::Occupied(mut entry) => {
                 ensure!(!create_new, Exist);
                 entry.insert(create_link());
+                guard.update_times();
                 Ok(())
             }
         }
@@ -336,6 +345,7 @@ impl Directory for TmpFsDir {
                     gid,
                 ));
                 entry.insert(TmpFsDirEntry::CharDev(loc, char_dev));
+                guard.update_times();
                 Ok(())
             }
             Entry::Occupied(_) => bail!(Exist),
@@ -356,6 +366,7 @@ impl Directory for TmpFsDir {
                 let loc = LinkLocation::new(self.this.upgrade().unwrap(), file_name);
                 let char_dev = Arc::new(TmpFsFifo::new(self.fs.clone(), mode, uid, gid));
                 entry.insert(TmpFsDirEntry::Fifo(loc, char_dev.clone()));
+                guard.update_times();
                 Ok(())
             }
             Entry::Occupied(_) => bail!(Exist),
@@ -387,6 +398,7 @@ impl Directory for TmpFsDir {
                 socket.bind(UnixAddr::Pathname(socketname.clone()))?,
             )),
         ));
+        guard.update_times();
         Ok(())
     }
 
@@ -438,6 +450,7 @@ impl Directory for TmpFsDir {
         };
         ensure!(entry.get().ty()? != FileType::Dir, IsDir);
         let (file_name, node) = entry.remove_entry();
+        guard.update_times();
         drop(guard);
 
         node.watchers()
@@ -457,6 +470,7 @@ impl Directory for TmpFsDir {
         ensure!(entry.get().ty()? == FileType::Dir, NotDir);
         ensure!(entry.get().is_empty_dir(), NotEmpty);
         let (file_name, node) = entry.remove_entry();
+        guard.update_times();
         drop(guard);
 
         node.watchers()
@@ -572,6 +586,9 @@ impl Directory for TmpFsDir {
 
                 guard.items.insert(newname.clone(), entry);
 
+                guard.update_times();
+                drop(guard);
+
                 let cookie = next_cookie();
                 self.watchers()
                     .send_event(InotifyMask::MOVED_FROM, Some(cookie), Some(oldname));
@@ -628,6 +645,11 @@ impl Directory for TmpFsDir {
                 }
             }
 
+            old_guard.update_times();
+            new_guard.update_times();
+            drop(old_guard);
+            drop(new_guard);
+
             let cookie = next_cookie();
             self.watchers()
                 .send_event(InotifyMask::MOVED_FROM, Some(cookie), Some(oldname));
@@ -672,6 +694,9 @@ impl Directory for TmpFsDir {
                     .send_event(InotifyMask::MOVE_SELF, None, None);
                 new_entry.update_link(self.this.upgrade().unwrap(), oldname.clone());
                 guard.items.insert(oldname.clone(), new_entry);
+
+                guard.update_times();
+                drop(guard);
 
                 let cookie = next_cookie();
                 self.watchers().send_event(
@@ -741,6 +766,11 @@ impl Directory for TmpFsDir {
                 .get()
                 .update_link(new_dir.clone(), newname.clone());
 
+            old_guard.update_times();
+            new_guard.update_times();
+            drop(old_guard);
+            drop(new_guard);
+
             Ok(())
         }
     }
@@ -772,6 +802,7 @@ impl Directory for TmpFsDir {
                 Entry::Vacant(e) => {
                     let node = e.insert(entry);
                     node.update_times(now(ClockId::Realtime), None, None);
+                    guard.update_times();
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
@@ -788,12 +819,21 @@ impl Directory for TmpFsDir {
                     let entry = entry.clone(LinkLocation::new(new_dir.clone(), e.key().clone()))?;
                     let node = e.insert(entry);
                     node.update_times(now(ClockId::Realtime), None, None);
+                    new_guard.update_times();
                 }
                 Entry::Occupied(_) => bail!(Exist),
             }
         }
 
         Ok(None)
+    }
+}
+
+impl TmpFsDirInternal {
+    fn update_times(&mut self) {
+        let now = now(ClockId::Realtime);
+        self.ctime = now;
+        self.mtime = now;
     }
 }
 
