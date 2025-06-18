@@ -448,6 +448,7 @@ bitflags! {
         const DENYWRITE = 1 << 11;
         const LOCKED = 1 << 13;
         const NORESERVE = 1 << 14;
+        const POPULATE = 1 << 15;
         const STACK = 1 << 17;
     }
 }
