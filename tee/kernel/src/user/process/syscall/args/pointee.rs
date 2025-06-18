@@ -33,9 +33,9 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, ControlMode, FdNum, ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode,
-    LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage,
-    SocketAddr, Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus, WinSize,
+    CmsgHdr, ControlMode, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger, LinuxDirent64,
+    LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit,
+    Rusage, SocketAddr, Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2245,6 +2245,67 @@ impl From<ITimerval> for ITimerval64 {
         Self {
             interval: Timeval64::from(value.interval),
             value: Timeval64::from(value.value),
+        }
+    }
+}
+
+impl Pointee for ITimerspec {}
+
+impl AbiDependentPointee for ITimerspec {
+    type I386 = ITimerspec32;
+    type Amd64 = ITimerspec64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerspec32 {
+    interval: Timespec32,
+    value: Timespec32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerspec64 {
+    interval: Timespec64,
+    value: Timespec64,
+}
+
+impl TryFrom<ITimerspec32> for ITimerspec {
+    type Error = Error;
+
+    fn try_from(value: ITimerspec32) -> Result<Self> {
+        Ok(Self {
+            interval: Timespec::try_from(value.interval)?,
+            value: Timespec::try_from(value.value)?,
+        })
+    }
+}
+
+impl From<ITimerspec> for ITimerspec32 {
+    fn from(value: ITimerspec) -> Self {
+        Self {
+            interval: Timespec32::from(value.interval),
+            value: Timespec32::from(value.value),
+        }
+    }
+}
+
+impl TryFrom<ITimerspec64> for ITimerspec {
+    type Error = Error;
+
+    fn try_from(value: ITimerspec64) -> Result<Self> {
+        Ok(Self {
+            interval: Timespec::try_from(value.interval)?,
+            value: Timespec::try_from(value.value)?,
+        })
+    }
+}
+
+impl From<ITimerspec> for ITimerspec64 {
+    fn from(value: ITimerspec) -> Self {
+        Self {
+            interval: Timespec64::from(value.interval),
+            value: Timespec64::from(value.value),
         }
     }
 }

@@ -2157,3 +2157,40 @@ enum_arg! {
         Prof = 2,
     }
 }
+
+bitflags! {
+    pub struct TimerfdCreateFlags {
+        const NONBLOCK = 1 << 11;
+        const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<TimerfdCreateFlags> for FdFlags {
+    fn from(value: TimerfdCreateFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(TimerfdCreateFlags::CLOEXEC));
+        flags
+    }
+}
+
+impl From<TimerfdCreateFlags> for OpenFlags {
+    fn from(value: TimerfdCreateFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::NONBLOCK, value.contains(TimerfdCreateFlags::NONBLOCK));
+        flags.set(Self::CLOEXEC, value.contains(TimerfdCreateFlags::CLOEXEC));
+        flags
+    }
+}
+
+bitflags! {
+    pub struct SetTimeFlags {
+        const ABSTIME = 1 << 0;
+        const CANCEL_ON_SET = 1 << 1;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ITimerspec {
+    pub interval: Timespec,
+    pub value: Timespec,
+}

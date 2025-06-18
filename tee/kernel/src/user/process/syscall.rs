@@ -35,6 +35,7 @@ use crate::{
             path::PathFd,
             pipe,
             stream_buffer::{self, SpliceBlockedError},
+            timer::Timer,
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
@@ -267,7 +268,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysTimerfdCreate);
     handlers.register(SysFallocate);
+    handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
@@ -4540,6 +4543,25 @@ async fn epoll_pwait(
     res
 }
 
+#[syscall(i386 = 322, amd64 = 283)]
+fn timerfd_create(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+
+    #[state] no_file_limit: CurrentNoFileLimit,
+    clockid: ClockId,
+    flags: TimerfdCreateFlags,
+) -> SyscallResult {
+    let timer = Timer::new(
+        clockid,
+        flags,
+        ctx.filesystem_user_id,
+        ctx.filesystem_group_id,
+    );
+    let fd_num = fdtable.insert(timer, flags, no_file_limit)?;
+    Ok(fd_num.get() as u64)
+}
+
 #[syscall(i386 = 324, amd64 = 285)]
 fn fallocate(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -4550,6 +4572,25 @@ fn fallocate(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     fd.allocate(mode, usize_from(offset), usize_from(length))?;
+    Ok(0)
+}
+
+#[syscall(i386 = 325, amd64 = 286)]
+fn timerfd_settime(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    flags: SetTimeFlags,
+    new_value: Pointer<ITimerspec>,
+    old_value: Pointer<ITimerspec>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let new = virtual_memory.read_with_abi(new_value, abi)?;
+    let old = fd.set_time(flags, new)?;
+    if !old_value.is_null() {
+        virtual_memory.write_with_abi(old_value, old, abi)?;
+    }
     Ok(0)
 }
 
