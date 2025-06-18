@@ -49,14 +49,14 @@ impl IndexMut<Resource> for Limits {
     }
 }
 
-pub struct CurrentLimit<R>(u32, PhantomData<fn(R)>);
+pub struct CurrentLimit<R>(u64, PhantomData<fn(R)>);
 
 impl<R> CurrentLimit<R> {
-    pub const fn new(value: u32) -> Self {
+    pub const fn new(value: u64) -> Self {
         Self(value, PhantomData)
     }
 
-    pub const fn get(self) -> u32 {
+    pub const fn get(self) -> u64 {
         self.0
     }
 }

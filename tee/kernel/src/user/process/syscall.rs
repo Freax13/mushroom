@@ -4725,7 +4725,7 @@ fn prlimit64(
 
     if !new_rlim.is_null() {
         let value = virtual_memory.read(new_rlim)?;
-        let value = RLimit::try_from(value)?;
+        let value = RLimit::from(value);
         let limit = &mut guard[resource];
 
         // Make sure that the limit is well-formed.

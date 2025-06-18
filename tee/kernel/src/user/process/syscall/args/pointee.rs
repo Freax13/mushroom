@@ -1553,20 +1553,32 @@ pub struct RLimit64 {
     rlim_max: u64,
 }
 
-impl From<RLimit> for RLimit32 {
-    fn from(value: RLimit) -> Self {
-        Self {
-            rlim_cur: value.rlim_cur,
-            rlim_max: value.rlim_max,
-        }
+impl TryFrom<RLimit> for RLimit32 {
+    type Error = Error;
+
+    fn try_from(value: RLimit) -> Result<Self> {
+        let cur = if value.rlim_cur != RLimit::INFINITY {
+            u32::try_from(value.rlim_cur)?
+        } else {
+            !0
+        };
+        let max = if value.rlim_max != RLimit::INFINITY {
+            u32::try_from(value.rlim_max)?
+        } else {
+            !0
+        };
+        Ok(Self {
+            rlim_cur: cur,
+            rlim_max: max,
+        })
     }
 }
 
 impl From<RLimit> for RLimit64 {
     fn from(value: RLimit) -> Self {
         Self {
-            rlim_cur: u64::from(value.rlim_cur),
-            rlim_max: u64::from(value.rlim_max),
+            rlim_cur: value.rlim_cur,
+            rlim_max: value.rlim_max,
         }
     }
 }
