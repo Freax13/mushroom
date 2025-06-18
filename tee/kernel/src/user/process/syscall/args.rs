@@ -14,7 +14,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result, bail, ensure, err},
+    error::{Result, bail, ensure, err},
     fs::{
         fd::{Events, FdFlags, FileDescriptorTable},
         path::Path,
@@ -448,6 +448,7 @@ bitflags! {
         const DENYWRITE = 1 << 11;
         const LOCKED = 1 << 13;
         const NORESERVE = 1 << 14;
+        const POPULATE = 1 << 15;
         const STACK = 1 << 17;
     }
 }
@@ -1252,15 +1253,20 @@ enum_arg! {
     pub enum Resource {
         Stack = 3,
         NoFile = 7,
+        As = 9,
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct RLimit {
     /// Soft limit
-    pub rlim_cur: u32,
+    pub rlim_cur: u64,
     /// Hard limit (ceiling for rlim_cur)
-    pub rlim_max: u32,
+    pub rlim_max: u64,
+}
+
+impl RLimit {
+    pub const INFINITY: u64 = !0;
 }
 
 #[derive(Clone, Copy, Zeroable, Pod)]
@@ -1275,20 +1281,18 @@ pub struct RLimit64 {
 impl From<RLimit> for RLimit64 {
     fn from(value: RLimit) -> Self {
         Self {
-            rlim_cur: u64::from(value.rlim_cur),
-            rlim_max: u64::from(value.rlim_max),
+            rlim_cur: value.rlim_cur,
+            rlim_max: value.rlim_max,
         }
     }
 }
 
-impl TryFrom<RLimit64> for RLimit {
-    type Error = Error;
-
-    fn try_from(value: RLimit64) -> Result<Self> {
-        Ok(Self {
-            rlim_cur: u32::try_from(value.rlim_cur)?,
-            rlim_max: u32::try_from(value.rlim_max)?,
-        })
+impl From<RLimit64> for RLimit {
+    fn from(value: RLimit64) -> Self {
+        Self {
+            rlim_cur: value.rlim_cur,
+            rlim_max: value.rlim_max,
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use alloc::vec;
 use bit_field::BitField;
 use bytemuck::{Pod, Zeroable, bytes_of_mut};
 use usize_conversions::usize_from;
-use x86_64::VirtAddr;
+use x86_64::{VirtAddr, align_up};
 
 use crate::{
     error::{Result, bail, ensure},
@@ -146,8 +146,8 @@ where
         let p_type = program_header_entry.p_type();
         let p_offset = program_header_entry.p_offset();
         let p_vaddr = program_header_entry.p_vaddr();
-        let p_filesz = program_header_entry.p_filesz();
-        let p_memsz = program_header_entry.p_memsz();
+        let mut p_filesz = program_header_entry.p_filesz();
+        let mut p_memsz = program_header_entry.p_memsz();
         let p_flags = program_header_entry.p_flags();
 
         match p_type {
@@ -160,6 +160,16 @@ where
                 permissions.set(MemoryPermissions::EXECUTE, p_flags.get_bit(PF_X_BIT));
                 permissions.set(MemoryPermissions::WRITE, p_flags.get_bit(PF_W_BIT));
                 permissions.set(MemoryPermissions::READ, p_flags.get_bit(PF_R_BIT));
+
+                // Oddly enough, if p_filesz is equal to p_memsz, Linux doesn't
+                // zero the memory *after* mem_sz. Instead the page will just
+                // containg the normal file contents. Some ELF binaries (e.g.
+                // GHC) depend on this behavior. It's not clear whether this is
+                // a bug in the GHC binary or intended behavior.
+                if p_filesz == p_memsz {
+                    p_filesz = align_up(p_filesz, 0x1000);
+                    p_memsz = p_filesz;
+                }
 
                 vm.mmap_file_with_zeros(
                     Bias::Fixed(VirtAddr::try_new(base + p_vaddr)?),

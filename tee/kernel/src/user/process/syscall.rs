@@ -221,6 +221,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFstatfs);
     handlers.register(SysGetpriority);
     handlers.register(SysSetpriority);
+    handlers.register(SysMlock);
+    handlers.register(SysMunlock);
     handlers.register(SysPrctl);
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
@@ -3127,6 +3129,16 @@ fn setpriority(thread: &Thread, which: Which, who: u32, prio: Nice) -> SyscallRe
     Ok(0)
 }
 
+#[syscall(i386 = 150, amd64 = 149)]
+fn mlock(start: Pointer<c_void>, len: u64) -> SyscallResult {
+    Ok(0)
+}
+
+#[syscall(i386 = 151, amd64 = 150)]
+fn munlock(start: Pointer<c_void>, len: u64) -> SyscallResult {
+    Ok(0)
+}
+
 #[syscall(i386 = 172, amd64 = 157)]
 fn prctl(
     mut thread: ThreadGuard,
@@ -4725,7 +4737,7 @@ fn prlimit64(
 
     if !new_rlim.is_null() {
         let value = virtual_memory.read(new_rlim)?;
-        let value = RLimit::try_from(value)?;
+        let value = RLimit::from(value);
         let limit = &mut guard[resource];
 
         // Make sure that the limit is well-formed.

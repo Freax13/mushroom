@@ -125,7 +125,7 @@ impl VirtualMemory {
         self.modify().init_brk(brk_start);
 
         // Create stack.
-        let len = u64::from(stack_limit.get());
+        let len = stack_limit.get();
         let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len) + len;
 
         // Sum up the number of pointer-sized values that need to be placed in
