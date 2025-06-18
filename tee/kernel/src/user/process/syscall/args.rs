@@ -1887,23 +1887,23 @@ impl Default for Termios {
                 | LocalMode::ECHOKE
                 | LocalMode::IEXTEN,
             special_characters: SpecialCharacters {
-                intr: 0x00,
-                quit: 0x03,
-                erase: 0x1c,
-                kill: 0x7f,
-                eof: 0x15,
-                time: 0x04,
-                min: 0x00,
-                swtc: 0x01,
-                start: 0x00,
-                stop: 0x11,
-                susp: 0x13,
-                eol: 0x1a,
-                reprint: 0x00,
-                discard: 0x12,
-                werase: 0x0f,
-                lnext: 0x17,
-                eol2: 0x16,
+                intr: 0x03,
+                quit: 0x1c,
+                erase: 0x7f,
+                kill: 0x15,
+                eof: 0x04,
+                time: 0x00,
+                min: 0x01,
+                swtc: 0x00,
+                start: 0x11,
+                stop: 0x13,
+                susp: 0x1a,
+                eol: 0x00,
+                reprint: 0x12,
+                discard: 0x0f,
+                werase: 0x17,
+                lnext: 0x16,
+                eol2: 0x00,
                 padding: [0x00, 0x00, 0x00],
             },
         }
@@ -2115,4 +2115,13 @@ impl From<[u8; 20]> for SpecialCharacters {
             padding: [value[17], value[18], value[19]],
         }
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct WinSize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
 }
