@@ -28,9 +28,9 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, EpollEvent, FdNum, FileMode, FileType, InotifyMask, MsgHdr,
-                OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, Stat,
-                Timespec, Whence,
+                Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, InotifyMask,
+                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
+                Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -583,6 +583,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn truncate(&self, length: usize) -> Result<()> {
         let _ = length;
         bail!(Inval)
+    }
+
+    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+        let _ = mode;
+        let _ = offset;
+        let _ = len;
+        bail!(BadF)
     }
 
     fn bind(

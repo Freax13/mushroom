@@ -264,6 +264,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysFallocate);
     handlers.register(SysAccept4);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
@@ -4504,6 +4505,19 @@ async fn epoll_pwait(
     }
 
     res
+}
+
+#[syscall(i386 = 324, amd64 = 285)]
+fn fallocate(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    mode: FallocateMode,
+    offset: u64,
+    length: u64,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    fd.allocate(mode, usize_from(offset), usize_from(length))?;
+    Ok(0)
 }
 
 #[syscall(i386 = 364, amd64 = 288, interruptable, restartable)]

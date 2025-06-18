@@ -31,7 +31,8 @@ use crate::{
         Process,
         memory::WriteToVec,
         syscall::args::{
-            ClockId, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+            ClockId, FallocateMode, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat,
+            Timespec,
         },
         thread::{Gid, Thread, Uid},
     },
@@ -467,6 +468,10 @@ impl File for CpuinfoFile {
     fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
 }
 
 struct MeminfoFile {
@@ -573,6 +578,10 @@ impl File for MeminfoFile {
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
 }
@@ -893,6 +902,10 @@ impl File for NetDevFile {
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
 }
@@ -1923,6 +1936,10 @@ impl File for MapsFile {
     fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
 }
 
 struct ProcessStatFile {
@@ -2027,6 +2044,10 @@ impl File for ProcessStatFile {
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
 }
@@ -2607,6 +2628,10 @@ impl File for TaskCommFile {
     fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
 }
 
 struct StatFile {
@@ -2724,6 +2749,10 @@ impl File for StatFile {
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
 }
@@ -2848,6 +2877,10 @@ impl File for UptimeFile {
     }
 
     fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
 }

@@ -22,7 +22,7 @@ use crate::{
     time::now,
     user::process::{
         futex::Futexes,
-        syscall::args::{ClockId, InotifyMask, OpenFlags, UnixAddr},
+        syscall::args::{ClockId, FallocateMode, InotifyMask, OpenFlags, UnixAddr},
         thread::{Gid, Uid},
     },
 };
@@ -1270,6 +1270,24 @@ impl File for TmpFsFile {
         guard.ctime = now;
         guard.mtime = now;
         guard.buffer.truncate(len)
+    }
+
+    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+        if mode.bits() == 0 {
+            let mut guard = self.internal.write();
+            let now = now(ClockId::Realtime);
+            guard.ctime = now;
+            guard.mtime = now;
+
+            let new_len = offset + len;
+            if guard.buffer.len() < new_len {
+                guard.buffer.truncate(new_len)?;
+            }
+
+            Ok(())
+        } else {
+            todo!()
+        }
     }
 }
 

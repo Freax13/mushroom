@@ -2125,3 +2125,7 @@ pub struct WinSize {
     ws_xpixel: u16,
     ws_ypixel: u16,
 }
+
+bitflags! {
+    pub struct FallocateMode {}
+}
