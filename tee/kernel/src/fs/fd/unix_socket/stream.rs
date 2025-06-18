@@ -78,8 +78,12 @@ enum Mode {
 
 impl StreamUnixSocket {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(flags: OpenFlags, uid: Uid, gid: Gid) -> StrongFileDescriptor {
-        StrongFileDescriptor::new_cyclic(|this| Self {
+    pub fn new(
+        flags: OpenFlags,
+        uid: Uid,
+        gid: Gid,
+    ) -> (StrongFileDescriptor, Arc<OpenFileDescriptionData<Self>>) {
+        StrongFileDescriptor::new_cyclic_with_data(|this| Self {
             this: this.clone(),
             ino: new_ino(),
             internal: Mutex::new(StreamUnixSocketInternal {

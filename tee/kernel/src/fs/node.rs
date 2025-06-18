@@ -727,6 +727,29 @@ pub fn create_char_dev(
     }
 }
 
+pub fn create_socket(
+    start_dir: Link,
+    path: &Path,
+    mode: FileMode,
+    uid: Uid,
+    gid: Gid,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    match last {
+        PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
+            bail!(Exist)
+        }
+        PathSegment::FileName(file_name) => {
+            let (_fd, socket) = StreamUnixSocket::new(OpenFlags::empty(), uid, gid);
+            parent
+                .node
+                .bind_socket(file_name.into_owned(), mode, uid, gid, &socket, path)?;
+            Ok(())
+        }
+    }
+}
+
 pub fn bind_socket(
     path: &Path,
     mode: FileMode,

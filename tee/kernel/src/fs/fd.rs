@@ -187,6 +187,24 @@ impl StrongFileDescriptor {
         })))
     }
 
+    pub fn new_cyclic_with_data<T>(
+        f: impl FnOnce(&Weak<OpenFileDescriptionData<T>>) -> T,
+    ) -> (Self, Arc<OpenFileDescriptionData<T>>)
+    where
+        T: OpenFileDescription,
+    {
+        let mut weak = None;
+        let this = Self(FileDescriptor(Arc::new_cyclic(|this| {
+            weak = Some(this.clone());
+            OpenFileDescriptionData {
+                reference_count: AtomicUsize::new(1),
+                ofd: f(this),
+            }
+        })));
+        let typed = weak.unwrap().upgrade().unwrap();
+        (this, typed)
+    }
+
     pub fn downgrade(this: &Self) -> FileDescriptor {
         this.0.clone()
     }

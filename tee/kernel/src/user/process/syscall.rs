@@ -39,8 +39,9 @@ use crate::{
         },
         node::{
             self, DirEntry, FileAccessContext, Link, OldDirEntry, Permission, create_char_dev,
-            create_directory, create_fifo, create_file, create_link, devtmpfs, hard_link,
-            lookup_and_resolve_link, lookup_link, procfs, read_soft_link, unlink_dir, unlink_file,
+            create_directory, create_fifo, create_file, create_link, create_socket, devtmpfs,
+            hard_link, lookup_and_resolve_link, lookup_link, procfs, read_soft_link, unlink_dir,
+            unlink_file,
         },
         path::Path,
     },
@@ -1320,7 +1321,8 @@ fn socket(
                     r#type.flags,
                     ctx.filesystem_user_id,
                     ctx.filesystem_group_id,
-                ),
+                )
+                .0,
                 r#type,
                 no_file_limit,
             )?,
@@ -3844,7 +3846,14 @@ fn mknodat(
             ensure!(ctx.is_user(Uid::SUPER_USER), Perm);
             todo!()
         }
-        FileType::Socket => todo!(),
+        FileType::Socket => create_socket(
+            start_dir,
+            &pathname,
+            mode,
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+            &mut ctx,
+        )?,
         FileType::Dir | FileType::Link => bail!(Inval),
     }
 
