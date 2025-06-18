@@ -12,6 +12,7 @@ fake-time = []
 real-time = []
 harden = ["log/max_level_off", "log/release_max_level_off"]
 profiling = ["log/max_level_off", "log/release_max_level_off", "dep:profiler-types"]
+lock-debugging = []
 
 [dependencies]
 arrayvec = { version = "0.7.4", default-features = false }

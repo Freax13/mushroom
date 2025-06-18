@@ -66,7 +66,7 @@ pub trait ThreadArg<'a> {
 }
 
 impl<'a> ThreadArg<'a> for ThreadGuard<'a> {
-    #[track_caller]
+    #[cfg_attr(feature = "lock-debugging", track_caller)]
     fn get(thread: &'a Arc<Thread>) -> Self {
         thread.lock()
     }
