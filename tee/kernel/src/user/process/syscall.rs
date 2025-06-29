@@ -2528,10 +2528,16 @@ fn gettimeofday(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     tv: Pointer<Timeval>,
-    tz: Pointer<c_void>,
+    tz: Pointer<Timezone>,
 ) -> SyscallResult {
     if !tz.is_null() {
-        todo!();
+        virtual_memory.write(
+            tz,
+            Timezone {
+                tz_minuteswest: 0,
+                tz_dsttime: 0,
+            },
+        )?;
     }
 
     if !tv.is_null() {

@@ -35,7 +35,8 @@ use crate::{
 use super::{
     CmsgHdr, ControlMode, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger, LinuxDirent64,
     LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit,
-    Rusage, SocketAddr, Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus, WinSize,
+    Rusage, SocketAddr, Stat, SysInfo, Termios, Time, Timespec, Timeval, Timezone, WStatus,
+    WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2192,6 +2193,9 @@ impl From<Termios64> for Termios {
 
 impl Pointee for WinSize {}
 impl PrimitivePointee for WinSize {}
+
+impl Pointee for Timezone {}
+impl PrimitivePointee for Timezone {}
 
 impl Pointee for ITimerval {}
 impl AbiDependentPointee for ITimerval {

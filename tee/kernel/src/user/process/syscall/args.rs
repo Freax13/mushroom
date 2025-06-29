@@ -2182,6 +2182,13 @@ bitflags! {
     pub struct FallocateMode {}
 }
 
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Timezone {
+    pub tz_minuteswest: i32,
+    pub tz_dsttime: i32,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ITimerval {
     pub interval: Timeval,
