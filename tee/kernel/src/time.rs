@@ -43,8 +43,6 @@ intrusive_adapter!(TreeAdapter = Arc<Node>: Node { rb_link: RBTreeAtomicLink });
 intrusive_adapter!(ListAdapter = Arc<Node>: Node { list_link: LinkedListAtomicLink });
 intrusive_adapter!(DeleteListAdapter = Arc<Node>: Node { delete_link: LinkedListAtomicLink });
 
-static SKIP_OFFSET: AtomicU64 = AtomicU64::new(0);
-
 static REALTIME_TIMERS: TimerLists = TimerLists::new();
 static REALTIME: Time = unsafe { Time::new(&REALTIME_TIMERS, &DEFAULT_BACKEND) };
 
@@ -94,7 +92,7 @@ pub fn advance_time(last_vcpu_guard: LastRunningVcpuGuard) -> Result<(), NoTimeo
 
     // Skip forward in time.
     let delta = u64::try_from(delta.0).unwrap();
-    SKIP_OFFSET.fetch_add(delta, Ordering::Relaxed);
+    DEFAULT_BACKEND.skip(delta);
 
     // Now that we advance forward in time, we can expire some more timers.
     expire_timers();
@@ -167,7 +165,6 @@ where
     /// Compute the current time assuming the given offset for the clock.
     fn now_with_offset(&self, clock_offset: u64) -> Tick {
         let offset = self.backend.current_offset();
-        let offset = offset + SKIP_OFFSET.load(Ordering::Relaxed);
         let offset = offset + clock_offset;
         Tick::from_ns(offset)
     }
