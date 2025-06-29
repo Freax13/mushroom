@@ -76,14 +76,14 @@ pub fn expire_timers() {
 
 /// Advance forward in time to the next timer deadline.
 pub fn advance_time(last_vcpu_guard: LastRunningVcpuGuard) -> Result<(), NoTimeoutScheduledError> {
-    debug!("advancing simulated time");
-
     // Determine the delta until the next deadline.
     let guard = TimerInterruptGuard::new();
     let realtime_delta = REALTIME.next_deadline().unwrap();
     let monotonic_delta = MONOTONIC.next_deadline().unwrap();
     drop(guard);
     let delta = zip_min(realtime_delta, monotonic_delta).ok_or(NoTimeoutScheduledError)?;
+
+    debug!("advancing simulated time by {}ns", delta.as_nanos());
 
     // Allow other vCPUs to run again. It's important that we do this before
     // expiring timers. If we don't do this, we'll likely wake up vCPUs only
