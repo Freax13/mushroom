@@ -200,6 +200,20 @@ impl VirtualMemory {
         unsafe { self.read_bytes_volatile(addr, NonNull::from(bytes)) }
     }
 
+    pub fn read_uninit_bytes<'a>(
+        &self,
+        addr: VirtAddr,
+        bytes: &'a mut [MaybeUninit<u8>],
+    ) -> Result<&'a mut [u8]> {
+        let len = bytes.len();
+        let data = NonNull::from(&mut *bytes).cast();
+        let ptr = NonNull::slice_from_raw_parts(data, len);
+        Ok(unsafe {
+            self.read_bytes_volatile(addr, ptr)?;
+            bytes.assume_init_mut()
+        })
+    }
+
     const ACCESS_RETRIES: usize = 8;
 
     pub unsafe fn read_bytes_volatile(&self, addr: VirtAddr, bytes: NonNull<[u8]>) -> Result<()> {

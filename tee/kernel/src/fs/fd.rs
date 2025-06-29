@@ -28,9 +28,9 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, InotifyMask,
-                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
-                Stat, Timespec, Whence,
+                Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
+                InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, SetTimeFlags,
+                ShutdownHow, SocketAddr, Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -77,6 +77,7 @@ pub mod path;
 pub mod pipe;
 mod std;
 pub mod stream_buffer;
+pub mod timer;
 pub mod unix_socket;
 
 pub use buf::{
@@ -841,6 +842,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn as_tty(&self) -> Option<Arc<PtyData>> {
         None
+    }
+
+    fn set_time(&self, flags: SetTimeFlags, new: ITimerspec) -> Result<ITimerspec> {
+        let _ = flags;
+        let _ = new;
+        bail!(Inval)
     }
 
     fn ioctl(

@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use usize_conversions::FromUsize;
 
-use crate::time::backend_offset;
+use crate::time::default_backend_offset;
 
 use super::syscall::args::{Rusage, Timespec, Timeval};
 
@@ -60,13 +60,12 @@ pub struct ThreadUsage {
 }
 
 impl ThreadUsage {
-    pub fn start(&self) {
-        self.last_start.store(backend_offset(), Ordering::Relaxed);
+    pub fn start(&self, start: u64) {
+        self.last_start.store(start, Ordering::Relaxed);
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&self, end: u64) {
         let start = self.last_start.swap(0, Ordering::Relaxed);
-        let end = backend_offset();
         self.total_ns.fetch_add(end - start, Ordering::Relaxed);
     }
 
@@ -78,6 +77,10 @@ impl ThreadUsage {
         self.voluntary_context_switches
             .fetch_add(1, Ordering::Relaxed);
     }
+
+    pub fn cpu_time(&self) -> u64 {
+        self.user_ns.load(Ordering::Relaxed)
+    }
 }
 
 pub fn collect(memory: &MemoryUsage, thread: &ThreadUsage) -> Rusage {
@@ -86,7 +89,7 @@ pub fn collect(memory: &MemoryUsage, thread: &ThreadUsage) -> Rusage {
 
     let last_start = thread.last_start.load(Ordering::Relaxed);
     if last_start != 0 {
-        total_ns += backend_offset() - last_start;
+        total_ns += default_backend_offset().saturating_sub(last_start);
     }
 
     let sys_time = total_ns - user_ns;

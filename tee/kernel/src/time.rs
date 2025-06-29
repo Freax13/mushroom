@@ -12,7 +12,7 @@ use bit_field::BitField;
 use core::{
     cell::SyncUnsafeCell,
     cmp,
-    ops::{Add, RangeInclusive, Sub},
+    ops::{Add, Deref, RangeInclusive, Sub},
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll, Waker},
@@ -31,23 +31,23 @@ compile_error!("neither the fake-time nor real-time features are enabled");
 #[cfg(feature = "fake-time")]
 mod fake;
 #[cfg(feature = "fake-time")]
-use fake as backend;
+type DefaultBackend = fake::FakeBackend;
 #[cfg(feature = "real-time")]
 mod real;
 #[cfg(feature = "real-time")]
-use real as backend;
+type DefaultBackend = real::RealBackend;
+
+static DEFAULT_BACKEND: DefaultBackend = DefaultBackend::new();
 
 intrusive_adapter!(TreeAdapter = Arc<Node>: Node { rb_link: RBTreeAtomicLink });
 intrusive_adapter!(ListAdapter = Arc<Node>: Node { list_link: LinkedListAtomicLink });
 intrusive_adapter!(DeleteListAdapter = Arc<Node>: Node { delete_link: LinkedListAtomicLink });
 
-static SKIP_OFFSET: AtomicU64 = AtomicU64::new(0);
-
 static REALTIME_TIMERS: TimerLists = TimerLists::new();
-static REALTIME: Time = unsafe { Time::new(&REALTIME_TIMERS) };
+static REALTIME: Time = unsafe { Time::new(&REALTIME_TIMERS, &DEFAULT_BACKEND) };
 
 static MONOTONIC_TIMERS: TimerLists = TimerLists::new();
-static MONOTONIC: Time = unsafe { Time::new(&MONOTONIC_TIMERS) };
+static MONOTONIC: Time = unsafe { Time::new(&MONOTONIC_TIMERS, &DEFAULT_BACKEND) };
 
 pub fn now(clock: ClockId) -> Timespec {
     let now = match clock {
@@ -76,14 +76,14 @@ pub fn expire_timers() {
 
 /// Advance forward in time to the next timer deadline.
 pub fn advance_time(last_vcpu_guard: LastRunningVcpuGuard) -> Result<(), NoTimeoutScheduledError> {
-    debug!("advancing simulated time");
-
     // Determine the delta until the next deadline.
     let guard = TimerInterruptGuard::new();
     let realtime_delta = REALTIME.next_deadline().unwrap();
     let monotonic_delta = MONOTONIC.next_deadline().unwrap();
     drop(guard);
     let delta = zip_min(realtime_delta, monotonic_delta).ok_or(NoTimeoutScheduledError)?;
+
+    debug!("advancing simulated time by {}ns", delta.as_nanos());
 
     // Allow other vCPUs to run again. It's important that we do this before
     // expiring timers. If we don't do this, we'll likely wake up vCPUs only
@@ -92,7 +92,7 @@ pub fn advance_time(last_vcpu_guard: LastRunningVcpuGuard) -> Result<(), NoTimeo
 
     // Skip forward in time.
     let delta = u64::try_from(delta.0).unwrap();
-    SKIP_OFFSET.fetch_add(delta, Ordering::Relaxed);
+    DEFAULT_BACKEND.skip(delta);
 
     // Now that we advance forward in time, we can expire some more timers.
     expire_timers();
@@ -113,39 +113,94 @@ pub async fn sleep_until(deadline: Timespec, clock_id: ClockId) {
 }
 
 /// Returns a timestamp from a time source that never skips forward.
-pub fn backend_offset() -> u64 {
-    backend::current_offset()
+pub fn default_backend_offset() -> u64 {
+    DEFAULT_BACKEND.current_offset()
 }
 
-struct Time {
+/// A method of reading wall clock time.
+pub trait TimeBackend {
+    /// Read the current time. Returns a duration since boot in ns.
+    fn current_offset(&self) -> u64;
+}
+
+impl<T> TimeBackend for &T
+where
+    T: TimeBackend,
+{
+    fn current_offset(&self) -> u64 {
+        <T as TimeBackend>::current_offset(self)
+    }
+}
+
+/// A time backend that measures CPU time consumed by a thread or process.
+#[derive(Default)]
+pub struct CpuTimeBackend {
+    consumed: AtomicU64,
+}
+
+impl CpuTimeBackend {
+    pub fn add(&self, ns: u64) {
+        self.consumed.fetch_add(ns, Ordering::Relaxed);
+    }
+}
+
+impl TimeBackend for CpuTimeBackend {
+    fn current_offset(&self) -> u64 {
+        self.consumed.load(Ordering::Relaxed)
+    }
+}
+
+pub struct Time<T = &'static DefaultBackend> {
+    backend: T,
     offset: AtomicU64,
     expire_lock: ExpireLock,
     management_lock: Mutex<ManagementLock>,
 }
 
-impl Time {
+impl<T> Time<T>
+where
+    T: TimeBackend,
+{
     /// Create a new instance.
     ///
     /// # Safety
     ///
     /// `lists` must be not be used elsewhere.
-    pub const unsafe fn new(lists: &'static TimerLists) -> Self {
+    pub const unsafe fn new(lists: &'static TimerLists, backend: T) -> Self {
         Self {
+            backend,
             offset: AtomicU64::new(0),
-            expire_lock: unsafe { ExpireLock::new(lists) },
+            expire_lock: unsafe { ExpireLock::new(TimerListsAllocation::Static(lists)) },
+            management_lock: Mutex::new(unsafe {
+                ManagementLock::new(TimerListsAllocation::Static(lists))
+            }),
+        }
+    }
+
+    /// Create a new instance.
+    ///
+    /// # Safety
+    ///
+    /// `lists` must be not be used elsewhere.
+    pub fn new_in_arc(backend: T) -> Self {
+        let lists = Arc::new(TimerLists::new());
+        let lists = TimerListsAllocation::Arc(lists);
+        Self {
+            backend,
+            offset: AtomicU64::new(0),
+            expire_lock: unsafe { ExpireLock::new(lists.clone()) },
             management_lock: Mutex::new(unsafe { ManagementLock::new(lists) }),
         }
     }
 
     /// Query the current time.
     pub fn now(&self) -> Tick {
-        Self::now_with_offset(self.offset.load(Ordering::Relaxed))
+        self.now_with_offset(self.offset.load(Ordering::Relaxed))
     }
 
     /// Compute the current time assuming the given offset for the clock.
-    fn now_with_offset(clock_offset: u64) -> Tick {
-        let offset = backend::current_offset();
-        let offset = offset + SKIP_OFFSET.load(Ordering::Relaxed);
+    fn now_with_offset(&self, clock_offset: u64) -> Tick {
+        let offset = self.backend.current_offset();
         let offset = offset + clock_offset;
         Tick::from_ns(offset)
     }
@@ -159,7 +214,7 @@ impl Time {
     pub fn update_offset(&self, tick: Tick) {
         let mut offset = self.offset.load(Ordering::Relaxed);
         loop {
-            let delta = tick - Self::now_with_offset(offset);
+            let delta = tick - self.now_with_offset(offset);
             let new_offset = offset
                 .checked_add_signed(delta.0)
                 .expect("clock went to far backwards");
@@ -177,7 +232,7 @@ impl Time {
 
             // Update the state for the timers.
             self.expire_lock
-                .expire_timers(Self::now_with_offset(new_offset), delta < TickDelta::ZERO);
+                .expire_timers(self.now_with_offset(new_offset), delta < TickDelta::ZERO);
 
             return;
         }
@@ -193,8 +248,8 @@ impl Time {
 
     /// Wait until the deadline.
     pub async fn sleep_until(&self, deadline: Tick) {
-        struct Sleep<'a> {
-            timers: &'a Time,
+        struct Sleep<'a, T> {
+            timers: &'a Time<T>,
             state: State,
         }
 
@@ -203,7 +258,10 @@ impl Time {
             Started { node: Arc<Node> },
         }
 
-        impl Future for Sleep<'_> {
+        impl<T> Future for Sleep<'_, T>
+        where
+            T: TimeBackend,
+        {
             type Output = ();
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -236,7 +294,7 @@ impl Time {
             }
         }
 
-        impl Drop for Sleep<'_> {
+        impl<T> Drop for Sleep<'_, T> {
             fn drop(&mut self) {
                 let state = core::mem::replace(
                     &mut self.state,
@@ -261,9 +319,13 @@ impl Time {
         }
         .await
     }
+
+    pub fn backend(&self) -> &T {
+        &self.backend
+    }
 }
 
-struct TimerLists {
+pub struct TimerLists {
     state: AtomicListsState,
     left: SyncUnsafeCell<Half>,
     right: SyncUnsafeCell<Half>,
@@ -285,17 +347,34 @@ impl TimerLists {
     }
 }
 
+#[derive(Clone)]
+enum TimerListsAllocation {
+    Static(&'static TimerLists),
+    Arc(Arc<TimerLists>),
+}
+
+impl Deref for TimerListsAllocation {
+    type Target = TimerLists;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            TimerListsAllocation::Static(timer_lists) => timer_lists,
+            TimerListsAllocation::Arc(timer_lists) => timer_lists,
+        }
+    }
+}
+
 struct Half {
     pending: LinkedList<ListAdapter>,
     expired: LinkedList<ListAdapter>,
 }
 
 struct ExpireLock {
-    lists: &'static TimerLists,
+    lists: TimerListsAllocation,
 }
 
 impl ExpireLock {
-    pub const unsafe fn new(lists: &'static TimerLists) -> Self {
+    pub const unsafe fn new(lists: TimerListsAllocation) -> Self {
         Self { lists }
     }
 
@@ -486,7 +565,7 @@ impl ExpireLock {
 }
 
 struct ManagementLock {
-    lists: &'static TimerLists,
+    lists: TimerListsAllocation,
     rb_tree_left: RBTree<TreeAdapter>,
     rb_tree_right: RBTree<TreeAdapter>,
     deleted_left: LinkedList<DeleteListAdapter>,
@@ -494,7 +573,7 @@ struct ManagementLock {
 }
 
 impl ManagementLock {
-    pub const unsafe fn new(lists: &'static TimerLists) -> Self {
+    pub const unsafe fn new(lists: TimerListsAllocation) -> Self {
         Self {
             lists,
             rb_tree_left: RBTree::new(TreeAdapter::NEW),
