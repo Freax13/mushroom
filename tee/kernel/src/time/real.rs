@@ -6,18 +6,27 @@ use core::arch::x86_64::{__cpuid, _rdtsc};
 
 use x86_64::registers::model_specific::Msr;
 
-use crate::spin::lazy::Lazy;
+use crate::{spin::lazy::Lazy, time::TimeBackend};
 
-/// Returns the time current offset in ns.
-pub fn current_offset() -> u64 {
-    static GUEST_TSC_FREQ: Lazy<u64> = Lazy::new(determine_tsc_frequency);
-    static START_OFFSET: Lazy<u64> = Lazy::new(|| unsafe { _rdtsc() });
+pub struct RealBackend {
+    guest_tsc_freq: Lazy<u64>,
+    start_offset: Lazy<u64>,
+}
 
-    let guest_tsc_freq = *GUEST_TSC_FREQ;
-    let start_offset = *START_OFFSET;
-    let current_tsc = unsafe { _rdtsc() };
+impl RealBackend {
+    pub const fn new() -> Self {
+        Self {
+            guest_tsc_freq: Lazy::new(determine_tsc_frequency),
+            start_offset: Lazy::new(|| unsafe { _rdtsc() }),
+        }
+    }
+}
 
-    (current_tsc - start_offset) * 1000 / guest_tsc_freq
+impl TimeBackend for RealBackend {
+    fn current_offset(&self) -> u64 {
+        let current_tsc = unsafe { _rdtsc() };
+        current_tsc.saturating_sub(*self.start_offset) * 1000 / *self.guest_tsc_freq
+    }
 }
 
 // Returns the TSC frequency in MHz.

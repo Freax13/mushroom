@@ -31,11 +31,13 @@ compile_error!("neither the fake-time nor real-time features are enabled");
 #[cfg(feature = "fake-time")]
 mod fake;
 #[cfg(feature = "fake-time")]
-use fake as backend;
+type DefaultBackend = fake::FakeBackend;
 #[cfg(feature = "real-time")]
 mod real;
 #[cfg(feature = "real-time")]
-use real as backend;
+type DefaultBackend = real::RealBackend;
+
+static DEFAULT_BACKEND: DefaultBackend = DefaultBackend::new();
 
 intrusive_adapter!(TreeAdapter = Arc<Node>: Node { rb_link: RBTreeAtomicLink });
 intrusive_adapter!(ListAdapter = Arc<Node>: Node { list_link: LinkedListAtomicLink });
@@ -44,10 +46,10 @@ intrusive_adapter!(DeleteListAdapter = Arc<Node>: Node { delete_link: LinkedList
 static SKIP_OFFSET: AtomicU64 = AtomicU64::new(0);
 
 static REALTIME_TIMERS: TimerLists = TimerLists::new();
-static REALTIME: Time = unsafe { Time::new(&REALTIME_TIMERS) };
+static REALTIME: Time = unsafe { Time::new(&REALTIME_TIMERS, &DEFAULT_BACKEND) };
 
 static MONOTONIC_TIMERS: TimerLists = TimerLists::new();
-static MONOTONIC: Time = unsafe { Time::new(&MONOTONIC_TIMERS) };
+static MONOTONIC: Time = unsafe { Time::new(&MONOTONIC_TIMERS, &DEFAULT_BACKEND) };
 
 pub fn now(clock: ClockId) -> Timespec {
     let now = match clock {
@@ -113,24 +115,44 @@ pub async fn sleep_until(deadline: Timespec, clock_id: ClockId) {
 }
 
 /// Returns a timestamp from a time source that never skips forward.
-pub fn backend_offset() -> u64 {
-    backend::current_offset()
+pub fn default_backend_offset() -> u64 {
+    DEFAULT_BACKEND.current_offset()
 }
 
-struct Time {
+/// A method of reading wall clock time.
+pub trait TimeBackend {
+    /// Read the current time. Returns a duration since boot in ns.
+    fn current_offset(&self) -> u64;
+}
+
+impl<T> TimeBackend for &T
+where
+    T: TimeBackend,
+{
+    fn current_offset(&self) -> u64 {
+        <T as TimeBackend>::current_offset(self)
+    }
+}
+
+pub struct Time<T = &'static DefaultBackend> {
+    backend: T,
     offset: AtomicU64,
     expire_lock: ExpireLock,
     management_lock: Mutex<ManagementLock>,
 }
 
-impl Time {
+impl<T> Time<T>
+where
+    T: TimeBackend,
+{
     /// Create a new instance.
     ///
     /// # Safety
     ///
     /// `lists` must be not be used elsewhere.
-    pub const unsafe fn new(lists: &'static TimerLists) -> Self {
+    pub const unsafe fn new(lists: &'static TimerLists, backend: T) -> Self {
         Self {
+            backend,
             offset: AtomicU64::new(0),
             expire_lock: unsafe { ExpireLock::new(lists) },
             management_lock: Mutex::new(unsafe { ManagementLock::new(lists) }),
@@ -139,12 +161,12 @@ impl Time {
 
     /// Query the current time.
     pub fn now(&self) -> Tick {
-        Self::now_with_offset(self.offset.load(Ordering::Relaxed))
+        self.now_with_offset(self.offset.load(Ordering::Relaxed))
     }
 
     /// Compute the current time assuming the given offset for the clock.
-    fn now_with_offset(clock_offset: u64) -> Tick {
-        let offset = backend::current_offset();
+    fn now_with_offset(&self, clock_offset: u64) -> Tick {
+        let offset = self.backend.current_offset();
         let offset = offset + SKIP_OFFSET.load(Ordering::Relaxed);
         let offset = offset + clock_offset;
         Tick::from_ns(offset)
@@ -159,7 +181,7 @@ impl Time {
     pub fn update_offset(&self, tick: Tick) {
         let mut offset = self.offset.load(Ordering::Relaxed);
         loop {
-            let delta = tick - Self::now_with_offset(offset);
+            let delta = tick - self.now_with_offset(offset);
             let new_offset = offset
                 .checked_add_signed(delta.0)
                 .expect("clock went to far backwards");
@@ -177,7 +199,7 @@ impl Time {
 
             // Update the state for the timers.
             self.expire_lock
-                .expire_timers(Self::now_with_offset(new_offset), delta < TickDelta::ZERO);
+                .expire_timers(self.now_with_offset(new_offset), delta < TickDelta::ZERO);
 
             return;
         }
@@ -193,8 +215,8 @@ impl Time {
 
     /// Wait until the deadline.
     pub async fn sleep_until(&self, deadline: Tick) {
-        struct Sleep<'a> {
-            timers: &'a Time,
+        struct Sleep<'a, T> {
+            timers: &'a Time<T>,
             state: State,
         }
 
@@ -203,7 +225,10 @@ impl Time {
             Started { node: Arc<Node> },
         }
 
-        impl Future for Sleep<'_> {
+        impl<T> Future for Sleep<'_, T>
+        where
+            T: TimeBackend,
+        {
             type Output = ();
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -236,7 +261,7 @@ impl Time {
             }
         }
 
-        impl Drop for Sleep<'_> {
+        impl<T> Drop for Sleep<'_, T> {
             fn drop(&mut self) {
                 let state = core::mem::replace(
                     &mut self.state,
@@ -263,7 +288,7 @@ impl Time {
     }
 }
 
-struct TimerLists {
+pub struct TimerLists {
     state: AtomicListsState,
     left: SyncUnsafeCell<Half>,
     right: SyncUnsafeCell<Half>,
