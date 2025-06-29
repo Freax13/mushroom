@@ -132,6 +132,24 @@ where
     }
 }
 
+/// A time backend that measures CPU time consumed by a thread or process.
+#[derive(Default)]
+pub struct CpuTimeBackend {
+    consumed: AtomicU64,
+}
+
+impl CpuTimeBackend {
+    pub fn add(&self, ns: u64) {
+        self.consumed.fetch_add(ns, Ordering::Relaxed);
+    }
+}
+
+impl TimeBackend for CpuTimeBackend {
+    fn current_offset(&self) -> u64 {
+        self.consumed.load(Ordering::Relaxed)
+    }
+}
+
 pub struct Time<T = &'static DefaultBackend> {
     backend: T,
     offset: AtomicU64,
@@ -164,7 +182,6 @@ where
     /// # Safety
     ///
     /// `lists` must be not be used elsewhere.
-    #[expect(dead_code)]
     pub fn new_in_arc(backend: T) -> Self {
         let lists = Arc::new(TimerLists::new());
         let lists = TimerListsAllocation::Arc(lists);
@@ -301,6 +318,10 @@ where
             state: State::Pending { deadline },
         }
         .await
+    }
+
+    pub fn backend(&self) -> &T {
+        &self.backend
     }
 }
 

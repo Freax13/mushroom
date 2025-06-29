@@ -37,7 +37,7 @@ use crate::{
     rt::{notify::Notify, once::OnceCell, oneshot, spawn},
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
-    time::{now, sleep_until},
+    time::{CpuTimeBackend, Time, now, sleep_until},
     user::process::syscall::args::{
         ExtractableThreadState, FileMode, ITimerWhich, ITimerval, OpenFlags, Timeval,
     },
@@ -92,6 +92,7 @@ pub struct Process {
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
     real_itimer: Mutex<ITimerState>,
+    pub cpu_time: Time<CpuTimeBackend>,
 }
 
 impl Process {
@@ -140,6 +141,7 @@ impl Process {
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
             real_itimer: Mutex::new(ITimerState::Disarmed),
+            cpu_time: Time::new_in_arc(CpuTimeBackend::default()),
         };
         let arc = Arc::new(this);
 

@@ -60,14 +60,12 @@ pub struct ThreadUsage {
 }
 
 impl ThreadUsage {
-    pub fn start(&self) {
-        self.last_start
-            .store(default_backend_offset(), Ordering::Relaxed);
+    pub fn start(&self, start: u64) {
+        self.last_start.store(start, Ordering::Relaxed);
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&self, end: u64) {
         let start = self.last_start.swap(0, Ordering::Relaxed);
-        let end = default_backend_offset();
         self.total_ns.fetch_add(end - start, Ordering::Relaxed);
     }
 

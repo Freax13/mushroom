@@ -156,9 +156,20 @@ impl Thread {
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let this = self.project();
-                this.thread.usage.start();
+
+                let start = time::default_backend_offset();
+                this.thread.usage.start(start);
+
                 let res = this.future.poll(cx);
-                this.thread.usage.stop();
+
+                let end = time::default_backend_offset();
+                this.thread.usage.stop(end);
+                this.thread
+                    .process
+                    .cpu_time
+                    .backend()
+                    .add(end.saturating_sub(start));
+
                 res
             }
         }
