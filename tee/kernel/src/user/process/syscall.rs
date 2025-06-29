@@ -3506,11 +3506,30 @@ fn clock_settime(
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    clock_id: ClockId,
+    clock_id: ExtendedClockId,
     tp: Pointer<Timespec>,
 ) -> SyscallResult {
-    let time = time::now(clock_id);
+    let time = match clock_id {
+        ExtendedClockId::Normal(clock_id) => now(clock_id),
+        ExtendedClockId::ProcessCpuTimeId(pid) => {
+            let process = if pid == 0 {
+                thread.process().clone()
+            } else {
+                Process::find_by_pid(pid).ok_or(err!(Srch))?
+            };
+            let now = process.cpu_time.now();
+            Timespec::from(now)
+        }
+        ExtendedClockId::ThreadCpuTimeId(tid) => {
+            if tid == 0 {
+                thread.cpu_time()
+            } else {
+                Thread::find_by_tid(tid).ok_or(err!(Srch))?.cpu_time()
+            }
+        }
+    };
     virtual_memory.write_with_abi(tp, time, abi)?;
     Ok(0)
 }
@@ -3519,7 +3538,7 @@ fn clock_gettime(
 fn clock_getres(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    clock_id: ClockId,
+    clock_id: ExtendedClockId,
     res: Pointer<Timespec>,
 ) -> SyscallResult {
     if !res.is_null() {

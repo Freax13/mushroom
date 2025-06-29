@@ -22,6 +22,7 @@ use crate::{
     time,
     user::process::{
         memory::PageFaultError,
+        syscall::args::Timespec,
         thread::running_state::{ExitAction, ThreadRunningState},
     },
 };
@@ -464,6 +465,10 @@ impl Thread {
             },
             res = f.fuse() => res,
         }
+    }
+
+    pub fn cpu_time(&self) -> Timespec {
+        Timespec::from_ns(self.usage.cpu_time() as i64)
     }
 
     #[cfg(not(feature = "harden"))]

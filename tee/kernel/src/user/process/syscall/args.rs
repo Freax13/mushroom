@@ -908,6 +908,44 @@ enum_arg! {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ExtendedClockId {
+    Normal(ClockId),
+    ProcessCpuTimeId(u32),
+    ThreadCpuTimeId(u32),
+}
+
+impl SyscallArg for ExtendedClockId {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        Ok(match value {
+            2 => Self::ProcessCpuTimeId(0),
+            3 => Self::ThreadCpuTimeId(0),
+            16.. => {
+                let id = (!value as u32).get_bits(3..);
+                match value.get_bits(0..3) {
+                    2 => Self::ProcessCpuTimeId(id),
+                    3 => Self::ThreadCpuTimeId(id),
+                    _ => bail!(Inval),
+                }
+            }
+            0..16 => Self::Normal(ClockId::parse(value, abi)?),
+        })
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        if let Ok(value) = Self::parse(value, abi) {
+            write!(f, "{value:?}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timespec {
     pub tv_sec: i32, // TODO: Is this always positive????

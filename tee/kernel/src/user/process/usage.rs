@@ -77,6 +77,10 @@ impl ThreadUsage {
         self.voluntary_context_switches
             .fetch_add(1, Ordering::Relaxed);
     }
+
+    pub fn cpu_time(&self) -> u64 {
+        self.user_ns.load(Ordering::Relaxed)
+    }
 }
 
 pub fn collect(memory: &MemoryUsage, thread: &ThreadUsage) -> Rusage {
