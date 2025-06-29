@@ -137,24 +137,22 @@ impl<T> ReadablePointee<ArchitectureDependent> for T
 where
     T: AbiDependentPointee,
     T::I386: CheckedBitPattern + TryInto<Self>,
-    <T::I386 as CheckedBitPattern>::Bits: NoUninit,
     T::Amd64: CheckedBitPattern + TryInto<Self>,
-    <T::Amd64 as CheckedBitPattern>::Bits: NoUninit,
     Error: From<<T::I386 as TryInto<Self>>::Error> + From<<T::Amd64 as TryInto<Self>>::Error>,
 {
     fn read(addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<(usize, Self)> {
         match abi {
             Abi::I386 => {
-                let mut bits = <T::I386 as CheckedBitPattern>::Bits::zeroed();
-                let bytes = bytes_of_mut(&mut bits);
-                vm.read_bytes(addr, bytes)?;
+                let mut bits = MaybeUninit::<T::I386>::uninit();
+                let bytes = bits.as_bytes_mut();
+                let bytes = vm.read_uninit_bytes(addr, bytes)?;
                 let value = try_pod_read_unaligned::<T::I386>(bytes)?;
                 Ok((bytes.len(), value.try_into()?))
             }
             Abi::Amd64 => {
-                let mut bits = <T::Amd64 as CheckedBitPattern>::Bits::zeroed();
-                let bytes = bytes_of_mut(&mut bits);
-                vm.read_bytes(addr, bytes)?;
+                let mut bits = MaybeUninit::<T::Amd64>::uninit();
+                let bytes = bits.as_bytes_mut();
+                let bytes = vm.read_uninit_bytes(addr, bytes)?;
                 let value = try_pod_read_unaligned::<T::Amd64>(bytes)?;
                 Ok((bytes.len(), value.try_into()?))
             }
