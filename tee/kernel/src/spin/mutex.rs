@@ -2,12 +2,13 @@ use core::{
     cell::UnsafeCell,
     cmp,
     marker::PhantomData,
-    num::Wrapping,
     ops::{Deref, DerefMut},
-    panic::Location,
     sync::atomic::{AtomicBool, Ordering},
 };
+#[cfg(feature = "lock-debugging")]
+use core::{panic::Location, ptr::null_mut, sync::atomic::AtomicPtr};
 
+#[cfg(feature = "lock-debugging")]
 use log::warn;
 
 use crate::exception::{InterruptGuard, NoInterruptGuard};
@@ -15,6 +16,8 @@ use crate::exception::{InterruptGuard, NoInterruptGuard};
 /// A spin locked based mutex to create unique references to shared values.
 pub struct Mutex<T, I = NoInterruptGuard> {
     locked: AtomicBool,
+    #[cfg(feature = "lock-debugging")]
+    location: AtomicPtr<Location<'static>>,
     cell: UnsafeCell<T>,
     _marker: PhantomData<I>,
 }
@@ -24,6 +27,8 @@ impl<T, I> Mutex<T, I> {
     pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
+            #[cfg(feature = "lock-debugging")]
+            location: AtomicPtr::new(null_mut()),
             cell: UnsafeCell::new(value),
             _marker: PhantomData,
         }
@@ -31,6 +36,7 @@ impl<T, I> Mutex<T, I> {
 
     /// Try to acquire the mutex.
     #[inline]
+    #[cfg_attr(feature = "lock-debugging", track_caller)]
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T, I>>
     where
         I: InterruptGuard,
@@ -39,16 +45,21 @@ impl<T, I> Mutex<T, I> {
 
         self.locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .ok()
-            .map(|_| MutexGuard {
-                mutex: self,
-                _interrupt_guard: interrupt_guard,
-            })
+            .ok()?;
+
+        #[cfg(feature = "lock-debugging")]
+        self.location
+            .store(Location::caller() as *const _ as *mut _, Ordering::Relaxed);
+
+        Some(MutexGuard {
+            mutex: self,
+            _interrupt_guard: interrupt_guard,
+        })
     }
 
     /// Acquire the mutex.
     #[inline]
-    #[track_caller]
+    #[cfg_attr(feature = "lock-debugging", track_caller)]
     pub fn lock(&self) -> MutexGuard<'_, T, I>
     where
         I: InterruptGuard,
@@ -61,21 +72,34 @@ impl<T, I> Mutex<T, I> {
 
     #[inline(never)]
     #[cold]
-    #[track_caller]
+    #[cfg_attr(feature = "lock-debugging", track_caller)] // TODO: Do the same for the other lock types.
     fn lock_slow_path(&self) -> MutexGuard<'_, T, I>
     where
         I: InterruptGuard,
     {
-        let mut counter = Wrapping(0u32);
+        #[cfg(feature = "lock-debugging")]
+        let mut counter = 0u32;
+
         loop {
             core::hint::spin_loop();
 
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
-            counter += 1;
-            if counter.0 == 0 {
-                warn!("lock stalling at {}", Location::caller());
+
+            #[cfg(feature = "lock-debugging")]
+            if let Some(new_counter) = counter.checked_add(1) {
+                counter = new_counter;
+            } else {
+                let current = self.location.load(Ordering::Relaxed);
+                if !current.is_null() {
+                    let current = unsafe { &*current };
+                    warn!(
+                        "lock stalling at {}, last locked at {current}",
+                        Location::caller()
+                    );
+                    counter = 0;
+                }
             }
         }
     }
@@ -88,7 +112,7 @@ impl<T, I> Mutex<T, I> {
 
     /// Lock two mutexes. This method avoids deadlocks with other threads
     /// trying to acquire the same Mutexes.
-    #[track_caller]
+    #[cfg_attr(feature = "lock-debugging", track_caller)]
     pub fn lock_two<'a>(&'a self, other: &'a Self) -> (MutexGuard<'a, T, I>, MutexGuard<'a, T, I>)
     where
         I: InterruptGuard,
@@ -131,6 +155,7 @@ where
     T: Clone,
     I: InterruptGuard,
 {
+    #[cfg_attr(feature = "lock-debugging", track_caller)]
     fn clone(&self) -> Self {
         Self::new(self.lock().clone())
     }
@@ -177,6 +202,8 @@ impl<T, I> DerefMut for MutexGuard<'_, T, I> {
 impl<T, I> Drop for MutexGuard<'_, T, I> {
     #[inline]
     fn drop(&mut self) {
+        #[cfg(feature = "lock-debugging")]
+        self.mutex.location.store(null_mut(), Ordering::Relaxed);
         self.mutex.locked.store(false, Ordering::Release);
     }
 }
