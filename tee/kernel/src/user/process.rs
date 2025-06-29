@@ -11,7 +11,7 @@ use core::{
 #[cfg(not(feature = "harden"))]
 use alloc::string::String;
 use alloc::{
-    collections::VecDeque,
+    collections::{VecDeque, btree_map::BTreeMap},
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -39,7 +39,8 @@ use crate::{
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
     user::process::syscall::args::{
-        ExtractableThreadState, FileMode, ITimerWhich, ITimerval, OpenFlags, Timeval,
+        ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags, SigEvent,
+        TimerId, Timeval,
     },
 };
 
@@ -92,6 +93,7 @@ pub struct Process {
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
     real_itimer: Mutex<ITimerState>,
+    timers: Mutex<BTreeMap<TimerId, Timer>>,
     pub cpu_time: Time<CpuTimeBackend>,
 }
 
@@ -141,6 +143,7 @@ impl Process {
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
             real_itimer: Mutex::new(ITimerState::Disarmed),
+            timers: Mutex::new(BTreeMap::new()),
             cpu_time: Time::new_in_arc(CpuTimeBackend::default()),
         };
         let arc = Arc::new(this);
@@ -230,6 +233,7 @@ impl Process {
         fdtable: FileDescriptorTable,
         exe: Link,
     ) {
+        *self.timers.lock() = BTreeMap::new();
         *self.exe.write() = exe;
         let mut threads = self.threads.lock();
 
@@ -576,6 +580,61 @@ impl Process {
         prev_state.get_value()
     }
 
+    pub fn create_timer(&self, clock_id: ClockId, sig_event: SigEvent) -> TimerId {
+        let mut guard = self.timers.lock();
+
+        // Find a usable timer id.
+        let id = match guard.last_key_value() {
+            Some((TimerId(i32::MAX), _)) => (0..)
+                .zip(guard.keys().copied())
+                .find(|&(i, key)| key.0 != i)
+                .map(|(i, _)| i)
+                .unwrap(),
+            Some((TimerId(i), _)) => i + 1,
+            None => 0,
+        };
+        let id = TimerId(id);
+
+        guard.insert(
+            id,
+            Timer {
+                clock_id,
+                sig_event,
+                state: TimerState::Disarmed,
+            },
+        );
+
+        id
+    }
+
+    pub fn timer_set_time(&self, timer: TimerId, new: ITimerspec) -> Result<ITimerspec> {
+        let new = match (new.interval != Timespec::ZERO, new.value != Timespec::ZERO) {
+            (true, _) => TimerState::Periodic {
+                value: new.value,
+                interval: new.interval,
+            },
+            (_, true) => TimerState::Oneshot { value: new.value },
+            (_, _) => TimerState::Disarmed,
+        };
+
+        let mut guard = self.timers.lock();
+        let timer = guard.get_mut(&timer).ok_or(err!(Inval))?;
+        let old = core::mem::replace(&mut timer.state, new);
+        drop(guard);
+
+        Ok(match old {
+            TimerState::Disarmed => ITimerspec {
+                interval: Timespec::ZERO,
+                value: Timespec::ZERO,
+            },
+            TimerState::Periodic { value, interval } => ITimerspec { interval, value },
+            TimerState::Oneshot { value } => ITimerspec {
+                interval: Timespec::ZERO,
+                value,
+            },
+        })
+    }
+
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
         let process_group_guard = self.process_group.lock();
@@ -733,6 +792,20 @@ impl ITimerState {
             }
         }
     }
+}
+
+struct Timer {
+    #[expect(dead_code)] // TODO
+    clock_id: ClockId,
+    #[expect(dead_code)] // TODO
+    sig_event: SigEvent,
+    state: TimerState,
+}
+
+enum TimerState {
+    Disarmed,
+    Periodic { value: Timespec, interval: Timespec },
+    Oneshot { value: Timespec },
 }
 
 pub struct Session {

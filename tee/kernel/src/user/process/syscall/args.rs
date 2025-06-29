@@ -1,5 +1,6 @@
 use core::{
     cmp::{self, Reverse},
+    ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
     net::{Ipv4Addr, SocketAddrV4},
@@ -2238,4 +2239,41 @@ bitflags! {
 pub struct ITimerspec {
     pub interval: Timespec,
     pub value: Timespec,
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct TimerId(pub i32);
+
+impl SyscallArg for TimerId {
+    fn parse(value: u64, _: Abi) -> Result<Self> {
+        Ok(Self(value as u32 as i32))
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        _abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        write!(f, "{}", (value as u32 as i32))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigEvent {
+    pub sigev_value: Pointer<c_void>,
+    pub sigev_signo: u32,
+    pub sigev_notify: SigEventData,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SigEventData {
+    Signal,
+    None,
+    Thread {
+        function: Pointer<c_void>,
+        attribute: Pointer<c_void>,
+    },
+    ThreadId(u32),
 }

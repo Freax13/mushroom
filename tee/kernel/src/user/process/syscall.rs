@@ -239,6 +239,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetdents64);
     handlers.register(SysEpollCreate);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysTimerCreate);
+    handlers.register(SysTimerSettime);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
     handlers.register(SysClockGetres);
@@ -3495,6 +3497,39 @@ fn getdents64(
 fn set_tid_address(mut thread: ThreadGuard, tidptr: Pointer<u32>) -> SyscallResult {
     thread.clear_child_tid = tidptr;
     Ok(u64::from(thread.tid()))
+}
+
+#[syscall(i386 = 259, amd64 = 222)]
+fn timer_create(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clockid: ClockId,
+    sevp: Pointer<SigEvent>,
+    timerid: Pointer<TimerId>,
+) -> SyscallResult {
+    let sevp = virtual_memory.read_with_abi(sevp, abi)?;
+    let id = thread.process().create_timer(clockid, sevp);
+    virtual_memory.write(timerid, id)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 260, amd64 = 223)]
+fn timer_settime(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    timerid: TimerId,
+    flags: u32, // TODO: Use a proper type
+    new_value: Pointer<ITimerspec>,
+    old_value: Pointer<ITimerspec>,
+) -> SyscallResult {
+    let new = virtual_memory.read_with_abi(new_value, abi)?;
+    let old = thread.process().timer_set_time(timerid, new)?;
+    if !old_value.is_null() {
+        virtual_memory.write_with_abi(old_value, old, abi)?;
+    }
+    Ok(0)
 }
 
 #[syscall(i386 = 264, amd64 = 227)]
