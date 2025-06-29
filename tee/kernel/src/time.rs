@@ -12,7 +12,7 @@ use bit_field::BitField;
 use core::{
     cell::SyncUnsafeCell,
     cmp,
-    ops::{Add, RangeInclusive, Sub},
+    ops::{Add, Deref, RangeInclusive, Sub},
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll, Waker},
@@ -152,7 +152,26 @@ where
         Self {
             backend,
             offset: AtomicU64::new(0),
-            expire_lock: unsafe { ExpireLock::new(lists) },
+            expire_lock: unsafe { ExpireLock::new(TimerListsAllocation::Static(lists)) },
+            management_lock: Mutex::new(unsafe {
+                ManagementLock::new(TimerListsAllocation::Static(lists))
+            }),
+        }
+    }
+
+    /// Create a new instance.
+    ///
+    /// # Safety
+    ///
+    /// `lists` must be not be used elsewhere.
+    #[expect(dead_code)]
+    pub fn new_in_arc(backend: T) -> Self {
+        let lists = Arc::new(TimerLists::new());
+        let lists = TimerListsAllocation::Arc(lists);
+        Self {
+            backend,
+            offset: AtomicU64::new(0),
+            expire_lock: unsafe { ExpireLock::new(lists.clone()) },
             management_lock: Mutex::new(unsafe { ManagementLock::new(lists) }),
         }
     }
@@ -307,17 +326,34 @@ impl TimerLists {
     }
 }
 
+#[derive(Clone)]
+enum TimerListsAllocation {
+    Static(&'static TimerLists),
+    Arc(Arc<TimerLists>),
+}
+
+impl Deref for TimerListsAllocation {
+    type Target = TimerLists;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            TimerListsAllocation::Static(timer_lists) => timer_lists,
+            TimerListsAllocation::Arc(timer_lists) => timer_lists,
+        }
+    }
+}
+
 struct Half {
     pending: LinkedList<ListAdapter>,
     expired: LinkedList<ListAdapter>,
 }
 
 struct ExpireLock {
-    lists: &'static TimerLists,
+    lists: TimerListsAllocation,
 }
 
 impl ExpireLock {
-    pub const unsafe fn new(lists: &'static TimerLists) -> Self {
+    pub const unsafe fn new(lists: TimerListsAllocation) -> Self {
         Self { lists }
     }
 
@@ -508,7 +544,7 @@ impl ExpireLock {
 }
 
 struct ManagementLock {
-    lists: &'static TimerLists,
+    lists: TimerListsAllocation,
     rb_tree_left: RBTree<TreeAdapter>,
     rb_tree_right: RBTree<TreeAdapter>,
     deleted_left: LinkedList<DeleteListAdapter>,
@@ -516,7 +552,7 @@ struct ManagementLock {
 }
 
 impl ManagementLock {
-    pub const unsafe fn new(lists: &'static TimerLists) -> Self {
+    pub const unsafe fn new(lists: TimerListsAllocation) -> Self {
         Self {
             lists,
             rb_tree_left: RBTree::new(TreeAdapter::NEW),
