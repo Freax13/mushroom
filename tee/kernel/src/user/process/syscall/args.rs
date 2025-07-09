@@ -1182,6 +1182,7 @@ bitflags::bitflags! {
         const MSG = 0x00000400;
         const RDHUP = 0x00002000;
 
+        const INPUT_FLAGS = 0xf << 28;
         const EXCLUSIVE = 1 << 28;
         const WAKEUP = 1 << 29;
         const ONESHOT = 1 << 30;

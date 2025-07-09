@@ -1,6 +1,7 @@
 use core::future::pending;
 
 use crate::fs::FileSystem;
+use crate::fs::fd::WeakFileDescriptor;
 use crate::fs::node::{FileAccessContext, new_ino};
 use crate::fs::ownership::Ownership;
 use crate::fs::path::Path;
@@ -11,9 +12,9 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use async_trait::async_trait;
-use futures::FutureExt;
 use futures::future::{Either, select};
 use futures::stream::{FuturesUnordered, StreamExt};
+use futures::{FutureExt, select_biased};
 
 use crate::error::{Result, bail, ensure, err};
 use crate::user::process::syscall::args::{
@@ -49,42 +50,75 @@ impl Epoll {
     }
 
     /// Returns an iterator over futures that wait for a fd to be come ready.
-    fn ready_futures(&self) -> impl Iterator<Item = impl Future<Output = EpollEvent>> {
+    fn ready_futures(
+        &self,
+        consume_oneshot: bool,
+    ) -> impl Iterator<Item = impl Future<Output = EpollEvent>> {
         let mut guard = self.internal.lock();
         let mut i = 0;
         core::iter::from_fn(move || {
             loop {
                 let entry = guard.interest_list.get(i)?;
+
                 // Remove closed fds.
-                if entry.fd.is_closed() {
+                let Some(fd) = entry.fd.upgrade().filter(|fd| !fd.is_closed()) else {
                     guard.interest_list.swap_remove(i);
                     continue;
-                }
+                };
 
                 i += 1;
-                let fd = entry.fd.clone();
                 let events = entry.event.events;
                 let data = entry.event.data;
+                let oneshot_counter = entry.oneshot_counter;
                 return Some(async move {
-                    let events = fd.ready(Events::from(events)).await;
-                    // If the fd was closed, stall.
-                    if fd.is_closed() {
-                        pending::<()>().await;
+                    let res = select_biased! {
+                        _ = fd.wait_until_closed().fuse() => None,
+                        events = fd.ready(Events::from(events)).fuse() => Some(events),
+                    };
+
+                    let Some(ready_events) = res else {
+                        drop(fd);
+
+                        // If the fd was closed, stall.
+                        return pending().await;
+                    };
+
+                    if events.contains(EpollEvents::ONESHOT) {
+                        let mut guard = self.internal.lock();
+                        let Some(i) = guard
+                            .interest_list
+                            .iter_mut()
+                            .find(|entry| entry.fd == fd)
+                            // make sure that no oneshot events were already returned
+                            .filter(|entry| entry.oneshot_counter == oneshot_counter)
+                        else {
+                            drop(guard);
+                            return pending().await;
+                        };
+
+                        if consume_oneshot {
+                            // Remove all events except for the input flags.
+                            i.event.events &= EpollEvents::INPUT_FLAGS;
+
+                            // Record that a oneshot event was returned.
+                            i.oneshot_counter += 1;
+                        }
                     }
-                    EpollEvent::new(EpollEvents::from(Events::from(events)), data)
+
+                    EpollEvent::new(EpollEvents::from(Events::from(ready_events)), data)
                 });
             }
         })
     }
 
     /// Waits for an fd to become ready and also returns a non-blocking iterator to may return more ready fds.
-    async fn poll(&self) -> (EpollEvent, impl Iterator<Item = EpollEvent>) {
+    async fn poll(&self, consume_oneshot: bool) -> (EpollEvent, impl Iterator<Item = EpollEvent>) {
         let mut futures = FuturesUnordered::new();
         loop {
             let wait = self.notify.wait();
 
             futures.clear();
-            futures.extend(self.ready_futures());
+            futures.extend(self.ready_futures(consume_oneshot));
 
             let ready = futures.next();
 
@@ -116,7 +150,7 @@ impl OpenFileDescription for Epoll {
     }
 
     async fn epoll_wait(&self, maxevents: usize) -> Result<Vec<EpollEvent>> {
-        let (first, more) = self.poll().await;
+        let (first, more) = self.poll(true).await;
         let events = core::iter::once(first)
             .chain(more)
             .take(maxevents)
@@ -124,15 +158,27 @@ impl OpenFileDescription for Epoll {
         Ok(events)
     }
 
-    fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
+    fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
+        assert!(
+            !event
+                .events
+                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP | EpollEvents::LET),
+            "{:?}",
+            event.events
+        );
+
         let mut guard = self.internal.lock();
         // Make sure that the file descriptor is not already registered.
         ensure!(
-            !guard.interest_list.iter().any(|entry| entry.fd == fd),
+            !guard.interest_list.iter().any(|entry| entry.fd == *fd),
             Exist
         );
         // Register the file descriptor.
-        guard.interest_list.push(InterestListEntry { fd, event });
+        guard.interest_list.push(InterestListEntry {
+            fd: FileDescriptor::downgrade(fd),
+            event,
+            oneshot_counter: 0,
+        });
         drop(guard);
         self.notify.notify();
         Ok(())
@@ -152,6 +198,14 @@ impl OpenFileDescription for Epoll {
     }
 
     fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        assert!(
+            !event
+                .events
+                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP | EpollEvents::LET),
+            "{:?}",
+            event.events
+        );
+
         let mut guard = self.internal.lock();
         let entry = guard
             .interest_list
@@ -200,7 +254,9 @@ impl OpenFileDescription for Epoll {
         if !events.contains(Events::READ) {
             return None;
         }
-        let ready = self.ready_futures().any(|fut| fut.now_or_never().is_some());
+        let ready = self
+            .ready_futures(false)
+            .any(|fut| fut.now_or_never().is_some());
         ready.then_some(NonEmptyEvents::READ)
     }
 
@@ -212,7 +268,7 @@ impl OpenFileDescription for Epoll {
         if !events.contains(Events::READ) {
             return pending().await;
         }
-        let (_, _) = self.poll().await;
+        let (_, _) = self.poll(false).await;
         NonEmptyEvents::READ
     }
 
@@ -222,6 +278,7 @@ impl OpenFileDescription for Epoll {
 }
 
 struct InterestListEntry {
-    fd: FileDescriptor,
+    fd: WeakFileDescriptor,
     event: EpollEvent,
+    oneshot_counter: u64,
 }

@@ -579,7 +579,14 @@ async fn poll_impl(
 
         // Wait for a file descriptor to become ready or for the timeout to
         // expire.
-        let ready_fut = futures.next();
+        let ready_fut = async {
+            let ready = futures.next().await;
+
+            // If there are no file descriptors, block forever.
+            if ready.is_none() {
+                pending::<()>().await;
+            }
+        };
         let sleep_fut = async {
             if let Some(deadline) = deadline {
                 sleep_until(deadline, ClockId::Monotonic).await;
@@ -592,13 +599,8 @@ async fn poll_impl(
         let sleep_fut = pin!(sleep_fut);
         let res = future::select(ready_fut, sleep_fut).await;
         match res {
-            Either::Left((res, _)) => {
-                if res.is_some() {
-                    // A file descriptor became ready.
-                } else {
-                    // There are no file descriptors. Exit early.
-                    break;
-                }
+            Either::Left((_, _)) => {
+                // A file descriptor became ready.
             }
             Either::Right(_) => {
                 // The timeout expired.
@@ -3727,7 +3729,7 @@ fn epoll_ctl(
             let _ = fd.epoll_ready(Events::empty())?;
 
             let event = event.ok_or(err!(Inval))?;
-            epoll.epoll_add(fd, event)?
+            epoll.epoll_add(&fd, event)?
         }
         EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
         EpollCtlOp::Mod => {
