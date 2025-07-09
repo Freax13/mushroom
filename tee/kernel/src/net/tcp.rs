@@ -612,6 +612,11 @@ impl OpenFileDescription for TcpSocket {
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
         let guard = self.internal.lock();
         Ok(match (level, optname) {
+            (1, 2) => {
+                // SO_REUSEADDR
+                let val = guard.reuse_addr as u32;
+                val.to_ne_bytes().to_vec()
+            }
             (1, 3) => {
                 // SO_TYPE
                 let ty = SocketType::Stream as u32;
