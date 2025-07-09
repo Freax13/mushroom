@@ -1592,6 +1592,8 @@ enum_arg! {
         SetDumpable = 4,
         SetName = 15,
         GetName = 16,
+        GetSeccomp = 21,
+        SetSeccomp = 22,
         SetNoNewPrivs = 38,
         GetNoNewPrivs = 39,
     }
