@@ -3223,6 +3223,23 @@ fn prctl(
             virtual_memory.write_bytes(VirtAddr::new(arg2), &buf)?;
             Ok(0)
         }
+        PrctlOp::GetSeccomp => Ok(0),
+        PrctlOp::SetSeccomp => match arg2 {
+            0 => {
+                // SECCOMP_MODE_DISABLED
+                Ok(0)
+            }
+            1 => {
+                // SECCOMP_MODE_STRICT
+                todo!()
+            }
+            2 => {
+                // SECCOMP_MODE_FILTER
+                // bail!(Acces)
+                Ok(0)
+            }
+            _ => bail!(Inval),
+        },
         PrctlOp::SetNoNewPrivs => {
             if arg2 != 0 {
                 thread.set_no_new_privs();
