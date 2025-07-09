@@ -159,6 +159,14 @@ impl OpenFileDescription for Epoll {
     }
 
     fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
+        assert!(
+            !event
+                .events
+                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP | EpollEvents::LET),
+            "{:?}",
+            event.events
+        );
+
         let mut guard = self.internal.lock();
         // Make sure that the file descriptor is not already registered.
         ensure!(
@@ -190,6 +198,14 @@ impl OpenFileDescription for Epoll {
     }
 
     fn epoll_mod(&self, fd: &dyn OpenFileDescription, event: EpollEvent) -> Result<()> {
+        assert!(
+            !event
+                .events
+                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP | EpollEvents::LET),
+            "{:?}",
+            event.events
+        );
+
         let mut guard = self.internal.lock();
         let entry = guard
             .interest_list
