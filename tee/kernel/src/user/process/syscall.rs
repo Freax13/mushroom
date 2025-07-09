@@ -3223,6 +3223,13 @@ fn prctl(
             virtual_memory.write_bytes(VirtAddr::new(arg2), &buf)?;
             Ok(0)
         }
+        PrctlOp::SetNoNewPrivs => {
+            if arg2 != 0 {
+                thread.set_no_new_privs();
+            }
+            Ok(0)
+        }
+        PrctlOp::GetNoNewPrivs => Ok(u64::from(thread.no_new_privs())),
     }
 }
 

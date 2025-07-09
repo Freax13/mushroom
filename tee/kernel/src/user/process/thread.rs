@@ -100,6 +100,7 @@ pub struct ThreadState {
     pub clear_child_tid: Pointer<u32>,
     pub vfork_done: Option<oneshot::Sender<()>>,
     task_comm: Option<ArrayVec<u8, TASK_COMM_CAPACITY>>,
+    no_new_privs: bool,
 }
 
 impl Thread {
@@ -132,6 +133,7 @@ impl Thread {
                 clear_child_tid: Pointer::NULL,
                 vfork_done,
                 task_comm: None,
+                no_new_privs: false,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -842,6 +844,14 @@ impl ThreadGuard<'_> {
 
     pub fn set_task_comm(&mut self, task_comm: ArrayVec<u8, TASK_COMM_CAPACITY>) {
         self.task_comm = Some(task_comm);
+    }
+
+    pub fn no_new_privs(&self) -> bool {
+        self.no_new_privs
+    }
+
+    pub fn set_no_new_privs(&mut self) {
+        self.no_new_privs = true;
     }
 }
 
