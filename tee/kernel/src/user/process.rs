@@ -169,7 +169,9 @@ impl Process {
     }
 
     pub fn ppid(&self) -> u32 {
-        self.parent.upgrade().map_or(1, |parent| parent.pid())
+        self.parent
+            .upgrade()
+            .map_or_else(|| if self.pid == 1 { 0 } else { 1 }, |parent| parent.pid())
     }
 
     pub fn pgrp(&self) -> u32 {
