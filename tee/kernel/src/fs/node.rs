@@ -109,13 +109,11 @@ pub trait INode: Any + Send + Sync + 'static {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        user: Uid,
-        group: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         let _ = file_name;
         let _ = mode;
-        let _ = user;
-        let _ = group;
+        let _ = ctx;
         bail!(NotDir)
     }
 
@@ -123,13 +121,11 @@ pub trait INode: Any + Send + Sync + 'static {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<DynINode> {
         let _ = file_name;
         let _ = mode;
-        let _ = uid;
-        let _ = gid;
+        let _ = ctx;
         bail!(NotDir)
     }
 
@@ -590,12 +586,7 @@ pub fn create_file(
         };
         ensure!(!trailing_slash, IsDir);
 
-        match parent.node.create_file(
-            file_name.into_owned(),
-            mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
-        )? {
+        match parent.node.create_file(file_name.into_owned(), mode, ctx)? {
             Ok(link) => return Ok(link),
             Err(existing) => {
                 let stat = existing.node.stat()?;
@@ -642,12 +633,9 @@ pub fn create_directory(
         PathSegment::Root | PathSegment::Empty | PathSegment::Dot | PathSegment::DotDot => {
             bail!(Exist)
         }
-        PathSegment::FileName(file_name) => parent.node.create_dir(
-            file_name.into_owned(),
-            mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
-        ),
+        PathSegment::FileName(file_name) => {
+            parent.node.create_dir(file_name.into_owned(), mode, ctx)
+        }
     }
 }
 

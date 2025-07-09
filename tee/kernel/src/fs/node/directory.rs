@@ -24,20 +24,18 @@ macro_rules! dir_impls {
             &self,
             file_name: FileName<'static>,
             mode: FileMode,
-            uid: Uid,
-            gid: Gid,
+            ctx: &FileAccessContext,
         ) -> Result<Result<Link, Link>> {
-            Directory::create_file(self, file_name, mode, uid, gid)
+            Directory::create_file(self, file_name, mode, ctx)
         }
 
         fn create_dir(
             &self,
             file_name: FileName<'static>,
             mode: FileMode,
-            uid: Uid,
-            gid: Gid,
+            ctx: &FileAccessContext,
         ) -> Result<DynINode> {
-            Directory::create_dir(self, file_name, mode, uid, gid)
+            Directory::create_dir(self, file_name, mode, ctx)
         }
 
         fn create_link(
@@ -139,15 +137,13 @@ pub trait Directory: INode {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>>;
     fn create_dir(
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<DynINode>;
     fn create_link(
         &self,

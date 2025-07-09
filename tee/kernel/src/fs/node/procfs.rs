@@ -200,13 +200,17 @@ impl Directory for ProcFsRoot {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -678,13 +682,17 @@ impl Directory for NetDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -1167,13 +1175,17 @@ impl Directory for ProcessDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -1421,13 +1433,17 @@ impl Directory for FdDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -2158,13 +2174,17 @@ impl Directory for ProcessTaskDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -2399,13 +2419,17 @@ impl Directory for TaskDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 

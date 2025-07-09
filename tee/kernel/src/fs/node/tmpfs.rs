@@ -122,15 +122,19 @@ impl TmpFsDir {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<Result<(LinkLocation, Arc<TmpFsFile>), Link>> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(file_name.clone());
         match entry {
             Entry::Vacant(entry) => {
                 let location = LinkLocation::new(self.this.upgrade().unwrap(), entry.key().clone());
-                let node = TmpFsFile::new(self.fs.clone(), mode, uid, gid);
+                let node = TmpFsFile::new(
+                    self.fs.clone(),
+                    mode,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                );
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
                 guard.update_times();
                 drop(guard);
@@ -246,15 +250,20 @@ impl Directory for TmpFsDir {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<DynINode> {
         let mut guard = self.internal.lock();
         let entry = guard.items.entry(file_name.clone());
         match entry {
             Entry::Vacant(entry) => {
                 let location = LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone());
-                let dir = TmpFsDir::new(self.fs.clone(), location, mode, uid, gid);
+                let dir = TmpFsDir::new(
+                    self.fs.clone(),
+                    location,
+                    mode,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                );
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 guard.update_times();
                 Ok(dir)
@@ -267,10 +276,9 @@ impl Directory for TmpFsDir {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        self.create_file(file_name, mode, uid, gid).map(|res| {
+        self.create_file(file_name, mode, ctx).map(|res| {
             res.map(|(loc, file)| Link {
                 location: loc,
                 node: file,
