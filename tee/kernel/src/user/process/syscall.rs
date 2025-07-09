@@ -3729,7 +3729,7 @@ fn epoll_ctl(
             let _ = fd.epoll_ready(Events::empty())?;
 
             let event = event.ok_or(err!(Inval))?;
-            epoll.epoll_add(fd, event)?
+            epoll.epoll_add(&fd, event)?
         }
         EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
         EpollCtlOp::Mod => {

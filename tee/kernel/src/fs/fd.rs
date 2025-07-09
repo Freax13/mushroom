@@ -3,6 +3,7 @@ use core::fmt;
 use core::{
     cmp,
     ffi::c_void,
+    mem::offset_of,
     num::NonZeroU8,
     ops::{BitOr, BitOrAssign, Deref, Not},
     pin::pin,
@@ -92,6 +93,7 @@ pub struct OpenFileDescriptionData<T: ?Sized> {
     /// file descriptor is stored internally within the kernel somewhere e.g.
     /// in a epoll interest list.
     reference_count: AtomicUsize,
+    close_notify: Notify,
     ofd: T,
 }
 
@@ -101,6 +103,12 @@ where
 {
     pub fn is_closed(&self) -> bool {
         self.reference_count.load(Ordering::Relaxed) == 0
+    }
+
+    pub async fn wait_until_closed(&self) {
+        self.close_notify
+            .wait_until(|| (self.reference_count.load(Ordering::Relaxed) == 0).then_some(()))
+            .await;
     }
 }
 
@@ -137,6 +145,10 @@ impl FileDescriptor {
             }
         }
     }
+
+    pub fn downgrade(this: &Self) -> WeakFileDescriptor {
+        WeakFileDescriptor(Arc::downgrade(&this.0))
+    }
 }
 
 impl Deref for FileDescriptor {
@@ -172,6 +184,7 @@ impl StrongFileDescriptor {
     {
         Self(FileDescriptor(Arc::new(OpenFileDescriptionData {
             reference_count: AtomicUsize::new(1),
+            close_notify: Notify::new(),
             ofd,
         })))
     }
@@ -183,6 +196,7 @@ impl StrongFileDescriptor {
         Self(FileDescriptor(Arc::new_cyclic(|this| {
             OpenFileDescriptionData {
                 reference_count: AtomicUsize::new(1),
+                close_notify: Notify::new(),
                 ofd: f(this),
             }
         })))
@@ -199,6 +213,7 @@ impl StrongFileDescriptor {
             weak = Some(this.clone());
             OpenFileDescriptionData {
                 reference_count: AtomicUsize::new(1),
+                close_notify: Notify::new(),
                 ofd: f(this),
             }
         })));
@@ -240,6 +255,32 @@ impl Drop for StrongFileDescriptor {
     fn drop(&mut self) {
         let val = self.0.0.reference_count.fetch_sub(1, Ordering::Relaxed);
         debug_assert_ne!(val, 0);
+        if val == 1 {
+            self.close_notify.notify();
+        }
+    }
+}
+
+pub struct WeakFileDescriptor(Weak<OpenFileDescriptionData<dyn OpenFileDescription>>);
+
+impl WeakFileDescriptor {
+    pub fn upgrade(&self) -> Option<FileDescriptor> {
+        self.0.upgrade().map(FileDescriptor)
+    }
+}
+
+impl PartialEq<FileDescriptor> for WeakFileDescriptor {
+    fn eq(&self, other: &FileDescriptor) -> bool {
+        core::ptr::addr_eq(self.0.as_ptr(), Arc::as_ptr(&other.0))
+    }
+}
+
+impl PartialEq<dyn OpenFileDescription> for WeakFileDescriptor {
+    fn eq(&self, other: &dyn OpenFileDescription) -> bool {
+        const OFFSET: isize = offset_of!(OpenFileDescriptionData::<()>, ofd) as isize;
+        let ptr = self.0.as_ptr() as *const c_void;
+        let ptr = unsafe { ptr.byte_offset(OFFSET) };
+        core::ptr::addr_eq(ptr, other)
     }
 }
 
@@ -787,7 +828,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
+    fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
         let _ = fd;
         let _ = event;
         bail!(Inval)

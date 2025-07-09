@@ -1,6 +1,7 @@
 use core::future::pending;
 
 use crate::fs::FileSystem;
+use crate::fs::fd::WeakFileDescriptor;
 use crate::fs::node::{FileAccessContext, new_ino};
 use crate::fs::ownership::Ownership;
 use crate::fs::path::Path;
@@ -11,9 +12,9 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use async_trait::async_trait;
-use futures::FutureExt;
 use futures::future::{Either, select};
 use futures::stream::{FuturesUnordered, StreamExt};
+use futures::{FutureExt, select_biased};
 
 use crate::error::{Result, bail, ensure, err};
 use crate::user::process::syscall::args::{
@@ -55,23 +56,30 @@ impl Epoll {
         core::iter::from_fn(move || {
             loop {
                 let entry = guard.interest_list.get(i)?;
+
                 // Remove closed fds.
-                if entry.fd.is_closed() {
+                let Some(fd) = entry.fd.upgrade().filter(|fd| !fd.is_closed()) else {
                     guard.interest_list.swap_remove(i);
                     continue;
-                }
+                };
 
                 i += 1;
-                let fd = entry.fd.clone();
                 let events = entry.event.events;
                 let data = entry.event.data;
                 return Some(async move {
-                    let events = fd.ready(Events::from(events)).await;
-                    // If the fd was closed, stall.
-                    if fd.is_closed() {
-                        pending::<()>().await;
-                    }
-                    EpollEvent::new(EpollEvents::from(Events::from(events)), data)
+                    let res = select_biased! {
+                        _ = fd.wait_until_closed().fuse() => None,
+                        events = fd.ready(Events::from(events)).fuse() => Some(events),
+                    };
+
+                    let Some(ready_events) = res else {
+                        drop(fd);
+
+                        // If the fd was closed, stall.
+                        return pending().await;
+                    };
+
+                    EpollEvent::new(EpollEvents::from(Events::from(ready_events)), data)
                 });
             }
         })
@@ -124,15 +132,18 @@ impl OpenFileDescription for Epoll {
         Ok(events)
     }
 
-    fn epoll_add(&self, fd: FileDescriptor, event: EpollEvent) -> Result<()> {
+    fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
         let mut guard = self.internal.lock();
         // Make sure that the file descriptor is not already registered.
         ensure!(
-            !guard.interest_list.iter().any(|entry| entry.fd == fd),
+            !guard.interest_list.iter().any(|entry| entry.fd == *fd),
             Exist
         );
         // Register the file descriptor.
-        guard.interest_list.push(InterestListEntry { fd, event });
+        guard.interest_list.push(InterestListEntry {
+            fd: FileDescriptor::downgrade(fd),
+            event,
+        });
         drop(guard);
         self.notify.notify();
         Ok(())
@@ -222,6 +233,6 @@ impl OpenFileDescription for Epoll {
 }
 
 struct InterestListEntry {
-    fd: FileDescriptor,
+    fd: WeakFileDescriptor,
     event: EpollEvent,
 }
