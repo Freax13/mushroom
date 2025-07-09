@@ -235,6 +235,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
+    handlers.register(SysFsetxattr);
+    handlers.register(SysListxattr);
+    handlers.register(SysLlistxattr);
     handlers.register(SysTime);
     handlers.register(SysFutex);
     handlers.register(SysSchedSetaffinity);
@@ -280,7 +283,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFallocate);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
-    handlers.register(SysEventfd);
+    handlers.register(SysEventfd2);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
     handlers.register(SysPipe2);
@@ -2112,7 +2115,9 @@ fn fcntl(
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx => {
+        | FcntlCmd::GetOwnEx
+        | FcntlCmd::OfdSetLk
+        | FcntlCmd::OfdSetLkW => {
             // TODO: Implement this
             warn!("{cmd} not implemented");
             Ok(0)
@@ -2157,7 +2162,9 @@ fn fcntl64(
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx => {
+        | FcntlCmd::GetOwnEx
+        | FcntlCmd::OfdSetLk
+        | FcntlCmd::OfdSetLkW => {
             // TODO: Implement this
             warn!("{cmd} not implemented");
             Ok(0)
@@ -3289,6 +3296,47 @@ fn mount(
 fn gettid(thread: &Thread) -> SyscallResult {
     let tid = thread.tid();
     Ok(u64::from(tid))
+}
+
+#[syscall(i386 = 228, amd64 = 190)]
+fn fsetxattr(
+    fd: FdNum,
+    name: Pointer<CString>,
+    value: Pointer<c_void>,
+    size: u64,
+    flags: u64, // TODO
+) -> SyscallResult {
+    bail!(OpNotSupp)
+}
+
+#[syscall(i386 = 232, amd64 = 194)]
+fn listxattr(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    list: Pointer<u8>,
+    size: u64,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(path)?;
+    let cwd = thread.process().cwd();
+    let _link = lookup_and_resolve_link(cwd, &pathname, &mut ctx)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 233, amd64 = 195)]
+fn llistxattr(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    list: Pointer<u8>,
+    size: u64,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(path)?;
+    let cwd = thread.process().cwd();
+    let _link = lookup_link(cwd, &pathname, &mut ctx)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 13, amd64 = 201)]
@@ -4744,7 +4792,7 @@ async fn accept4(
 }
 
 #[syscall(i386 = 323, amd64 = 290)]
-fn eventfd(
+fn eventfd2(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
