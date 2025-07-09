@@ -22,6 +22,7 @@ use crate::{
     time,
     user::process::{
         memory::PageFaultError,
+        syscall::args::{TimerId, Timespec},
         thread::running_state::{ExitAction, ThreadRunningState},
     },
 };
@@ -156,9 +157,20 @@ impl Thread {
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let this = self.project();
-                this.thread.usage.start();
+
+                let start = time::default_backend_offset();
+                this.thread.usage.start(start);
+
                 let res = this.future.poll(cx);
-                this.thread.usage.stop();
+
+                let end = time::default_backend_offset();
+                this.thread.usage.stop(end);
+                this.thread
+                    .process
+                    .cpu_time
+                    .backend()
+                    .add(end.saturating_sub(start));
+
                 res
             }
         }
@@ -305,9 +317,9 @@ impl Thread {
     fn run_userspace(&self) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
         let mut guard = self.cpu_state.lock();
-        let start = time::backend_offset();
+        let start = time::default_backend_offset();
         let exit = guard.run_user(&virtual_memory)?;
-        let end = time::backend_offset();
+        let end = time::default_backend_offset();
         drop(guard);
 
         self.usage.record_user_execution_time(end - start);
@@ -453,6 +465,10 @@ impl Thread {
             },
             res = f.fuse() => res,
         }
+    }
+
+    pub fn cpu_time(&self) -> Timespec {
+        Timespec::from_ns(self.usage.cpu_time() as i64)
     }
 
     #[cfg(not(feature = "harden"))]
@@ -1048,13 +1064,22 @@ impl SigInfoCode {
     pub const SEGV_ACCERR: Self = Self(2);
     pub const ILL_ILLOPN: Self = Self(2);
     pub const KERNEL: Self = Self(0x80);
+    pub const TIMER: Self = Self(-2);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum SigFields {
     None,
+    Timer(SigTimer),
     SigChld(SigChld),
     SigFault(SigFault),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigTimer {
+    pub tid: TimerId,
+    pub overrun: u32,
+    pub sigval: Pointer<c_void>,
 }
 
 #[derive(Debug, Clone, Copy)]

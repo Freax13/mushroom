@@ -35,6 +35,7 @@ use crate::{
             path::PathFd,
             pipe,
             stream_buffer::{self, SpliceBlockedError},
+            timer::Timer,
             unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
@@ -138,7 +139,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysDup);
     handlers.register(SysDup2);
     handlers.register(SysNanosleep);
+    handlers.register(SysGetitimer);
     handlers.register(SysAlarm);
+    handlers.register(SysSetitimer);
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
@@ -236,6 +239,10 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetdents64);
     handlers.register(SysEpollCreate);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysTimerCreate);
+    handlers.register(SysTimerSettime);
+    handlers.register(SysTimerGettime);
+    handlers.register(SysTimerDelete);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
     handlers.register(SysClockGetres);
@@ -265,7 +272,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysTimerfdCreate);
     handlers.register(SysFallocate);
+    handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
     handlers.register(SysEventfd);
     handlers.register(SysEpollCreate1);
@@ -1203,6 +1212,19 @@ async fn nanosleep(
     Ok(0)
 }
 
+#[syscall(i386 = 105, amd64 = 36)]
+fn getitimer(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    which: ITimerWhich,
+    curr_value: Pointer<ITimerval>,
+) -> SyscallResult {
+    let current = thread.process().get_itimer(which);
+    virtual_memory.write_with_abi(curr_value, current, abi)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 27, amd64 = 37)]
 fn alarm(thread: &Thread, seconds: u32) -> SyscallResult {
     let remaining = if seconds != 0 {
@@ -1211,6 +1233,27 @@ fn alarm(thread: &Thread, seconds: u32) -> SyscallResult {
         thread.process().cancel_alarm()
     };
     Ok(u64::from(remaining))
+}
+
+#[syscall(i386 = 104, amd64 = 38)]
+fn setitimer(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    which: ITimerWhich,
+    new_value: Pointer<ITimerval>,
+    old_value: Pointer<ITimerval>,
+) -> SyscallResult {
+    let new_value = if !new_value.is_null() {
+        virtual_memory.read_with_abi(new_value, abi)?
+    } else {
+        ITimerval::default()
+    };
+    let old = thread.process().set_itimer(which, new_value);
+    if !old_value.is_null() {
+        virtual_memory.write_with_abi(old_value, old, abi)?;
+    }
+    Ok(0)
 }
 
 #[syscall(i386 = 20, amd64 = 39)]
@@ -2489,10 +2532,16 @@ fn gettimeofday(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     tv: Pointer<Timeval>,
-    tz: Pointer<c_void>,
+    tz: Pointer<Timezone>,
 ) -> SyscallResult {
     if !tz.is_null() {
-        todo!();
+        virtual_memory.write(
+            tz,
+            Timezone {
+                tz_minuteswest: 0,
+                tz_dsttime: 0,
+            },
+        )?;
     }
 
     if !tv.is_null() {
@@ -3452,6 +3501,59 @@ fn set_tid_address(mut thread: ThreadGuard, tidptr: Pointer<u32>) -> SyscallResu
     Ok(u64::from(thread.tid()))
 }
 
+#[syscall(i386 = 259, amd64 = 222)]
+fn timer_create(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clockid: ClockId,
+    sevp: Pointer<SigEvent>,
+    timerid: Pointer<TimerId>,
+) -> SyscallResult {
+    let sevp = virtual_memory.read_with_abi(sevp, abi)?;
+    let id = thread.process().create_timer(clockid, sevp);
+    virtual_memory.write_with_abi(timerid, id, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 260, amd64 = 223)]
+fn timer_settime(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    timerid: TimerId,
+    flags: TimerSettimeFlags,
+    new_value: Pointer<ITimerspec>,
+    old_value: Pointer<ITimerspec>,
+) -> SyscallResult {
+    let new = virtual_memory.read_with_abi(new_value, abi)?;
+    let absolute = flags.contains(TimerSettimeFlags::ABSTIME);
+    let old = thread.process().timer_set_time(timerid, new, absolute)?;
+    if !old_value.is_null() {
+        virtual_memory.write_with_abi(old_value, old, abi)?;
+    }
+    Ok(0)
+}
+
+#[syscall(i386 = 261, amd64 = 224)]
+fn timer_gettime(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    timerid: TimerId,
+    curr_value: Pointer<ITimerspec>,
+) -> SyscallResult {
+    let curr = thread.process().timer_get_time(timerid)?;
+    virtual_memory.write_with_abi(curr_value, curr, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 263, amd64 = 226)]
+fn timer_delete(thread: &Thread, timerid: TimerId) -> SyscallResult {
+    thread.process().timer_delete(timerid)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 264, amd64 = 227)]
 fn clock_settime(
     abi: Abi,
@@ -3467,11 +3569,30 @@ fn clock_settime(
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    clock_id: ClockId,
+    clock_id: ExtendedClockId,
     tp: Pointer<Timespec>,
 ) -> SyscallResult {
-    let time = time::now(clock_id);
+    let time = match clock_id {
+        ExtendedClockId::Normal(clock_id) => now(clock_id),
+        ExtendedClockId::ProcessCpuTimeId(pid) => {
+            let process = if pid == 0 {
+                thread.process().clone()
+            } else {
+                Process::find_by_pid(pid).ok_or(err!(Srch))?
+            };
+            let now = process.cpu_time.now();
+            Timespec::from(now)
+        }
+        ExtendedClockId::ThreadCpuTimeId(tid) => {
+            if tid == 0 {
+                thread.cpu_time()
+            } else {
+                Thread::find_by_tid(tid).ok_or(err!(Srch))?.cpu_time()
+            }
+        }
+    };
     virtual_memory.write_with_abi(tp, time, abi)?;
     Ok(0)
 }
@@ -3480,7 +3601,7 @@ fn clock_gettime(
 fn clock_getres(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
-    clock_id: ClockId,
+    clock_id: ExtendedClockId,
     res: Pointer<Timespec>,
 ) -> SyscallResult {
     if !res.is_null() {
@@ -4504,6 +4625,25 @@ async fn epoll_pwait(
     res
 }
 
+#[syscall(i386 = 322, amd64 = 283)]
+fn timerfd_create(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+
+    #[state] no_file_limit: CurrentNoFileLimit,
+    clockid: ClockId,
+    flags: TimerfdCreateFlags,
+) -> SyscallResult {
+    let timer = Timer::new(
+        clockid,
+        flags,
+        ctx.filesystem_user_id,
+        ctx.filesystem_group_id,
+    );
+    let fd_num = fdtable.insert(timer, flags, no_file_limit)?;
+    Ok(fd_num.get() as u64)
+}
+
 #[syscall(i386 = 324, amd64 = 285)]
 fn fallocate(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -4514,6 +4654,25 @@ fn fallocate(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     fd.allocate(mode, usize_from(offset), usize_from(length))?;
+    Ok(0)
+}
+
+#[syscall(i386 = 325, amd64 = 286)]
+fn timerfd_settime(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    flags: SetTimeFlags,
+    new_value: Pointer<ITimerspec>,
+    old_value: Pointer<ITimerspec>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let new = virtual_memory.read_with_abi(new_value, abi)?;
+    let old = fd.set_time(flags, new)?;
+    if !old_value.is_null() {
+        virtual_memory.write_with_abi(old_value, old, abi)?;
+    }
     Ok(0)
 }
 

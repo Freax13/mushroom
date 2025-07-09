@@ -1,5 +1,6 @@
 use core::{
     cmp::{self, Reverse},
+    ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
     net::{Ipv4Addr, SocketAddrV4},
@@ -908,6 +909,44 @@ enum_arg! {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ExtendedClockId {
+    Normal(ClockId),
+    ProcessCpuTimeId(u32),
+    ThreadCpuTimeId(u32),
+}
+
+impl SyscallArg for ExtendedClockId {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        Ok(match value {
+            2 => Self::ProcessCpuTimeId(0),
+            3 => Self::ThreadCpuTimeId(0),
+            16.. => {
+                let id = (!value as u32).get_bits(3..);
+                match value.get_bits(0..3) {
+                    2 => Self::ProcessCpuTimeId(id),
+                    3 => Self::ThreadCpuTimeId(id),
+                    _ => bail!(Inval),
+                }
+            }
+            0..16 => Self::Normal(ClockId::parse(value, abi)?),
+        })
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        if let Ok(value) = Self::parse(value, abi) {
+            write!(f, "{value:?}")
+        } else {
+            write!(f, "{value}")
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Timespec {
     pub tv_sec: i32, // TODO: Is this always positive????
@@ -930,7 +969,7 @@ impl Timespec {
     pub fn from_ns(ns: i64) -> Self {
         Timespec {
             tv_sec: i32::try_from(ns / 1_000_000_000).unwrap(),
-            tv_nsec: u32::try_from(ns % 1_000_000_000).unwrap(),
+            tv_nsec: (ns % 1_000_000_000) as u32,
         }
     }
 
@@ -963,6 +1002,21 @@ impl Timespec {
             tv_sec: 0,
             tv_nsec: 0,
         })
+    }
+
+    #[expect(dead_code)]
+    pub fn saturating_mul(self, rhs: u64) -> Self {
+        let mut acc = Timespec::ZERO;
+        // This implements multiplication with double-and-add (similar to
+        // square-and-multiply).
+        // TODO: Replace this with something more efficient.
+        for i in (0..64).rev() {
+            acc = acc.saturating_add(acc);
+            if rhs.get_bit(i) {
+                acc = acc.saturating_add(self);
+            }
+        }
+        acc
     }
 
     pub fn kernel_ticks(&self) -> u64 {
@@ -2128,4 +2182,127 @@ pub struct WinSize {
 
 bitflags! {
     pub struct FallocateMode {}
+}
+
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Timezone {
+    pub tz_minuteswest: i32,
+    pub tz_dsttime: i32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ITimerval {
+    pub interval: Timeval,
+    pub value: Timeval,
+}
+
+impl From<ITimerspec> for ITimerval {
+    fn from(value: ITimerspec) -> Self {
+        Self {
+            interval: value.interval.into(),
+            value: value.value.into(),
+        }
+    }
+}
+
+impl From<ITimerval> for ITimerspec {
+    fn from(value: ITimerval) -> Self {
+        Self {
+            interval: value.interval.into(),
+            value: value.value.into(),
+        }
+    }
+}
+
+enum_arg! {
+    pub enum ITimerWhich {
+        Real = 0,
+        Virtual = 1,
+        Prof = 2,
+    }
+}
+
+bitflags! {
+    pub struct TimerfdCreateFlags {
+        const NONBLOCK = 1 << 11;
+        const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<TimerfdCreateFlags> for FdFlags {
+    fn from(value: TimerfdCreateFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(TimerfdCreateFlags::CLOEXEC));
+        flags
+    }
+}
+
+impl From<TimerfdCreateFlags> for OpenFlags {
+    fn from(value: TimerfdCreateFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::NONBLOCK, value.contains(TimerfdCreateFlags::NONBLOCK));
+        flags.set(Self::CLOEXEC, value.contains(TimerfdCreateFlags::CLOEXEC));
+        flags
+    }
+}
+
+bitflags! {
+    pub struct SetTimeFlags {
+        const ABSTIME = 1 << 0;
+        const CANCEL_ON_SET = 1 << 1;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ITimerspec {
+    pub interval: Timespec,
+    pub value: Timespec,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct TimerId(pub i64);
+
+impl SyscallArg for TimerId {
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        match abi {
+            Abi::I386 => Ok(Self(value as u32 as i32 as i64)),
+            Abi::Amd64 => Ok(Self(value as i64)),
+        }
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        let value = Self::parse(value, abi).unwrap();
+        write!(f, "{}", value.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigEvent {
+    pub sigev_value: Pointer<c_void>,
+    pub sigev_signo: u32,
+    pub sigev_notify: SigEventData,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SigEventData {
+    Signal,
+    None,
+    Thread {
+        function: Pointer<c_void>,
+        attribute: Pointer<c_void>,
+    },
+    ThreadId(u32),
+}
+
+bitflags! {
+    pub struct TimerSettimeFlags {
+        const ABSTIME = 1;
+    }
 }

@@ -2,7 +2,7 @@
 
 use core::{
     ffi::{CStr, c_void},
-    fmt,
+    fmt::{self, Debug},
     marker::PhantomData,
     mem::{MaybeUninit, size_of},
 };
@@ -33,9 +33,10 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, ControlMode, FdNum, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset,
-    MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SocketAddr,
-    Stat, SysInfo, Termios, Time, Timespec, Timeval, WStatus, WinSize,
+    CmsgHdr, ControlMode, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger, LinuxDirent64,
+    LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit,
+    Rusage, SigEvent, SigEventData, SocketAddr, Stat, SysInfo, Termios, Time, TimerId, Timespec,
+    Timeval, Timezone, WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -136,24 +137,22 @@ impl<T> ReadablePointee<ArchitectureDependent> for T
 where
     T: AbiDependentPointee,
     T::I386: CheckedBitPattern + TryInto<Self>,
-    <T::I386 as CheckedBitPattern>::Bits: NoUninit,
     T::Amd64: CheckedBitPattern + TryInto<Self>,
-    <T::Amd64 as CheckedBitPattern>::Bits: NoUninit,
     Error: From<<T::I386 as TryInto<Self>>::Error> + From<<T::Amd64 as TryInto<Self>>::Error>,
 {
     fn read(addr: VirtAddr, vm: &VirtualMemory, abi: Abi) -> Result<(usize, Self)> {
         match abi {
             Abi::I386 => {
-                let mut bits = <T::I386 as CheckedBitPattern>::Bits::zeroed();
-                let bytes = bytes_of_mut(&mut bits);
-                vm.read_bytes(addr, bytes)?;
+                let mut bits = MaybeUninit::<T::I386>::uninit();
+                let bytes = bits.as_bytes_mut();
+                let bytes = vm.read_uninit_bytes(addr, bytes)?;
                 let value = try_pod_read_unaligned::<T::I386>(bytes)?;
                 Ok((bytes.len(), value.try_into()?))
             }
             Abi::Amd64 => {
-                let mut bits = <T::Amd64 as CheckedBitPattern>::Bits::zeroed();
-                let bytes = bytes_of_mut(&mut bits);
-                vm.read_bytes(addr, bytes)?;
+                let mut bits = MaybeUninit::<T::Amd64>::uninit();
+                let bytes = bits.as_bytes_mut();
+                let bytes = vm.read_uninit_bytes(addr, bytes)?;
                 let value = try_pod_read_unaligned::<T::Amd64>(bytes)?;
                 Ok((bytes.len(), value.try_into()?))
             }
@@ -413,6 +412,15 @@ where
     }
 }
 
+impl<T> Debug for Pointer32<T>
+where
+    T: ?Sized + Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&Pointer::from(*self), f)
+    }
+}
+
 impl<T> Clone for Pointer64<T>
 where
     T: ?Sized,
@@ -448,6 +456,15 @@ where
     }
 }
 
+impl<T> Debug for Pointer64<T>
+where
+    T: ?Sized + Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&Pointer::from(*self), f)
+    }
+}
+
 impl Pointee for FdNum {}
 
 impl PrimitivePointee for FdNum {}
@@ -468,8 +485,10 @@ pub struct SigInfo32 {
     _sifields: [i32; 29],
 }
 
-impl From<SigInfo> for SigInfo32 {
-    fn from(value: SigInfo) -> Self {
+impl TryFrom<SigInfo> for SigInfo32 {
+    type Error = Error;
+
+    fn try_from(value: SigInfo) -> Result<Self> {
         let mut _sifields = [0; 29];
         let dst = bytes_of_mut(&mut _sifields);
         macro_rules! pack {
@@ -481,6 +500,13 @@ impl From<SigInfo> for SigInfo32 {
         }
         match value.fields {
             SigFields::None => {}
+            SigFields::Timer(sig_timer) => {
+                pack!(SigTimer32 {
+                    tid: sig_timer.tid.try_into()?,
+                    overrun: sig_timer.overrun,
+                    sigval: sig_timer.sigval.try_into()?,
+                })
+            }
             SigFields::SigChld(sig_chld) => {
                 pack!(SigChld32 {
                     pid: sig_chld.pid,
@@ -496,13 +522,21 @@ impl From<SigInfo> for SigInfo32 {
                 })
             }
         }
-        Self {
+        Ok(Self {
             si_signo: value.signal.get() as i32,
             si_errno: 0,
             si_code: value.code.get(),
             _sifields,
-        }
+        })
     }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigTimer32 {
+    tid: TimerId32,
+    overrun: u32,
+    sigval: Pointer32<c_void>,
 }
 
 #[derive(Clone, Copy, NoUninit)]
@@ -544,6 +578,13 @@ impl From<SigInfo> for SigInfo64 {
         }
         match value.fields {
             SigFields::None => {}
+            SigFields::Timer(sig_timer) => {
+                pack!(SigTimer64 {
+                    tid: sig_timer.tid.into(),
+                    overrun: sig_timer.overrun,
+                    sigval: sig_timer.sigval.into(),
+                })
+            }
             SigFields::SigChld(sig_chld) => {
                 pack!(SigChld64 {
                     pid: sig_chld.pid,
@@ -567,6 +608,14 @@ impl From<SigInfo> for SigInfo64 {
             _sifields,
         }
     }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C, packed(4))]
+struct SigTimer64 {
+    tid: TimerId64,
+    overrun: u32,
+    sigval: Pointer64<c_void>,
 }
 
 #[derive(Clone, Copy, NoUninit)]
@@ -2192,3 +2241,341 @@ impl From<Termios64> for Termios {
 
 impl Pointee for WinSize {}
 impl PrimitivePointee for WinSize {}
+
+impl Pointee for Timezone {}
+impl PrimitivePointee for Timezone {}
+
+impl Pointee for ITimerval {}
+impl AbiDependentPointee for ITimerval {
+    type I386 = ITimerval32;
+    type Amd64 = ITimerval64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerval32 {
+    pub interval: Timeval32,
+    pub value: Timeval32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerval64 {
+    pub interval: Timeval64,
+    pub value: Timeval64,
+}
+
+impl From<ITimerval32> for ITimerval {
+    fn from(value: ITimerval32) -> Self {
+        Self {
+            interval: Timeval::from(value.interval),
+            value: Timeval::from(value.value),
+        }
+    }
+}
+
+impl From<ITimerval> for ITimerval32 {
+    fn from(value: ITimerval) -> Self {
+        Self {
+            interval: Timeval32::from(value.interval),
+            value: Timeval32::from(value.value),
+        }
+    }
+}
+
+impl From<ITimerval64> for ITimerval {
+    fn from(value: ITimerval64) -> Self {
+        Self {
+            interval: Timeval::from(value.interval),
+            value: Timeval::from(value.value),
+        }
+    }
+}
+
+impl From<ITimerval> for ITimerval64 {
+    fn from(value: ITimerval) -> Self {
+        Self {
+            interval: Timeval64::from(value.interval),
+            value: Timeval64::from(value.value),
+        }
+    }
+}
+
+impl Pointee for ITimerspec {}
+
+impl AbiDependentPointee for ITimerspec {
+    type I386 = ITimerspec32;
+    type Amd64 = ITimerspec64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerspec32 {
+    interval: Timespec32,
+    value: Timespec32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct ITimerspec64 {
+    interval: Timespec64,
+    value: Timespec64,
+}
+
+impl TryFrom<ITimerspec32> for ITimerspec {
+    type Error = Error;
+
+    fn try_from(value: ITimerspec32) -> Result<Self> {
+        Ok(Self {
+            interval: Timespec::try_from(value.interval)?,
+            value: Timespec::try_from(value.value)?,
+        })
+    }
+}
+
+impl From<ITimerspec> for ITimerspec32 {
+    fn from(value: ITimerspec) -> Self {
+        Self {
+            interval: Timespec32::from(value.interval),
+            value: Timespec32::from(value.value),
+        }
+    }
+}
+
+impl TryFrom<ITimerspec64> for ITimerspec {
+    type Error = Error;
+
+    fn try_from(value: ITimerspec64) -> Result<Self> {
+        Ok(Self {
+            interval: Timespec::try_from(value.interval)?,
+            value: Timespec::try_from(value.value)?,
+        })
+    }
+}
+
+impl From<ITimerspec> for ITimerspec64 {
+    fn from(value: ITimerspec) -> Self {
+        Self {
+            interval: Timespec64::from(value.interval),
+            value: Timespec64::from(value.value),
+        }
+    }
+}
+
+impl Pointee for TimerId {}
+impl AbiDependentPointee for TimerId {
+    type I386 = TimerId32;
+    type Amd64 = TimerId64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct TimerId32(i32);
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct TimerId64(i64);
+
+impl TryFrom<TimerId> for TimerId32 {
+    type Error = Error;
+
+    fn try_from(value: TimerId) -> Result<Self> {
+        Ok(Self(i32::try_from(value.0)?))
+    }
+}
+
+impl From<TimerId> for TimerId64 {
+    fn from(value: TimerId) -> Self {
+        Self(value.0)
+    }
+}
+
+impl Pointee for SigEvent {}
+impl AbiDependentPointee for SigEvent {
+    type I386 = SigEvent32;
+    type Amd64 = SigEvent64;
+}
+
+#[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C)]
+pub struct SigEvent32 {
+    sigev_value: Pointer32<c_void>,
+    sigev_signo: u32,
+    sigev_notify: SigEventData32,
+}
+
+#[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C)]
+pub struct SigEvent64 {
+    sigev_value: Pointer64<c_void>,
+    sigev_signo: u32,
+    sigev_notify: SigEventData64,
+}
+
+#[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C)]
+pub enum SigEventData32 {
+    Signal {
+        _padding: [u8; 8],
+    },
+    None {
+        _padding: [u8; 8],
+    },
+    Thread {
+        function: Pointer32<c_void>,
+        attribute: Pointer32<c_void>,
+    },
+    ThreadId {
+        tid: u32,
+        _padding: [u8; 4],
+    },
+}
+
+#[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C)]
+pub enum SigEventData64 {
+    Signal {
+        _padding: [u8; 16],
+    },
+    None {
+        _padding: [u8; 16],
+    },
+    Thread {
+        function: PackedPointer64,
+        attribute: PackedPointer64,
+    },
+    ThreadId {
+        tid: u32,
+        _padding: [u8; 12],
+    },
+}
+
+#[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
+#[repr(C, packed(4))]
+pub struct PackedPointer64(u64);
+
+impl From<SigEvent32> for SigEvent {
+    fn from(value: SigEvent32) -> Self {
+        Self {
+            sigev_value: value.sigev_value.into(),
+            sigev_signo: value.sigev_signo,
+            sigev_notify: value.sigev_notify.into(),
+        }
+    }
+}
+
+impl TryFrom<SigEvent> for SigEvent32 {
+    type Error = Error;
+
+    fn try_from(value: SigEvent) -> Result<Self> {
+        Ok(Self {
+            sigev_value: value.sigev_value.try_into()?,
+            sigev_signo: value.sigev_signo,
+            sigev_notify: value.sigev_notify.try_into()?,
+        })
+    }
+}
+
+impl From<SigEvent64> for SigEvent {
+    fn from(value: SigEvent64) -> Self {
+        Self {
+            sigev_value: value.sigev_value.into(),
+            sigev_signo: value.sigev_signo,
+            sigev_notify: value.sigev_notify.into(),
+        }
+    }
+}
+
+impl TryFrom<SigEvent> for SigEvent64 {
+    type Error = Error;
+
+    fn try_from(value: SigEvent) -> Result<Self> {
+        Ok(Self {
+            sigev_value: value.sigev_value.into(),
+            sigev_signo: value.sigev_signo,
+            sigev_notify: value.sigev_notify.into(),
+        })
+    }
+}
+
+impl From<SigEventData32> for SigEventData {
+    fn from(value: SigEventData32) -> Self {
+        match value {
+            SigEventData32::Signal { .. } => Self::Signal,
+            SigEventData32::None { .. } => Self::None,
+            SigEventData32::Thread {
+                function,
+                attribute,
+            } => Self::Thread {
+                function: function.into(),
+                attribute: attribute.into(),
+            },
+            SigEventData32::ThreadId { tid, .. } => Self::ThreadId(tid),
+        }
+    }
+}
+
+impl TryFrom<SigEventData> for SigEventData32 {
+    type Error = Error;
+
+    fn try_from(value: SigEventData) -> Result<Self> {
+        Ok(match value {
+            SigEventData::Signal => Self::Signal { _padding: [0; 8] },
+            SigEventData::None => Self::None { _padding: [0; 8] },
+            SigEventData::Thread {
+                function,
+                attribute,
+            } => Self::Thread {
+                function: function.try_into()?,
+                attribute: attribute.try_into()?,
+            },
+            SigEventData::ThreadId(tid) => Self::ThreadId {
+                tid,
+                _padding: [0; 4],
+            },
+        })
+    }
+}
+
+impl From<SigEventData64> for SigEventData {
+    fn from(value: SigEventData64) -> Self {
+        match value {
+            SigEventData64::Signal { .. } => Self::Signal,
+            SigEventData64::None { .. } => Self::None,
+            SigEventData64::Thread {
+                function,
+                attribute,
+            } => Self::Thread {
+                function: Pointer {
+                    value: function.0,
+                    _marker: PhantomData,
+                },
+                attribute: Pointer {
+                    value: attribute.0,
+                    _marker: PhantomData,
+                },
+            },
+            SigEventData64::ThreadId { tid, .. } => Self::ThreadId(tid),
+        }
+    }
+}
+
+impl From<SigEventData> for SigEventData64 {
+    fn from(value: SigEventData) -> Self {
+        match value {
+            SigEventData::Signal => Self::Signal { _padding: [0; 16] },
+            SigEventData::None => Self::None { _padding: [0; 16] },
+            SigEventData::Thread {
+                function,
+                attribute,
+            } => Self::Thread {
+                function: PackedPointer64(function.value),
+                attribute: PackedPointer64(attribute.value),
+            },
+            SigEventData::ThreadId(tid) => Self::ThreadId {
+                tid,
+                _padding: [0; 12],
+            },
+        }
+    }
+}
