@@ -574,6 +574,8 @@ enum_arg! {
         GetOwn = 9,
         SetOwnEx = 15,
         GetOwnEx = 16,
+        OfdSetLk = 37,
+        OfdSetLkW = 38,
         DupFdCloExec = 1030,
     }
 }

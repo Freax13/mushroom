@@ -2115,7 +2115,9 @@ fn fcntl(
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx => {
+        | FcntlCmd::GetOwnEx
+        | FcntlCmd::OfdSetLk
+        | FcntlCmd::OfdSetLkW => {
             // TODO: Implement this
             warn!("{cmd} not implemented");
             Ok(0)
@@ -2160,7 +2162,9 @@ fn fcntl64(
         | FcntlCmd::SetOwn
         | FcntlCmd::GetOwn
         | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx => {
+        | FcntlCmd::GetOwnEx
+        | FcntlCmd::OfdSetLk
+        | FcntlCmd::OfdSetLkW => {
             // TODO: Implement this
             warn!("{cmd} not implemented");
             Ok(0)
