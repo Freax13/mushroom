@@ -5,6 +5,7 @@ use core::{
 
 use crate::{
     error::{bail, ensure, err},
+    fs::ownership::Ownership,
     spin::{lazy::Lazy, rwlock::RwLock},
     user::process::{
         Process,
@@ -418,14 +419,22 @@ impl FileAccessContext {
     }
 
     #[track_caller]
-    pub fn check_permissions(&self, stat: &Stat, permission: Permission) -> Result<()> {
+    pub fn check_permissions(
+        &self,
+        info: &impl OwnershipInfo,
+        permission: Permission,
+    ) -> Result<()> {
+        let uid = info.uid();
+        let gid = info.gid();
+        let mode = info.mode();
+
         if self.filesystem_user_id == Uid::SUPER_USER {
             // Access checks are special for the super user: Read and write
             // checks are omitted completly, but for execute at least one
             // execute flag has to be set.
             if matches!(permission, Permission::Execute) {
                 ensure!(
-                    stat.mode.mode().intersects(
+                    mode.intersects(
                         FileMode::OWNER_EXECUTE | FileMode::GROUP_EXECUTE | FileMode::OTHER_EXECUTE,
                     ),
                     Acces
@@ -434,13 +443,13 @@ impl FileAccessContext {
             return Ok(());
         }
 
-        let mode_bit = if self.is_user(stat.uid) {
+        let mode_bit = if self.is_user(uid) {
             match permission {
                 Permission::Read => FileMode::OWNER_READ,
                 Permission::Write => FileMode::OWNER_WRITE,
                 Permission::Execute => FileMode::OWNER_EXECUTE,
             }
-        } else if self.is_in_group(stat.gid) {
+        } else if self.is_in_group(gid) {
             match permission {
                 Permission::Read => FileMode::GROUP_READ,
                 Permission::Write => FileMode::GROUP_WRITE,
@@ -453,7 +462,7 @@ impl FileAccessContext {
                 Permission::Execute => FileMode::OTHER_EXECUTE,
             }
         };
-        ensure!(stat.mode.mode().contains(mode_bit), Acces);
+        ensure!(mode.contains(mode_bit), Acces);
 
         Ok(())
     }
@@ -496,6 +505,40 @@ impl ExtractableThreadState for FileAccessContext {
             filesystem_group_id: credentials_guard.filesystem_group_id,
             supplementary_group_ids: credentials_guard.supplementary_group_ids.clone(),
         }
+    }
+}
+
+pub trait OwnershipInfo {
+    fn uid(&self) -> Uid;
+    fn gid(&self) -> Gid;
+    fn mode(&self) -> FileMode;
+}
+
+impl OwnershipInfo for Stat {
+    fn uid(&self) -> Uid {
+        self.uid
+    }
+
+    fn gid(&self) -> Gid {
+        self.gid
+    }
+
+    fn mode(&self) -> FileMode {
+        self.mode.mode()
+    }
+}
+
+impl OwnershipInfo for Ownership {
+    fn uid(&self) -> Uid {
+        self.uid()
+    }
+
+    fn gid(&self) -> Gid {
+        self.gid()
+    }
+
+    fn mode(&self) -> FileMode {
+        self.mode()
     }
 }
 
