@@ -577,11 +577,25 @@ impl Process {
         drop(process_group_guard);
         writeln!(
             write,
-            "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?}",
+            "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?} exe={:?}",
             "",
             self.pid,
-            self.exit_status.try_get()
+            self.exit_status.try_get(),
+            self.exe().location.path()
         )?;
+
+        if let Some(thread) = self.thread_group_leader().upgrade() {
+            writeln!(write, "{:indent$}memory:", "")?;
+            if let Some(vm) = thread.try_lock().map(|t| t.virtual_memory().clone()) {
+                let maps = vm.maps();
+                let maps = String::from_utf8(maps).unwrap();
+                for line in maps.lines() {
+                    writeln!(write, "{:indent$}  {line}", "")?;
+                }
+            } else {
+                writeln!(write, "{:indent$}  thread is locked", "")?;
+            }
+        }
 
         let indent = indent + 2;
         let threads_guard = self.threads.lock();

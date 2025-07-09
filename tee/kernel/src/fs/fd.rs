@@ -484,10 +484,11 @@ impl FileDescriptorTable {
         for (num, fd) in self.table.lock().iter() {
             writeln!(
                 write,
-                "{:indent$}{num} {} {:?}",
+                "{:indent$}{num} {} {:?} ino={:?}",
                 "",
                 fd.fd.type_name(),
-                fd.flags
+                fd.flags,
+                fd.fd.stat().map(|stat| stat.ino)
             )?;
         }
         Ok(())
