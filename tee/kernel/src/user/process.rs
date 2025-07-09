@@ -169,7 +169,9 @@ impl Process {
     }
 
     pub fn ppid(&self) -> u32 {
-        self.parent.upgrade().map_or(1, |parent| parent.pid())
+        self.parent
+            .upgrade()
+            .map_or_else(|| if self.pid == 1 { 0 } else { 1 }, |parent| parent.pid())
     }
 
     pub fn pgrp(&self) -> u32 {
@@ -307,6 +309,9 @@ impl Process {
         if let Some(parent) = self.parent.upgrade() {
             parent.child_death_notify.notify();
         }
+
+        let mut children = core::mem::take(&mut *self.children.lock());
+        INIT_THREAD.process().children.lock().append(&mut children);
     }
 
     pub fn thread_group_leader(&self) -> Weak<Thread> {
@@ -577,11 +582,25 @@ impl Process {
         drop(process_group_guard);
         writeln!(
             write,
-            "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?}",
+            "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?} exe={:?}",
             "",
             self.pid,
-            self.exit_status.try_get()
+            self.exit_status.try_get(),
+            self.exe().location.path()
         )?;
+
+        if let Some(thread) = self.thread_group_leader().upgrade() {
+            writeln!(write, "{:indent$}memory:", "")?;
+            if let Some(vm) = thread.try_lock().map(|t| t.virtual_memory().clone()) {
+                let maps = vm.maps();
+                let maps = String::from_utf8(maps).unwrap();
+                for line in maps.lines() {
+                    writeln!(write, "{:indent$}  {line}", "")?;
+                }
+            } else {
+                writeln!(write, "{:indent$}  thread is locked", "")?;
+            }
+        }
 
         let indent = indent + 2;
         let threads_guard = self.threads.lock();

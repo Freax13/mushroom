@@ -385,14 +385,114 @@ impl CpuinfoFile {
 
     fn content(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
+
+        let features = [
+            "fpu",
+            "vme",
+            "de",
+            "pse",
+            "tsc",
+            "msr",
+            "pae",
+            "mce",
+            "cx8",
+            "apic",
+            "sep",
+            "mtrr",
+            "pge",
+            "mca",
+            "cmov",
+            "pat",
+            "pse36",
+            "clflush",
+            "mmx",
+            "fxsr",
+            "sse",
+            "sse2",
+            "ht",
+            "syscall",
+            "nx",
+            "pdpe1gb",
+            "rdtscp",
+            "lm",
+            "constant_tsc",
+            "rep_good",
+            "nopl",
+            "xtopology",
+            "nonstop_tsc",
+            "cpuid",
+            "aperfmperf",
+            "pni",
+            "pclmulqdq",
+            "monitor",
+            "ssse3",
+            "fma",
+            "cx16",
+            "pcid",
+            "sse4_1",
+            "sse4_2",
+            "movbe",
+            "popcnt",
+            "aes",
+            "xsave",
+            "avx",
+            "f16c",
+            "rdrand",
+            "lahf_lm",
+            "abm",
+            "3dnowprefetch",
+            "cat_l3",
+            "cdp_l3",
+            "ssbd",
+            "mba",
+            "ibrs",
+            "ibpb",
+            "stibp",
+            "fsgsbase",
+            "bmi1",
+            "avx2",
+            "smep",
+            "bmi2",
+            "erms",
+            "invpcid",
+            "cqm",
+            "rdt_a",
+            "rdseed",
+            "adx",
+            "smap",
+            "clflushopt",
+            "clwb",
+            "sha_ni",
+            "xsaveopt",
+            "xsavec",
+            "xgetbv1",
+            "xsaves",
+            "cqm_llc",
+            "cqm_occup_llc",
+            "cqm_mbm_total",
+            "cqm_mbm_local",
+            "wbnoinvd",
+            "umip",
+            "pku",
+            "ospke",
+            "vaes",
+            "vpclmulqdq",
+            "rdpid",
+        ];
+
         for i in 0..MAX_APS_COUNT {
-            writeln!(buffer, "processor	: {i}").unwrap();
-            writeln!(buffer, "physical id: 0").unwrap();
-            writeln!(buffer, "siblings : {MAX_APS_COUNT}").unwrap();
-            writeln!(buffer, "core id : {i}").unwrap();
-            writeln!(buffer, "cpu cores : {MAX_APS_COUNT}").unwrap();
-            writeln!(buffer, "apicid : {i}").unwrap();
-            writeln!(buffer, "initial apicid : {i}").unwrap();
+            writeln!(buffer, "processor\t: {i}").unwrap();
+            writeln!(buffer, "physical id\t: 0").unwrap();
+            writeln!(buffer, "siblings\t: {MAX_APS_COUNT}").unwrap();
+            writeln!(buffer, "core id\t\t: {i}").unwrap();
+            writeln!(buffer, "cpu cores\t: {MAX_APS_COUNT}").unwrap();
+            writeln!(buffer, "apicid\t\t: {i}").unwrap();
+            writeln!(buffer, "initial apicid\t: {i}").unwrap();
+            write!(buffer, "flags\t\t:").unwrap();
+            for feature in features {
+                write!(buffer, " {feature}").unwrap();
+            }
+            writeln!(buffer).unwrap();
             writeln!(buffer).unwrap();
         }
         buffer
@@ -503,10 +603,12 @@ impl MeminfoFile {
     fn content(&self) -> Vec<u8> {
         let total = (DYNAMIC.end.start_address() - DYNAMIC.start.start_address()) / 1024;
         let free = total / 2; // TODO
+        let cached = total / 8;
 
         let mut buffer = Vec::new();
         writeln!(buffer, "MemTotal: {total:14} kB").unwrap();
         writeln!(buffer, "MemFree:  {free:14} kB").unwrap();
+        writeln!(buffer, "Cached:   {cached:14} kB").unwrap();
         buffer
     }
 }

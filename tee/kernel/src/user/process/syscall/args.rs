@@ -1307,6 +1307,7 @@ pub struct Time(pub u32);
 enum_arg! {
     pub enum Resource {
         Stack = 3,
+        Core = 4,
         NoFile = 7,
         As = 9,
     }
@@ -1591,6 +1592,10 @@ enum_arg! {
         SetDumpable = 4,
         SetName = 15,
         GetName = 16,
+        GetSeccomp = 21,
+        SetSeccomp = 22,
+        SetNoNewPrivs = 38,
+        GetNoNewPrivs = 39,
     }
 }
 
