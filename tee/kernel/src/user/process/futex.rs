@@ -1,13 +1,14 @@
 use core::{
+    future::poll_fn,
     num::NonZeroU32,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
 };
 
 use crate::{error::ensure, memory::page::KernelPage, spin::mutex::Mutex};
 use alloc::{collections::BTreeMap, sync::Arc};
 use bytemuck::bytes_of_mut;
+use crossbeam_utils::atomic::AtomicCell;
 use futures::task::AtomicWaker;
 use intrusive_collections::{LinkedList, LinkedListAtomicLink, intrusive_adapter};
 
@@ -43,8 +44,9 @@ impl Futexes {
 
         let node = Arc::new(FutexWaiter {
             link: LinkedListAtomicLink::new(),
-            waker: AtomicWaker::new(),
-            woken: AtomicBool::new(false),
+            wait_waker: AtomicWaker::new(),
+            wake_waker: AtomicWaker::new(),
+            state: AtomicCell::new(WaiterState::Pending),
             scope,
             bitset,
         });
@@ -69,8 +71,17 @@ impl Futexes {
             type Output = ();
 
             fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                self.node.waker.register(cx.waker());
-                if self.node.woken.load(Ordering::SeqCst) {
+                self.node.wait_waker.register(cx.waker());
+                let woken = self
+                    .node
+                    .state
+                    .compare_exchange(WaiterState::WakupPending, WaiterState::WakupConfirmed)
+                    .is_ok();
+                if woken {
+                    // Wake up the task that was waking us up, so that it can
+                    // observe the new state.
+                    self.node.wake_waker.wake();
+
                     self.ready = true;
                     Poll::Ready(())
                 } else {
@@ -83,24 +94,33 @@ impl Futexes {
             fn drop(&mut self) {
                 // If the node was woken up, it has already been removed from
                 // the list. Check once, before taking the lock.
-                if self.ready || self.node.woken.load(Ordering::Relaxed) {
+                if self.ready {
                     return;
                 }
 
-                let mut guard = self.futexes.futexes.lock();
+                let prev_state = self.node.state.swap(WaiterState::Cancelled);
 
-                // Check again after taking the lock.
-                if self.node.woken.load(Ordering::SeqCst) {
-                    return;
+                // If the node was woken up, it has already been removed from
+                // the list. Check once, before taking the lock.
+                match prev_state {
+                    WaiterState::Pending => {
+                        let mut guard = self.futexes.futexes.lock();
+                        let list = guard.get_mut(&self.offset).unwrap();
+                        let ptr = Arc::as_ptr(&self.node);
+                        let mut cursor = unsafe {
+                            // SAFETY: The node hasn't been woken up, so it
+                            // must still be on the list.
+                            list.cursor_mut_from_ptr(ptr)
+                        };
+                        cursor.remove();
+                    }
+                    WaiterState::WakupPending => {
+                        // Wake up the task that was waking us up, so that it
+                        // can observe the new state.
+                        self.node.wake_waker.wake();
+                    }
+                    WaiterState::WakupConfirmed | WaiterState::Cancelled => unreachable!(),
                 }
-
-                let list = guard.get_mut(&self.offset).unwrap();
-                let ptr = Arc::as_ptr(&self.node);
-                let mut cursor = unsafe {
-                    // SAFETY: The node hasn't been woken up, so it must still be on the list.
-                    list.cursor_mut_from_ptr(ptr)
-                };
-                cursor.remove();
             }
         }
 
@@ -112,40 +132,70 @@ impl Futexes {
         })
     }
 
-    pub fn wake(
+    pub async fn wake(
         &self,
         offset: usize,
         num_waiters: u32,
         scope: FutexScope,
         bitset: Option<NonZeroU32>,
     ) -> u32 {
-        if num_waiters == 0 {
-            return 0;
-        }
-
         let mut woken = 0;
-        let mut guard = self.futexes.lock();
-        if let Some(waiters) = guard.get_mut(&offset) {
-            let mut cursor = waiters.front_mut();
-            while let Some(node) = cursor.get() {
-                // Skip nodes that haven't had their requirements satisfied.
-                if !node.matches(scope, bitset) {
-                    cursor.move_next();
-                    continue;
+        while woken < num_waiters {
+            // Find some candiates to wake up and start the wake up process.
+            let mut candidates = LinkedList::new(ListAdapter::NEW);
+            if let Some(waiters) = self.futexes.lock().get_mut(&offset) {
+                let mut cursor = waiters.front_mut();
+                'outer: for _ in woken..num_waiters {
+                    loop {
+                        let Some(node) = cursor.get() else {
+                            break 'outer;
+                        };
+
+                        // Skip nodes that haven't had their requirements satisfied.
+                        if !node.matches(scope, bitset) {
+                            cursor.move_next();
+                            continue;
+                        }
+
+                        // Wake the node up.
+                        if node
+                            .state
+                            .compare_exchange(WaiterState::Pending, WaiterState::WakupPending)
+                            .is_err()
+                        {
+                            cursor.move_next();
+                            continue;
+                        }
+                        node.wait_waker.wake();
+
+                        // Remove the node from the list.
+                        let node = cursor.remove().unwrap();
+
+                        // Add the node to the list of candidates.
+                        candidates.push_back(node);
+                        break;
+                    }
                 }
+            }
 
-                // Wake the node up.
-                node.woken.store(true, Ordering::SeqCst);
-                node.waker.wake();
+            if candidates.is_empty() {
+                break;
+            }
 
-                // Remove the node from the list.
-                cursor.remove();
-
-                // Record that the thread was woken up.
-                woken += 1;
-                if woken >= num_waiters {
-                    break;
-                }
+            for node in candidates {
+                // Wait for the wake operation to be confirmed or cancelled.
+                let confirmed = poll_fn(|cx| {
+                    node.wake_waker.register(cx.waker());
+                    let state = node.state.load();
+                    match state {
+                        WaiterState::Pending => unreachable!(),
+                        WaiterState::WakupPending => Poll::Pending,
+                        WaiterState::WakupConfirmed => Poll::Ready(true),
+                        WaiterState::Cancelled => Poll::Ready(false),
+                    }
+                })
+                .await;
+                woken += u32::from(confirmed);
             }
         }
         woken
@@ -154,8 +204,9 @@ impl Futexes {
 
 struct FutexWaiter {
     link: LinkedListAtomicLink,
-    waker: AtomicWaker,
-    woken: AtomicBool,
+    wait_waker: AtomicWaker,
+    wake_waker: AtomicWaker,
+    state: AtomicCell<WaiterState>,
     scope: FutexScope,
     bitset: Option<NonZeroU32>,
 }
@@ -175,4 +226,16 @@ impl FutexWaiter {
 pub enum FutexScope {
     Global,
     Process(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaiterState {
+    /// The futex wait operation has just started.
+    Pending,
+    /// The futex wait operation was woken up, but not yet confirmed.
+    WakupPending,
+    /// The futex wait operation was woken up and confirmed.
+    WakupConfirmed,
+    /// The futex wait operation has been cancelled.
+    Cancelled,
 }
