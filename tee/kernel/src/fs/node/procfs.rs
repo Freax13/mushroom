@@ -603,10 +603,12 @@ impl MeminfoFile {
     fn content(&self) -> Vec<u8> {
         let total = (DYNAMIC.end.start_address() - DYNAMIC.start.start_address()) / 1024;
         let free = total / 2; // TODO
+        let cached = total / 8;
 
         let mut buffer = Vec::new();
         writeln!(buffer, "MemTotal: {total:14} kB").unwrap();
         writeln!(buffer, "MemFree:  {free:14} kB").unwrap();
+        writeln!(buffer, "Cached:   {cached:14} kB").unwrap();
         buffer
     }
 }
