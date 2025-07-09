@@ -283,7 +283,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFallocate);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
-    handlers.register(SysEventfd);
+    handlers.register(SysEventfd2);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
     handlers.register(SysPipe2);
@@ -4788,7 +4788,7 @@ async fn accept4(
 }
 
 #[syscall(i386 = 323, amd64 = 290)]
-fn eventfd(
+fn eventfd2(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
