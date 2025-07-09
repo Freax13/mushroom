@@ -9,7 +9,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf},
-        node::FileAccessContext,
+        node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
     },
@@ -18,14 +18,15 @@ use crate::{
     time::{now, sleep_until},
     user::process::{
         syscall::args::{
-            ClockId, FileMode, ITimerspec, OpenFlags, SetTimeFlags, Stat, TimerfdCreateFlags,
-            Timespec,
+            ClockId, FileMode, FileTypeAndMode, ITimerspec, OpenFlags, SetTimeFlags, Stat,
+            TimerfdCreateFlags, Timespec,
         },
         thread::{Gid, Uid},
     },
 };
 
 pub struct Timer {
+    ino: u64,
     clock_id: ClockId,
     internal: Mutex<TimerInternal>,
     set_timer_notify: Notify,
@@ -40,6 +41,7 @@ struct TimerInternal {
 impl Timer {
     pub fn new(clock_id: ClockId, flags: TimerfdCreateFlags, uid: Uid, gid: Gid) -> Self {
         Self {
+            ino: new_ino(),
             clock_id,
             internal: Mutex::new(TimerInternal {
                 flags: OpenFlags::from(flags),
@@ -81,7 +83,24 @@ impl OpenFileDescription for Timer {
     }
 
     fn stat(&self) -> Result<Stat> {
-        todo!()
+        Ok(Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(
+                crate::user::process::syscall::args::FileType::Unknown,
+                FileMode::ALL_READ_WRITE,
+            ),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
@@ -133,6 +152,10 @@ impl OpenFileDescription for Timer {
             }
         }
         NonEmptyEvents::new(ready_events)
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
+        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {

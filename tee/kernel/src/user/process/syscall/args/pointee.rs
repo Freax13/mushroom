@@ -485,8 +485,10 @@ pub struct SigInfo32 {
     _sifields: [i32; 29],
 }
 
-impl From<SigInfo> for SigInfo32 {
-    fn from(value: SigInfo) -> Self {
+impl TryFrom<SigInfo> for SigInfo32 {
+    type Error = Error;
+
+    fn try_from(value: SigInfo) -> Result<Self> {
         let mut _sifields = [0; 29];
         let dst = bytes_of_mut(&mut _sifields);
         macro_rules! pack {
@@ -498,6 +500,13 @@ impl From<SigInfo> for SigInfo32 {
         }
         match value.fields {
             SigFields::None => {}
+            SigFields::Timer(sig_timer) => {
+                pack!(SigTimer32 {
+                    tid: sig_timer.tid.try_into()?,
+                    overrun: sig_timer.overrun,
+                    sigval: sig_timer.sigval.try_into()?,
+                })
+            }
             SigFields::SigChld(sig_chld) => {
                 pack!(SigChld32 {
                     pid: sig_chld.pid,
@@ -513,13 +522,21 @@ impl From<SigInfo> for SigInfo32 {
                 })
             }
         }
-        Self {
+        Ok(Self {
             si_signo: value.signal.get() as i32,
             si_errno: 0,
             si_code: value.code.get(),
             _sifields,
-        }
+        })
     }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigTimer32 {
+    tid: TimerId32,
+    overrun: u32,
+    sigval: Pointer32<c_void>,
 }
 
 #[derive(Clone, Copy, NoUninit)]
@@ -561,6 +578,13 @@ impl From<SigInfo> for SigInfo64 {
         }
         match value.fields {
             SigFields::None => {}
+            SigFields::Timer(sig_timer) => {
+                pack!(SigTimer64 {
+                    tid: sig_timer.tid.into(),
+                    overrun: sig_timer.overrun,
+                    sigval: sig_timer.sigval.into(),
+                })
+            }
             SigFields::SigChld(sig_chld) => {
                 pack!(SigChld64 {
                     pid: sig_chld.pid,
@@ -584,6 +608,14 @@ impl From<SigInfo> for SigInfo64 {
             _sifields,
         }
     }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C, packed(4))]
+struct SigTimer64 {
+    tid: TimerId64,
+    overrun: u32,
+    sigval: Pointer64<c_void>,
 }
 
 #[derive(Clone, Copy, NoUninit)]
@@ -2331,7 +2363,32 @@ impl From<ITimerspec> for ITimerspec64 {
 }
 
 impl Pointee for TimerId {}
-impl PrimitivePointee for TimerId {}
+impl AbiDependentPointee for TimerId {
+    type I386 = TimerId32;
+    type Amd64 = TimerId64;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct TimerId32(i32);
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct TimerId64(i64);
+
+impl TryFrom<TimerId> for TimerId32 {
+    type Error = Error;
+
+    fn try_from(value: TimerId) -> Result<Self> {
+        Ok(Self(i32::try_from(value.0)?))
+    }
+}
+
+impl From<TimerId> for TimerId64 {
+    fn from(value: TimerId) -> Self {
+        Self(value.0)
+    }
+}
 
 impl Pointee for SigEvent {}
 impl AbiDependentPointee for SigEvent {

@@ -22,7 +22,7 @@ use crate::{
     time,
     user::process::{
         memory::PageFaultError,
-        syscall::args::Timespec,
+        syscall::args::{TimerId, Timespec},
         thread::running_state::{ExitAction, ThreadRunningState},
     },
 };
@@ -1064,13 +1064,22 @@ impl SigInfoCode {
     pub const SEGV_ACCERR: Self = Self(2);
     pub const ILL_ILLOPN: Self = Self(2);
     pub const KERNEL: Self = Self(0x80);
+    pub const TIMER: Self = Self(-2);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum SigFields {
     None,
+    Timer(SigTimer),
     SigChld(SigChld),
     SigFault(SigFault),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigTimer {
+    pub tid: TimerId,
+    pub overrun: u32,
+    pub sigval: Pointer<c_void>,
 }
 
 #[derive(Debug, Clone, Copy)]

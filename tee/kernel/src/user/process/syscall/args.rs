@@ -1004,6 +1004,7 @@ impl Timespec {
         })
     }
 
+    #[expect(dead_code)]
     pub fn saturating_mul(self, rhs: u64) -> Self {
         let mut acc = Timespec::ZERO;
         // This implements multiplication with double-and-add (similar to
@@ -2196,6 +2197,24 @@ pub struct ITimerval {
     pub value: Timeval,
 }
 
+impl From<ITimerspec> for ITimerval {
+    fn from(value: ITimerspec) -> Self {
+        Self {
+            interval: value.interval.into(),
+            value: value.value.into(),
+        }
+    }
+}
+
+impl From<ITimerval> for ITimerspec {
+    fn from(value: ITimerval) -> Self {
+        Self {
+            interval: value.interval.into(),
+            value: value.value.into(),
+        }
+    }
+}
+
 enum_arg! {
     pub enum ITimerWhich {
         Real = 0,
@@ -2241,22 +2260,26 @@ pub struct ITimerspec {
     pub value: Timespec,
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct TimerId(pub i32);
+pub struct TimerId(pub i64);
 
 impl SyscallArg for TimerId {
-    fn parse(value: u64, _: Abi) -> Result<Self> {
-        Ok(Self(value as u32 as i32))
+    fn parse(value: u64, abi: Abi) -> Result<Self> {
+        match abi {
+            Abi::I386 => Ok(Self(value as u32 as i32 as i64)),
+            Abi::Amd64 => Ok(Self(value as i64)),
+        }
     }
 
     fn display(
         f: &mut dyn fmt::Write,
         value: u64,
-        _abi: Abi,
+        abi: Abi,
         _thread: &ThreadGuard<'_>,
     ) -> fmt::Result {
-        write!(f, "{}", (value as u32 as i32))
+        let value = Self::parse(value, abi).unwrap();
+        write!(f, "{}", value.0)
     }
 }
 
@@ -2276,4 +2299,10 @@ pub enum SigEventData {
         attribute: Pointer<c_void>,
     },
     ThreadId(u32),
+}
+
+bitflags! {
+    pub struct TimerSettimeFlags {
+        const ABSTIME = 1;
+    }
 }

@@ -4,8 +4,7 @@ use core::{
     ffi::CStr,
     iter::from_fn,
     ops::Not,
-    pin::pin,
-    sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 #[cfg(not(feature = "harden"))]
@@ -38,9 +37,12 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
-    user::process::syscall::args::{
-        ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags, SigEvent,
-        TimerId, Timeval,
+    user::process::{
+        syscall::args::{
+            ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
+            SigEvent, TimerId,
+        },
+        timer::Timer,
     },
 };
 
@@ -62,6 +64,7 @@ pub mod limits;
 pub mod memory;
 pub mod syscall;
 pub mod thread;
+mod timer;
 pub mod usage;
 
 pub const TASK_COMM_CAPACITY: usize = 15;
@@ -92,7 +95,7 @@ pub struct Process {
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
-    real_itimer: Mutex<ITimerState>,
+    real_itimer: Timer,
     timers: Mutex<BTreeMap<TimerId, Timer>>,
     pub cpu_time: Time<CpuTimeBackend>,
 }
@@ -118,7 +121,7 @@ impl Process {
             .take(TASK_COMM_CAPACITY)
             .collect();
 
-        let this = Self {
+        let arc = Arc::new_cyclic(|this| Self {
             pid: first_tid,
             start_time: now(ClockId::Monotonic),
             exit_status: OnceCell::new(),
@@ -142,11 +145,16 @@ impl Process {
             umask: Mutex::new(umask),
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
-            real_itimer: Mutex::new(ITimerState::Disarmed),
+            real_itimer: Timer::new(
+                ClockId::Realtime,
+                timer::Event::ITimer {
+                    signal: Signal::ALRM,
+                },
+                this.clone(),
+            ),
             timers: Mutex::new(BTreeMap::new()),
             cpu_time: Time::new_in_arc(CpuTimeBackend::default()),
-        };
-        let arc = Arc::new(this);
+        });
 
         if let Some(parent) = parent.upgrade() {
             parent.children.lock().push(arc.clone());
@@ -353,15 +361,18 @@ impl Process {
             .await
     }
 
-    pub fn queue_signal(&self, sig_info: SigInfo) {
+    pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
         match sig_info.signal {
             Signal::CONT | Signal::KILL => self.stop_state.cont(),
             Signal::STOP => self.stop_state.stop(),
             _ => {}
         }
 
-        self.pending_signals.lock().add(sig_info);
-        self.signals_notify.notify();
+        let added = self.pending_signals.lock().add(sig_info);
+        if added {
+            self.signals_notify.notify();
+        }
+        added
     }
 
     fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
@@ -481,158 +492,79 @@ impl Process {
     }
 
     pub fn get_itimer(&self, which: ITimerWhich) -> ITimerval {
-        let mutex = match which {
+        let timer = match which {
             ITimerWhich::Real => &self.real_itimer,
             ITimerWhich::Virtual => todo!(),
             ITimerWhich::Prof => todo!(),
         };
-        let guard = mutex.lock();
-        guard.get_value()
+        timer.get_time().into()
     }
 
     pub fn set_itimer(self: &Arc<Self>, which: ITimerWhich, value: ITimerval) -> ITimerval {
-        let new_state = if value != ITimerval::default() {
-            if value.interval != Timeval::default() {
-                let start = now(ClockId::Monotonic);
-                let expired = Arc::new(AtomicU64::new(0));
-                let (cancel_tx, cancel_rx) = oneshot::new();
-                let this = Arc::downgrade(self);
-                spawn({
-                    let expired = expired.clone();
-                    async move {
-                        let cancel_fut = cancel_rx.recv().fuse();
-                        let mut cancel_fut = pin!(cancel_fut);
-                        let mut deadline = start.saturating_add(Timespec::from(value.value));
-
-                        loop {
-                            select_biased! {
-                                _ = cancel_fut => {
-                                    // The timer has been cancelled -> do nothing.
-                                    return;
-                                }
-                                _ = sleep_until(deadline, ClockId::Monotonic).fuse() => {}
-                            }
-
-                            // Record that the timer was fired.
-                            expired.fetch_add(1, Ordering::Relaxed);
-
-                            // The alarm has fired -> queue a signal.
-                            let Some(this) = this.upgrade() else {
-                                return;
-                            };
-                            this.queue_signal(SigInfo {
-                                signal: Signal::ALRM,
-                                code: SigInfoCode::KERNEL,
-                                fields: SigFields::None,
-                            });
-
-                            // Otherwise update the deadline for the next tick.
-                            deadline = deadline.saturating_add(Timespec::from(value.interval));
-                        }
-                    }
-                });
-                ITimerState::Periodic {
-                    start,
-                    interval: value.interval,
-                    expired,
-                    _cancel_tx: cancel_tx,
-                }
-            } else {
-                let deadline = now(ClockId::Monotonic).saturating_add(Timespec::from(value.value));
-                let (cancel_tx, cancel_rx) = oneshot::new();
-                let this = Arc::downgrade(self);
-                spawn(async move {
-                    select_biased! {
-                        _ = cancel_rx.recv().fuse() => {
-                            // The timer has been cancelled -> do nothing.
-                        }
-                        _ = sleep_until(deadline, ClockId::Monotonic).fuse() => {
-                            // The alarm has fired -> queue a signal.
-                            let Some(this) = this.upgrade() else {
-                                return;
-                            };
-                            this.queue_signal(SigInfo {
-                                signal: Signal::ALRM,
-                                code: SigInfoCode::KERNEL,
-                                fields: SigFields::None,
-                            });
-                        }
-                    }
-                });
-                ITimerState::Oneshot {
-                    deadline,
-                    _cancel_tx: cancel_tx,
-                }
-            }
-        } else {
-            ITimerState::Disarmed
-        };
-
-        let mutex = match which {
+        let timer = match which {
             ITimerWhich::Real => &self.real_itimer,
             ITimerWhich::Virtual => todo!(),
             ITimerWhich::Prof => todo!(),
         };
-        let mut guard = mutex.lock();
-        let prev_state = core::mem::replace(&mut *guard, new_state);
-        drop(guard);
-
-        prev_state.get_value()
+        let old = timer.set_time(value.into(), true);
+        old.into()
     }
 
-    pub fn create_timer(&self, clock_id: ClockId, sig_event: SigEvent) -> TimerId {
+    pub fn create_timer(self: &Arc<Self>, clock_id: ClockId, sig_event: SigEvent) -> TimerId {
         let mut guard = self.timers.lock();
 
         // Find a usable timer id.
-        let id = match guard.last_key_value() {
-            Some((TimerId(i32::MAX), _)) => (0..)
-                .zip(guard.keys().copied())
-                .find(|&(i, key)| key.0 != i)
-                .map(|(i, _)| i)
-                .unwrap(),
-            Some((TimerId(i), _)) => i + 1,
-            None => 0,
-        };
+        let id = (0..)
+            .zip(guard.keys().copied())
+            .find(|&(i, key)| key.0 != i)
+            .map(|(i, _)| i)
+            .unwrap_or(guard.len() as i64);
         let id = TimerId(id);
 
-        guard.insert(
-            id,
-            Timer {
-                clock_id,
-                sig_event,
-                state: TimerState::Disarmed,
-            },
-        );
+        let event = timer::Event::Timer {
+            sig_event,
+            timer: id,
+        };
+        guard.insert(id, Timer::new(clock_id, event, Arc::downgrade(self)));
 
         id
     }
 
-    pub fn timer_set_time(&self, timer: TimerId, new: ITimerspec) -> Result<ITimerspec> {
-        let new = match (new.interval != Timespec::ZERO, new.value != Timespec::ZERO) {
-            (true, _) => TimerState::Periodic {
-                value: new.value,
-                interval: new.interval,
-            },
-            (_, true) => TimerState::Oneshot { value: new.value },
-            (_, _) => TimerState::Disarmed,
-        };
-
+    pub fn timer_set_time(
+        &self,
+        timer: TimerId,
+        new: ITimerspec,
+        absolute: bool,
+    ) -> Result<ITimerspec> {
         let mut guard = self.timers.lock();
         let timer = guard.get_mut(&timer).ok_or(err!(Inval))?;
-        let old = core::mem::replace(&mut timer.state, new);
+        let old = timer.set_time(new, absolute);
         drop(guard);
+        Ok(old)
+    }
 
-        Ok(match old {
-            TimerState::Disarmed => ITimerspec {
+    pub fn timer_get_time(&self, timer: TimerId) -> Result<ITimerspec> {
+        let mut guard = self.timers.lock();
+        let timer = guard.get_mut(&timer).ok_or(err!(Inval))?;
+        let old = timer.get_time();
+        drop(guard);
+        Ok(old)
+    }
+
+    pub fn timer_delete(&self, timer: TimerId) -> Result<()> {
+        // Remove the timer.
+        let timer = self.timers.lock().remove(&timer).ok_or(err!(Inval))?;
+
+        // Disarm the timer.
+        timer.set_time(
+            ITimerspec {
                 interval: Timespec::ZERO,
                 value: Timespec::ZERO,
             },
-            TimerState::Periodic { value, interval } => ITimerspec { interval, value },
-            TimerState::Oneshot { value } => ITimerspec {
-                interval: Timespec::ZERO,
-                value,
-            },
-        })
+            true,
+        );
+
+        Ok(())
     }
 
     #[cfg(not(feature = "harden"))]
@@ -744,68 +676,6 @@ impl ProcessGroup {
     pub fn session(&self) -> Arc<Session> {
         self.session.lock().clone()
     }
-}
-
-enum ITimerState {
-    Disarmed,
-    Periodic {
-        /// Time when the timer was started
-        start: Timespec,
-        /// Interval between timer ticks
-        interval: Timeval,
-        /// How many times the timer was fired
-        expired: Arc<AtomicU64>,
-        _cancel_tx: oneshot::Sender<()>,
-    },
-    Oneshot {
-        /// Time when the timer will be fired
-        deadline: Timespec,
-        _cancel_tx: oneshot::Sender<()>,
-    },
-}
-
-impl ITimerState {
-    fn get_value(&self) -> ITimerval {
-        match *self {
-            Self::Disarmed => ITimerval::default(),
-            Self::Periodic {
-                start,
-                interval,
-                ref expired,
-                ..
-            } => {
-                let expired = expired.load(Ordering::Relaxed);
-                let current_deadline =
-                    start.saturating_add(Timespec::from(interval).saturating_mul(expired));
-                let now = now(ClockId::Monotonic);
-                ITimerval {
-                    interval: Timeval::default(),
-                    value: current_deadline.saturating_sub(now).into(),
-                }
-            }
-            Self::Oneshot { deadline, .. } => {
-                let now = now(ClockId::Monotonic);
-                ITimerval {
-                    interval: Timeval::default(),
-                    value: deadline.saturating_sub(now).into(),
-                }
-            }
-        }
-    }
-}
-
-struct Timer {
-    #[expect(dead_code)] // TODO
-    clock_id: ClockId,
-    #[expect(dead_code)] // TODO
-    sig_event: SigEvent,
-    state: TimerState,
-}
-
-enum TimerState {
-    Disarmed,
-    Periodic { value: Timespec, interval: Timespec },
-    Oneshot { value: Timespec },
 }
 
 pub struct Session {

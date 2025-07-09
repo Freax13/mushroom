@@ -241,6 +241,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetTidAddress);
     handlers.register(SysTimerCreate);
     handlers.register(SysTimerSettime);
+    handlers.register(SysTimerGettime);
+    handlers.register(SysTimerDelete);
     handlers.register(SysClockSettime);
     handlers.register(SysClockGettime);
     handlers.register(SysClockGetres);
@@ -3510,7 +3512,7 @@ fn timer_create(
 ) -> SyscallResult {
     let sevp = virtual_memory.read_with_abi(sevp, abi)?;
     let id = thread.process().create_timer(clockid, sevp);
-    virtual_memory.write(timerid, id)?;
+    virtual_memory.write_with_abi(timerid, id, abi)?;
     Ok(0)
 }
 
@@ -3520,15 +3522,35 @@ fn timer_settime(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     timerid: TimerId,
-    flags: u32, // TODO: Use a proper type
+    flags: TimerSettimeFlags,
     new_value: Pointer<ITimerspec>,
     old_value: Pointer<ITimerspec>,
 ) -> SyscallResult {
     let new = virtual_memory.read_with_abi(new_value, abi)?;
-    let old = thread.process().timer_set_time(timerid, new)?;
+    let absolute = flags.contains(TimerSettimeFlags::ABSTIME);
+    let old = thread.process().timer_set_time(timerid, new, absolute)?;
     if !old_value.is_null() {
         virtual_memory.write_with_abi(old_value, old, abi)?;
     }
+    Ok(0)
+}
+
+#[syscall(i386 = 261, amd64 = 224)]
+fn timer_gettime(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    timerid: TimerId,
+    curr_value: Pointer<ITimerspec>,
+) -> SyscallResult {
+    let curr = thread.process().timer_get_time(timerid)?;
+    virtual_memory.write_with_abi(curr_value, curr, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 263, amd64 = 226)]
+fn timer_delete(thread: &Thread, timerid: TimerId) -> SyscallResult {
+    thread.process().timer_delete(timerid)?;
     Ok(0)
 }
 
