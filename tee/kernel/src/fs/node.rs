@@ -594,7 +594,7 @@ fn find_parent<'a>(
     let (parent, segment, trailing_slash) = segments.try_fold(
         (start_dir, first, false),
         |(dir, segment, _trailing_slash), next_segment| -> Result<_> {
-            // Don't do anything if the next segment is emtpty or a dot.
+            // Don't do anything if the next segment is empty or a dot.
             if let PathSegment::Empty = next_segment {
                 return Ok((dir, segment, true));
             }
