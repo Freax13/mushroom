@@ -235,6 +235,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysArchPrctl);
     handlers.register(SysMount);
     handlers.register(SysGettid);
+    handlers.register(SysFsetxattr);
+    handlers.register(SysListxattr);
+    handlers.register(SysLlistxattr);
     handlers.register(SysTime);
     handlers.register(SysFutex);
     handlers.register(SysSchedSetaffinity);
@@ -3289,6 +3292,47 @@ fn mount(
 fn gettid(thread: &Thread) -> SyscallResult {
     let tid = thread.tid();
     Ok(u64::from(tid))
+}
+
+#[syscall(i386 = 228, amd64 = 190)]
+fn fsetxattr(
+    fd: FdNum,
+    name: Pointer<CString>,
+    value: Pointer<c_void>,
+    size: u64,
+    flags: u64, // TODO
+) -> SyscallResult {
+    bail!(OpNotSupp)
+}
+
+#[syscall(i386 = 232, amd64 = 194)]
+fn listxattr(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    list: Pointer<u8>,
+    size: u64,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(path)?;
+    let cwd = thread.process().cwd();
+    let _link = lookup_and_resolve_link(cwd, &pathname, &mut ctx)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 233, amd64 = 195)]
+fn llistxattr(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    list: Pointer<u8>,
+    size: u64,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(path)?;
+    let cwd = thread.process().cwd();
+    let _link = lookup_link(cwd, &pathname, &mut ctx)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 13, amd64 = 201)]
