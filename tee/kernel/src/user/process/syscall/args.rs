@@ -1307,6 +1307,7 @@ pub struct Time(pub u32);
 enum_arg! {
     pub enum Resource {
         Stack = 3,
+        Core = 4,
         NoFile = 7,
         As = 9,
     }

@@ -11,6 +11,7 @@ use super::{
 #[derive(Clone, Copy)]
 pub struct Limits {
     stack: RLimit,
+    core: RLimit,
     no_file: RLimit,
     address_space: RLimit,
 }
@@ -21,6 +22,10 @@ impl Limits {
             stack: RLimit {
                 rlim_cur: 0x80_0000,
                 rlim_max: 0x80_0000,
+            },
+            core: RLimit {
+                rlim_cur: RLimit::INFINITY,
+                rlim_max: RLimit::INFINITY,
             },
             no_file: RLimit {
                 rlim_cur: 1024,
@@ -40,6 +45,7 @@ impl Index<Resource> for Limits {
     fn index(&self, index: Resource) -> &Self::Output {
         match index {
             Resource::Stack => &self.stack,
+            Resource::Core => &self.core,
             Resource::NoFile => &self.no_file,
             Resource::As => &self.address_space,
         }
@@ -50,6 +56,7 @@ impl IndexMut<Resource> for Limits {
     fn index_mut(&mut self, index: Resource) -> &mut Self::Output {
         match index {
             Resource::Stack => &mut self.stack,
+            Resource::Core => &mut self.core,
             Resource::NoFile => &mut self.no_file,
             Resource::As => &mut self.address_space,
         }
