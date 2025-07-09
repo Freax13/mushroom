@@ -3844,6 +3844,8 @@ async fn openat(
 
         if flags.contains(OpenFlags::DIRECTORY) {
             ensure!(link.node.ty()? == FileType::Dir, NotDir);
+        } else if flags.intersects(OpenFlags::WRONLY | OpenFlags::RDWR) {
+            ensure!(link.node.ty()? != FileType::Dir, IsDir);
         }
 
         let path_fd = PathFd::new(link);
@@ -3861,6 +3863,11 @@ async fn openat(
             };
 
             let stat = link.node.stat()?;
+            if flags.contains(OpenFlags::DIRECTORY) {
+                ensure!(stat.mode.ty() == FileType::Dir, NotDir);
+            } else if flags.intersects(OpenFlags::WRONLY | OpenFlags::RDWR) {
+                ensure!(stat.mode.ty() != FileType::Dir, IsDir);
+            }
             if flags.contains(OpenFlags::WRONLY) {
                 ctx.check_permissions(&stat, Permission::Write)?;
             } else if flags.contains(OpenFlags::RDWR) {

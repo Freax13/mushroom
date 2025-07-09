@@ -560,7 +560,7 @@ pub fn lookup_link(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) ->
                 // Make sure that the node is a directory.
                 let stat = start_dir.node.stat()?;
                 ensure!(stat.mode.ty() == FileType::Dir, NotDir);
-                if !matches!(segment, PathSegment::Dot) {
+                if !matches!(segment, PathSegment::Empty | PathSegment::Dot) {
                     ctx.check_permissions(&stat, Permission::Execute)?;
                 }
             }
@@ -843,7 +843,18 @@ pub fn unlink_file(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) ->
     let PathSegment::FileName(filename) = segment else {
         bail!(IsDir)
     };
-    ensure!(!trailing_slash, IsDir);
+
+    // If there's a trailing slash, file deletion will definitely fail, but we
+    // need to look at the node to figure out the correct error.
+    if trailing_slash {
+        let link = parent.node.get_node(&filename, ctx)?;
+        let stat = link.node.stat()?;
+        match stat.mode.ty() {
+            FileType::Dir => bail!(IsDir),
+            _ => bail!(NotDir),
+        }
+    }
+
     parent.node.delete_non_dir(filename.into_owned(), ctx)
 }
 
