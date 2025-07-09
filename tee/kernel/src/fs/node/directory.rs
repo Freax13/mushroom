@@ -87,12 +87,16 @@ macro_rules! dir_impls {
             Directory::is_empty(self)
         }
 
-        fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
-            Directory::delete_non_dir(self, file_name)
+        fn delete_non_dir(
+            &self,
+            file_name: FileName<'static>,
+            ctx: &FileAccessContext,
+        ) -> Result<()> {
+            Directory::delete_non_dir(self, file_name, ctx)
         }
 
-        fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
-            Directory::delete_dir(self, file_name)
+        fn delete_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()> {
+            Directory::delete_dir(self, file_name, ctx)
         }
 
         fn rename(
@@ -102,8 +106,17 @@ macro_rules! dir_impls {
             new_dir: DynINode,
             newname: FileName<'static>,
             no_replace: bool,
+            ctx: &FileAccessContext,
         ) -> Result<()> {
-            Directory::rename(self, oldname, check_is_dir, new_dir, newname, no_replace)
+            Directory::rename(
+                self,
+                oldname,
+                check_is_dir,
+                new_dir,
+                newname,
+                no_replace,
+                ctx,
+            )
         }
 
         fn exchange(
@@ -111,8 +124,9 @@ macro_rules! dir_impls {
             oldname: FileName<'static>,
             new_dir: DynINode,
             newname: FileName<'static>,
+            ctx: &FileAccessContext,
         ) -> Result<()> {
-            Directory::exchange(self, oldname, new_dir, newname)
+            Directory::exchange(self, oldname, new_dir, newname, ctx)
         }
 
         fn hard_link(
@@ -121,8 +135,9 @@ macro_rules! dir_impls {
             follow_symlink: bool,
             new_dir: DynINode,
             newname: FileName<'static>,
+            ctx: &FileAccessContext,
         ) -> Result<Option<Path>> {
-            Directory::hard_link(self, oldname, follow_symlink, new_dir, newname)
+            Directory::hard_link(self, oldname, follow_symlink, new_dir, newname, ctx)
         }
     };
 }
@@ -180,8 +195,8 @@ pub trait Directory: INode {
     ) -> Result<()>;
     fn is_empty(&self) -> bool;
     fn list_entries(&self, ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>>;
-    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()>;
-    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()>;
+    fn delete_non_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()>;
+    fn delete_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()>;
     fn rename(
         &self,
         oldname: FileName<'static>,
@@ -189,12 +204,14 @@ pub trait Directory: INode {
         new_dir: DynINode,
         newname: FileName<'static>,
         no_replace: bool,
+        ctx: &FileAccessContext,
     ) -> Result<()>;
     fn exchange(
         &self,
         oldname: FileName<'static>,
         new_dir: DynINode,
         newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<()>;
     fn hard_link(
         &self,
@@ -202,5 +219,6 @@ pub trait Directory: INode {
         follow_symlink: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<Option<Path>>;
 }

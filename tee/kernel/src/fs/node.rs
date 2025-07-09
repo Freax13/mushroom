@@ -210,13 +210,15 @@ pub trait INode: Any + Send + Sync + 'static {
         false
     }
 
-    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()> {
         let _ = file_name;
+        let _ = ctx;
         bail!(NotDir)
     }
 
-    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()> {
         let _ = file_name;
+        let _ = ctx;
         bail!(NotDir)
     }
 
@@ -227,12 +229,14 @@ pub trait INode: Any + Send + Sync + 'static {
         new_dir: DynINode,
         newname: FileName<'static>,
         no_replace: bool,
+        ctx: &FileAccessContext,
     ) -> Result<()> {
         let _ = oldname;
         let _ = check_is_dir;
         let _ = new_dir;
         let _ = newname;
         let _ = no_replace;
+        let _ = ctx;
         bail!(NotDir)
     }
 
@@ -241,10 +245,12 @@ pub trait INode: Any + Send + Sync + 'static {
         oldname: FileName<'static>,
         new_dir: DynINode,
         newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<()> {
         let _ = oldname;
         let _ = new_dir;
         let _ = newname;
+        let _ = ctx;
         bail!(NotDir)
     }
 
@@ -254,11 +260,13 @@ pub trait INode: Any + Send + Sync + 'static {
         follow_symlink: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<Option<Path>> {
         let _ = oldname;
         let _ = follow_symlink;
         let _ = new_dir;
         let _ = newname;
+        let _ = ctx;
         bail!(NotDir)
     }
 
@@ -836,9 +844,7 @@ pub fn unlink_file(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) ->
         bail!(IsDir)
     };
     ensure!(!trailing_slash, IsDir);
-    let stat = parent.node.stat()?;
-    ctx.check_permissions(&stat, Permission::Write)?;
-    parent.node.delete_non_dir(filename.into_owned())
+    parent.node.delete_non_dir(filename.into_owned(), ctx)
 }
 
 pub fn unlink_dir(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) -> Result<()> {
@@ -848,11 +854,7 @@ pub fn unlink_dir(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) -> 
         PathSegment::Empty => todo!(),
         PathSegment::Dot => bail!(Inval),
         PathSegment::DotDot => bail!(NotEmpty),
-        PathSegment::FileName(filename) => {
-            let stat = parent.node.stat()?;
-            ctx.check_permissions(&stat, Permission::Write)?;
-            parent.node.delete_dir(filename.into_owned())
-        }
+        PathSegment::FileName(filename) => parent.node.delete_dir(filename.into_owned(), ctx),
     }
 }
 
@@ -870,9 +872,6 @@ pub fn hard_link(
     };
     let new_filename = new_filename.into_owned();
 
-    let stat = new_parent.node.stat()?;
-    ctx.check_permissions(&stat, Permission::Write)?;
-
     loop {
         let (old_parent, old_filename, trailing_slash) =
             find_parent(target_dir, &target_path, ctx)?;
@@ -886,6 +885,7 @@ pub fn hard_link(
             symlink_follow,
             new_parent.node.clone(),
             new_filename.clone(),
+            ctx,
         )?;
         if let Some(new_path) = new_path {
             ctx.follow_symlink()?;
@@ -923,11 +923,6 @@ pub fn rename(
         PathSegment::FileName(filename) => filename,
     };
 
-    let stat = old_parent.node.stat()?;
-    ctx.check_permissions(&stat, Permission::Write)?;
-    let stat = new_parent.node.stat()?;
-    ctx.check_permissions(&stat, Permission::Write)?;
-
     let check_is_dir = old_path.has_trailing_slash() || new_path.has_trailing_slash();
     old_parent.node.rename(
         old_name.into_owned(),
@@ -935,6 +930,7 @@ pub fn rename(
         new_parent.node,
         new_name.into_owned(),
         no_replace,
+        ctx,
     )?;
 
     Ok(())
@@ -962,15 +958,11 @@ pub fn exchange(
         PathSegment::FileName(filename) => filename,
     };
 
-    let stat = old_parent.node.stat()?;
-    ctx.check_permissions(&stat, Permission::Write)?;
-    let stat = new_parent.node.stat()?;
-    ctx.check_permissions(&stat, Permission::Write)?;
-
     old_parent.node.exchange(
         old_name.into_owned(),
         new_parent.node,
         new_name.into_owned(),
+        ctx,
     )?;
 
     Ok(())

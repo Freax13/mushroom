@@ -829,11 +829,11 @@ impl Directory for DevPtsDirectory {
         Ok(entries)
     }
 
-    fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -844,6 +844,7 @@ impl Directory for DevPtsDirectory {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -853,6 +854,7 @@ impl Directory for DevPtsDirectory {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -863,6 +865,7 @@ impl Directory for DevPtsDirectory {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
