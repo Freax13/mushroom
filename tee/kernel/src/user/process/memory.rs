@@ -438,7 +438,7 @@ impl VirtualMemory {
         Ok(())
     }
 
-    pub fn futex_wake(
+    pub async fn futex_wake(
         &self,
         uaddr: Pointer<u32>,
         num_waiters: u32,
@@ -463,8 +463,13 @@ impl VirtualMemory {
         // Offset into the mapping's backing.
         let abs_offset = usize_from(uaddr - (mapping_page - guard.page_offset).start_address());
 
+        // Release all locks.
+        let futexes = guard.futexes.clone();
+        drop(guard);
+        drop(state);
+
         // Wake the futexes.
-        Ok(guard.futexes.wake(abs_offset, num_waiters, scope, bitset))
+        Ok(futexes.wake(abs_offset, num_waiters, scope, bitset).await)
     }
 }
 

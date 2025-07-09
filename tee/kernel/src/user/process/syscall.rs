@@ -47,7 +47,7 @@ use crate::{
         path::Path,
     },
     net::{netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
-    rt::{oneshot, r#yield},
+    rt::{oneshot, spawn, r#yield},
     time::{self, now, sleep_until},
     user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
 };
@@ -95,9 +95,13 @@ impl ThreadGuard<'_> {
 
         let clear_child_tid = core::mem::take(&mut self.clear_child_tid);
         if !clear_child_tid.is_null() {
-            let virtual_memory = self.virtual_memory();
+            let virtual_memory = self.virtual_memory().clone();
             let _ = virtual_memory.write(clear_child_tid, 0u32);
-            let _ = virtual_memory.futex_wake(clear_child_tid, 1, FutexScope::Global, None);
+            spawn(async move {
+                let _ = virtual_memory
+                    .futex_wake(clear_child_tid, 1, FutexScope::Global, None)
+                    .await;
+            });
         }
     }
 }
@@ -3327,7 +3331,7 @@ async fn futex(
             Ok(0)
         }
         FutexOp::Wake => {
-            let woken = virtual_memory.futex_wake(uaddr, val, scope, None)?;
+            let woken = virtual_memory.futex_wake(uaddr, val, scope, None).await?;
             Ok(u64::from(woken))
         }
         FutexOp::Fd => bail!(NoSys),
@@ -3367,7 +3371,9 @@ async fn futex(
         }
         FutexOp::WakeBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
-            let woken = virtual_memory.futex_wake(uaddr, val, scope, Some(bitset))?;
+            let woken = virtual_memory
+                .futex_wake(uaddr, val, scope, Some(bitset))
+                .await?;
             Ok(u64::from(woken))
         }
         FutexOp::WaitRequeuePi => bail!(NoSys),
