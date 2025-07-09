@@ -7,7 +7,7 @@ use crate::{
         mem::{Full, Null, Random, URandom, Zero},
         mushroom::Output,
     },
-    fs::{StaticFile, path::Path},
+    fs::{StaticFile, node::FileAccessContext, path::Path},
     user::process::thread::{Gid, Uid},
 };
 
@@ -33,8 +33,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         .create_file(
             input_name,
             FileMode::from_bits_truncate(0o444),
-            Uid::SUPER_USER,
-            Gid::SUPER_USER,
+            &FileAccessContext::root(),
         )?
         .ok()
         .unwrap();
@@ -134,7 +133,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
     )?;
 
     let output_name = FileName::new(b"shm").unwrap();
-    tmp_fs_dir.create_dir(output_name, FileMode::ALL, Uid::SUPER_USER, Gid::SUPER_USER)?;
+    tmp_fs_dir.create_dir(output_name, FileMode::ALL, &FileAccessContext::root())?;
 
     Ok(tmp_fs_dir)
 }

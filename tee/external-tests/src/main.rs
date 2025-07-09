@@ -39,6 +39,8 @@ fn main() -> Result<()> {
     let file = File::open("/dev/input").context("failed to open input file")?;
     let buf_reader = BufReader::new(file);
     let mut archive = Archive::new(buf_reader);
+    archive.set_preserve_permissions(true);
+    archive.set_preserve_ownerships(true);
     archive.unpack(root).context("failed to unpack image")?;
 
     // Execute the build.

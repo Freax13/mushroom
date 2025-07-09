@@ -15,6 +15,7 @@ use crate::{
             stream_buffer,
             unix_socket::StreamUnixSocket,
         },
+        node::Permission,
         ownership::Ownership,
     },
     memory::page::{Buffer, KernelPage},
@@ -122,17 +123,23 @@ impl TmpFsDir {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<Result<(LinkLocation, Arc<TmpFsFile>), Link>> {
         let mut guard = self.internal.lock();
-        let entry = guard.items.entry(file_name.clone());
+        let internal = &mut *guard;
+        let entry = internal.items.entry(file_name.clone());
         match entry {
             Entry::Vacant(entry) => {
+                ctx.check_permissions(&internal.ownership, Permission::Write)?;
                 let location = LinkLocation::new(self.this.upgrade().unwrap(), entry.key().clone());
-                let node = TmpFsFile::new(self.fs.clone(), mode, uid, gid);
+                let node = TmpFsFile::new(
+                    self.fs.clone(),
+                    mode,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                );
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
-                guard.update_times();
+                internal.update_times();
                 drop(guard);
 
                 self.watchers()
@@ -246,17 +253,24 @@ impl Directory for TmpFsDir {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<DynINode> {
         let mut guard = self.internal.lock();
-        let entry = guard.items.entry(file_name.clone());
+        let internal = &mut *guard;
+        let entry = internal.items.entry(file_name.clone());
         match entry {
             Entry::Vacant(entry) => {
+                ctx.check_permissions(&internal.ownership, Permission::Write)?;
                 let location = LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone());
-                let dir = TmpFsDir::new(self.fs.clone(), location, mode, uid, gid);
+                let dir = TmpFsDir::new(
+                    self.fs.clone(),
+                    location,
+                    mode,
+                    ctx.filesystem_user_id,
+                    ctx.filesystem_group_id,
+                );
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
-                guard.update_times();
+                internal.update_times();
                 Ok(dir)
             }
             Entry::Occupied(_) => bail!(Exist),
@@ -267,10 +281,9 @@ impl Directory for TmpFsDir {
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        self.create_file(file_name, mode, uid, gid).map(|res| {
+        self.create_file(file_name, mode, ctx).map(|res| {
             res.map(|(loc, file)| Link {
                 location: loc,
                 node: file,
@@ -442,8 +455,9 @@ impl Directory for TmpFsDir {
         Ok(entries)
     }
 
-    fn delete_non_dir(&self, file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()> {
         let mut guard = self.internal.lock();
+        ctx.check_permissions(&guard.ownership, Permission::Write)?;
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else {
             bail!(NoEnt);
@@ -461,8 +475,9 @@ impl Directory for TmpFsDir {
         Ok(())
     }
 
-    fn delete_dir(&self, file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, file_name: FileName<'static>, ctx: &FileAccessContext) -> Result<()> {
         let mut guard = self.internal.lock();
+        ctx.check_permissions(&guard.ownership, Permission::Write)?;
         let node = guard.items.entry(file_name);
         let Entry::Occupied(entry) = node else {
             bail!(NoEnt);
@@ -488,6 +503,7 @@ impl Directory for TmpFsDir {
         new_dir: DynINode,
         newname: FileName<'static>,
         no_replace: bool,
+        ctx: &FileAccessContext,
     ) -> Result<()> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
@@ -550,6 +566,7 @@ impl Directory for TmpFsDir {
         if core::ptr::eq(self, &*new_dir) {
             if newname == oldname {
                 let guard = self.internal.lock();
+                ctx.check_permissions(&guard.ownership, Permission::Write)?;
 
                 // Look up the entries.
                 let Some(old) = guard.items.get(&oldname) else {
@@ -564,6 +581,7 @@ impl Directory for TmpFsDir {
                 Ok(())
             } else {
                 let mut guard = self.internal.lock();
+                ctx.check_permissions(&guard.ownership, Permission::Write)?;
 
                 // Look up the entries.
                 let Some(old) = guard.items.get(&oldname) else {
@@ -599,6 +617,8 @@ impl Directory for TmpFsDir {
             }
         } else {
             let (mut old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+            ctx.check_permissions(&old_guard.ownership, Permission::Write)?;
+            ctx.check_permissions(&new_guard.ownership, Permission::Write)?;
 
             // Look up the entries.
             let Entry::Occupied(old_entry) = old_guard.items.entry(oldname.clone()) else {
@@ -666,6 +686,7 @@ impl Directory for TmpFsDir {
         oldname: FileName<'static>,
         new_dir: DynINode,
         newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<()> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
@@ -676,6 +697,7 @@ impl Directory for TmpFsDir {
                 Ok(())
             } else {
                 let mut guard = self.internal.lock();
+                ctx.check_permissions(&guard.ownership, Permission::Write)?;
 
                 ensure!(guard.items.contains_key(&oldname), NoEnt);
                 ensure!(guard.items.contains_key(&newname), NoEnt);
@@ -721,6 +743,8 @@ impl Directory for TmpFsDir {
             }
         } else {
             let (mut old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+            ctx.check_permissions(&old_guard.ownership, Permission::Write)?;
+            ctx.check_permissions(&new_guard.ownership, Permission::Write)?;
 
             // Do the exchange.
             let Entry::Occupied(mut old_entry) = old_guard.items.entry(oldname.clone()) else {
@@ -781,6 +805,7 @@ impl Directory for TmpFsDir {
         follow_symlink: bool,
         new_dir: DynINode,
         newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<Option<Path>> {
         let new_dir =
             Arc::<dyn Any + Send + Sync>::downcast::<Self>(new_dir).map_err(|_| err!(XDev))?;
@@ -788,6 +813,7 @@ impl Directory for TmpFsDir {
 
         if core::ptr::eq(self, &*new_dir) {
             let mut guard = self.internal.lock();
+            ctx.check_permissions(&guard.ownership, Permission::Write)?;
             let entry = guard.items.get(&oldname).ok_or(err!(NoEnt))?;
             if follow_symlink && let TmpFsDirEntry::Symlink(_, symlink) = &entry {
                 return Ok(Some(symlink.target.clone()));
@@ -808,6 +834,7 @@ impl Directory for TmpFsDir {
             }
         } else {
             let (old_guard, mut new_guard) = self.internal.lock_two(&new_dir.internal);
+            ctx.check_permissions(&new_guard.ownership, Permission::Write)?;
             let entry = old_guard.items.get(&oldname).ok_or(err!(NoEnt))?;
 
             if follow_symlink && let TmpFsDirEntry::Symlink(_, symlink) = &entry {

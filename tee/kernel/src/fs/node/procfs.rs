@@ -200,13 +200,17 @@ impl Directory for ProcFsRoot {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -318,11 +322,11 @@ impl Directory for ProcFsRoot {
         Ok(entries)
     }
 
-    fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -333,6 +337,7 @@ impl Directory for ProcFsRoot {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -342,6 +347,7 @@ impl Directory for ProcFsRoot {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -352,6 +358,7 @@ impl Directory for ProcFsRoot {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
@@ -678,13 +685,17 @@ impl Directory for NetDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -759,11 +770,11 @@ impl Directory for NetDir {
         Ok(Link { location, node })
     }
 
-    fn delete_non_dir(&self, _: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -774,6 +785,7 @@ impl Directory for NetDir {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(Perm)
     }
@@ -783,6 +795,7 @@ impl Directory for NetDir {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(Perm)
     }
@@ -793,6 +806,7 @@ impl Directory for NetDir {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(Perm)
     }
@@ -1167,13 +1181,17 @@ impl Directory for ProcessDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -1270,11 +1288,11 @@ impl Directory for ProcessDir {
         Ok(entries)
     }
 
-    fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -1285,6 +1303,7 @@ impl Directory for ProcessDir {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -1294,6 +1313,7 @@ impl Directory for ProcessDir {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -1304,6 +1324,7 @@ impl Directory for ProcessDir {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
@@ -1421,13 +1442,17 @@ impl Directory for FdDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -1487,11 +1512,11 @@ impl Directory for FdDir {
         Ok(fdtable.list_entries())
     }
 
-    fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -1502,6 +1527,7 @@ impl Directory for FdDir {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -1511,6 +1537,7 @@ impl Directory for FdDir {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -1521,6 +1548,7 @@ impl Directory for FdDir {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
@@ -2158,13 +2186,17 @@ impl Directory for ProcessTaskDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -2256,11 +2288,11 @@ impl Directory for ProcessTaskDir {
         Ok(Link { location, node })
     }
 
-    fn delete_non_dir(&self, _: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -2271,6 +2303,7 @@ impl Directory for ProcessTaskDir {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(Perm)
     }
@@ -2280,6 +2313,7 @@ impl Directory for ProcessTaskDir {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(Perm)
     }
@@ -2290,6 +2324,7 @@ impl Directory for ProcessTaskDir {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(Perm)
     }
@@ -2399,13 +2434,17 @@ impl Directory for TaskDir {
         &self,
         _: FileName<'static>,
         _: FileMode,
-        _: Uid,
-        _: Gid,
+        _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
         bail!(NoEnt)
     }
 
-    fn create_dir(&self, _: FileName<'static>, _: FileMode, _: Uid, _: Gid) -> Result<DynINode> {
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
         bail!(NoEnt)
     }
 
@@ -2482,11 +2521,11 @@ impl Directory for TaskDir {
         Ok(entries)
     }
 
-    fn delete_non_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_non_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
-    fn delete_dir(&self, _file_name: FileName<'static>) -> Result<()> {
+    fn delete_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
         bail!(Perm)
     }
 
@@ -2497,6 +2536,7 @@ impl Directory for TaskDir {
         _new_dir: DynINode,
         _newname: FileName<'static>,
         _no_replace: bool,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -2506,6 +2546,7 @@ impl Directory for TaskDir {
         _oldname: FileName<'static>,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<()> {
         bail!(NoEnt)
     }
@@ -2516,6 +2557,7 @@ impl Directory for TaskDir {
         _follow_symlink: bool,
         _new_dir: DynINode,
         _newname: FileName<'static>,
+        _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
     }
