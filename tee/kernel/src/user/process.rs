@@ -307,6 +307,9 @@ impl Process {
         if let Some(parent) = self.parent.upgrade() {
             parent.child_death_notify.notify();
         }
+
+        let mut children = core::mem::take(&mut *self.children.lock());
+        INIT_THREAD.process().children.lock().append(&mut children);
     }
 
     pub fn thread_group_leader(&self) -> Weak<Thread> {
