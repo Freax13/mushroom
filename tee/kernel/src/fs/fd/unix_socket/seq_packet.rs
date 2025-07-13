@@ -18,7 +18,8 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, Stat, Timespec,
+            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SocketAddr, Stat,
+            Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -126,8 +127,13 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok(len)
     }
 
-    fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
-        self.read(buf)
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        _flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
+        let len = self.read(buf)?;
+        Ok((len, None))
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {

@@ -718,23 +718,28 @@ impl OpenFileDescription for TcpSocket {
         active.read_half.read(buf)
     }
 
-    fn recv_from(&self, buf: &mut dyn ReadBuf, flags: RecvFromFlags) -> Result<usize> {
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        if flags.contains(RecvFromFlags::OOB) {
+        let len = if flags.contains(RecvFromFlags::OOB) {
             let oob_data = active.read_half.read_oob()?;
             if buf.buffer_len() != 0 {
                 buf.write(0, &[oob_data])?;
-                Ok(1)
+                1
             } else {
-                Ok(0)
+                0
             }
         } else {
-            active.read_half.read(buf)
-        }
+            active.read_half.read(buf)?
+        };
+        Ok((len, None))
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {

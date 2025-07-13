@@ -435,9 +435,14 @@ impl OpenFileDescription for UdpSocket {
         Ok(len)
     }
 
-    fn recv_from(&self, buf: &mut dyn ReadBuf, _: RecvFromFlags) -> Result<usize> {
-        let (len, _addr) = self.recv(buf)?;
-        Ok(len)
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        _flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
+        let (len, addr) = self.recv(buf)?;
+        let addr = SocketAddr::Inet(addr);
+        Ok((len, Some(addr)))
     }
 
     fn recv_msg(

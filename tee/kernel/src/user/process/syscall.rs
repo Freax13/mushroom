@@ -1468,12 +1468,9 @@ async fn recv_from(
     buf: Pointer<[u8]>,
     len: u64,
     flags: RecvFromFlags,
-    src_addr: Pointer<c_void>,
-    addrlen: Pointer<c_void>,
+    src_addr: Pointer<SocketAddr>,
+    addrlen: Pointer<u32>,
 ) -> SyscallResult {
-    assert!(src_addr.is_null());
-    assert!(addrlen.is_null());
-
     let fd = fdtable.get(sockfd)?;
 
     let count = usize_from(len);
@@ -1484,11 +1481,23 @@ async fn recv_from(
     } else {
         Events::READ
     };
-    let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
+    let (len, addr) = if !flags.contains(RecvFromFlags::DONTWAIT) {
         do_io(&**fd, events, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
+
+    if !src_addr.is_null() {
+        let max_len = virtual_memory.read(addrlen)?;
+        let actual_len = if let Some(addr) = addr {
+            addr.write(src_addr, usize_from(max_len), &virtual_memory)? as u32
+        } else {
+            0
+        };
+        if max_len != actual_len {
+            virtual_memory.write(addrlen, actual_len)?;
+        }
+    }
 
     let len = u64::from_usize(len);
     Ok(len)

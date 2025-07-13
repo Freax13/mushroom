@@ -193,7 +193,11 @@ impl OpenFileDescription for StreamUnixSocket {
             .map(|(len, _ancillary_data)| len)
     }
 
-    fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        _flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
@@ -202,7 +206,7 @@ impl OpenFileDescription for StreamUnixSocket {
             .read_half
             .lock()
             .read(buf)
-            .map(|(len, _ancillary_data)| len)
+            .map(|(len, _ancillary_data)| (len, None))
     }
 
     fn recv_msg(
