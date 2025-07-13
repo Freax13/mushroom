@@ -655,16 +655,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(BadF)
     }
 
-    fn bind(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        ctx: &mut FileAccessContext,
-    ) -> Result<()> {
-        let _ = virtual_memory;
+    fn bind(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let _ = addr;
-        let _ = addrlen;
         let _ = ctx;
         bail!(NotSock)
     }
@@ -674,21 +666,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, Vec<u8>)> {
+    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, SocketAddr)> {
         let _ = flags;
         bail!(NotSock)
     }
 
-    async fn connect(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        _: &mut FileAccessContext,
-    ) -> Result<()> {
-        let _ = virtual_memory;
+    async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         let _ = addr;
-        let _ = addrlen;
         bail!(NotSock)
     }
 
@@ -717,27 +701,23 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn get_socket_name(&self) -> Result<Vec<u8>> {
+    fn get_socket_name(&self) -> Result<SocketAddr> {
         bail!(NotSock)
     }
 
-    fn get_peer_name(&self) -> Result<Vec<u8>> {
+    fn get_peer_name(&self) -> Result<SocketAddr> {
         bail!(NotSock)
     }
 
     fn send_to(
         &self,
-        vm: &VirtualMemory,
         buf: &dyn WriteBuf,
         flags: SentToFlags,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
+        addr: Option<SocketAddr>,
     ) -> Result<usize> {
-        let _ = vm;
         let _ = buf;
         let _ = flags;
         let _ = addr;
-        let _ = addrlen;
         bail!(Inval)
     }
 

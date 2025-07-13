@@ -23,7 +23,7 @@ use crate::{
     time::now,
     user::process::{
         futex::Futexes,
-        syscall::args::{ClockId, FallocateMode, InotifyMask, OpenFlags, UnixAddr},
+        syscall::args::{ClockId, FallocateMode, InotifyMask, OpenFlags, SocketAddrUnix},
         thread::{Gid, Uid},
     },
 };
@@ -408,7 +408,7 @@ impl Directory for TmpFsDir {
                 mode,
                 uid,
                 gid,
-                socket.bind(UnixAddr::Pathname(socketname.clone()))?,
+                socket.bind(SocketAddrUnix::Pathname(socketname.clone()))?,
             )),
         ));
         guard.update_times();

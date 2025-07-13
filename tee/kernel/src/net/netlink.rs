@@ -3,7 +3,7 @@ use core::{cmp, future::pending};
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
-use bytemuck::{Pod, Zeroable, bytes_of};
+use bytemuck::{Pod, Zeroable};
 use usize_conversions::usize_from;
 
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                FileMode, MsgHdr, OpenFlags, Pointer, SentToFlags, SocketAddr, SocketAddrNetlink,
+                FileMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr, SocketAddrNetlink,
                 SocketType, SocketTypeWithFlags, Stat,
                 pointee::{Pointee, PrimitivePointee},
             },
@@ -72,15 +72,7 @@ impl OpenFileDescription for NetlinkSocket {
         self.flags
     }
 
-    fn bind(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        _: &mut FileAccessContext,
-    ) -> Result<()> {
-        ensure!(addrlen >= 12, Inval);
-        let addr = virtual_memory.read(addr)?;
+    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         let SocketAddr::Netlink(mut addr) = addr else {
             bail!(Inval);
         };
@@ -112,23 +104,20 @@ impl OpenFileDescription for NetlinkSocket {
         Ok(())
     }
 
-    fn get_socket_name(&self) -> Result<Vec<u8>> {
+    fn get_socket_name(&self) -> Result<SocketAddr> {
         let addr = self
             .connection
             .get()
             .map(|connection| connection.addr)
             .unwrap_or_default();
-        let addr = SocketAddr::Netlink(addr);
-        Ok(bytes_of(&addr).to_vec())
+        Ok(SocketAddr::Netlink(addr))
     }
 
     fn send_to(
         &self,
-        _vm: &VirtualMemory,
         buf: &dyn WriteBuf,
         _flags: SentToFlags,
-        _addr: Pointer<SocketAddr>,
-        _addrlen: usize,
+        _addr: Option<SocketAddr>,
     ) -> Result<usize> {
         let connection = self.connection.get().ok_or(err!(NotConn))?;
         // TODO: Should we truncate?
@@ -152,10 +141,7 @@ impl OpenFileDescription for NetlinkSocket {
 
         if msg_hdr.namelen != 0 {
             let addr = SocketAddr::Netlink(SocketAddrNetlink::default());
-            let name = bytes_of(&addr);
-            let len = cmp::min(usize_from(msg_hdr.namelen), name.len());
-            vm.write_bytes(msg_hdr.name.get(), &name[..len])?;
-            msg_hdr.namelen = len as u32;
+            msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
         }
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;

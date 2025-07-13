@@ -12,7 +12,6 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
-use bytemuck::bytes_of;
 
 use crate::{
     error::{Result, bail, ensure, err},
@@ -40,8 +39,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FileMode, FileType, FileTypeAndMode, Linger, OpenFlags,
-                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketAddrInet,
-                SocketType, SocketTypeWithFlags, Stat, Timespec,
+                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketType,
+                SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -238,13 +237,12 @@ impl TcpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, addr: SocketAddrInet) -> Result<bool> {
+    fn try_bind(&self, mut socket_addr: SocketAddrV4) -> Result<bool> {
         let guard = self.internal.lock();
         let reuse_addr = guard.reuse_addr;
         let reuse_port = guard.reuse_port;
         drop(guard);
 
-        let mut socket_addr = SocketAddrV4::from(addr);
         let effective_uid = Uid::SUPER_USER; // TODO
 
         let mut guard = PORTS.lock();
@@ -296,10 +294,7 @@ impl TcpSocket {
     }
 
     fn get_or_bind_ephemeral(&self) -> Result<&BoundSocket> {
-        self.try_bind(SocketAddrInet::from(SocketAddrV4::new(
-            Ipv4Addr::UNSPECIFIED,
-            0,
-        )))?;
+        self.try_bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
         Ok(self.bound_socket.get().unwrap())
     }
 }
@@ -321,15 +316,7 @@ impl OpenFileDescription for TcpSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn bind(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        _: &mut FileAccessContext,
-    ) -> Result<()> {
-        ensure!(addrlen == size_of::<SocketAddr>(), Inval);
-        let addr = virtual_memory.read(addr)?;
+    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         let SocketAddr::Inet(addr) = addr else {
             bail!(Inval);
         };
@@ -337,7 +324,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
-    fn get_socket_name(&self) -> Result<Vec<u8>> {
+    fn get_socket_name(&self) -> Result<SocketAddr> {
         let addr = self
             .bound_socket
             .get()
@@ -351,21 +338,17 @@ impl OpenFileDescription for TcpSocket {
                     bound.bind_addr
                 }
             })
-            .map(SocketAddrInet::from)
-            .unwrap_or_default();
-        let addr = SocketAddr::Inet(addr);
-        Ok(bytes_of(&addr).to_vec())
+            .unwrap_or(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+        Ok(SocketAddr::Inet(addr))
     }
 
-    fn get_peer_name(&self) -> Result<Vec<u8>> {
+    fn get_peer_name(&self) -> Result<SocketAddr> {
         let socket = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = socket.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        let addr = SocketAddrInet::from(active.remote_addr);
-        let addr = SocketAddr::Inet(addr);
-        Ok(bytes_of(&addr).to_vec())
+        Ok(SocketAddr::Inet(active.remote_addr))
     }
 
     fn listen(&self, backlog: usize) -> Result<()> {
@@ -412,7 +395,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
-    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, Vec<u8>)> {
+    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, SocketAddr)> {
         let bound = self.bound_socket.get().ok_or(err!(Inval))?;
         let mode = bound.mode.get().ok_or(err!(Inval))?;
         let Mode::Passive(passive) = mode else {
@@ -448,27 +431,17 @@ impl OpenFileDescription for TcpSocket {
         };
         let fd = StrongFileDescriptor::from(socket);
 
-        let socket_addr = SocketAddr::Inet(SocketAddrInet::from(remote_addr));
-        let socket_addr = bytes_of(&socket_addr).to_vec();
+        let socket_addr = SocketAddr::Inet(remote_addr);
 
         Ok((fd, socket_addr))
     }
 
-    async fn connect(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        _: &mut FileAccessContext,
-    ) -> Result<()> {
+    async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         let bound = self.get_or_bind_ephemeral()?;
 
-        ensure!(addrlen == size_of::<SocketAddr>(), Inval);
-        let remote_addr = virtual_memory.read(addr)?;
-        let SocketAddr::Inet(remote_addr) = remote_addr else {
+        let SocketAddr::Inet(remote_addr) = addr else {
             bail!(Inval);
         };
-        let remote_addr = SocketAddrV4::from(remote_addr);
 
         let remote_ip = *remote_addr.ip();
         let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
@@ -775,13 +748,11 @@ impl OpenFileDescription for TcpSocket {
 
     fn send_to(
         &self,
-        _vm: &VirtualMemory,
         buf: &dyn WriteBuf,
         flags: SentToFlags,
-        addr: Pointer<SocketAddr>,
-        _addrlen: usize,
+        addr: Option<SocketAddr>,
     ) -> Result<usize> {
-        ensure!(addr.is_null(), IsConn);
+        ensure!(addr.is_none(), IsConn);
 
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;

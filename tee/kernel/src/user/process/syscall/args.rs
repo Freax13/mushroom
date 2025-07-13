@@ -3,11 +3,11 @@ use core::{
     ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::SocketAddrV4,
     ops::Add,
 };
 
-use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
@@ -1668,73 +1668,18 @@ impl Rusage {
     }
 }
 
-#[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
-#[repr(C, u16)]
+#[derive(Debug, Clone)]
 pub enum SocketAddr {
-    #[expect(dead_code)]
-    Unspecified(SocketAddrUnspecified) = 0,
-    Inet(SocketAddrInet) = 2,
-    Netlink(SocketAddrNetlink) = 16,
+    Unspecified,
+    Unix(SocketAddrUnix),
+    Inet(SocketAddrV4),
+    Netlink(SocketAddrNetlink),
 }
 
-#[derive(Default, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct SocketAddrUnspecified {
-    _pad: [u8; 14],
-}
-
-impl fmt::Debug for SocketAddrUnspecified {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SocketAddrUnspecified")
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Default, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct SocketAddrInet {
-    /// port in network byte order
-    port: u16,
-    /// internet address
-    pub addr: [u8; 4],
-    _pad: [u8; 8],
-}
-
-impl fmt::Debug for SocketAddrInet {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SocketAddrInet")
-            .field("addr", &self.addr)
-            .field("port", &u16::from_be(self.port))
-            .finish_non_exhaustive()
-    }
-}
-
-impl From<SocketAddrInet> for SocketAddrV4 {
-    fn from(value: SocketAddrInet) -> Self {
-        Self::new(
-            Ipv4Addr::new(value.addr[0], value.addr[1], value.addr[2], value.addr[3]),
-            u16::from_be(value.port),
-        )
-    }
-}
-
-impl From<SocketAddrV4> for SocketAddrInet {
-    fn from(value: SocketAddrV4) -> Self {
-        Self {
-            port: value.port().to_be(),
-            addr: value.ip().octets(),
-            _pad: [0; 8],
-        }
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C, packed(2))]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct SocketAddrNetlink {
-    _pad: u16,
     pub pid: u32,
     pub groups: u32,
-    _pad2: [u8; 4],
 }
 
 bitflags! {
@@ -1830,49 +1775,11 @@ pub struct Linger {
     pub linger: i32,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum UnixAddr {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SocketAddrUnix {
     Pathname(Path),
     Unnamed,
     Abstract(Vec<u8>),
-}
-
-impl UnixAddr {
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() >= 2, Inval);
-        let (family, path) = bytes.split_first_chunk::<2>().ok_or(err!(Inval))?;
-        let family = u16::from_ne_bytes(*family);
-        ensure!(family == Domain::Unix as u16, Inval);
-
-        Ok(match path {
-            [] => Self::Unnamed,
-            [0, name @ ..] => Self::Abstract(name.to_owned()),
-            mut path => {
-                // Truncate at the null-terminator (if there is one).
-                if let Some(idx) = path.iter().position(|&b| b == 0) {
-                    path = &path[..idx];
-                }
-                Self::Pathname(Path::new(path.to_owned())?)
-            }
-        })
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(Domain::Unix as u16).to_ne_bytes());
-        match self {
-            UnixAddr::Pathname(path) => {
-                bytes.extend_from_slice(path.as_bytes());
-                bytes.push(0);
-            }
-            UnixAddr::Unnamed => {}
-            UnixAddr::Abstract(name) => {
-                bytes.push(0);
-                bytes.extend_from_slice(name);
-            }
-        }
-        bytes
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

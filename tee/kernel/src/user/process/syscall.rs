@@ -1410,8 +1410,8 @@ async fn connect(
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.connect(&virtual_memory, addr, usize_from(addrlen), &mut ctx)
-        .await?;
+    let addr = SocketAddr::read(addr, usize_from(addrlen), &virtual_memory)?;
+    fd.connect(addr, &mut ctx).await?;
     Ok(0)
 }
 
@@ -1449,9 +1449,14 @@ fn sendto(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let len = usize_from(len);
-    let addrlen = usize_from(addrlen);
     let buf = UserBuf::new(&virtual_memory, buf, len);
-    let sent = fd.send_to(&virtual_memory, &buf, flags, dest_addr, addrlen)?;
+    let addrlen = usize_from(addrlen);
+    let dest_addr = if !dest_addr.is_null() {
+        Some(SocketAddr::read(dest_addr, addrlen, &virtual_memory)?)
+    } else {
+        None
+    };
+    let sent = fd.send_to(&buf, flags, dest_addr)?;
     Ok(u64::try_from(sent)?)
 }
 
@@ -1549,7 +1554,8 @@ fn bind(
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.bind(&virtual_memory, addr, usize_from(addrlen), &mut ctx)?;
+    let addr = SocketAddr::read(addr, usize_from(addrlen), &virtual_memory)?;
+    fd.bind(addr, &mut ctx)?;
     Ok(0)
 }
 
@@ -1571,13 +1577,11 @@ fn getsockname(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let max_len = virtual_memory.read(addrlen)?;
-    let mut socket_name = fd.get_socket_name()?;
-    let actual_len = socket_name.len() as u32;
+    let socket_name = fd.get_socket_name()?;
+    let actual_len = socket_name.write(addr, usize_from(max_len), &virtual_memory)? as u32;
     if max_len != actual_len {
         virtual_memory.write(addrlen, actual_len)?;
     }
-    socket_name.truncate(max_len as usize);
-    virtual_memory.write_bytes(addr.get(), &socket_name)?;
     Ok(0)
 }
 
@@ -1591,13 +1595,11 @@ fn getpeername(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let max_len = virtual_memory.read(addrlen)?;
-    let mut socket_name = fd.get_peer_name()?;
-    let actual_len = socket_name.len() as u32;
+    let peer_name = fd.get_peer_name()?;
+    let actual_len = peer_name.write(addr, usize_from(max_len), &virtual_memory)? as u32;
     if max_len != actual_len {
         virtual_memory.write(addrlen, actual_len)?;
     }
-    socket_name.truncate(max_len as usize);
-    virtual_memory.write_bytes(addr.get(), &socket_name)?;
     Ok(0)
 }
 
@@ -4774,18 +4776,15 @@ async fn accept4(
     flags: Accept4Flags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let (socket, mut addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
+    let (socket, addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
     let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
 
     if !upeer_sockaddr.is_null() {
-        let addr_len = virtual_memory.read(upeer_addrlen)?;
-        let addr_len = usize_from(addr_len);
-        if addr_len != addr.len() {
-            virtual_memory.write(upeer_addrlen, addr_len as u32)?;
+        let max_len = virtual_memory.read(upeer_addrlen)?;
+        let actual_len = addr.write(upeer_sockaddr, usize_from(max_len), &virtual_memory)? as u32;
+        if max_len != actual_len {
+            virtual_memory.write(upeer_addrlen, actual_len)?;
         }
-
-        addr.truncate(addr_len);
-        virtual_memory.write_bytes(upeer_sockaddr.get(), &addr)?;
     }
 
     Ok(fd_num.get() as u64)

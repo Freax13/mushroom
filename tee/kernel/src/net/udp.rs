@@ -13,7 +13,6 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
-use bytemuck::bytes_of;
 use usize_conversions::usize_from;
 
 use crate::{
@@ -36,7 +35,7 @@ use crate::{
         syscall::{
             args::{
                 FileMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, SocketAddr,
-                SocketAddrInet, SocketType, SocketTypeWithFlags, Stat,
+                SocketType, SocketTypeWithFlags, Stat,
             },
             traits::Abi,
         },
@@ -158,9 +157,7 @@ impl UdpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, addr: SocketAddrInet) -> Result<bool> {
-        let mut socket_addr = SocketAddrV4::from(addr);
-
+    fn try_bind(&self, mut socket_addr: SocketAddrV4) -> Result<bool> {
         let mut guard = self.internal.lock();
         if guard.socketname.is_some() {
             return Ok(false);
@@ -203,10 +200,7 @@ impl UdpSocket {
         let mut guard = self.internal.lock();
         if guard.socketname.is_none() {
             drop(guard);
-            self.try_bind(SocketAddrInet::from(SocketAddrV4::new(
-                Ipv4Addr::UNSPECIFIED,
-                0,
-            )))?;
+            self.try_bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
             guard = self.internal.lock();
         }
         Ok(guard.socketname.unwrap())
@@ -230,7 +224,7 @@ impl UdpSocket {
             let SocketAddr::Inet(peername) = peername else {
                 bail!(Inval);
             };
-            SocketAddrV4::from(peername)
+            peername
         } else {
             self.internal.lock().peername.ok_or(err!(NotConn))?
         };
@@ -384,15 +378,7 @@ impl OpenFileDescription for UdpSocket {
         }
     }
 
-    fn bind(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        _: &mut FileAccessContext,
-    ) -> Result<()> {
-        ensure!(addrlen == size_of::<SocketAddr>(), Inval);
-        let addr = virtual_memory.read(addr)?;
+    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         let SocketAddr::Inet(addr) = addr else {
             bail!(Inval);
         };
@@ -400,36 +386,24 @@ impl OpenFileDescription for UdpSocket {
         Ok(())
     }
 
-    fn get_socket_name(&self) -> Result<Vec<u8>> {
+    fn get_socket_name(&self) -> Result<SocketAddr> {
         let addr = self.internal.lock().socketname;
-        let addr = addr.map(SocketAddrInet::from).unwrap_or_default();
-        let addr = SocketAddr::Inet(addr);
-        Ok(bytes_of(&addr).to_vec())
+        let addr = addr.unwrap_or(SocketAddrV4::new(Ipv4Addr::BROADCAST, 0));
+        Ok(SocketAddr::Inet(addr))
     }
 
-    fn get_peer_name(&self) -> Result<Vec<u8>> {
+    fn get_peer_name(&self) -> Result<SocketAddr> {
         let addr = self.internal.lock().peername.ok_or(err!(NotConn))?;
-        let addr = SocketAddr::Inet(addr.into());
-        Ok(bytes_of(&addr).to_vec())
+        Ok(SocketAddr::Inet(addr))
     }
 
-    async fn connect(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        _: &mut FileAccessContext,
-    ) -> Result<()> {
+    async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         self.get_or_bind_ephemeral()?;
 
-        ensure!(addrlen == size_of::<SocketAddr>(), Inval);
-        let remote_addr = virtual_memory.read(addr)?;
-
         let mut guard = self.internal.lock();
-        match remote_addr {
-            SocketAddr::Unspecified(_) => guard.peername = None,
+        match addr {
+            SocketAddr::Unspecified => guard.peername = None,
             SocketAddr::Inet(remote_addr) => {
-                let remote_addr = SocketAddrV4::from(remote_addr);
                 ensure!(guard.peername.is_none(), IsConn);
                 guard.peername = Some(remote_addr);
             }
@@ -478,11 +452,8 @@ impl OpenFileDescription for UdpSocket {
         let (len, addr) = self.recv(&mut vectored_buf)?;
 
         if msg_hdr.namelen != 0 {
-            let addr = SocketAddr::Inet(addr.into());
-            let name = bytes_of(&addr);
-            let len = cmp::min(usize_from(msg_hdr.namelen), name.len());
-            vm.write_bytes(msg_hdr.name.get(), &name[..len])?;
-            msg_hdr.namelen = len as u32;
+            let addr = SocketAddr::Inet(addr);
+            msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
         }
 
         msg_hdr.controllen = 0;
@@ -496,19 +467,11 @@ impl OpenFileDescription for UdpSocket {
 
     fn send_to(
         &self,
-        vm: &VirtualMemory,
         buf: &dyn WriteBuf,
         _: SentToFlags,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
+        addr: Option<SocketAddr>,
     ) -> Result<usize> {
-        let peername = if addrlen != 0 {
-            ensure!(addrlen == size_of::<SocketAddr>(), Inval);
-            Some(vm.read(addr)?)
-        } else {
-            None
-        };
-        self.send(peername, buf)
+        self.send(addr, buf)
     }
 
     fn send_msg(
@@ -523,11 +486,11 @@ impl OpenFileDescription for UdpSocket {
         }
 
         let peername = if msg_hdr.namelen != 0 {
-            ensure!(
-                usize_from(msg_hdr.namelen) == size_of::<SocketAddr>(),
-                Inval
-            );
-            Some(vm.read(msg_hdr.name)?)
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
         } else {
             None
         };
