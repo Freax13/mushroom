@@ -162,7 +162,7 @@ impl OpenFileDescription for Epoll {
         assert!(
             !event
                 .events
-                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP | EpollEvents::ET),
+                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP),
             "{:?}",
             event.events
         );
@@ -201,7 +201,7 @@ impl OpenFileDescription for Epoll {
         assert!(
             !event
                 .events
-                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP | EpollEvents::ET),
+                .intersects(EpollEvents::EXCLUSIVE | EpollEvents::WAKEUP),
             "{:?}",
             event.events
         );
