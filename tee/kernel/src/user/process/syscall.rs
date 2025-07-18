@@ -1526,7 +1526,7 @@ async fn sendmsg(
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
     let len = do_io(&**fd, Events::WRITE, || {
-        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable)
+        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable)
     })
     .await?;
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
@@ -5090,7 +5090,7 @@ async fn sendmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = do_io(&**socket, Events::WRITE, || {
-            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, &fdtable)
+            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, flags, &fdtable)
         })
         .await;
         match res {

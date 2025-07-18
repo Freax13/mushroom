@@ -46,8 +46,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
-                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
-                SocketType, SocketTypeWithFlags, Stat, Timespec,
+                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow,
+                SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -808,8 +808,11 @@ impl OpenFileDescription for TcpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        flags: SendMsgFlags,
         _: &FileDescriptorTable,
     ) -> Result<usize> {
+        ensure!(!flags.contains(SendMsgFlags::FASTOPEN), OpNotSupp);
+
         if !msg_hdr.control.is_null() {
             todo!();
         }

@@ -40,8 +40,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
-                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketAddrUnix,
-                SocketType, Stat, Timespec, pointee::SizedPointee,
+                Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
+                SocketAddrUnix, SocketType, Stat, Timespec, pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -308,6 +308,7 @@ impl OpenFileDescription for StreamUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: SendMsgFlags,
         fdtable: &FileDescriptorTable,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;

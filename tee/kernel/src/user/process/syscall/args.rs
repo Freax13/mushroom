@@ -1764,6 +1764,7 @@ bitflags! {
 bitflags! {
     pub struct SendMsgFlags {
         const NOSIGNAL = 0x4000;
+        const FASTOPEN = 0x20000000;
     }
 }
 
