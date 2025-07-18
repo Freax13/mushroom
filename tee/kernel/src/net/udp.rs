@@ -374,6 +374,7 @@ impl OpenFileDescription for UdpSocket {
         match (level, optname) {
             (0, 2) => Ok(()),  // IP_TTL
             (0, 6) => Ok(()),  // IP_RECVOPTS
+            (0, 10) => Ok(()), // IP_MTU_DISCOVER
             (0, 11) => Ok(()), // IP_RECVERR
             (0, 32) => Ok(()), // IP_MULTICAST_IF
             (0, 33) => Ok(()), // IP_MULTICAST_TTL

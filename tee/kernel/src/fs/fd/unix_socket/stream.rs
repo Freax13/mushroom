@@ -477,6 +477,8 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(ty.to_le_bytes().to_vec())
             }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            (1, 17) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PASSCRED
+            (1, 38) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PROTOCOL
             _ => bail!(Inval),
         }
     }
