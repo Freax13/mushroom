@@ -3837,13 +3837,6 @@ fn epoll_ctl(
     fd: FdNum,
     event: Pointer<EpollEvent>,
 ) -> SyscallResult {
-    let event = if !event.is_null() {
-        let event = virtual_memory.read(event)?;
-        Some(event)
-    } else {
-        None
-    };
-
     let epoll = fdtable.get(epfd)?;
     let fd = fdtable.get(fd)?;
 
@@ -3852,12 +3845,12 @@ fn epoll_ctl(
             // Poll the fd once to check if it supports epoll.
             let _ = fd.epoll_ready(Events::empty())?;
 
-            let event = event.ok_or(err!(Inval))?;
+            let event = virtual_memory.read(event)?;
             epoll.epoll_add(&fd, event)?
         }
         EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
         EpollCtlOp::Mod => {
-            let event = event.ok_or(err!(Inval))?;
+            let event = virtual_memory.read(event)?;
             epoll.epoll_mod(&**fd, event)?
         }
     }
