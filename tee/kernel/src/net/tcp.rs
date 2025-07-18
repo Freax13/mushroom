@@ -12,14 +12,16 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
+use usize_conversions::usize_from;
 
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, FileLockRecord, LazyFileLockRecord, NonEmptyEvents,
-            OpenFileDescription, ReadBuf, StrongFileDescriptor, WriteBuf, common_ioctl,
+            Events, FileDescriptorTable, FileLock, FileLockRecord, LazyFileLockRecord,
+            NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
+            WriteBuf, common_ioctl,
             file::{File, open_file},
             inotify::Watchers,
             stream_buffer,
@@ -44,7 +46,7 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
-                OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
+                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
                 SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
@@ -799,6 +801,34 @@ impl OpenFileDescription for TcpSocket {
         active
             .write_half
             .send(buf, flags.contains(SentToFlags::OOB))
+    }
+
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        _: &FileDescriptorTable,
+    ) -> Result<usize> {
+        if !msg_hdr.control.is_null() {
+            todo!();
+        }
+        if msg_hdr.flags != 0 {
+            todo!();
+        }
+
+        let addr = if msg_hdr.namelen != 0 {
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
+        } else {
+            None
+        };
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr)
     }
 
     fn path(&self) -> Result<Path> {
