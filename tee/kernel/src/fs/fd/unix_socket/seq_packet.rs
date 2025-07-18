@@ -6,7 +6,7 @@ use futures::future;
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{Result, bail, err},
+    error::{Result, bail},
     fs::{
         FileSystem,
         fd::{NonEmptyEvents, ReadBuf, WriteBuf},
@@ -234,12 +234,17 @@ struct ReadHalf {
 
 impl ReadHalf {
     fn read(&self) -> Result<Option<Box<[u8]>>> {
+        let mut guard = self.state.buffer.lock();
+        if let Some(packet) = guard.pop_front() {
+            return Ok(Some(packet));
+        }
+        drop(guard);
+
         if Arc::strong_count(&self.state) == 1 {
             return Ok(None);
         }
 
-        let mut guard = self.state.buffer.lock();
-        guard.pop_front().map(Some).ok_or(err!(Again))
+        bail!(Again)
     }
 }
 
