@@ -1471,7 +1471,7 @@ fn sendto(
     Ok(u64::try_from(sent)?)
 }
 
-#[syscall(i386 = 371, amd64 = 45, interruptable)]
+#[syscall(i386 = 371, amd64 = 45, interruptable, restartable)]
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
