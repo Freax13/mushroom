@@ -6,6 +6,7 @@ use node::tmpfs::TmpFsFile;
 
 use crate::error::Result;
 use crate::fs::fd::file::File;
+use crate::fs::node::INode;
 use crate::spin::lazy::Lazy;
 
 pub mod fd;

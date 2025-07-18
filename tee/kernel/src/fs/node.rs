@@ -97,6 +97,8 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>);
 
+    fn truncate(&self, length: usize) -> Result<()>;
+
     // Directory related functions.
 
     fn get_node(&self, file_name: &FileName, ctx: &FileAccessContext) -> Result<Link> {

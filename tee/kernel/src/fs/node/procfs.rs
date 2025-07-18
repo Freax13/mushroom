@@ -541,6 +541,10 @@ impl INode for CpuinfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -569,10 +573,6 @@ impl File for CpuinfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -655,6 +655,10 @@ impl INode for MeminfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -683,10 +687,6 @@ impl File for MeminfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -986,6 +986,10 @@ impl INode for NetDevFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -1014,10 +1018,6 @@ impl File for NetDevFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1104,6 +1104,10 @@ impl INode for SelfLink {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
@@ -1733,6 +1737,10 @@ impl INode for FdINode {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
+
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         self.fd.path()
     }
@@ -1853,11 +1861,21 @@ impl INode for FollowedFdINode {
 
     fn update_times(&self, ctime: Timespec, mtime: Option<Timespec>, atime: Option<Timespec>) {
         if let Some(link) = self.fd.path_fd_link() {
-            // Special case for path fds: Forward the chmod call to the pointed
-            // to node, but rewrite ELOOP to EOPNOTSUPP.
+            // Special case for path fds: Forward the call to the pointed to
+            // link.
             link.node.update_times(ctime, mtime, atime);
         } else {
             self.fd.update_times(ctime, mtime, atime);
+        }
+    }
+
+    fn truncate(&self, length: usize) -> Result<()> {
+        if let Some(link) = self.fd.path_fd_link() {
+            // Special case for path fds: Forward the call to the pointed to
+            // link.
+            link.node.truncate(length)
+        } else {
+            self.fd.truncate(length)
         }
     }
 
@@ -1935,6 +1953,10 @@ impl INode for ExeLink {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
@@ -2028,6 +2050,10 @@ impl INode for MapsFile {
         Ok(())
     }
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
@@ -2060,10 +2086,6 @@ impl File for MapsFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2140,6 +2162,10 @@ impl INode for ProcessStatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
@@ -2170,10 +2196,6 @@ impl File for ProcessStatFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2738,6 +2760,10 @@ impl INode for TaskCommFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
@@ -2766,10 +2792,6 @@ impl File for TaskCommFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2861,6 +2883,10 @@ impl INode for StatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -2889,10 +2915,6 @@ impl File for StatFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2989,6 +3011,10 @@ impl INode for UptimeFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -3017,10 +3043,6 @@ impl File for UptimeFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 

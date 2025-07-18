@@ -177,6 +177,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFlock);
     handlers.register(SysFsync);
     handlers.register(SysFdatasync);
+    handlers.register(SysTruncate);
     handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
@@ -2230,6 +2231,21 @@ fn fsync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult
 #[syscall(i386 = 148, amd64 = 75)]
 fn fdatasync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
     fdtable.get(fd)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 92, amd64 = 76)]
+fn truncate(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    length: u64,
+) -> SyscallResult {
+    let length = usize_from(length);
+    let path = virtual_memory.read(path)?;
+    let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
+    link.node.truncate(length)?;
     Ok(0)
 }
 
