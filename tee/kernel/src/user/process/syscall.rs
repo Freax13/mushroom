@@ -1448,7 +1448,8 @@ async fn accept(
 }
 
 #[syscall(i386 = 369, amd64 = 44)]
-fn sendto(
+async fn sendto(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -1467,8 +1468,41 @@ fn sendto(
     } else {
         None
     };
-    let sent = fd.send_to(&buf, flags, dest_addr)?;
-    Ok(u64::try_from(sent)?)
+
+    // Start writing to the file descriptor. This first write can be
+    // interrupted and restarted. Any errors that occur are report to
+    // userspace.
+    let mut written = thread
+        .interruptable(
+            do_io(&**fd, Events::WRITE, || {
+                fd.send_to(&buf, flags, dest_addr.clone())
+            }),
+            true,
+        )
+        .await?;
+
+    // Try to send the rest of the bytes that weren't sent in the first send
+    // call. This can be interrupted as well, but if that happens, it won't be
+    // reported to userspace. Any errors that occur also won't be reported to
+    // userspace.
+    while written != len {
+        let res = thread
+            .interruptable(
+                do_io(&**fd, Events::WRITE, || {
+                    let buf = OffsetBuf::new(&buf, written);
+                    fd.send_to(&buf, flags, dest_addr.clone())
+                }),
+                false,
+            )
+            .await;
+        let Ok(newly_written) = res else {
+            break;
+        };
+        written += newly_written;
+    }
+
+    let len = u64::from_usize(written);
+    Ok(len)
 }
 
 #[syscall(i386 = 371, amd64 = 45, interruptable, restartable)]
