@@ -1172,24 +1172,27 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, NoUninit)]
     #[repr(transparent)]
     pub struct EpollEvents: u32 {
-        const IN = 0x00000001;
-        const PRI = 0x00000002;
-        const OUT = 0x00000004;
-        const ERR = 0x00000008;
-        const HUP = 0x00000010;
-        const NVAL = 0x00000020;
-        const RDNORM = 0x00000040;
-        const RDBAND = 0x00000080;
-        const WRNORM = 0x00000100;
-        const WRBAND = 0x00000200;
-        const MSG = 0x00000400;
-        const RDHUP = 0x00002000;
+        const IN = 1 << 0;
+        const PRI = 1 << 1;
+        const OUT = 1 << 2;
+        const ERR = 1 << 3;
+        const HUP = 1 << 4;
+        const NVAL = 1 << 5;
+        const RDNORM = 1 << 6;
+        const RDBAND = 1 << 7;
+        const WRNORM = 1 << 8;
+        const WRBAND = 1 << 9;
+        const MSG = 1 << 10;
+        const REMOVE = 1 << 12;
+        const RDHUP = 1 << 13;
+        const FREE = 1 << 14;
+        const BUSY_LOOP = 1 << 15;
 
         const INPUT_FLAGS = 0xf << 28;
         const EXCLUSIVE = 1 << 28;
         const WAKEUP = 1 << 29;
         const ONESHOT = 1 << 30;
-        const LET = 1 << 31;
+        const ET = 1 << 31;
     }
 }
 
