@@ -630,10 +630,11 @@ impl OpenFileDescription for StreamUnixSocket {
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let mode = self.mode.get()?;
         match mode {
-            Mode::Active(active) => NonEmptyEvents::zip(
-                active.read_half.lock().poll_read(events),
-                active.write_half.lock().poll_write(events),
-            ),
+            Mode::Active(active) => {
+                let poll_read = active.read_half.lock().poll_read(events);
+                let poll_write = active.write_half.lock().poll_write(events);
+                NonEmptyEvents::zip(poll_read, poll_write)
+            }
             Mode::Passive(passive) => {
                 let guard = passive.internal.lock();
                 let mut ready_events = Events::empty();
