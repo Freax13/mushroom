@@ -46,7 +46,7 @@ use crate::{
         },
         path::Path,
     },
-    net::{netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
+    net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{oneshot, spawn, r#yield},
     time::{self, now, sleep_until},
     user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
@@ -1382,16 +1382,26 @@ fn socket(
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
-        Domain::Inet => match r#type.socket_type {
-            SocketType::Stream => fdtable.insert(
-                TcpSocket::new(r#type, ctx.filesystem_user_id, ctx.filesystem_group_id),
-                r#type,
-                no_file_limit,
-            )?,
-            SocketType::Dgram => fdtable.insert(UdpSocket::new(r#type), r#type, no_file_limit)?,
-            SocketType::Raw => todo!(),
-            SocketType::Seqpacket => todo!(),
-        },
+        Domain::Inet | Domain::Inet6 => {
+            let ip_version = IpVersion::try_from(domain).unwrap();
+            match r#type.socket_type {
+                SocketType::Stream => fdtable.insert(
+                    TcpSocket::new(
+                        ip_version,
+                        r#type,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    ),
+                    r#type,
+                    no_file_limit,
+                )?,
+                SocketType::Dgram => {
+                    fdtable.insert(UdpSocket::new(ip_version, r#type), r#type, no_file_limit)?
+                }
+                SocketType::Raw => todo!(),
+                SocketType::Seqpacket => todo!(),
+            }
+        }
         Domain::Netlink => {
             fdtable.insert(NetlinkSocket::new(r#type, protocol)?, r#type, no_file_limit)?
         }
@@ -1652,7 +1662,7 @@ fn socketpair(
                 _ => bail!(Inval),
             }
         }
-        Domain::Unspec | Domain::Inet | Domain::Netlink => bail!(OpNotSupp),
+        Domain::Unspec | Domain::Inet | Domain::Inet6 | Domain::Netlink => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.

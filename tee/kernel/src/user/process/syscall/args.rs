@@ -3,7 +3,7 @@ use core::{
     ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
-    net::SocketAddrV4,
+    net::{self, SocketAddrV4, SocketAddrV6},
     ops::Add,
 };
 
@@ -15,7 +15,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Result, bail, ensure, err},
+    error::{Error, Result, bail, ensure, err},
     fs::{
         fd::{Events, FdFlags, FileDescriptorTable},
         path::Path,
@@ -1088,6 +1088,7 @@ enum_arg! {
         Unspec = 0,
         Unix = 1,
         Inet = 2,
+        Inet6 = 10,
         Netlink = 16,
     }
 }
@@ -1673,7 +1674,41 @@ pub enum SocketAddr {
     Unspecified,
     Unix(SocketAddrUnix),
     Inet(SocketAddrV4),
+    Inet6(SocketAddrV6),
     Netlink(SocketAddrNetlink),
+}
+
+impl SocketAddr {
+    pub fn domain(&self) -> Domain {
+        match self {
+            SocketAddr::Unspecified => Domain::Unspec,
+            SocketAddr::Unix(_) => Domain::Unix,
+            SocketAddr::Inet(_) => Domain::Inet,
+            SocketAddr::Inet6(_) => Domain::Inet6,
+            SocketAddr::Netlink(_) => Domain::Netlink,
+        }
+    }
+}
+
+impl From<net::SocketAddr> for SocketAddr {
+    fn from(value: net::SocketAddr) -> Self {
+        match value {
+            net::SocketAddr::V4(addr) => Self::Inet(addr),
+            net::SocketAddr::V6(addr) => Self::Inet6(addr),
+        }
+    }
+}
+
+impl TryFrom<SocketAddr> for net::SocketAddr {
+    type Error = Error;
+
+    fn try_from(value: SocketAddr) -> Result<Self> {
+        Ok(match value {
+            SocketAddr::Inet(addr) => Self::V4(addr),
+            SocketAddr::Inet6(addr) => Self::V6(addr),
+            _ => bail!(Inval),
+        })
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy)]

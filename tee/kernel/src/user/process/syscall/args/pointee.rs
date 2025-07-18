@@ -6,7 +6,7 @@ use core::{
     fmt::{self, Debug},
     marker::PhantomData,
     mem::{MaybeUninit, size_of},
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
 };
 
 use alloc::{borrow::ToOwned, ffi::CString};
@@ -1948,10 +1948,7 @@ impl SocketAddr {
         ensure!(addrlen >= 2, Inval);
         let domain = vm.read(Pointer::<u16>::from(addr))?;
         Ok(match domain {
-            domain if domain == Domain::Unspec as u16 => {
-                ensure!(addrlen == 16, Inval);
-                Self::Unspecified
-            }
+            domain if domain == Domain::Unspec as u16 => Self::Unspecified,
             domain if domain == Domain::Unix as u16 => {
                 let mut path = [0; 108];
                 ensure!(addrlen <= 2 + path.len(), Inval);
@@ -1971,12 +1968,17 @@ impl SocketAddr {
                 Self::Unix(addr)
             }
             domain if domain == Domain::Inet as u16 => {
-                ensure!(addrlen == size_of::<RawSocketAddrInet>(), Inval);
+                ensure!(addrlen >= size_of::<RawSocketAddrInet>(), Inval);
                 let raw = vm.read(Pointer::<RawSocketAddrInet>::from(addr))?;
                 Self::Inet(SocketAddrV4::from(raw))
             }
+            domain if domain == Domain::Inet6 as u16 => {
+                ensure!(addrlen >= size_of::<RawSocketAddrInet6>(), Inval);
+                let raw = vm.read(Pointer::<RawSocketAddrInet6>::from(addr))?;
+                Self::Inet6(SocketAddrV6::from(raw))
+            }
             domain if domain == Domain::Netlink as u16 => {
-                ensure!(addrlen == size_of::<RawSocketAddrNetlink>(), Inval);
+                ensure!(addrlen >= size_of::<RawSocketAddrNetlink>(), Inval);
                 let raw = vm.read(Pointer::<RawSocketAddrNetlink>::from(addr))?;
                 Self::Netlink(SocketAddrNetlink::from(raw))
             }
@@ -2022,6 +2024,13 @@ impl SocketAddr {
                 vm.write_bytes(addr, bytes)?;
                 Ok(size_of::<RawSocketAddrInet>())
             }
+            SocketAddr::Inet6(socket_addr) => {
+                let socket_addr = RawSocketAddrInet6::from(socket_addr);
+                let trunc_len = cmp::min(addrlen, size_of::<RawSocketAddrInet6>());
+                let bytes = &bytes_of(&socket_addr)[..trunc_len];
+                vm.write_bytes(addr, bytes)?;
+                Ok(size_of::<RawSocketAddrInet6>())
+            }
             SocketAddr::Netlink(socket_addr) => {
                 let socket_addr = RawSocketAddrNetlink::from(socket_addr);
                 let trunc_len = cmp::min(addrlen, size_of::<RawSocketAddrNetlink>());
@@ -2050,8 +2059,8 @@ impl PrimitivePointee for RawSocketAddrInet {}
 impl From<RawSocketAddrInet> for SocketAddrV4 {
     fn from(value: RawSocketAddrInet) -> Self {
         Self::new(
-            Ipv4Addr::new(value.addr[0], value.addr[1], value.addr[2], value.addr[3]),
-            value.port,
+            Ipv4Addr::from_bits(u32::from_be_bytes(value.addr)),
+            u16::from_be(value.port),
         )
     }
 }
@@ -2060,9 +2069,49 @@ impl From<SocketAddrV4> for RawSocketAddrInet {
     fn from(value: SocketAddrV4) -> Self {
         Self {
             family: Domain::Inet as u16,
-            port: value.port(),
-            addr: value.ip().octets(),
+            port: value.port().to_be(),
+            addr: value.ip().to_bits().to_be_bytes(),
             _pad: [0; 8],
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct RawSocketAddrInet6 {
+    family: u16,
+    /// Port number
+    port: u16,
+    /// IPv6 flow info
+    flowinfo: u32,
+    /// IPv6 address
+    addr: [u8; 16],
+    /// Set of interfaces for a scope
+    scope_id: u32,
+}
+
+impl Pointee for RawSocketAddrInet6 {}
+impl PrimitivePointee for RawSocketAddrInet6 {}
+
+impl From<RawSocketAddrInet6> for SocketAddrV6 {
+    fn from(value: RawSocketAddrInet6) -> Self {
+        Self::new(
+            Ipv6Addr::from_bits(u128::from_be_bytes(value.addr)),
+            u16::from_be(value.port),
+            u32::from_be(value.flowinfo),
+            u32::from_be(value.scope_id),
+        )
+    }
+}
+
+impl From<SocketAddrV6> for RawSocketAddrInet6 {
+    fn from(value: SocketAddrV6) -> Self {
+        Self {
+            family: Domain::Inet6 as u16,
+            port: value.port().to_be(),
+            flowinfo: value.flowinfo().to_be(),
+            addr: value.ip().to_bits().to_be_bytes(),
+            scope_id: value.scope_id().to_be(),
         }
     }
 }
@@ -2074,7 +2123,6 @@ struct RawSocketAddrNetlink {
     _pad: u16,
     pid: u32,
     groups: u32,
-    _pad2: [u8; 4],
 }
 
 impl Pointee for RawSocketAddrNetlink {}
@@ -2096,7 +2144,6 @@ impl From<SocketAddrNetlink> for RawSocketAddrNetlink {
             _pad: 0,
             pid: value.pid,
             groups: value.groups,
-            _pad2: [0; 4],
         }
     }
 }

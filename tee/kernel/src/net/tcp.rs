@@ -1,7 +1,7 @@
 use core::{
     cmp,
     ffi::c_void,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{self, IpAddr},
     ops::Not,
 };
 
@@ -25,6 +25,7 @@ use crate::{
         ownership::Ownership,
         path::Path,
     },
+    net::IpVersion,
     rt::{
         self,
         notify::{Notify, NotifyOnDrop},
@@ -67,11 +68,12 @@ impl PortData {
     /// used to bind a port at a later time.
     pub fn prepare_bind(
         &mut self,
-        ip: Ipv4Addr,
+        ip: IpAddr,
         reuse_addr: bool,
         reuse_port: bool,
         effective_uid: Uid,
     ) -> Result<BindGuard<'_>> {
+        let ip_version = IpVersion::from(ip);
         let local_ip = ip.is_unspecified().not().then_some(ip);
 
         if let Some(local_ip) = local_ip {
@@ -89,6 +91,11 @@ impl PortData {
                 self.entries.swap_remove(i);
                 continue;
             };
+
+            // Skip entries with a different address family.
+            if entry.ip_version != ip_version {
+                continue;
+            }
 
             // Skip entries that don't overlap with `ip`.
             if entry
@@ -123,6 +130,7 @@ impl PortData {
 
         Ok(BindGuard {
             port_data: self,
+            ip_version,
             local_ip,
             reuse_addr,
             reuse_port,
@@ -146,6 +154,8 @@ impl PortData {
             .iter()
             // Ignore the socket itself.
             .filter(|entry| entry.mode.as_ptr() != &**mode)
+            // Ignore sockets with a different ip version.
+            .filter(|entry| entry.ip_version == socket_entry.ip_version)
             // Ignore if both sockets have the reuse_port option enabled.
             .filter(|entry| !(entry.reuse_port && socket_entry.reuse_port))
             // Ignore sockets that don't have an overlap in the bound address.
@@ -165,7 +175,8 @@ impl PortData {
 
 struct BindGuard<'a> {
     port_data: &'a mut PortData,
-    local_ip: Option<Ipv4Addr>,
+    ip_version: IpVersion,
+    local_ip: Option<IpAddr>,
     reuse_addr: bool,
     reuse_port: bool,
     effective_uid: Uid,
@@ -174,6 +185,7 @@ struct BindGuard<'a> {
 impl BindGuard<'_> {
     pub fn bind(self, mode: Weak<Once<Mode>>) {
         self.port_data.entries.push(PortDataEntry {
+            ip_version: self.ip_version,
             local_ip: self.local_ip,
             remote_addr: None,
             reuse_addr: self.reuse_addr,
@@ -185,8 +197,9 @@ impl BindGuard<'_> {
 }
 
 struct PortDataEntry {
-    local_ip: Option<Ipv4Addr>,
-    remote_addr: Option<SocketAddrV4>,
+    ip_version: IpVersion,
+    local_ip: Option<IpAddr>,
+    remote_addr: Option<net::SocketAddr>,
     reuse_addr: bool,
     reuse_port: bool,
     effective_uid: Uid,
@@ -198,6 +211,7 @@ const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct TcpSocket {
     ino: u64,
+    ip_version: IpVersion,
     internal: Mutex<TcpSocketInternal>,
     activate_notify: Notify,
     bound_socket: Once<BoundSocket>,
@@ -216,9 +230,10 @@ struct TcpSocketInternal {
 }
 
 impl TcpSocket {
-    pub fn new(r#type: SocketTypeWithFlags, uid: Uid, gid: Gid) -> Self {
+    pub fn new(ip_version: IpVersion, r#type: SocketTypeWithFlags, uid: Uid, gid: Gid) -> Self {
         Self {
             ino: new_ino(),
+            ip_version,
             internal: Mutex::new(TcpSocketInternal {
                 flags: r#type.flags,
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
@@ -237,7 +252,9 @@ impl TcpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, mut socket_addr: SocketAddrV4) -> Result<bool> {
+    fn try_bind(&self, mut socket_addr: net::SocketAddr) -> Result<bool> {
+        ensure!(IpVersion::from(socket_addr.ip()) == self.ip_version, Inval);
+
         let guard = self.internal.lock();
         let reuse_addr = guard.reuse_addr;
         let reuse_port = guard.reuse_port;
@@ -255,7 +272,7 @@ impl TcpSocket {
                 for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
                     let entry = guard.entry(port).or_default();
                     if let Ok(bind_guard) =
-                        entry.prepare_bind(*socket_addr.ip(), false, false, effective_uid)
+                        entry.prepare_bind(socket_addr.ip(), false, false, effective_uid)
                     {
                         socket_addr.set_port(port);
                         break 'port bind_guard;
@@ -266,7 +283,7 @@ impl TcpSocket {
             }
         } else {
             guard.entry(socket_addr.port()).or_default().prepare_bind(
-                *socket_addr.ip(),
+                socket_addr.ip(),
                 reuse_addr,
                 reuse_port,
                 effective_uid,
@@ -294,7 +311,7 @@ impl TcpSocket {
     }
 
     fn get_or_bind_ephemeral(&self) -> Result<&BoundSocket> {
-        self.try_bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
+        self.try_bind(self.ip_version.unspecified_addr())?;
         Ok(self.bound_socket.get().unwrap())
     }
 }
@@ -317,9 +334,7 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
-        let SocketAddr::Inet(addr) = addr else {
-            bail!(Inval);
-        };
+        let addr = net::SocketAddr::try_from(addr)?;
         ensure!(self.try_bind(addr)?, Inval);
         Ok(())
     }
@@ -338,8 +353,8 @@ impl OpenFileDescription for TcpSocket {
                     bound.bind_addr
                 }
             })
-            .unwrap_or(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-        Ok(SocketAddr::Inet(addr))
+            .unwrap_or_else(|| self.ip_version.unspecified_addr());
+        Ok(SocketAddr::from(addr))
     }
 
     fn get_peer_name(&self) -> Result<SocketAddr> {
@@ -348,7 +363,7 @@ impl OpenFileDescription for TcpSocket {
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        Ok(SocketAddr::Inet(active.remote_addr))
+        Ok(SocketAddr::from(active.remote_addr))
     }
 
     fn listen(&self, backlog: usize) -> Result<()> {
@@ -419,6 +434,7 @@ impl OpenFileDescription for TcpSocket {
 
         let socket = Self {
             ino: new_ino(),
+            ip_version: self.ip_version,
             internal: Mutex::new(internal),
             activate_notify: Notify::new(),
             bound_socket: Once::with_value(BoundSocket {
@@ -431,7 +447,7 @@ impl OpenFileDescription for TcpSocket {
         };
         let fd = StrongFileDescriptor::from(socket);
 
-        let socket_addr = SocketAddr::Inet(remote_addr);
+        let socket_addr = SocketAddr::from(remote_addr);
 
         Ok((fd, socket_addr))
     }
@@ -439,11 +455,9 @@ impl OpenFileDescription for TcpSocket {
     async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
         let bound = self.get_or_bind_ephemeral()?;
 
-        let SocketAddr::Inet(remote_addr) = addr else {
-            bail!(Inval);
-        };
+        let remote_addr = net::SocketAddr::try_from(addr)?;
 
-        let remote_ip = *remote_addr.ip();
+        let remote_ip = remote_addr.ip();
         let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
 
         if let Some(remote_ip) = remote_ip {
@@ -477,6 +491,13 @@ impl OpenFileDescription for TcpSocket {
                     (i.wrapping_add(ports.round_robin_counter)) % ports.entries.len();
                 i += 1;
                 let entry = &ports.entries[offset_index];
+
+                // Skip over entries that don't have a matching domain.
+                match (entry.ip_version, self.ip_version) {
+                    (IpVersion::V4, IpVersion::V4) => {}                 // matches
+                    (IpVersion::V4, IpVersion::V6) => continue,          // doesn't match
+                    (IpVersion::V6, IpVersion::V4 | IpVersion::V6) => {} // matches
+                }
 
                 // Skip over entries that don't have a matching IP.
                 if Option::zip(entry.local_ip, remote_ip)
@@ -513,10 +534,10 @@ impl OpenFileDescription for TcpSocket {
                 // socket.
                 let peer_ip = peer_ip.or_else(|| {
                     let ip = bound.bind_addr.ip();
-                    ip.is_unspecified().not().then_some(*ip)
+                    ip.is_unspecified().not().then_some(ip)
                 });
                 // If all of that fails, use localhost.
-                let peer_ip = peer_ip.unwrap_or(Ipv4Addr::LOCALHOST);
+                let peer_ip = peer_ip.unwrap_or_else(|| self.ip_version.localhost_ip());
                 let mut remote_addr = remote_addr;
                 remote_addr.set_ip(peer_ip);
 
@@ -528,9 +549,11 @@ impl OpenFileDescription for TcpSocket {
                     .ip()
                     .is_unspecified()
                     .not()
-                    .then_some(*bound.bind_addr.ip());
+                    .then_some(bound.bind_addr.ip());
                 // Otherwise use localhost.
-                let local_ip = local_ip.unwrap_or(Ipv4Addr::LOCALHOST);
+                let local_ip = local_ip.unwrap_or_else(|| self.ip_version.localhost_ip());
+
+                let server_ip_version = entry.ip_version;
 
                 // Try to reserve a slot in the backlog.
                 let Some(connect_guard) = passive.prepare_connect() else {
@@ -558,12 +581,13 @@ impl OpenFileDescription for TcpSocket {
                 bound
                     .mode
                     .init(|| {
-                        let (socket1, socket2) = ActiveTcpSocket::new_pair(
-                            SocketAddrV4::new(local_ip, bound.bind_addr.port()),
+                        let (client, server) = ActiveTcpSocket::new_pair(
+                            net::SocketAddr::new(local_ip, bound.bind_addr.port()),
                             remote_addr,
+                            server_ip_version,
                         );
-                        connect_guard.connect(socket2);
-                        Mode::Active(socket1)
+                        connect_guard.connect(server);
+                        Mode::Active(client)
                     })
                     .map_err(|_| err!(IsConn))?;
                 self.activate_notify.notify();
@@ -956,7 +980,7 @@ impl Drop for TcpSocket {
 }
 
 struct BoundSocket {
-    bind_addr: SocketAddrV4,
+    bind_addr: net::SocketAddr,
     reuse_addr: bool,
     reuse_port: bool,
     connect_notify: NotifyOnDrop,
@@ -1003,26 +1027,51 @@ impl ConnectGuard<'_> {
 }
 
 struct ActiveTcpSocket {
-    local_addr: SocketAddrV4,
-    remote_addr: SocketAddrV4,
+    local_addr: net::SocketAddr,
+    remote_addr: net::SocketAddr,
     read_half: stream_buffer::ReadHalf,
     write_half: stream_buffer::WriteHalf,
 }
 
 impl ActiveTcpSocket {
-    fn new_pair(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> (Self, Self) {
+    fn new_pair(
+        local_addr: net::SocketAddr,
+        remote_addr: net::SocketAddr,
+        server_domain: IpVersion,
+    ) -> (Self, Self) {
         let (rx1, tx1) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
         let (rx2, tx2) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
+
+        let client_local_addr = local_addr;
+        let client_remote_addr = remote_addr;
+
+        let mut server_local_addr = remote_addr;
+        let mut server_remote_addr = local_addr;
+        // The server might be a Ipv6 socket. If that's the case, we need to
+        // make sure that ip addresses are also ipv6 ones.
+        if server_domain == IpVersion::V6
+            && let net::SocketAddr::V4(addr) = server_local_addr
+        {
+            server_local_addr =
+                net::SocketAddr::new(IpAddr::V6(addr.ip().to_ipv6_mapped()), addr.port());
+        }
+        if server_domain == IpVersion::V6
+            && let net::SocketAddr::V4(addr) = server_remote_addr
+        {
+            server_remote_addr =
+                net::SocketAddr::new(IpAddr::V6(addr.ip().to_ipv6_mapped()), addr.port());
+        }
+
         (
             Self {
-                local_addr,
-                remote_addr,
+                local_addr: client_local_addr,
+                remote_addr: client_remote_addr,
                 read_half: rx1,
                 write_half: tx2,
             },
             Self {
-                local_addr: remote_addr,
-                remote_addr: local_addr,
+                local_addr: server_local_addr,
+                remote_addr: server_remote_addr,
                 read_half: rx2,
                 write_half: tx1,
             },
