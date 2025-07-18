@@ -511,7 +511,7 @@ impl Process {
             ITimerWhich::Virtual => todo!(),
             ITimerWhich::Prof => todo!(),
         };
-        let old = timer.set_time(value.into(), true);
+        let old = timer.set_time(value.into(), false);
         old.into()
     }
 
