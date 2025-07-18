@@ -1,4 +1,4 @@
-use core::net::Ipv4Addr;
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use alloc::vec::Vec;
 use bitflags::bitflags;
@@ -174,6 +174,39 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
                     let new_addr_data = IfAddrMsg {
                         family: Domain::Inet as u8,
                         prefixlen: 8,
+                        flags: AddrFlags::IFA_F_PERMANENT,
+                        scope: AddrScope::RT_SCOPE_HOST,
+                        index: 1,
+                    };
+                    response.extend_from_slice(bytes_of(&new_addr_data));
+
+                    response.extend_from_slice(&rta_attrs);
+                    let mut response = Vec::new();
+
+                    let mut rta_attrs = Vec::new();
+
+                    let rta_data = &Ipv6Addr::LOCALHOST.octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::IFA_ADDRESS,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let new_addr_header = MsgHeader {
+                        len: (size_of::<MsgHeader>() + size_of::<IfAddrMsg>() + rta_attrs.len())
+                            as u32,
+                        r#type: RTM_NEWADDR,
+                        flags: MsgHeaderFlags::MULTI,
+                        seq: header.seq,
+                        pid,
+                    };
+                    response.extend_from_slice(bytes_of(&new_addr_header));
+
+                    let new_addr_data = IfAddrMsg {
+                        family: Domain::Inet6 as u8,
+                        prefixlen: 128,
                         flags: AddrFlags::IFA_F_PERMANENT,
                         scope: AddrScope::RT_SCOPE_HOST,
                         index: 1,
