@@ -130,8 +130,12 @@ impl OpenFileDescription for SeqPacketUnixSocket {
     fn recv_from(
         &self,
         buf: &mut dyn ReadBuf,
-        _flags: RecvFromFlags,
+        flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
+        if flags.contains(RecvFromFlags::PEEK) {
+            todo!()
+        }
+
         let len = self.read(buf)?;
         Ok((len, None))
     }

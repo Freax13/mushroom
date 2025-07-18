@@ -219,10 +219,15 @@ impl UdpSocket {
         Ok(guard.socketname.unwrap())
     }
 
-    fn recv(&self, buf: &mut (impl ReadBuf + ?Sized)) -> Result<(usize, SocketAddr)> {
+    fn recv(&self, buf: &mut (impl ReadBuf + ?Sized), peek: bool) -> Result<(usize, SocketAddr)> {
         let mut guard = self.internal.lock();
-        let packet = guard.rx.pop_front().ok_or(err!(Again))?;
-        drop(guard);
+        let packed_owned;
+        let packet = if peek {
+            guard.rx.front().ok_or(err!(Again))?
+        } else {
+            packed_owned = guard.rx.pop_front().ok_or(err!(Again))?;
+            &packed_owned
+        };
 
         let len = cmp::min(buf.buffer_len(), packet.bytes.len());
         buf.write(0, &packet.bytes[..len])?;
@@ -467,16 +472,17 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let (len, _addr) = self.recv(buf)?;
+        let (len, _addr) = self.recv(buf, false)?;
         Ok(len)
     }
 
     fn recv_from(
         &self,
         buf: &mut dyn ReadBuf,
-        _flags: RecvFromFlags,
+        flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        let (len, addr) = self.recv(buf)?;
+        let peek = flags.contains(RecvFromFlags::PEEK);
+        let (len, addr) = self.recv(buf, peek)?;
         Ok((len, Some(addr)))
     }
 
@@ -489,7 +495,7 @@ impl OpenFileDescription for UdpSocket {
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, addr) = self.recv(&mut vectored_buf)?;
+        let (len, addr) = self.recv(&mut vectored_buf, false)?;
 
         if msg_hdr.namelen != 0 {
             msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;

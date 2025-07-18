@@ -751,6 +751,10 @@ impl OpenFileDescription for TcpSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
+        if flags.contains(RecvFromFlags::PEEK) {
+            todo!()
+        }
+
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {

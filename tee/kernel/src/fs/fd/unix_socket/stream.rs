@@ -189,23 +189,24 @@ impl OpenFileDescription for StreamUnixSocket {
         active
             .read_half
             .lock()
-            .read(buf)
+            .read(buf, false)
             .map(|(len, _ancillary_data)| len)
     }
 
     fn recv_from(
         &self,
         buf: &mut dyn ReadBuf,
-        _flags: RecvFromFlags,
+        flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
+        let peek = flags.contains(RecvFromFlags::PEEK);
         active
             .read_half
             .lock()
-            .read(buf)
+            .read(buf, peek)
             .map(|(len, _ancillary_data)| (len, None))
     }
 
@@ -223,7 +224,7 @@ impl OpenFileDescription for StreamUnixSocket {
         };
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf)?;
+        let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf, false)?;
 
         if let Some(ancillary_data) = ancillary_data {
             let align = match abi {
@@ -798,7 +799,11 @@ struct BufferGuard<'a> {
 }
 
 impl BufferGuard<'_> {
-    pub fn read(&mut self, buf: &mut dyn ReadBuf) -> Result<(usize, Option<AncillaryData>)> {
+    pub fn read(
+        &mut self,
+        buf: &mut dyn ReadBuf,
+        peek: bool,
+    ) -> Result<(usize, Option<AncillaryData>)> {
         let buffer = &mut *self.guard;
 
         let len = buf.buffer_len();
@@ -832,9 +837,10 @@ impl BufferGuard<'_> {
             buf.write(0, slice1)?;
             buf.write(slice1.len(), &slice2[..len - slice1.len()])?;
         }
-        buffer.data.drain(..len);
-
-        buffer.total_received += len;
+        if !peek {
+            buffer.data.drain(..len);
+            buffer.total_received += len;
+        }
 
         let ancillary_data = buffer
             .boundaries

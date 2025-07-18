@@ -1799,6 +1799,7 @@ enum_arg! {
 bitflags! {
     pub struct RecvFromFlags {
         const OOB = 1 << 0;
+        const PEEK = 1 << 1;
         const DONTWAIT = 1 << 6;
     }
 }
