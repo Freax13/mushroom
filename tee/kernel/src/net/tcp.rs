@@ -18,13 +18,17 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
-            WriteBuf, common_ioctl, stream_buffer,
+            Events, FileLock, FileLockRecord, LazyFileLockRecord, NonEmptyEvents,
+            OpenFileDescription, ReadBuf, StrongFileDescriptor, WriteBuf, common_ioctl,
+            file::{File, open_file},
+            inotify::Watchers,
+            stream_buffer,
         },
-        node::{FileAccessContext, new_ino},
+        node::{FileAccessContext, INode, LinkLocation, new_ino, procfs::ProcFs},
         ownership::Ownership,
         path::Path,
     },
+    memory::page::KernelPage,
     net::IpVersion,
     rt::{
         self,
@@ -36,12 +40,12 @@ use crate::{
     },
     time::{now, sleep_until},
     user::process::{
-        memory::VirtualMemory,
+        memory::{VirtualMemory, WriteToVec},
         syscall::{
             args::{
-                Accept4Flags, ClockId, FileMode, FileType, FileTypeAndMode, Linger, OpenFlags,
-                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketType,
-                SocketTypeWithFlags, Stat, Timespec,
+                Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
+                OpenFlags, Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr,
+                SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -1076,5 +1080,192 @@ impl ActiveTcpSocket {
                 write_half: tx1,
             },
         )
+    }
+}
+
+pub struct NetTcpFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    pub ino: u64,
+    ip_version: IpVersion,
+    file_lock_record: LazyFileLockRecord,
+    watchers: Watchers,
+}
+
+impl NetTcpFile {
+    pub fn new(fs: Arc<ProcFs>, ip_version: IpVersion) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            ip_version,
+            file_lock_record: LazyFileLockRecord::new(),
+            watchers: Watchers::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        match self.ip_version {
+            IpVersion::V4 => {
+                writeln!(
+                    buffer,
+                    "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode"
+                ).unwrap();
+            }
+            IpVersion::V6 => {
+                writeln!(
+                    buffer,
+                    "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode"
+                ).unwrap();
+            }
+        }
+
+        // ipv4:
+        //   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+        //    0: 0100007F:16B3 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 2239468 1 ffff8d0cdb1f5f00 100 0 0 10 0
+        //
+        // ipv6:
+        //   sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+        //    0: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 3928 1 0000000000000000 100 0 0 10 0
+
+        let guard = PORTS.lock();
+        for (i, (local_port, data)) in guard.iter().enumerate() {
+            for entry in data
+                .entries
+                .iter()
+                .filter(|entry| entry.ip_version == self.ip_version)
+            {
+                let Some(mode) = entry.mode.upgrade() else {
+                    continue;
+                };
+                let Some(mode) = mode.get() else {
+                    // TODO: Should we still generate an entry?
+                    continue;
+                };
+
+                let local_ip = entry
+                    .local_ip
+                    .unwrap_or_else(|| self.ip_version.unspecified_ip());
+                let remote_addr = entry
+                    .remote_addr
+                    .unwrap_or_else(|| self.ip_version.unspecified_addr());
+                let remote_ip = remote_addr.ip();
+                let remote_port = remote_addr.port();
+
+                // TODO: There are probably more status'.
+                let status: u8 = match mode {
+                    Mode::Active(_) => 0x01,
+                    Mode::Passive(_) => 0x0a,
+                };
+
+                let tx_queue = 0u32;
+                let rx_queue = 0u32;
+                let tr = 0u8;
+                let tm_when = 0u32;
+                let retransmit = 0u32;
+                let uid = entry.effective_uid.get();
+                let timeout = 0u32;
+                let ino = i; // TODO
+
+                write!(buffer, "{i:>4}: ").unwrap();
+                for octet in local_ip.as_octets().iter().copied().rev() {
+                    write!(buffer, "{octet:02X}").unwrap();
+                }
+                write!(buffer, ":{local_port:04X} ").unwrap();
+                for octet in remote_ip.as_octets().iter().copied().rev() {
+                    write!(buffer, "{octet:02X}").unwrap();
+                }
+                writeln!(
+                    buffer,
+                    ":{remote_port:04X} {status:02X} {tx_queue:08X}:{rx_queue:08X} {tr:02X}:{tm_when:08X} {retransmit:08X}  {uid:04X} {timeout:>8} {ino} 1 ffff8d0cdb1f5f00 100 0 0 10 0"
+                ).unwrap();
+            }
+        }
+
+        buffer
+    }
+}
+
+impl INode for NetTcpFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev(),
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        self.file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for NetTcpFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
     }
 }

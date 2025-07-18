@@ -10,6 +10,7 @@
     drain_keep_rest,
     generic_const_exprs,
     int_roundings,
+    ip_as_octets,
     linked_list_cursors,
     maybe_uninit_array_assume_init,
     maybe_uninit_as_bytes,

@@ -26,6 +26,7 @@ use crate::{
         path::{FileName, Path},
     },
     memory::page::KernelPage,
+    net::{IpVersion, tcp::NetTcpFile},
     time::now,
     user::process::{
         Process,
@@ -46,6 +47,12 @@ use super::{
 
 pub struct ProcFs {
     dev: u64,
+}
+
+impl ProcFs {
+    pub fn dev(&self) -> u64 {
+        self.dev
+    }
 }
 
 impl FileSystem for ProcFs {
@@ -81,6 +88,8 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         net_dir_file_lock_record: Arc::new(FileLockRecord::new()),
         net_dir_watchers: Arc::new(Watchers::new()),
         net_dev_file: NetDevFile::new(fs.clone()),
+        net_tcp_file: NetTcpFile::new(fs.clone(), IpVersion::V4),
+        net_tcp6_file: NetTcpFile::new(fs.clone(), IpVersion::V6),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
             fs: fs.clone(),
@@ -106,6 +115,8 @@ struct ProcFsRoot {
     net_dir_file_lock_record: Arc<FileLockRecord>,
     net_dir_watchers: Arc<Watchers>,
     net_dev_file: Arc<NetDevFile>,
+    net_tcp_file: Arc<NetTcpFile>,
+    net_tcp6_file: Arc<NetTcpFile>,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
     uptime_file: Arc<UptimeFile>,
@@ -181,6 +192,8 @@ impl Directory for ProcFsRoot {
                 self.net_dir_file_lock_record.clone(),
                 self.net_dir_watchers.clone(),
                 self.net_dev_file.clone(),
+                self.net_tcp_file.clone(),
+                self.net_tcp6_file.clone(),
             ),
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
@@ -703,6 +716,8 @@ struct NetDir {
     file_lock_record: Arc<FileLockRecord>,
     watchers: Arc<Watchers>,
     net_dev_file: Arc<NetDevFile>,
+    net_tcp_file: Arc<NetTcpFile>,
+    net_tcp6_file: Arc<NetTcpFile>,
 }
 
 impl NetDir {
@@ -712,6 +727,8 @@ impl NetDir {
         file_lock_record: Arc<FileLockRecord>,
         watchers: Arc<Watchers>,
         net_dev_file: Arc<NetDevFile>,
+        net_tcp_file: Arc<NetTcpFile>,
+        net_tcp6_file: Arc<NetTcpFile>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -721,6 +738,8 @@ impl NetDir {
             file_lock_record,
             watchers,
             net_dev_file,
+            net_tcp_file,
+            net_tcp6_file,
         })
     }
 }
@@ -859,6 +878,21 @@ impl Directory for NetDir {
                 name: DirEntryName::DotDot,
             });
         }
+        entries.push(DirEntry {
+            ino: self.net_dev_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"dev").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.net_tcp_file.ino,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"tcp").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.net_tcp6_file.ino,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"tcp6").unwrap()),
+        });
         Ok(entries)
     }
 
@@ -867,6 +901,8 @@ impl Directory for NetDir {
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
             b"dev" => self.net_dev_file.clone(),
+            b"tcp" => self.net_tcp_file.clone(),
+            b"tcp6" => self.net_tcp6_file.clone(),
             _ => bail!(NoEnt),
         };
         Ok(Link { location, node })
