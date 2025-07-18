@@ -616,3 +616,64 @@ fn socket_shutdown_both() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn udp_socketname() {
+    let server = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::empty(),
+        None,
+    )
+    .unwrap();
+
+    socket::bind(server.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0)).unwrap();
+    let server_name = socket::getsockname::<SockaddrIn>(server.as_raw_fd()).unwrap();
+    assert_eq!(server_name.ip(), Ipv4Addr::LOCALHOST);
+    assert_ne!(server_name.port(), 0);
+
+    let make_client = || {
+        socket::socket(
+            AddressFamily::Inet,
+            SockType::Datagram,
+            SockFlag::empty(),
+            None,
+        )
+        .unwrap()
+    };
+
+    {
+        // By default, the socket's address is unspecified.
+        let client = make_client();
+        let client_name = socket::getsockname::<SockaddrIn>(client.as_raw_fd()).unwrap();
+        assert_eq!(client_name.ip(), Ipv4Addr::UNSPECIFIED);
+        assert_eq!(client_name.port(), 0);
+    }
+
+    {
+        // Sending a packet does not change the address, but it binds the socket to a port.
+        let client = make_client();
+        socket::sendto(client.as_raw_fd(), b"foo", &server_name, MsgFlags::empty()).unwrap();
+        let client_name = socket::getsockname::<SockaddrIn>(client.as_raw_fd()).unwrap();
+        assert_eq!(client_name.ip(), Ipv4Addr::UNSPECIFIED);
+        assert_ne!(client_name.port(), 0);
+    }
+
+    {
+        // Connecting the socket binds it to the same interface.
+        let client = make_client();
+        socket::connect(client.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0)).unwrap();
+        let client_name = socket::getsockname::<SockaddrIn>(client.as_raw_fd()).unwrap();
+        assert_eq!(client_name.ip(), Ipv4Addr::LOCALHOST);
+        assert_ne!(client_name.port(), 0);
+    }
+
+    {
+        // Connecting the socket binds it to the same interface, but not necessarily the same IP.
+        let client = make_client();
+        socket::connect(client.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 2, 0)).unwrap();
+        let client_name = socket::getsockname::<SockaddrIn>(client.as_raw_fd()).unwrap();
+        assert_eq!(client_name.ip(), Ipv4Addr::LOCALHOST);
+        assert_ne!(client_name.port(), 0);
+    }
+}
