@@ -870,9 +870,9 @@ impl BufferGuard<'_> {
         ensure!(!buffer.shutdown, Pipe);
         ensure!(Arc::strong_count(&self.buffer.buffer) > 1, Pipe);
 
-        let len = buf.buffer_len();
-        assert!(len <= buffer.capacity); // TODO
-        ensure!(len < buffer.capacity, Again);
+        let remaining_capacity = buffer.capacity.saturating_sub(buffer.data.len());
+        ensure!(remaining_capacity > 0, Again);
+        let len = cmp::min(len, remaining_capacity);
 
         buffer.data.resize(buffer.data.len() + len, 0);
         let (slice1, slice2) = buffer.data.as_mut_slices();
