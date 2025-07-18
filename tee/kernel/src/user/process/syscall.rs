@@ -36,7 +36,7 @@ use crate::{
             pipe,
             stream_buffer::{self, SpliceBlockedError},
             timer::Timer,
-            unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
+            unix_socket::{DgramUnixSocket, SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
             self, DirEntry, FileAccessContext, Link, OldDirEntry, Permission, create_char_dev,
@@ -1642,6 +1642,15 @@ fn socketpair(
             ensure!(protocol == 0, Inval);
 
             match r#type.socket_type {
+                SocketType::Stream => {
+                    let (half1, half2) = StreamUnixSocket::new_pair(
+                        r#type.flags,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    );
+                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+                }
                 SocketType::Seqpacket => {
                     let (half1, half2) = SeqPacketUnixSocket::new_pair(
                         r#type.flags,
@@ -1651,8 +1660,8 @@ fn socketpair(
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
                 }
-                SocketType::Stream => {
-                    let (half1, half2) = StreamUnixSocket::new_pair(
+                SocketType::Dgram => {
+                    let (half1, half2) = DgramUnixSocket::new_pair(
                         r#type.flags,
                         ctx.filesystem_user_id,
                         ctx.filesystem_group_id,
