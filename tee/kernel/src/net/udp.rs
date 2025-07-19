@@ -473,7 +473,11 @@ impl OpenFileDescription for UdpSocket {
                 guard.receive_buffer_size = new_receive_buffer_size;
                 Ok(())
             }
-            (1, 15) => Ok(()), // SO_REUSEPORT
+            (1, 15) => Ok(()),  // SO_REUSEPORT
+            (41, 16) => Ok(()), // IPV6_UNICAST_HOPS
+            (41, 17) => Ok(()), // IPV6_MULTICAST_IF
+            (41, 18) => Ok(()), // IPV6_MULTICAST_HOPS
+            (41, 19) => Ok(()), // IPV6_MULTICAST_LOOP
             (41, 26) => {
                 // IPV6_V6ONLY
                 ensure!(optlen == 4, Inval);
