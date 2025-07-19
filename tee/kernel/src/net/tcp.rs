@@ -233,6 +233,7 @@ struct TcpSocketInternal {
     receive_buffer_size: usize,
     no_delay: bool,
     linger: Option<i32>,
+    v6only: bool,
 }
 
 impl TcpSocket {
@@ -249,6 +250,7 @@ impl TcpSocket {
                 receive_buffer_size: 1024 * 1024,
                 no_delay: false,
                 linger: None,
+                v6only: false,
             }),
             activate_notify: Notify::new(),
             bound_socket: Once::new(),
@@ -459,6 +461,8 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+        let v6only = self.internal.lock().v6only;
+
         let bound = self.get_or_bind_ephemeral()?;
 
         let remote_addr = net::SocketAddr::try_from(addr)?;
@@ -500,9 +504,16 @@ impl OpenFileDescription for TcpSocket {
 
                 // Skip over entries that don't have a matching domain.
                 match (entry.ip_version, self.ip_version) {
-                    (IpVersion::V4, IpVersion::V4) => {}                 // matches
-                    (IpVersion::V4, IpVersion::V6) => continue,          // doesn't match
-                    (IpVersion::V6, IpVersion::V4 | IpVersion::V6) => {} // matches
+                    (IpVersion::V4, IpVersion::V4) => {}        // matches
+                    (IpVersion::V4, IpVersion::V6) => continue, // doesn't match
+                    (IpVersion::V6, IpVersion::V4) => {
+                        if v6only {
+                            continue; // doesn't match
+                        } else {
+                            // matches
+                        }
+                    }
+                    (IpVersion::V6, IpVersion::V6) => {} // matches
                 }
 
                 // Skip over entries that don't have a matching IP.
@@ -716,6 +727,14 @@ impl OpenFileDescription for TcpSocket {
             }
             (6, 6) => {
                 // TCP_KEEPCNT
+                Ok(())
+            }
+            (41, 26) => {
+                // IPV6_V6ONLY
+                ensure!(optlen == 4, Inval);
+                ensure!(self.ip_version == IpVersion::V6, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.v6only = optval;
                 Ok(())
             }
             _ => bail!(Inval),
