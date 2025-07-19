@@ -35,3 +35,6 @@ static-page-tables = { workspace = true }
 supervisor-services = { workspace = true }
 usize_conversions = "0.2.0"
 x86_64 = "0.15.1"
+
+[lints.clippy]
+new_without_default = "allow"
