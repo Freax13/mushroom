@@ -1006,7 +1006,6 @@ impl Timespec {
         })
     }
 
-    #[expect(dead_code)]
     pub fn saturating_mul(self, rhs: u64) -> Self {
         let mut acc = Timespec::ZERO;
         // This implements multiplication with double-and-add (similar to
