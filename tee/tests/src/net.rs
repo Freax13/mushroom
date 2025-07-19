@@ -1,5 +1,5 @@
 use std::{
-    net::Ipv4Addr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
     sync::atomic::{AtomicU16, Ordering},
 };
@@ -10,9 +10,9 @@ use nix::{
     libc::{Ioctl, ioctl},
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::socket::{
-        self, AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn, getpeername,
-        getsockname, setsockopt, shutdown,
-        sockopt::{ReuseAddr, ReusePort},
+        self, AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn, SockaddrIn6,
+        getpeername, getsockname, setsockopt, shutdown,
+        sockopt::{Ipv6V6Only, ReuseAddr, ReusePort},
     },
     unistd::close,
 };
@@ -675,5 +675,741 @@ fn udp_socketname() {
         let client_name = socket::getsockname::<SockaddrIn>(client.as_raw_fd()).unwrap();
         assert_eq!(client_name.ip(), Ipv4Addr::LOCALHOST);
         assert_ne!(client_name.port(), 0);
+    }
+}
+
+#[test]
+fn udp_dual_stack_localhost() {
+    let bind_addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+    let bind_addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
+
+    let sock4 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        socket::bind(sock4.as_raw_fd(), &bind_addrv6),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    socket::bind(sock4.as_raw_fd(), &bind_addrv4).unwrap();
+
+    let sock46 = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        socket::bind(sock46.as_raw_fd(), &bind_addrv4),
+        Err(Errno::EINVAL)
+    );
+    socket::bind(sock46.as_raw_fd(), &bind_addrv6).unwrap();
+
+    let sock6 = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    socket::setsockopt(&sock6, Ipv6V6Only, &true).unwrap();
+    assert_eq!(
+        socket::bind(sock6.as_raw_fd(), &bind_addrv4),
+        Err(Errno::EINVAL)
+    );
+    socket::bind(sock6.as_raw_fd(), &bind_addrv6).unwrap();
+
+    let addr4 = socket::getsockname::<SockaddrIn>(sock4.as_raw_fd()).unwrap();
+    let addr46 = socket::getsockname::<SockaddrIn6>(sock46.as_raw_fd()).unwrap();
+    let addr6 = socket::getsockname::<SockaddrIn6>(sock6.as_raw_fd()).unwrap();
+
+    assert_eq!(addr4.ip(), Ipv4Addr::LOCALHOST);
+    assert_eq!(addr46.ip(), Ipv6Addr::LOCALHOST);
+    assert_eq!(addr6.ip(), Ipv6Addr::LOCALHOST);
+
+    assert_ne!(addr6.port(), addr46.port());
+
+    let mut addr4 = SocketAddrV4::from(addr4);
+    addr4.set_ip(Ipv4Addr::LOCALHOST);
+    let addr4 = SockaddrIn::from(addr4);
+
+    let mut addr46 = SocketAddrV6::from(addr46);
+    addr46.set_ip(Ipv6Addr::LOCALHOST);
+    let addr46 = SockaddrIn6::from(addr46);
+
+    let mut addr6 = SocketAddrV6::from(addr6);
+    addr6.set_ip(Ipv6Addr::LOCALHOST);
+    let addr6 = SockaddrIn6::from(addr6);
+
+    let addr4_mapped = SocketAddrV6::new(addr4.ip().to_ipv6_mapped(), addr4.port(), 0, 0);
+    let addr4_mapped = SockaddrIn6::from(addr4_mapped);
+    let addr46_mapped = SocketAddrV4::new(Ipv4Addr::LOCALHOST, addr46.port());
+    let addr46_mapped = SockaddrIn::from(addr46_mapped);
+    let addr46_double_mapped =
+        SocketAddrV6::new(Ipv4Addr::LOCALHOST.to_ipv6_mapped(), addr46.port(), 0, 0);
+    let addr46_double_mapped = SockaddrIn6::from(addr46_double_mapped);
+    let addr6_mapped = SocketAddrV4::new(Ipv4Addr::LOCALHOST, addr6.port());
+    let addr6_mapped = SockaddrIn::from(addr6_mapped);
+    let addr6_double_mapped =
+        SocketAddrV6::new(Ipv4Addr::LOCALHOST.to_ipv6_mapped(), addr6.port(), 0, 0);
+    let addr6_double_mapped = SockaddrIn6::from(addr6_double_mapped);
+
+    assert_eq!(
+        socket::sendto(sock4.as_raw_fd(), b"4to4", &addr4, MsgFlags::empty()),
+        Ok(4)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to4m",
+            &addr4_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(sock4.as_raw_fd(), b"4to46", &addr46, MsgFlags::empty()),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to46m",
+            &addr46_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(6)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to46dm",
+            &addr46_double_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(sock4.as_raw_fd(), b"4to6", &addr6, MsgFlags::empty()),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to6m",
+            &addr6_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to6dm",
+            &addr6_double_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::EAFNOSUPPORT)
+    );
+
+    assert_eq!(
+        socket::sendto(sock46.as_raw_fd(), b"46to4", &addr4, MsgFlags::empty()),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to4m",
+            &addr4_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(sock46.as_raw_fd(), b"46to46", &addr46, MsgFlags::empty()),
+        Ok(6)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to46m",
+            &addr46_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to46dm",
+            &addr46_double_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(sock46.as_raw_fd(), b"46to6", &addr6, MsgFlags::empty()),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to6m",
+            &addr6_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to6dm",
+            &addr6_double_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+
+    assert_eq!(
+        socket::sendto(sock6.as_raw_fd(), b"6to4", &addr4, MsgFlags::empty()),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock6.as_raw_fd(),
+            b"6to4m",
+            &addr4_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(sock6.as_raw_fd(), b"6to46", &addr46, MsgFlags::empty()),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock6.as_raw_fd(),
+            b"6to46m",
+            &addr46_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(sock6.as_raw_fd(), b"6to6", &addr6, MsgFlags::empty()),
+        Ok(4)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock6.as_raw_fd(),
+            b"6to6m",
+            &addr6_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+
+    let addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+    let addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+
+    let mut buf = [0; 16];
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"4to4");
+    assert_eq!(addr.unwrap(), addr4);
+
+    assert_eq!(
+        socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf),
+        Err(Errno::EAGAIN)
+    );
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to46");
+    assert_eq!(
+        addr.unwrap(),
+        SockaddrIn6::from(SocketAddrV6::new(addr46.ip(), addr46.port(), 0, 0))
+    );
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"6to46");
+    assert_eq!(addr.unwrap(), addr6);
+
+    assert_eq!(
+        socket::recvfrom::<SockaddrIn>(sock46.as_raw_fd(), &mut buf),
+        Err(Errno::EAGAIN)
+    );
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock6.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to6");
+    assert_eq!(addr.unwrap(), addr46);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock6.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"6to6");
+    assert_eq!(addr.unwrap(), addr6);
+
+    assert_eq!(
+        socket::recvfrom::<SockaddrIn>(sock6.as_raw_fd(), &mut buf),
+        Err(Errno::EAGAIN)
+    );
+}
+
+#[test]
+fn udp_dual_stack_unspecified() {
+    let bind_addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+    let bind_addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+
+    let sock4 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        socket::bind(sock4.as_raw_fd(), &bind_addrv6),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    socket::bind(sock4.as_raw_fd(), &bind_addrv4).unwrap();
+
+    let sock46 = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        socket::bind(sock46.as_raw_fd(), &bind_addrv4),
+        Err(Errno::EINVAL)
+    );
+    socket::bind(sock46.as_raw_fd(), &bind_addrv6).unwrap();
+
+    let sock6 = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    socket::setsockopt(&sock6, Ipv6V6Only, &true).unwrap();
+    assert_eq!(
+        socket::bind(sock6.as_raw_fd(), &bind_addrv4),
+        Err(Errno::EINVAL)
+    );
+    socket::bind(sock6.as_raw_fd(), &bind_addrv6).unwrap();
+
+    let addr4 = socket::getsockname::<SockaddrIn>(sock4.as_raw_fd()).unwrap();
+    let addr46 = socket::getsockname::<SockaddrIn6>(sock46.as_raw_fd()).unwrap();
+    let addr6 = socket::getsockname::<SockaddrIn6>(sock6.as_raw_fd()).unwrap();
+
+    assert_eq!(addr4.ip(), Ipv4Addr::UNSPECIFIED);
+    assert_eq!(addr46.ip(), Ipv6Addr::UNSPECIFIED);
+    assert_eq!(addr6.ip(), Ipv6Addr::UNSPECIFIED);
+
+    assert_ne!(addr4.port(), addr46.port());
+    assert_ne!(addr6.port(), addr46.port());
+
+    let mut addr4 = SocketAddrV4::from(addr4);
+    addr4.set_ip(Ipv4Addr::LOCALHOST);
+    let addr4 = SockaddrIn::from(addr4);
+
+    let mut addr46 = SocketAddrV6::from(addr46);
+    addr46.set_ip(Ipv6Addr::LOCALHOST);
+    let addr46 = SockaddrIn6::from(addr46);
+
+    let mut addr6 = SocketAddrV6::from(addr6);
+    addr6.set_ip(Ipv6Addr::LOCALHOST);
+    let addr6 = SockaddrIn6::from(addr6);
+
+    let addr4_mapped = SocketAddrV6::new(addr4.ip().to_ipv6_mapped(), addr4.port(), 0, 0);
+    let addr4_mapped = SockaddrIn6::from(addr4_mapped);
+    let addr46_mapped = SocketAddrV4::new(Ipv4Addr::LOCALHOST, addr46.port());
+    let addr46_mapped = SockaddrIn::from(addr46_mapped);
+    let addr46_double_mapped =
+        SocketAddrV6::new(Ipv4Addr::LOCALHOST.to_ipv6_mapped(), addr46.port(), 0, 0);
+    let addr46_double_mapped = SockaddrIn6::from(addr46_double_mapped);
+    let addr6_mapped = SocketAddrV4::new(Ipv4Addr::LOCALHOST, addr6.port());
+    let addr6_mapped = SockaddrIn::from(addr6_mapped);
+    let addr6_double_mapped =
+        SocketAddrV6::new(Ipv4Addr::LOCALHOST.to_ipv6_mapped(), addr6.port(), 0, 0);
+    let addr6_double_mapped = SockaddrIn6::from(addr6_double_mapped);
+
+    assert_eq!(
+        socket::sendto(sock4.as_raw_fd(), b"4to4", &addr4, MsgFlags::empty()),
+        Ok(4)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to4m",
+            &addr4_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(sock4.as_raw_fd(), b"4to46", &addr46, MsgFlags::empty()),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to46m",
+            &addr46_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(6)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to46dm",
+            &addr46_double_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(sock4.as_raw_fd(), b"4to6", &addr6, MsgFlags::empty()),
+        Err(Errno::EAFNOSUPPORT)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to6m",
+            &addr6_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock4.as_raw_fd(),
+            b"4to6dm",
+            &addr6_double_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::EAFNOSUPPORT)
+    );
+
+    assert_eq!(
+        socket::sendto(sock46.as_raw_fd(), b"46to4", &addr4, MsgFlags::empty()),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to4m",
+            &addr4_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(6)
+    );
+    assert_eq!(
+        socket::sendto(sock46.as_raw_fd(), b"46to46", &addr46, MsgFlags::empty()),
+        Ok(6)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to46m",
+            &addr46_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(7)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to46dm",
+            &addr46_double_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(8)
+    );
+    assert_eq!(
+        socket::sendto(sock46.as_raw_fd(), b"46to6", &addr6, MsgFlags::empty()),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to6m",
+            &addr6_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(6)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock46.as_raw_fd(),
+            b"46to6dm",
+            &addr6_double_mapped,
+            MsgFlags::empty()
+        ),
+        Ok(7)
+    );
+
+    assert_eq!(
+        socket::sendto(sock6.as_raw_fd(), b"6to4", &addr4, MsgFlags::empty()),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock6.as_raw_fd(),
+            b"6to4m",
+            &addr4_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(sock6.as_raw_fd(), b"6to46", &addr46, MsgFlags::empty()),
+        Ok(5)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock6.as_raw_fd(),
+            b"6to46m",
+            &addr46_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+    assert_eq!(
+        socket::sendto(sock6.as_raw_fd(), b"6to6", &addr6, MsgFlags::empty()),
+        Ok(4)
+    );
+    assert_eq!(
+        socket::sendto(
+            sock6.as_raw_fd(),
+            b"6to6m",
+            &addr6_mapped,
+            MsgFlags::empty()
+        ),
+        Err(Errno::ENETUNREACH)
+    );
+
+    let addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+    let addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+
+    let mut buf = [0; 16];
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"4to4");
+    assert_eq!(addr.unwrap(), addr4);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to4");
+    assert_eq!(addr.unwrap(), addr46_mapped);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to4m");
+    assert_eq!(addr.unwrap(), addr46_mapped);
+
+    assert_eq!(
+        socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf),
+        Err(Errno::EAGAIN)
+    );
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"4to46m");
+    assert_eq!(addr.unwrap(), addr4_mapped);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to46");
+    assert_eq!(addr.unwrap(), addr46);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to46m");
+    assert_eq!(addr.unwrap(), addr46_double_mapped);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to46dm");
+    assert_eq!(addr.unwrap(), addr46_double_mapped);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock46.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"6to46");
+    assert_eq!(addr.unwrap(), addr6);
+
+    assert_eq!(
+        socket::recvfrom::<SockaddrIn>(sock46.as_raw_fd(), &mut buf),
+        Err(Errno::EAGAIN)
+    );
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock6.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"46to6");
+    assert_eq!(addr.unwrap(), addr46);
+
+    let (len, addr) = socket::recvfrom::<SockaddrIn6>(sock6.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(buf[..len], *b"6to6");
+    assert_eq!(addr.unwrap(), addr6);
+
+    assert_eq!(
+        socket::recvfrom::<SockaddrIn>(sock6.as_raw_fd(), &mut buf),
+        Err(Errno::EAGAIN)
+    );
+}
+
+#[test]
+fn udp_bind() {
+    fn bind(ip_addr: IpAddr, port: u16, reuse_addr: bool, v6only: bool) -> Result<OwnedFd> {
+        let domain = match ip_addr {
+            IpAddr::V4(_) => AddressFamily::Inet,
+            IpAddr::V6(_) => AddressFamily::Inet6,
+        };
+        let socket = socket::socket(domain, SockType::Datagram, SockFlag::empty(), None)?;
+
+        socket::setsockopt(&socket, ReuseAddr, &reuse_addr)?;
+        if ip_addr.is_ipv6() {
+            socket::setsockopt(&socket, Ipv6V6Only, &v6only)?;
+        }
+
+        match ip_addr {
+            IpAddr::V4(addr) => socket::bind(
+                socket.as_raw_fd(),
+                &SockaddrIn::from(SocketAddrV4::new(addr, port)),
+            )?,
+            IpAddr::V6(addr) => socket::bind(
+                socket.as_raw_fd(),
+                &SockaddrIn6::from(SocketAddrV6::new(addr, port, 0, 0)),
+            )?,
+        }
+
+        Ok(socket)
+    }
+
+    let ips = [
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ];
+
+    let mut port = 50000;
+    for ip_a in ips {
+        for reuse_addr_a in [false, true] {
+            let v6only_values: &[Option<bool>] = if ip_a.is_ipv6() {
+                &[Some(false), Some(true)]
+            } else {
+                &[None]
+            };
+            for v6only_a in v6only_values {
+                for ip_b in ips {
+                    for reuse_addr_b in [false, true] {
+                        let v6only_values: &[Option<bool>] = if ip_b.is_ipv6() {
+                            &[Some(false), Some(true)]
+                        } else {
+                            &[None]
+                        };
+                        for v6only_b in v6only_values {
+                            let domain_a = match ip_a {
+                                IpAddr::V4(_) => AddressFamily::Inet,
+                                IpAddr::V6(_) => AddressFamily::Inet6,
+                            };
+                            let sock_a = socket::socket(
+                                domain_a,
+                                SockType::Datagram,
+                                SockFlag::empty(),
+                                None,
+                            )
+                            .unwrap();
+                            socket::setsockopt(&sock_a, ReuseAddr, &reuse_addr_a).unwrap();
+                            if let Some(v6only_a) = v6only_a {
+                                socket::setsockopt(&sock_a, Ipv6V6Only, v6only_a).unwrap();
+                            }
+
+                            let domain_b = match ip_b {
+                                IpAddr::V4(_) => AddressFamily::Inet,
+                                IpAddr::V6(_) => AddressFamily::Inet6,
+                            };
+                            let sock_b = socket::socket(
+                                domain_b,
+                                SockType::Datagram,
+                                SockFlag::empty(),
+                                None,
+                            )
+                            .unwrap();
+                            socket::setsockopt(&sock_b, ReuseAddr, &reuse_addr_b).unwrap();
+                            if let Some(v6only_b) = v6only_b {
+                                socket::setsockopt(&sock_b, Ipv6V6Only, v6only_b).unwrap();
+                            }
+
+                            port += 1;
+                            let port = match ip_a {
+                                IpAddr::V4(addr) => {
+                                    socket::bind(
+                                        sock_a.as_raw_fd(),
+                                        &SockaddrIn::from(SocketAddrV4::new(addr, port)),
+                                    )
+                                    .unwrap();
+                                    let addr =
+                                        socket::getsockname::<SockaddrIn>(sock_a.as_raw_fd())
+                                            .unwrap();
+                                    addr.port()
+                                }
+                                IpAddr::V6(addr) => {
+                                    socket::bind(
+                                        sock_a.as_raw_fd(),
+                                        &SockaddrIn6::from(SocketAddrV6::new(addr, port, 0, 0)),
+                                    )
+                                    .unwrap();
+                                    let addr =
+                                        socket::getsockname::<SockaddrIn6>(sock_a.as_raw_fd())
+                                            .unwrap();
+                                    addr.port()
+                                }
+                            };
+
+                            let res = match ip_b {
+                                IpAddr::V4(addr) => socket::bind(
+                                    sock_b.as_raw_fd(),
+                                    &SockaddrIn::from(SocketAddrV4::new(addr, port)),
+                                ),
+                                IpAddr::V6(addr) => socket::bind(
+                                    sock_b.as_raw_fd(),
+                                    &SockaddrIn6::from(SocketAddrV6::new(addr, port, 0, 0)),
+                                ),
+                            };
+
+                            println!("---------------------------------------");
+                            println!(
+                                "Bound socket A to         {ip_a}:{port} with reuse_addr={reuse_addr_a} and v6only={v6only_a:?}"
+                            );
+                            println!(
+                                "Tried to bind socket B to {ip_b}:{port} with reuse_addr={reuse_addr_b} and v6only={v6only_b:?} => res={res:?}"
+                            );
+
+                            let expect_success = (reuse_addr_a && reuse_addr_b)
+                                || (!ip_a.is_unspecified()
+                                    && !ip_b.is_unspecified()
+                                    && ip_a != ip_b)
+                                || (ip_a.is_ipv4() && ip_b.is_ipv6() && v6only_b.unwrap())
+                                || (ip_a.is_ipv6() && ip_b.is_ipv4() && v6only_a.unwrap())
+                                || (ip_a.is_ipv4()
+                                    && ip_b.is_ipv6()
+                                    && ip_a.is_unspecified()
+                                    && !ip_b.is_unspecified())
+                                || (ip_a.is_ipv6()
+                                    && ip_b.is_ipv4()
+                                    && !ip_a.is_unspecified()
+                                    && ip_b.is_unspecified());
+
+                            if expect_success {
+                                assert_eq!(res, Ok(()));
+                            } else {
+                                assert_eq!(res, Err(Errno::EADDRINUSE));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
