@@ -9,7 +9,6 @@ use alloc::{
     },
     format,
     sync::{Arc, Weak},
-    vec,
     vec::Vec,
 };
 use async_trait::async_trait;
@@ -41,8 +40,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
-                Pointer, RecvFromFlags, SentToFlags, ShutdownHow, SocketAddr, SocketType, Stat,
-                Timespec, UnixAddr, pointee::SizedPointee,
+                Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
+                SocketAddrUnix, SocketType, Stat, Timespec, pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -59,7 +58,7 @@ pub struct StreamUnixSocket {
     this: Weak<OpenFileDescriptionData<Self>>,
     ino: u64,
     internal: Mutex<StreamUnixSocketInternal>,
-    socketname: Mutex<UnixAddr>,
+    socketname: Mutex<SocketAddrUnix>,
     activate_notify: Notify,
     mode: Once<Mode>,
     file_lock: FileLock,
@@ -90,7 +89,7 @@ impl StreamUnixSocket {
                 flags,
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
-            socketname: Mutex::new(UnixAddr::Unnamed),
+            socketname: Mutex::new(SocketAddrUnix::Unnamed),
             activate_notify: Notify::new(),
             mode: Once::new(),
             file_lock: FileLock::anonymous(),
@@ -116,12 +115,12 @@ impl StreamUnixSocket {
                         gid,
                     ),
                 }),
-                socketname: Mutex::new(UnixAddr::Unnamed),
+                socketname: Mutex::new(SocketAddrUnix::Unnamed),
                 activate_notify: Notify::new(),
                 mode: Once::with_value(Mode::Active(Active {
                     write_half: write_half1,
                     read_half: read_half1,
-                    peername: UnixAddr::Unnamed,
+                    peername: SocketAddrUnix::Unnamed,
                 })),
                 file_lock: FileLock::anonymous(),
             }),
@@ -136,24 +135,24 @@ impl StreamUnixSocket {
                         gid,
                     ),
                 }),
-                socketname: Mutex::new(UnixAddr::Unnamed),
+                socketname: Mutex::new(SocketAddrUnix::Unnamed),
                 activate_notify: Notify::new(),
                 mode: Once::with_value(Mode::Active(Active {
                     write_half: write_half2,
                     read_half: read_half2,
-                    peername: UnixAddr::Unnamed,
+                    peername: SocketAddrUnix::Unnamed,
                 })),
                 file_lock: FileLock::anonymous(),
             }),
         )
     }
 
-    pub fn bind(&self, socketname: UnixAddr) -> Result<Weak<OpenFileDescriptionData<Self>>> {
-        ensure!(!matches!(socketname, UnixAddr::Unnamed), Inval);
+    pub fn bind(&self, socketname: SocketAddrUnix) -> Result<Weak<OpenFileDescriptionData<Self>>> {
+        ensure!(!matches!(socketname, SocketAddrUnix::Unnamed), Inval);
 
         let mut guard = self.socketname.lock();
         // Make sure that the socket is not already bound.
-        ensure!(matches!(*guard, UnixAddr::Unnamed), Inval);
+        ensure!(matches!(*guard, SocketAddrUnix::Unnamed), Inval);
         *guard = socketname;
         drop(guard);
 
@@ -190,20 +189,25 @@ impl OpenFileDescription for StreamUnixSocket {
         active
             .read_half
             .lock()
-            .read(buf)
+            .read(buf, false)
             .map(|(len, _ancillary_data)| len)
     }
 
-    fn recv_from(&self, buf: &mut dyn ReadBuf, _flags: RecvFromFlags) -> Result<usize> {
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
+        let peek = flags.contains(RecvFromFlags::PEEK);
         active
             .read_half
             .lock()
-            .read(buf)
-            .map(|(len, _ancillary_data)| len)
+            .read(buf, peek)
+            .map(|(len, _ancillary_data)| (len, None))
     }
 
     fn recv_msg(
@@ -220,7 +224,7 @@ impl OpenFileDescription for StreamUnixSocket {
         };
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf)?;
+        let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf, false)?;
 
         if let Some(ancillary_data) = ancillary_data {
             let align = match abi {
@@ -287,17 +291,15 @@ impl OpenFileDescription for StreamUnixSocket {
 
     fn send_to(
         &self,
-        _vm: &VirtualMemory,
         buf: &dyn WriteBuf,
         _: SentToFlags,
-        addr: Pointer<SocketAddr>,
-        _addrlen: usize,
+        addr: Option<SocketAddr>,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        ensure!(addr.is_null(), IsConn);
+        ensure!(addr.is_none(), IsConn);
         active.write_half.lock().write(buf, None)
     }
 
@@ -306,6 +308,7 @@ impl OpenFileDescription for StreamUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: SendMsgFlags,
         fdtable: &FileDescriptorTable,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
@@ -406,19 +409,13 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(())
     }
 
-    fn bind(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        ctx: &mut FileAccessContext,
-    ) -> Result<()> {
-        let mut raw = vec![0; addrlen];
-        virtual_memory.read_bytes(addr.get(), &mut raw)?;
-        let addr = UnixAddr::parse(&raw)?;
+    fn bind(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
+        let SocketAddr::Unix(addr) = addr else {
+            bail!(Inval);
+        };
 
         match addr {
-            UnixAddr::Pathname(path) => {
+            SocketAddrUnix::Pathname(path) => {
                 let guard = self.internal.lock();
 
                 let cwd = ctx.process.as_ref().unwrap().cwd();
@@ -432,7 +429,7 @@ impl OpenFileDescription for StreamUnixSocket {
                     ctx,
                 )
             }
-            UnixAddr::Unnamed => {
+            SocketAddrUnix::Unnamed => {
                 // Auto-bind. Pick a 5-hexdigit abstract name and bind it.
 
                 const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
@@ -454,12 +451,12 @@ impl OpenFileDescription for StreamUnixSocket {
                 let Entry::Vacant(entry) = entry else {
                     bail!(AddrInUse);
                 };
-                let addr = UnixAddr::Abstract(name.to_vec());
+                let addr = SocketAddrUnix::Abstract(name.to_vec());
                 let weak = self.bind(addr)?;
                 entry.insert(weak);
                 Ok(())
             }
-            UnixAddr::Abstract(ref name) => {
+            SocketAddrUnix::Abstract(ref name) => {
                 let mut guard = ABSTRACT_SOCKETS.lock();
                 let entry = guard.entry(name.to_owned());
                 let Entry::Vacant(entry) = entry else {
@@ -480,6 +477,8 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(ty.to_le_bytes().to_vec())
             }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            (1, 17) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PASSCRED
+            (1, 38) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PROTOCOL
             _ => bail!(Inval),
         }
     }
@@ -499,16 +498,16 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    fn get_socket_name(&self) -> Result<Vec<u8>> {
-        Ok(self.socketname.lock().to_bytes())
+    fn get_socket_name(&self) -> Result<SocketAddr> {
+        Ok(SocketAddr::Unix(self.socketname.lock().clone()))
     }
 
-    fn get_peer_name(&self) -> Result<Vec<u8>> {
+    fn get_peer_name(&self) -> Result<SocketAddr> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        Ok(active.peername.to_bytes())
+        Ok(SocketAddr::Unix(active.peername.clone()))
     }
 
     fn listen(&self, backlog: usize) -> Result<()> {
@@ -544,7 +543,7 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(())
     }
 
-    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, Vec<u8>)> {
+    fn accept(&self, flags: Accept4Flags) -> Result<(StrongFileDescriptor, SocketAddr)> {
         let mode = self.mode.get().ok_or(err!(Inval))?;
         let Mode::Passive(passive) = mode else {
             bail!(Inval)
@@ -553,7 +552,7 @@ impl OpenFileDescription for StreamUnixSocket {
         let active = guard.queue.pop_front().ok_or(err!(Again))?;
         drop(guard);
 
-        let addr = active.peername.to_bytes();
+        let addr = SocketAddr::Unix(active.peername.clone());
 
         let mut internal = self.internal.lock().clone();
         internal
@@ -574,21 +573,15 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok((socket, addr))
     }
 
-    async fn connect(
-        &self,
-        virtual_memory: &VirtualMemory,
-        addr: Pointer<SocketAddr>,
-        addrlen: usize,
-        ctx: &mut FileAccessContext,
-    ) -> Result<()> {
-        let mut raw = vec![0; addrlen];
-        virtual_memory.read_bytes(addr.get(), &mut raw)?;
-        let addr = UnixAddr::parse(&raw)?;
+    async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
+        let SocketAddr::Unix(addr) = addr else {
+            bail!(Inval);
+        };
 
         let server = match addr {
-            UnixAddr::Pathname(path) => get_socket(&path, ctx)?,
-            UnixAddr::Unnamed => bail!(Inval),
-            UnixAddr::Abstract(name) => ABSTRACT_SOCKETS
+            SocketAddrUnix::Pathname(path) => get_socket(&path, ctx)?,
+            SocketAddrUnix::Unnamed => bail!(Inval),
+            SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
                 .lock()
                 .get(&name)
                 .and_then(Weak::upgrade)
@@ -639,10 +632,11 @@ impl OpenFileDescription for StreamUnixSocket {
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let mode = self.mode.get()?;
         match mode {
-            Mode::Active(active) => NonEmptyEvents::zip(
-                active.read_half.lock().poll_read(events),
-                active.write_half.lock().poll_write(events),
-            ),
+            Mode::Active(active) => {
+                let poll_read = active.read_half.lock().poll_read(events);
+                let poll_write = active.write_half.lock().poll_write(events);
+                NonEmptyEvents::zip(poll_read, poll_write)
+            }
             Mode::Passive(passive) => {
                 let guard = passive.internal.lock();
                 let mut ready_events = Events::empty();
@@ -738,7 +732,7 @@ impl OpenFileDescription for StreamUnixSocket {
 struct Active {
     write_half: LockedBuffer,
     read_half: LockedBuffer,
-    peername: UnixAddr,
+    peername: SocketAddrUnix,
 }
 
 struct Buffer {
@@ -809,7 +803,11 @@ struct BufferGuard<'a> {
 }
 
 impl BufferGuard<'_> {
-    pub fn read(&mut self, buf: &mut dyn ReadBuf) -> Result<(usize, Option<AncillaryData>)> {
+    pub fn read(
+        &mut self,
+        buf: &mut dyn ReadBuf,
+        peek: bool,
+    ) -> Result<(usize, Option<AncillaryData>)> {
         let buffer = &mut *self.guard;
 
         let len = buf.buffer_len();
@@ -843,9 +841,10 @@ impl BufferGuard<'_> {
             buf.write(0, slice1)?;
             buf.write(slice1.len(), &slice2[..len - slice1.len()])?;
         }
-        buffer.data.drain(..len);
-
-        buffer.total_received += len;
+        if !peek {
+            buffer.data.drain(..len);
+            buffer.total_received += len;
+        }
 
         let ancillary_data = buffer
             .boundaries
@@ -873,9 +872,9 @@ impl BufferGuard<'_> {
         ensure!(!buffer.shutdown, Pipe);
         ensure!(Arc::strong_count(&self.buffer.buffer) > 1, Pipe);
 
-        let len = buf.buffer_len();
-        assert!(len <= buffer.capacity); // TODO
-        ensure!(len < buffer.capacity, Again);
+        let remaining_capacity = buffer.capacity.saturating_sub(buffer.data.len());
+        ensure!(remaining_capacity > 0, Again);
+        let len = cmp::min(len, remaining_capacity);
 
         buffer.data.resize(buffer.data.len() + len, 0);
         let (slice1, slice2) = buffer.data.as_mut_slices();

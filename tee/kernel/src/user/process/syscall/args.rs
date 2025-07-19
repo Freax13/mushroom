@@ -3,11 +3,11 @@ use core::{
     ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{self, SocketAddrV4, SocketAddrV6},
     ops::Add,
 };
 
-use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
@@ -15,7 +15,7 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Result, bail, ensure, err},
+    error::{Error, Result, bail, ensure, err},
     fs::{
         fd::{Events, FdFlags, FileDescriptorTable},
         path::Path,
@@ -1006,7 +1006,6 @@ impl Timespec {
         })
     }
 
-    #[expect(dead_code)]
     pub fn saturating_mul(self, rhs: u64) -> Self {
         let mut acc = Timespec::ZERO;
         // This implements multiplication with double-and-add (similar to
@@ -1088,6 +1087,7 @@ enum_arg! {
         Unspec = 0,
         Unix = 1,
         Inet = 2,
+        Inet6 = 10,
         Netlink = 16,
     }
 }
@@ -1171,24 +1171,27 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, NoUninit)]
     #[repr(transparent)]
     pub struct EpollEvents: u32 {
-        const IN = 0x00000001;
-        const PRI = 0x00000002;
-        const OUT = 0x00000004;
-        const ERR = 0x00000008;
-        const HUP = 0x00000010;
-        const NVAL = 0x00000020;
-        const RDNORM = 0x00000040;
-        const RDBAND = 0x00000080;
-        const WRNORM = 0x00000100;
-        const WRBAND = 0x00000200;
-        const MSG = 0x00000400;
-        const RDHUP = 0x00002000;
+        const IN = 1 << 0;
+        const PRI = 1 << 1;
+        const OUT = 1 << 2;
+        const ERR = 1 << 3;
+        const HUP = 1 << 4;
+        const NVAL = 1 << 5;
+        const RDNORM = 1 << 6;
+        const RDBAND = 1 << 7;
+        const WRNORM = 1 << 8;
+        const WRBAND = 1 << 9;
+        const MSG = 1 << 10;
+        const REMOVE = 1 << 12;
+        const RDHUP = 1 << 13;
+        const FREE = 1 << 14;
+        const BUSY_LOOP = 1 << 15;
 
         const INPUT_FLAGS = 0xf << 28;
         const EXCLUSIVE = 1 << 28;
         const WAKEUP = 1 << 29;
         const ONESHOT = 1 << 30;
-        const LET = 1 << 31;
+        const ET = 1 << 31;
     }
 }
 
@@ -1668,73 +1671,52 @@ impl Rusage {
     }
 }
 
-#[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
-#[repr(C, u16)]
+#[derive(Debug, Clone)]
 pub enum SocketAddr {
-    #[expect(dead_code)]
-    Unspecified(SocketAddrUnspecified) = 0,
-    Inet(SocketAddrInet) = 2,
-    Netlink(SocketAddrNetlink) = 16,
+    Unspecified,
+    Unix(SocketAddrUnix),
+    Inet(SocketAddrV4),
+    Inet6(SocketAddrV6),
+    Netlink(SocketAddrNetlink),
 }
 
-#[derive(Default, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct SocketAddrUnspecified {
-    _pad: [u8; 14],
-}
-
-impl fmt::Debug for SocketAddrUnspecified {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SocketAddrUnspecified")
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Default, Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct SocketAddrInet {
-    /// port in network byte order
-    port: u16,
-    /// internet address
-    pub addr: [u8; 4],
-    _pad: [u8; 8],
-}
-
-impl fmt::Debug for SocketAddrInet {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SocketAddrInet")
-            .field("addr", &self.addr)
-            .field("port", &u16::from_be(self.port))
-            .finish_non_exhaustive()
-    }
-}
-
-impl From<SocketAddrInet> for SocketAddrV4 {
-    fn from(value: SocketAddrInet) -> Self {
-        Self::new(
-            Ipv4Addr::new(value.addr[0], value.addr[1], value.addr[2], value.addr[3]),
-            u16::from_be(value.port),
-        )
-    }
-}
-
-impl From<SocketAddrV4> for SocketAddrInet {
-    fn from(value: SocketAddrV4) -> Self {
-        Self {
-            port: value.port().to_be(),
-            addr: value.ip().octets(),
-            _pad: [0; 8],
+impl SocketAddr {
+    pub fn domain(&self) -> Domain {
+        match self {
+            SocketAddr::Unspecified => Domain::Unspec,
+            SocketAddr::Unix(_) => Domain::Unix,
+            SocketAddr::Inet(_) => Domain::Inet,
+            SocketAddr::Inet6(_) => Domain::Inet6,
+            SocketAddr::Netlink(_) => Domain::Netlink,
         }
     }
 }
 
-#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
-#[repr(C, packed(2))]
+impl From<net::SocketAddr> for SocketAddr {
+    fn from(value: net::SocketAddr) -> Self {
+        match value {
+            net::SocketAddr::V4(addr) => Self::Inet(addr),
+            net::SocketAddr::V6(addr) => Self::Inet6(addr),
+        }
+    }
+}
+
+impl TryFrom<SocketAddr> for net::SocketAddr {
+    type Error = Error;
+
+    fn try_from(value: SocketAddr) -> Result<Self> {
+        Ok(match value {
+            SocketAddr::Inet(addr) => Self::V4(addr),
+            SocketAddr::Inet6(addr) => Self::V6(addr),
+            _ => bail!(Inval),
+        })
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
 pub struct SocketAddrNetlink {
-    _pad: u16,
     pub pid: u32,
     pub groups: u32,
-    _pad2: [u8; 4],
 }
 
 bitflags! {
@@ -1784,6 +1766,7 @@ bitflags! {
 bitflags! {
     pub struct SendMsgFlags {
         const NOSIGNAL = 0x4000;
+        const FASTOPEN = 0x20000000;
     }
 }
 
@@ -1819,6 +1802,7 @@ enum_arg! {
 bitflags! {
     pub struct RecvFromFlags {
         const OOB = 1 << 0;
+        const PEEK = 1 << 1;
         const DONTWAIT = 1 << 6;
     }
 }
@@ -1830,49 +1814,11 @@ pub struct Linger {
     pub linger: i32,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum UnixAddr {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SocketAddrUnix {
     Pathname(Path),
     Unnamed,
     Abstract(Vec<u8>),
-}
-
-impl UnixAddr {
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() >= 2, Inval);
-        let (family, path) = bytes.split_first_chunk::<2>().ok_or(err!(Inval))?;
-        let family = u16::from_ne_bytes(*family);
-        ensure!(family == Domain::Unix as u16, Inval);
-
-        Ok(match path {
-            [] => Self::Unnamed,
-            [0, name @ ..] => Self::Abstract(name.to_owned()),
-            mut path => {
-                // Truncate at the null-terminator (if there is one).
-                if let Some(idx) = path.iter().position(|&b| b == 0) {
-                    path = &path[..idx];
-                }
-                Self::Pathname(Path::new(path.to_owned())?)
-            }
-        })
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(Domain::Unix as u16).to_ne_bytes());
-        match self {
-            UnixAddr::Pathname(path) => {
-                bytes.extend_from_slice(path.as_bytes());
-                bytes.push(0);
-            }
-            UnixAddr::Unnamed => {}
-            UnixAddr::Abstract(name) => {
-                bytes.push(0);
-                bytes.extend_from_slice(name);
-            }
-        }
-        bytes
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

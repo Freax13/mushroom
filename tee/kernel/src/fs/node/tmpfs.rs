@@ -23,7 +23,7 @@ use crate::{
     time::now,
     user::process::{
         futex::Futexes,
-        syscall::args::{ClockId, FallocateMode, InotifyMask, OpenFlags, UnixAddr},
+        syscall::args::{ClockId, FallocateMode, InotifyMask, OpenFlags, SocketAddrUnix},
         thread::{Gid, Uid},
     },
 };
@@ -408,7 +408,7 @@ impl Directory for TmpFsDir {
                 mode,
                 uid,
                 gid,
-                socket.bind(UnixAddr::Pathname(socketname.clone()))?,
+                socket.bind(SocketAddrUnix::Pathname(socketname.clone()))?,
             )),
         ));
         guard.update_times();
@@ -1066,6 +1066,14 @@ impl INode for TmpFsFile {
         }
     }
 
+    fn truncate(&self, len: usize) -> Result<()> {
+        let mut guard = self.internal.write();
+        let now = now(ClockId::Realtime);
+        guard.ctime = now;
+        guard.mtime = now;
+        guard.buffer.truncate(len)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -1291,14 +1299,6 @@ impl File for TmpFsFile {
         Ok(copied)
     }
 
-    fn truncate(&self, len: usize) -> Result<()> {
-        let mut guard = self.internal.write();
-        let now = now(ClockId::Realtime);
-        guard.ctime = now;
-        guard.mtime = now;
-        guard.buffer.truncate(len)
-    }
-
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
         if mode.bits() == 0 {
             let mut guard = self.internal.write();
@@ -1401,6 +1401,10 @@ impl INode for TmpFsSymlink {
         }
     }
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
@@ -1482,6 +1486,10 @@ impl INode for TmpFsCharDev {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
@@ -1577,6 +1585,10 @@ impl INode for TmpFsFifo {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -1663,6 +1675,10 @@ impl INode for TmpFsSocket {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()

@@ -179,6 +179,7 @@ jobs:
           - coreutils
           - libuv
           - dejagnu
+          - gnutls
         tee:
           - snp
           - tdx

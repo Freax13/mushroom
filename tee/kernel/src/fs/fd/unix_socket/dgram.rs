@@ -6,10 +6,10 @@ use futures::future;
 
 use super::super::{Events, FileLock, OpenFileDescription};
 use crate::{
-    error::{Result, bail},
+    error::{Result, bail, ensure},
     fs::{
         FileSystem,
-        fd::{NonEmptyEvents, ReadBuf, WriteBuf},
+        fd::{FileDescriptorTable, NonEmptyEvents, ReadBuf, VectoredUserBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -17,28 +17,32 @@ use crate::{
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::process::{
-        syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SocketAddr, Stat,
-            Timespec,
+        memory::VirtualMemory,
+        syscall::{
+            args::{
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
 };
 
-pub struct SeqPacketUnixSocket {
+pub struct DgramUnixSocket {
     ino: u64,
-    internal: Mutex<SeqPacketUnixSocketInternal>,
+    internal: Mutex<DgramUnixSocketInternal>,
     write_half: WriteHalf,
     read_half: ReadHalf,
     file_lock: FileLock,
 }
 
-struct SeqPacketUnixSocketInternal {
+struct DgramUnixSocketInternal {
     flags: OpenFlags,
     ownership: Ownership,
 }
 
-impl SeqPacketUnixSocket {
+impl DgramUnixSocket {
     pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
         let state1 = Arc::new(State::new());
         let state2 = Arc::new(State::new());
@@ -67,7 +71,7 @@ impl SeqPacketUnixSocket {
         (
             Self {
                 ino: new_ino(),
-                internal: Mutex::new(SeqPacketUnixSocketInternal {
+                internal: Mutex::new(DgramUnixSocketInternal {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
@@ -81,7 +85,7 @@ impl SeqPacketUnixSocket {
             },
             Self {
                 ino: new_ino(),
-                internal: Mutex::new(SeqPacketUnixSocketInternal {
+                internal: Mutex::new(DgramUnixSocketInternal {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
@@ -98,7 +102,7 @@ impl SeqPacketUnixSocket {
 }
 
 #[async_trait]
-impl OpenFileDescription for SeqPacketUnixSocket {
+impl OpenFileDescription for DgramUnixSocket {
     fn flags(&self) -> OpenFlags {
         self.internal.lock().flags
     }
@@ -146,6 +150,43 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         buf.read(0, &mut bytes)?;
         self.write_half.write(Box::from(bytes));
         Ok(len)
+    }
+
+    fn send_to(
+        &self,
+        buf: &dyn WriteBuf,
+        flags: SentToFlags,
+        addr: Option<SocketAddr>,
+    ) -> Result<usize> {
+        ensure!(addr.is_none(), IsConn);
+
+        if flags != SentToFlags::empty() {
+            todo!()
+        }
+
+        self.write(buf)
+    }
+
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        _: SendMsgFlags,
+        _: &FileDescriptorTable,
+    ) -> Result<usize> {
+        ensure!(msg_hdr.name.is_null(), IsConn);
+        ensure!(msg_hdr.namelen == 0, IsConn);
+
+        ensure!(msg_hdr.control.is_null(), IsConn);
+        ensure!(msg_hdr.controllen == 0, IsConn);
+
+        if msg_hdr.flags != 0 {
+            todo!()
+        }
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        self.write(&vectored_buf)
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {

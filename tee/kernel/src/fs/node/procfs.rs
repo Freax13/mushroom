@@ -26,6 +26,7 @@ use crate::{
         path::{FileName, Path},
     },
     memory::page::KernelPage,
+    net::{IpVersion, tcp::NetTcpFile},
     time::now,
     user::process::{
         Process,
@@ -46,6 +47,12 @@ use super::{
 
 pub struct ProcFs {
     dev: u64,
+}
+
+impl ProcFs {
+    pub fn dev(&self) -> u64 {
+        self.dev
+    }
 }
 
 impl FileSystem for ProcFs {
@@ -81,6 +88,8 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         net_dir_file_lock_record: Arc::new(FileLockRecord::new()),
         net_dir_watchers: Arc::new(Watchers::new()),
         net_dev_file: NetDevFile::new(fs.clone()),
+        net_tcp_file: NetTcpFile::new(fs.clone(), IpVersion::V4),
+        net_tcp6_file: NetTcpFile::new(fs.clone(), IpVersion::V6),
         self_link: Arc::new(SelfLink {
             parent: this.clone(),
             fs: fs.clone(),
@@ -106,6 +115,8 @@ struct ProcFsRoot {
     net_dir_file_lock_record: Arc<FileLockRecord>,
     net_dir_watchers: Arc<Watchers>,
     net_dev_file: Arc<NetDevFile>,
+    net_tcp_file: Arc<NetTcpFile>,
+    net_tcp6_file: Arc<NetTcpFile>,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
     uptime_file: Arc<UptimeFile>,
@@ -181,6 +192,8 @@ impl Directory for ProcFsRoot {
                 self.net_dir_file_lock_record.clone(),
                 self.net_dir_watchers.clone(),
                 self.net_dev_file.clone(),
+                self.net_tcp_file.clone(),
+                self.net_tcp6_file.clone(),
             ),
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
@@ -541,6 +554,10 @@ impl INode for CpuinfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -569,10 +586,6 @@ impl File for CpuinfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -655,6 +668,10 @@ impl INode for MeminfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -686,10 +703,6 @@ impl File for MeminfoFile {
         bail!(Acces)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
-        bail!(Acces)
-    }
-
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
@@ -703,6 +716,8 @@ struct NetDir {
     file_lock_record: Arc<FileLockRecord>,
     watchers: Arc<Watchers>,
     net_dev_file: Arc<NetDevFile>,
+    net_tcp_file: Arc<NetTcpFile>,
+    net_tcp6_file: Arc<NetTcpFile>,
 }
 
 impl NetDir {
@@ -712,6 +727,8 @@ impl NetDir {
         file_lock_record: Arc<FileLockRecord>,
         watchers: Arc<Watchers>,
         net_dev_file: Arc<NetDevFile>,
+        net_tcp_file: Arc<NetTcpFile>,
+        net_tcp6_file: Arc<NetTcpFile>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -721,6 +738,8 @@ impl NetDir {
             file_lock_record,
             watchers,
             net_dev_file,
+            net_tcp_file,
+            net_tcp6_file,
         })
     }
 }
@@ -859,6 +878,21 @@ impl Directory for NetDir {
                 name: DirEntryName::DotDot,
             });
         }
+        entries.push(DirEntry {
+            ino: self.net_dev_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"dev").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.net_tcp_file.ino,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"tcp").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.net_tcp6_file.ino,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"tcp6").unwrap()),
+        });
         Ok(entries)
     }
 
@@ -867,6 +901,8 @@ impl Directory for NetDir {
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
             b"dev" => self.net_dev_file.clone(),
+            b"tcp" => self.net_tcp_file.clone(),
+            b"tcp6" => self.net_tcp6_file.clone(),
             _ => bail!(NoEnt),
         };
         Ok(Link { location, node })
@@ -986,6 +1022,10 @@ impl INode for NetDevFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -1014,10 +1054,6 @@ impl File for NetDevFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1104,6 +1140,10 @@ impl INode for SelfLink {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
@@ -1733,6 +1773,10 @@ impl INode for FdINode {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
+
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         self.fd.path()
     }
@@ -1853,11 +1897,21 @@ impl INode for FollowedFdINode {
 
     fn update_times(&self, ctime: Timespec, mtime: Option<Timespec>, atime: Option<Timespec>) {
         if let Some(link) = self.fd.path_fd_link() {
-            // Special case for path fds: Forward the chmod call to the pointed
-            // to node, but rewrite ELOOP to EOPNOTSUPP.
+            // Special case for path fds: Forward the call to the pointed to
+            // link.
             link.node.update_times(ctime, mtime, atime);
         } else {
             self.fd.update_times(ctime, mtime, atime);
+        }
+    }
+
+    fn truncate(&self, length: usize) -> Result<()> {
+        if let Some(link) = self.fd.path_fd_link() {
+            // Special case for path fds: Forward the call to the pointed to
+            // link.
+            link.node.truncate(length)
+        } else {
+            self.fd.truncate(length)
         }
     }
 
@@ -1935,6 +1989,10 @@ impl INode for ExeLink {
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
@@ -2028,6 +2086,10 @@ impl INode for MapsFile {
         Ok(())
     }
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
@@ -2060,10 +2122,6 @@ impl File for MapsFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2140,6 +2198,10 @@ impl INode for ProcessStatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
@@ -2170,10 +2232,6 @@ impl File for ProcessStatFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2738,6 +2796,10 @@ impl INode for TaskCommFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         &self.file_lock_record
     }
@@ -2766,10 +2828,6 @@ impl File for TaskCommFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2861,6 +2919,10 @@ impl INode for StatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -2889,10 +2951,6 @@ impl File for StatFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2989,6 +3047,10 @@ impl INode for UptimeFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         self.file_lock_record.get()
     }
@@ -3017,10 +3079,6 @@ impl File for UptimeFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self, _length: usize) -> Result<()> {
         bail!(Acces)
     }
 

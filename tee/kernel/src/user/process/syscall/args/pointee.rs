@@ -1,13 +1,15 @@
 //! This module contains various traits for userspace pointers.
 
 use core::{
+    cmp,
     ffi::{CStr, c_void},
     fmt::{self, Debug},
     marker::PhantomData,
     mem::{MaybeUninit, size_of},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
 };
 
-use alloc::ffi::CString;
+use alloc::{borrow::ToOwned, ffi::CString};
 use bytemuck::{
     CheckedBitPattern, NoUninit, Pod, Zeroable, bytes_of, bytes_of_mut, cast,
     checked::try_pod_read_unaligned,
@@ -16,7 +18,7 @@ use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result, ensure},
+    error::{Error, Result, bail, ensure},
     fs::{
         StatFs,
         node::{DirEntry, OldDirEntry},
@@ -33,10 +35,10 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, ControlMode, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger, LinuxDirent64,
-    LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit,
-    Rusage, SigEvent, SigEventData, SocketAddr, Stat, SysInfo, Termios, Time, TimerId, Timespec,
-    Timeval, Timezone, WStatus, WinSize,
+    CmsgHdr, ControlMode, Domain, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger,
+    LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg,
+    Pointer, RLimit, Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
+    Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -1939,7 +1941,212 @@ impl From<Rusage> for Rusage64 {
 }
 
 impl Pointee for SocketAddr {}
-impl PrimitivePointee for SocketAddr {}
+
+impl SocketAddr {
+    pub fn read(addr: Pointer<Self>, addrlen: usize, vm: &VirtualMemory) -> Result<Self> {
+        let addr = addr.get();
+        ensure!(addrlen >= 2, Inval);
+        let domain = vm.read(Pointer::<u16>::from(addr))?;
+        Ok(match domain {
+            domain if domain == Domain::Unspec as u16 => Self::Unspecified,
+            domain if domain == Domain::Unix as u16 => {
+                let mut path = [0; 108];
+                ensure!(addrlen <= 2 + path.len(), Inval);
+                let path = &mut path[..addrlen - 2];
+                vm.read_bytes(addr + 2, path)?;
+                let addr = match &*path {
+                    [] => SocketAddrUnix::Unnamed,
+                    [0, name @ ..] => SocketAddrUnix::Abstract(name.to_owned()),
+                    mut path => {
+                        // Truncate at the null-terminator (if there is one).
+                        if let Some(idx) = path.iter().position(|&b| b == 0) {
+                            path = &path[..idx];
+                        }
+                        SocketAddrUnix::Pathname(Path::new(path.to_owned())?)
+                    }
+                };
+                Self::Unix(addr)
+            }
+            domain if domain == Domain::Inet as u16 => {
+                ensure!(addrlen >= size_of::<RawSocketAddrInet>(), Inval);
+                let raw = vm.read(Pointer::<RawSocketAddrInet>::from(addr))?;
+                Self::Inet(SocketAddrV4::from(raw))
+            }
+            domain if domain == Domain::Inet6 as u16 => {
+                ensure!(addrlen >= size_of::<RawSocketAddrInet6>(), Inval);
+                let raw = vm.read(Pointer::<RawSocketAddrInet6>::from(addr))?;
+                Self::Inet6(SocketAddrV6::from(raw))
+            }
+            domain if domain == Domain::Netlink as u16 => {
+                ensure!(addrlen >= size_of::<RawSocketAddrNetlink>(), Inval);
+                let raw = vm.read(Pointer::<RawSocketAddrNetlink>::from(addr))?;
+                Self::Netlink(SocketAddrNetlink::from(raw))
+            }
+            _ => bail!(Inval),
+        })
+    }
+
+    pub fn write(&self, addr: Pointer<Self>, addrlen: usize, vm: &VirtualMemory) -> Result<usize> {
+        let addr = addr.get();
+        match *self {
+            SocketAddr::Unspecified => {
+                let trunc_len = cmp::min(addrlen, 16);
+                vm.set_bytes(addr, trunc_len, 0)?;
+                Ok(16)
+            }
+            SocketAddr::Unix(ref socket_addr) => {
+                let domain_bytes = (Domain::Unix as u16).to_ne_bytes();
+                let trunc_len = cmp::min(domain_bytes.len(), addrlen);
+                vm.write_bytes(addr, &domain_bytes[..trunc_len])?;
+
+                let len = match socket_addr {
+                    SocketAddrUnix::Pathname(path) => {
+                        let trunc_len = cmp::min(path.as_bytes().len(), addrlen.saturating_sub(2));
+                        vm.write_bytes(addr + 2, &path.as_bytes()[..trunc_len])?;
+                        path.as_bytes().len()
+                    }
+                    SocketAddrUnix::Unnamed => 0,
+                    SocketAddrUnix::Abstract(name) => {
+                        if addrlen > 2 {
+                            vm.write_bytes(addr + 2, &[0])?;
+                        }
+                        let trunc_len = cmp::min(name.len(), addrlen.saturating_sub(3));
+                        vm.write_bytes(addr + 3, &name[..trunc_len])?;
+                        1 + name.len()
+                    }
+                };
+                Ok(2 + len)
+            }
+            SocketAddr::Inet(socket_addr) => {
+                let socket_addr = RawSocketAddrInet::from(socket_addr);
+                let trunc_len = cmp::min(addrlen, size_of::<RawSocketAddrInet>());
+                let bytes = &bytes_of(&socket_addr)[..trunc_len];
+                vm.write_bytes(addr, bytes)?;
+                Ok(size_of::<RawSocketAddrInet>())
+            }
+            SocketAddr::Inet6(socket_addr) => {
+                let socket_addr = RawSocketAddrInet6::from(socket_addr);
+                let trunc_len = cmp::min(addrlen, size_of::<RawSocketAddrInet6>());
+                let bytes = &bytes_of(&socket_addr)[..trunc_len];
+                vm.write_bytes(addr, bytes)?;
+                Ok(size_of::<RawSocketAddrInet6>())
+            }
+            SocketAddr::Netlink(socket_addr) => {
+                let socket_addr = RawSocketAddrNetlink::from(socket_addr);
+                let trunc_len = cmp::min(addrlen, size_of::<RawSocketAddrNetlink>());
+                let bytes = &bytes_of(&socket_addr)[..trunc_len];
+                vm.write_bytes(addr, bytes)?;
+                Ok(size_of::<RawSocketAddrNetlink>())
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct RawSocketAddrInet {
+    family: u16,
+    /// port in network byte order
+    port: u16,
+    /// internet address
+    addr: [u8; 4],
+    _pad: [u8; 8],
+}
+
+impl Pointee for RawSocketAddrInet {}
+impl PrimitivePointee for RawSocketAddrInet {}
+
+impl From<RawSocketAddrInet> for SocketAddrV4 {
+    fn from(value: RawSocketAddrInet) -> Self {
+        Self::new(
+            Ipv4Addr::from_bits(u32::from_be_bytes(value.addr)),
+            u16::from_be(value.port),
+        )
+    }
+}
+
+impl From<SocketAddrV4> for RawSocketAddrInet {
+    fn from(value: SocketAddrV4) -> Self {
+        Self {
+            family: Domain::Inet as u16,
+            port: value.port().to_be(),
+            addr: value.ip().to_bits().to_be_bytes(),
+            _pad: [0; 8],
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct RawSocketAddrInet6 {
+    family: u16,
+    /// Port number
+    port: u16,
+    /// IPv6 flow info
+    flowinfo: u32,
+    /// IPv6 address
+    addr: [u8; 16],
+    /// Set of interfaces for a scope
+    scope_id: u32,
+}
+
+impl Pointee for RawSocketAddrInet6 {}
+impl PrimitivePointee for RawSocketAddrInet6 {}
+
+impl From<RawSocketAddrInet6> for SocketAddrV6 {
+    fn from(value: RawSocketAddrInet6) -> Self {
+        Self::new(
+            Ipv6Addr::from_bits(u128::from_be_bytes(value.addr)),
+            u16::from_be(value.port),
+            u32::from_be(value.flowinfo),
+            u32::from_be(value.scope_id),
+        )
+    }
+}
+
+impl From<SocketAddrV6> for RawSocketAddrInet6 {
+    fn from(value: SocketAddrV6) -> Self {
+        Self {
+            family: Domain::Inet6 as u16,
+            port: value.port().to_be(),
+            flowinfo: value.flowinfo().to_be(),
+            addr: value.ip().to_bits().to_be_bytes(),
+            scope_id: value.scope_id().to_be(),
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct RawSocketAddrNetlink {
+    family: u16,
+    _pad: u16,
+    pid: u32,
+    groups: u32,
+}
+
+impl Pointee for RawSocketAddrNetlink {}
+impl PrimitivePointee for RawSocketAddrNetlink {}
+
+impl From<RawSocketAddrNetlink> for SocketAddrNetlink {
+    fn from(value: RawSocketAddrNetlink) -> Self {
+        Self {
+            pid: value.pid,
+            groups: value.groups,
+        }
+    }
+}
+
+impl From<SocketAddrNetlink> for RawSocketAddrNetlink {
+    fn from(value: SocketAddrNetlink) -> Self {
+        Self {
+            family: Domain::Netlink as u16,
+            _pad: 0,
+            pid: value.pid,
+            groups: value.groups,
+        }
+    }
+}
 
 impl Pointee for Linger {}
 impl PrimitivePointee for Linger {}

@@ -36,7 +36,7 @@ use crate::{
             pipe,
             stream_buffer::{self, SpliceBlockedError},
             timer::Timer,
-            unix_socket::{SeqPacketUnixSocket, StreamUnixSocket},
+            unix_socket::{DgramUnixSocket, SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
             self, DirEntry, FileAccessContext, Link, OldDirEntry, Permission, create_char_dev,
@@ -46,7 +46,7 @@ use crate::{
         },
         path::Path,
     },
-    net::{netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
+    net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{oneshot, spawn, r#yield},
     time::{self, now, sleep_until},
     user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
@@ -177,6 +177,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFlock);
     handlers.register(SysFsync);
     handlers.register(SysFdatasync);
+    handlers.register(SysTruncate);
     handlers.register(SysFtruncate);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
@@ -1382,16 +1383,26 @@ fn socket(
             SocketType::Raw => todo!(),
             SocketType::Seqpacket => todo!(),
         },
-        Domain::Inet => match r#type.socket_type {
-            SocketType::Stream => fdtable.insert(
-                TcpSocket::new(r#type, ctx.filesystem_user_id, ctx.filesystem_group_id),
-                r#type,
-                no_file_limit,
-            )?,
-            SocketType::Dgram => fdtable.insert(UdpSocket::new(r#type), r#type, no_file_limit)?,
-            SocketType::Raw => todo!(),
-            SocketType::Seqpacket => todo!(),
-        },
+        Domain::Inet | Domain::Inet6 => {
+            let ip_version = IpVersion::try_from(domain).unwrap();
+            match r#type.socket_type {
+                SocketType::Stream => fdtable.insert(
+                    TcpSocket::new(
+                        ip_version,
+                        r#type,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    ),
+                    r#type,
+                    no_file_limit,
+                )?,
+                SocketType::Dgram => {
+                    fdtable.insert(UdpSocket::new(ip_version, r#type), r#type, no_file_limit)?
+                }
+                SocketType::Raw => todo!(),
+                SocketType::Seqpacket => todo!(),
+            }
+        }
         Domain::Netlink => {
             fdtable.insert(NetlinkSocket::new(r#type, protocol)?, r#type, no_file_limit)?
         }
@@ -1410,8 +1421,8 @@ async fn connect(
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.connect(&virtual_memory, addr, usize_from(addrlen), &mut ctx)
-        .await?;
+    let addr = SocketAddr::read(addr, usize_from(addrlen), &virtual_memory)?;
+    fd.connect(addr, &mut ctx).await?;
     Ok(0)
 }
 
@@ -1437,7 +1448,8 @@ async fn accept(
 }
 
 #[syscall(i386 = 369, amd64 = 44)]
-fn sendto(
+async fn sendto(
+    thread: Arc<Thread>,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -1449,13 +1461,51 @@ fn sendto(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let len = usize_from(len);
-    let addrlen = usize_from(addrlen);
     let buf = UserBuf::new(&virtual_memory, buf, len);
-    let sent = fd.send_to(&virtual_memory, &buf, flags, dest_addr, addrlen)?;
-    Ok(u64::try_from(sent)?)
+    let addrlen = usize_from(addrlen);
+    let dest_addr = if !dest_addr.is_null() {
+        Some(SocketAddr::read(dest_addr, addrlen, &virtual_memory)?)
+    } else {
+        None
+    };
+
+    // Start writing to the file descriptor. This first write can be
+    // interrupted and restarted. Any errors that occur are report to
+    // userspace.
+    let mut written = thread
+        .interruptable(
+            do_io(&**fd, Events::WRITE, || {
+                fd.send_to(&buf, flags, dest_addr.clone())
+            }),
+            true,
+        )
+        .await?;
+
+    // Try to send the rest of the bytes that weren't sent in the first send
+    // call. This can be interrupted as well, but if that happens, it won't be
+    // reported to userspace. Any errors that occur also won't be reported to
+    // userspace.
+    while written != len {
+        let res = thread
+            .interruptable(
+                do_io(&**fd, Events::WRITE, || {
+                    let buf = OffsetBuf::new(&buf, written);
+                    fd.send_to(&buf, flags, dest_addr.clone())
+                }),
+                false,
+            )
+            .await;
+        let Ok(newly_written) = res else {
+            break;
+        };
+        written += newly_written;
+    }
+
+    let len = u64::from_usize(written);
+    Ok(len)
 }
 
-#[syscall(i386 = 371, amd64 = 45, interruptable)]
+#[syscall(i386 = 371, amd64 = 45, interruptable, restartable)]
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1463,12 +1513,9 @@ async fn recv_from(
     buf: Pointer<[u8]>,
     len: u64,
     flags: RecvFromFlags,
-    src_addr: Pointer<c_void>,
-    addrlen: Pointer<c_void>,
+    src_addr: Pointer<SocketAddr>,
+    addrlen: Pointer<u32>,
 ) -> SyscallResult {
-    assert!(src_addr.is_null());
-    assert!(addrlen.is_null());
-
     let fd = fdtable.get(sockfd)?;
 
     let count = usize_from(len);
@@ -1479,11 +1526,23 @@ async fn recv_from(
     } else {
         Events::READ
     };
-    let len = if !flags.contains(RecvFromFlags::DONTWAIT) {
+    let (len, addr) = if !flags.contains(RecvFromFlags::DONTWAIT) {
         do_io(&**fd, events, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
+
+    if !src_addr.is_null() {
+        let max_len = virtual_memory.read(addrlen)?;
+        let actual_len = if let Some(addr) = addr {
+            addr.write(src_addr, usize_from(max_len), &virtual_memory)? as u32
+        } else {
+            0
+        };
+        if max_len != actual_len {
+            virtual_memory.write(addrlen, actual_len)?;
+        }
+    }
 
     let len = u64::from_usize(len);
     Ok(len)
@@ -1501,7 +1560,7 @@ async fn sendmsg(
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
     let len = do_io(&**fd, Events::WRITE, || {
-        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable)
+        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable)
     })
     .await?;
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
@@ -1549,7 +1608,8 @@ fn bind(
     addrlen: u32,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.bind(&virtual_memory, addr, usize_from(addrlen), &mut ctx)?;
+    let addr = SocketAddr::read(addr, usize_from(addrlen), &virtual_memory)?;
+    fd.bind(addr, &mut ctx)?;
     Ok(0)
 }
 
@@ -1571,13 +1631,11 @@ fn getsockname(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let max_len = virtual_memory.read(addrlen)?;
-    let mut socket_name = fd.get_socket_name()?;
-    let actual_len = socket_name.len() as u32;
+    let socket_name = fd.get_socket_name()?;
+    let actual_len = socket_name.write(addr, usize_from(max_len), &virtual_memory)? as u32;
     if max_len != actual_len {
         virtual_memory.write(addrlen, actual_len)?;
     }
-    socket_name.truncate(max_len as usize);
-    virtual_memory.write_bytes(addr.get(), &socket_name)?;
     Ok(0)
 }
 
@@ -1591,13 +1649,11 @@ fn getpeername(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let max_len = virtual_memory.read(addrlen)?;
-    let mut socket_name = fd.get_peer_name()?;
-    let actual_len = socket_name.len() as u32;
+    let peer_name = fd.get_peer_name()?;
+    let actual_len = peer_name.write(addr, usize_from(max_len), &virtual_memory)? as u32;
     if max_len != actual_len {
         virtual_memory.write(addrlen, actual_len)?;
     }
-    socket_name.truncate(max_len as usize);
-    virtual_memory.write_bytes(addr.get(), &socket_name)?;
     Ok(0)
 }
 
@@ -1620,6 +1676,15 @@ fn socketpair(
             ensure!(protocol == 0, Inval);
 
             match r#type.socket_type {
+                SocketType::Stream => {
+                    let (half1, half2) = StreamUnixSocket::new_pair(
+                        r#type.flags,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
+                    );
+                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+                }
                 SocketType::Seqpacket => {
                     let (half1, half2) = SeqPacketUnixSocket::new_pair(
                         r#type.flags,
@@ -1629,8 +1694,8 @@ fn socketpair(
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
                 }
-                SocketType::Stream => {
-                    let (half1, half2) = StreamUnixSocket::new_pair(
+                SocketType::Dgram => {
+                    let (half1, half2) = DgramUnixSocket::new_pair(
                         r#type.flags,
                         ctx.filesystem_user_id,
                         ctx.filesystem_group_id,
@@ -1641,7 +1706,7 @@ fn socketpair(
                 _ => bail!(Inval),
             }
         }
-        Domain::Unspec | Domain::Inet | Domain::Netlink => bail!(OpNotSupp),
+        Domain::Unspec | Domain::Inet | Domain::Inet6 | Domain::Netlink => bail!(OpNotSupp),
     }
 
     // Make sure we don't leak a file descriptor if inserting the other one failed.
@@ -2209,6 +2274,21 @@ fn fsync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult
 #[syscall(i386 = 148, amd64 = 75)]
 fn fdatasync(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum) -> SyscallResult {
     fdtable.get(fd)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 92, amd64 = 76)]
+fn truncate(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    path: Pointer<Path>,
+    length: u64,
+) -> SyscallResult {
+    let length = usize_from(length);
+    let path = virtual_memory.read(path)?;
+    let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
+    link.node.truncate(length)?;
     Ok(0)
 }
 
@@ -3791,13 +3871,6 @@ fn epoll_ctl(
     fd: FdNum,
     event: Pointer<EpollEvent>,
 ) -> SyscallResult {
-    let event = if !event.is_null() {
-        let event = virtual_memory.read(event)?;
-        Some(event)
-    } else {
-        None
-    };
-
     let epoll = fdtable.get(epfd)?;
     let fd = fdtable.get(fd)?;
 
@@ -3806,12 +3879,12 @@ fn epoll_ctl(
             // Poll the fd once to check if it supports epoll.
             let _ = fd.epoll_ready(Events::empty())?;
 
-            let event = event.ok_or(err!(Inval))?;
+            let event = virtual_memory.read(event)?;
             epoll.epoll_add(&fd, event)?
         }
         EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
         EpollCtlOp::Mod => {
-            let event = event.ok_or(err!(Inval))?;
+            let event = virtual_memory.read(event)?;
             epoll.epoll_mod(&**fd, event)?
         }
     }
@@ -4774,18 +4847,15 @@ async fn accept4(
     flags: Accept4Flags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let (socket, mut addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
+    let (socket, addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
     let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
 
     if !upeer_sockaddr.is_null() {
-        let addr_len = virtual_memory.read(upeer_addrlen)?;
-        let addr_len = usize_from(addr_len);
-        if addr_len != addr.len() {
-            virtual_memory.write(upeer_addrlen, addr_len as u32)?;
+        let max_len = virtual_memory.read(upeer_addrlen)?;
+        let actual_len = addr.write(upeer_sockaddr, usize_from(max_len), &virtual_memory)? as u32;
+        if max_len != actual_len {
+            virtual_memory.write(upeer_addrlen, actual_len)?;
         }
-
-        addr.truncate(addr_len);
-        virtual_memory.write_bytes(upeer_sockaddr.get(), &addr)?;
     }
 
     Ok(fd_num.get() as u64)
@@ -5056,7 +5126,7 @@ async fn sendmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = do_io(&**socket, Events::WRITE, || {
-            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, &fdtable)
+            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, flags, &fdtable)
         })
         .await;
         match res {

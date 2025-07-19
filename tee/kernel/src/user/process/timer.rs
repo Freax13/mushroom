@@ -51,8 +51,7 @@ impl Timer {
                                     }
                                     Some(overrun) => {
                                         // If the timer is overrunning, increase the counter.
-                                        *overrun = overrun.checked_add(1).unwrap(); // TODO
-                                        // *overrun = overrun.saturating_add(1);
+                                        *overrun = overrun.saturating_add(1);
                                     }
                                 }
                             }

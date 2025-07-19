@@ -74,7 +74,6 @@ pub trait File: INode {
         let _ = len;
         bail!(OpNotSupp)
     }
-    fn truncate(&self, length: usize) -> Result<()>;
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
 }
 

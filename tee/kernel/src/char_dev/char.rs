@@ -926,6 +926,10 @@ impl INode for PtsChar {
         todo!()
     }
 
+    fn truncate(&self, _length: usize) -> Result<()> {
+        todo!()
+    }
+
     fn file_lock_record(&self) -> &Arc<FileLockRecord> {
         todo!()
     }

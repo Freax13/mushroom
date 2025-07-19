@@ -102,6 +102,7 @@ pub enum ErrorKind {
     NotSock = 88,
     MsgSize = 90,
     OpNotSupp = 95,
+    AFNoSupport = 97,
     AddrInUse = 98,
     AddrNotAvail = 99,
     NetUnreach = 101,
