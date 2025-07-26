@@ -180,6 +180,7 @@ jobs:
           - libuv
           - dejagnu
           - gnutls
+          - elfutils
         tee:
           - snp
           - tdx
