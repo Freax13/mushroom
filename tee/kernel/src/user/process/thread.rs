@@ -1304,14 +1304,22 @@ impl SigInfoCode {
     pub const ILL_ILLOPN: Self = Self(2);
     pub const KERNEL: Self = Self(0x80);
     pub const TIMER: Self = Self(-2);
+    pub const TKILL: Self = Self(-6);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum SigFields {
     None,
+    Kill(SigKill),
     Timer(SigTimer),
     SigChld(SigChld),
     SigFault(SigFault),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigKill {
+    pub pid: u32,
+    pub uid: Uid,
 }
 
 #[derive(Debug, Clone, Copy)]

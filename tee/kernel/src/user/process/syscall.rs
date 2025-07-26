@@ -50,7 +50,10 @@ use crate::{
     rt::{oneshot, spawn, r#yield},
     time::{self, now, sleep_until},
     user::process::{
-        ProcessGroup, WaitResult, memory::MemoryPermissions, syscall::args::*, thread::PtraceState,
+        ProcessGroup, WaitResult,
+        memory::MemoryPermissions,
+        syscall::args::*,
+        thread::{PtraceState, SigKill},
     },
 };
 
@@ -2076,25 +2079,26 @@ async fn wait4(
 
 #[syscall(i386 = 37, amd64 = 62)]
 fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
+    let process = thread.process();
     let sig_info = signal.map(|signal| SigInfo {
         signal,
         code: SigInfoCode::USER,
-        fields: SigFields::None,
+        fields: SigFields::Kill(SigKill {
+            pid: process.pid(),
+            uid: process.credentials.lock().real_user_id,
+        }),
     });
 
     match pid {
         1.. => {
             let target = Process::find_by_pid(pid as u32).ok_or(err!(Srch))?;
             if let Some(sig_info) = sig_info {
-                ensure!(
-                    thread.process().can_send_signal(&target, sig_info.signal),
-                    Perm
-                );
+                ensure!(process.can_send_signal(&target, sig_info.signal), Perm);
                 target.queue_signal(sig_info);
             }
         }
         0 => {
-            let process_group = thread.process().process_group.lock();
+            let process_group = process.process_group.lock();
             let guard = process_group.processes.lock();
             let processes = guard.iter().filter_map(Weak::upgrade).collect::<Vec<_>>();
             drop(guard);
@@ -2105,7 +2109,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             if let Some(sig_info) = sig_info {
                 let mut processes = processes
                     .into_iter()
-                    .filter(|target| thread.process().can_send_signal(target, sig_info.signal))
+                    .filter(|target| process.can_send_signal(target, sig_info.signal))
                     .peekable();
                 processes.peek().ok_or(err!(Perm))?;
                 for target in processes {
@@ -2118,7 +2122,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             processes.peek().ok_or(err!(Srch))?;
             if let Some(sig_info) = sig_info {
                 let mut processes = processes
-                    .filter(|target| thread.process().can_send_signal(target, sig_info.signal))
+                    .filter(|target| process.can_send_signal(target, sig_info.signal))
                     .peekable();
                 processes.peek().ok_or(err!(Perm))?;
                 for target in processes {
@@ -2127,7 +2131,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         ..-1 => {
-            let process_group = thread.process().process_group.lock();
+            let process_group = process.process_group.lock();
             let target = process_group
                 .processes
                 .lock()
@@ -2137,10 +2141,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
                 .ok_or(err!(Srch))?;
             drop(process_group);
             if let Some(sig_info) = sig_info {
-                ensure!(
-                    thread.process().can_send_signal(&target, sig_info.signal),
-                    Perm
-                );
+                ensure!(process.can_send_signal(&target, sig_info.signal), Perm);
                 target.queue_signal(sig_info);
             }
         }
@@ -4086,7 +4087,17 @@ fn epoll_ctl(
 }
 
 #[syscall(i386 = 270, amd64 = 234)]
-fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
+fn tgkill(thread: &Thread, tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
+    let process = thread.process();
+    let sig_info = SigInfo {
+        signal,
+        code: SigInfoCode::TKILL,
+        fields: SigFields::Kill(SigKill {
+            pid: process.pid(),
+            uid: process.credentials.lock().real_user_id,
+        }),
+    };
+
     let process = Process::find_by_pid(tgid).ok_or(err!(Srch))?;
     let threads = process.threads.lock();
     let thread = threads
@@ -4094,11 +4105,7 @@ fn tgkill(tgid: u32, pid: u32, signal: Signal) -> SyscallResult {
         .filter_map(Weak::upgrade)
         .find(|t| t.tid() == pid)
         .ok_or(err!(Srch))?;
-    thread.queue_signal(SigInfo {
-        signal,
-        code: SigInfoCode::USER,
-        fields: SigFields::None,
-    });
+    thread.queue_signal(sig_info);
     Ok(0)
 }
 

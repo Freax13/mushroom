@@ -503,6 +503,12 @@ impl TryFrom<SigInfo> for SigInfo32 {
         }
         match value.fields {
             SigFields::None => {}
+            SigFields::Kill(sig_kill) => {
+                pack!(SigKill32 {
+                    pid: sig_kill.pid,
+                    uid: sig_kill.uid,
+                })
+            }
             SigFields::Timer(sig_timer) => {
                 pack!(SigTimer32 {
                     tid: sig_timer.tid.try_into()?,
@@ -532,6 +538,13 @@ impl TryFrom<SigInfo> for SigInfo32 {
             _sifields,
         })
     }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigKill32 {
+    pid: u32,
+    uid: Uid,
 }
 
 #[derive(Clone, Copy, NoUninit)]
@@ -581,6 +594,12 @@ impl From<SigInfo> for SigInfo64 {
         }
         match value.fields {
             SigFields::None => {}
+            SigFields::Kill(sig_kill) => {
+                pack!(SigKill64 {
+                    pid: sig_kill.pid,
+                    uid: sig_kill.uid,
+                })
+            }
             SigFields::Timer(sig_timer) => {
                 pack!(SigTimer64 {
                     tid: sig_timer.tid.into(),
@@ -611,6 +630,13 @@ impl From<SigInfo> for SigInfo64 {
             _sifields,
         }
     }
+}
+
+#[derive(Clone, Copy, NoUninit)]
+#[repr(C)]
+struct SigKill64 {
+    pid: u32,
+    uid: Uid,
 }
 
 #[derive(Clone, Copy, NoUninit)]
