@@ -714,6 +714,7 @@ bitflags! {
         const NOHANG = 1 << 0;
         const UNTRACED = 1 << 1;
         const CONTINUED = 1 << 3;
+        const __WALL = 1 << 30;
     }
 }
 
