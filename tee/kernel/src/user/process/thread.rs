@@ -127,10 +127,10 @@ impl Thread {
         cpu_state: CpuState,
         affinity: ApBitmap,
         nice: Nice,
-    ) -> Self {
-        Self {
+    ) -> Arc<Self> {
+        let thread = Self {
             tid,
-            process,
+            process: process.clone(),
             signal_notify: Notify::new(),
             running_state: ThreadRunningState::new(),
             usage: ThreadUsage::default(),
@@ -156,7 +156,10 @@ impl Thread {
             inos: ThreadInos::new(),
             ptrace_tracer_notify: Notify::new(),
             ptrace_tracee_notify: Notify::new(),
-        }
+        };
+        let thread = Arc::new(thread);
+        process.add_thread(Arc::downgrade(&thread));
+        thread
     }
 
     pub fn spawn(self: Arc<Self>) {
@@ -199,7 +202,7 @@ impl Thread {
         });
     }
 
-    pub fn empty(tid: u32) -> Self {
+    pub fn empty(tid: u32) -> Arc<Self> {
         Self::new(
             tid,
             Process::new(
@@ -255,7 +258,6 @@ impl Thread {
     }
 
     pub async fn run(self: Arc<Self>) {
-        self.process.add_thread(Arc::downgrade(&self));
         let mut preemption_state = PreemptionState::new();
         loop {
             let exit_action = {
@@ -688,7 +690,7 @@ impl ThreadGuard<'_> {
         new_clear_child_tid: Option<Pointer<u32>>,
         new_tls: Option<NewTls>,
         vfork_done: Option<oneshot::Sender<()>>,
-    ) -> Thread {
+    ) -> Arc<Thread> {
         let process = new_process.unwrap_or_else(|| self.process().clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory().clone());
         let signal_handler_table =

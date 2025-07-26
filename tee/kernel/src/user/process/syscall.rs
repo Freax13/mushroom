@@ -1880,7 +1880,7 @@ async fn clone(
         virtual_memory.write(child_tid, new_tid)?;
     }
 
-    Arc::new(new_thread).spawn();
+    new_thread.spawn();
 
     if let Some(vfork_receiver) = vfork_receiver {
         let _ = vfork_receiver.recv().await;

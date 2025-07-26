@@ -780,7 +780,6 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
         .unwrap();
     drop(guard);
 
-    let thread = Arc::new(thread);
     thread.clone().spawn();
 
     thread
