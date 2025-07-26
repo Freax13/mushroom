@@ -592,6 +592,10 @@ impl File for CpuinfoFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct MeminfoFile {
@@ -705,6 +709,10 @@ impl File for MeminfoFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -1059,6 +1067,10 @@ impl File for NetDevFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -2128,6 +2140,10 @@ impl File for MapsFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct ProcessStatFile {
@@ -2237,6 +2253,10 @@ impl File for ProcessStatFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -2834,6 +2854,10 @@ impl File for TaskCommFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct StatFile {
@@ -2956,6 +2980,10 @@ impl File for StatFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -3084,5 +3112,9 @@ impl File for UptimeFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }

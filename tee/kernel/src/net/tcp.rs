@@ -1324,4 +1324,8 @@ impl File for NetTcpFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }

@@ -782,6 +782,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>>;
 
+    fn deleted(&self) -> bool {
+        false
+    }
+
     fn as_dir(&self, ctx: &mut FileAccessContext) -> Result<Link> {
         let _ = ctx;
         bail!(NotDir)
