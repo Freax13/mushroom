@@ -28,7 +28,7 @@ use crate::{
         StatFs,
         fd::{
             Events, FdFlags, FileDescriptorTable, KernelReadBuf, KernelWriteBuf, OffsetBuf,
-            StrongFileDescriptor, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
+            ReadBuf, StrongFileDescriptor, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             inotify::Inotify,
@@ -298,6 +298,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPrlimit64);
     handlers.register(SysSendmmsg);
     handlers.register(SysGetcpu);
+    handlers.register(SysProcessVmReadv);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
     handlers.register(SysCopyFileRange);
@@ -5179,7 +5180,7 @@ async fn pwritev(
 
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_write_io(&**fd, vectored_buf.buffer_len(), || {
+    let len = do_write_io(&**fd, WriteBuf::buffer_len(&vectored_buf), || {
         fd.pwrite(pos, &vectored_buf)
     })
     .await?;
@@ -5350,6 +5351,55 @@ fn getcpu(
         virtual_memory.write(cpu, 0)?;
     }
     Ok(0)
+}
+
+#[syscall(i386 = 347, amd64 = 310)]
+fn process_vm_readv(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: u32,
+    lvec: Pointer<Iovec>,
+    liovcnt: u64,
+    rvec: Pointer<Iovec>,
+    riovcnt: u64,
+    flags: u64, // TODO: Add proper type
+) -> SyscallResult {
+    ensure!(flags == 0, Inval);
+
+    let tracee = thread
+        .lock()
+        .tracees
+        .iter()
+        .filter_map(Weak::upgrade)
+        .find(|tracee| tracee.tid() == pid)
+        .ok_or(err!(Srch))?;
+    let guard = tracee.lock();
+    ensure!(core::ptr::eq(guard.tracer.as_ptr(), thread), Srch);
+    ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+    let mut local_vec = VectoredUserBuf::new(&virtual_memory, lvec, liovcnt, abi)?;
+    let remote_vec = VectoredUserBuf::with_remote_virtual_memory(
+        &virtual_memory,
+        rvec,
+        riovcnt,
+        abi,
+        guard.virtual_memory(),
+    )?;
+
+    let len = cmp::min(
+        WriteBuf::buffer_len(&local_vec),
+        ReadBuf::buffer_len(&remote_vec),
+    );
+    let mut buffer = [0; 4096];
+    for offset in (0..len).step_by(buffer.len()) {
+        let chunk_len = cmp::min(buffer.len(), len - offset);
+        let buffer = &mut buffer[..chunk_len];
+        remote_vec.read(offset, buffer)?;
+        local_vec.write(offset, buffer)?;
+    }
+
+    Ok(u64::from_usize(len))
 }
 
 #[syscall(amd64 = 316)]

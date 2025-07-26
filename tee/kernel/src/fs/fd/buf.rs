@@ -169,12 +169,22 @@ pub struct VectoredUserBuf<'a> {
 impl<'a> VectoredUserBuf<'a> {
     pub fn new(
         vm: &'a VirtualMemory,
-        mut iov: Pointer<Iovec>,
+        iov: Pointer<Iovec>,
         iovlen: impl IntoUsize,
         abi: Abi,
     ) -> Result<Self> {
+        Self::with_remote_virtual_memory(vm, iov, iovlen, abi, vm)
+    }
+
+    pub fn with_remote_virtual_memory(
+        vm: &VirtualMemory,
+        mut iov: Pointer<Iovec>,
+        iovlen: impl IntoUsize,
+        abi: Abi,
+        remote: &'a VirtualMemory,
+    ) -> Result<Self> {
         let mut vectored_buf = Self {
-            vm,
+            vm: remote,
             iovec: Vec::new(),
         };
         for _ in 0..iovlen.into_usize() {
