@@ -931,6 +931,7 @@ enum_arg! {
     pub enum ClockId {
         Realtime = 0,
         Monotonic = 1,
+        MonotonicRaw = 4,
     }
 }
 

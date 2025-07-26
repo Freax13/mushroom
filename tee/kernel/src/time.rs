@@ -52,7 +52,7 @@ static MONOTONIC: Time = unsafe { Time::new(&MONOTONIC_TIMERS, &DEFAULT_BACKEND)
 pub fn now(clock: ClockId) -> Timespec {
     let now = match clock {
         ClockId::Realtime => REALTIME.now(),
-        ClockId::Monotonic => MONOTONIC.now(),
+        ClockId::Monotonic | ClockId::MonotonicRaw => MONOTONIC.now(),
     };
     Timespec::from(now)
 }
@@ -64,7 +64,7 @@ pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
             REALTIME.update_offset(time);
             Ok(())
         }
-        ClockId::Monotonic => bail!(OpNotSupp),
+        ClockId::Monotonic | ClockId::MonotonicRaw => bail!(OpNotSupp),
     }
 }
 
@@ -108,7 +108,7 @@ pub async fn sleep_until(deadline: Timespec, clock_id: ClockId) {
     let deadline = Tick::try_from(deadline).unwrap();
     match clock_id {
         ClockId::Realtime => REALTIME.sleep_until(deadline).await,
-        ClockId::Monotonic => MONOTONIC.sleep_until(deadline).await,
+        ClockId::Monotonic | ClockId::MonotonicRaw => MONOTONIC.sleep_until(deadline).await,
     }
 }
 
