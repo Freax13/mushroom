@@ -23,7 +23,10 @@ use crate::{
         mutex::Mutex,
         rwlock::{RwLock, WriteRwLockGuard},
     },
-    user::process::{futex::Futexes, syscall::args::Stat},
+    user::process::{
+        futex::Futexes,
+        syscall::args::{OpenFlags, Stat},
+    },
 };
 use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
@@ -640,6 +643,21 @@ impl VirtualMemoryWriteGuard<'_> {
                     Some((path, deleted)),
                 )
             }
+        }
+
+        let flags = file.flags();
+        let allowed = if flags.contains(OpenFlags::WRONLY) {
+            MemoryPermissions::empty()
+        } else if flags.contains(OpenFlags::RDWR) {
+            MemoryPermissions::READ | MemoryPermissions::WRITE
+        } else {
+            // RDONLY
+            MemoryPermissions::READ
+        };
+        if shared {
+            ensure!(allowed.contains(permissions), Acces);
+        } else {
+            ensure!(allowed.contains(MemoryPermissions::READ), Acces);
         }
 
         let stat = file.stat()?;
