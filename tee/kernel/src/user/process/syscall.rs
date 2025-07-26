@@ -19,7 +19,7 @@ use futures::{
 use kernel_macros::syscall;
 use log::warn;
 use usize_conversions::{FromUsize, usize_from};
-use x86_64::VirtAddr;
+use x86_64::{VirtAddr, align_up};
 
 use crate::{
     char_dev::mem::random_bytes,
@@ -143,6 +143,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysPipe);
     handlers.register(SysSelect);
     handlers.register(SysSchedYield);
+    handlers.register(SysMremap);
     handlers.register(SysMsync);
     handlers.register(SysMadvise);
     handlers.register(SysDup);
@@ -1155,6 +1156,22 @@ async fn select_impl(
 async fn sched_yield() -> SyscallResult {
     r#yield().await;
     Ok(0)
+}
+
+#[syscall(i386 = 163, amd64 = 25)]
+fn mremap(
+    old_address: Pointer<c_void>,
+    old_size: u64,
+    new_size: u64,
+    flags: MremapFlags,
+    new_address: Pointer<c_void>,
+) -> SyscallResult {
+    if align_up(old_size, 0x1000) == align_up(new_size, 0x1000) {
+        return Ok(old_address.get().as_u64());
+    }
+
+    // TODO: Implement this.
+    bail!(NoSys)
 }
 
 #[syscall(i386 = 144, amd64 = 26)]

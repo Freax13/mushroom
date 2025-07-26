@@ -2285,6 +2285,14 @@ bitflags! {
     }
 }
 
+bitflags! {
+    pub struct MremapFlags {
+        const MAYMOVE = 1;
+        const FIXED = 2;
+        const DONTUNMAP = 4;
+    }
+}
+
 enum_arg! {
     pub enum PtraceOp {
         TraceMe = 0,
