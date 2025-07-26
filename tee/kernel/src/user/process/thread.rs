@@ -1000,6 +1000,35 @@ impl ThreadGuard<'_> {
         buffer
     }
 
+    pub fn status(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        write!(buffer, "Name:\t").unwrap();
+        buffer.extend_from_slice(&self.task_comm());
+        writeln!(buffer).unwrap();
+
+        writeln!(buffer, "Umask:\t{0:4o}", *self.process().umask.lock()).unwrap();
+
+        writeln!(buffer, "Tgid:\t{}", self.process().pid()).unwrap();
+
+        writeln!(buffer, "Ngid:\t0").unwrap();
+
+        writeln!(buffer, "Pid:\t{}", self.process().pid()).unwrap();
+
+        writeln!(buffer, "Ppid:\t{}", self.process().ppid()).unwrap();
+
+        writeln!(
+            buffer,
+            "Ppid:\t{}",
+            self.tracer.upgrade().map_or(0, |thread| thread.tid())
+        )
+        .unwrap();
+
+        // TODO: More
+
+        buffer
+    }
+
     pub fn task_comm(&self) -> ArrayVec<u8, TASK_COMM_CAPACITY> {
         self.task_comm
             .clone()
