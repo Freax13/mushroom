@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     // Execute the build.
     let status = Command::new("/bin/sh")
         .arg("-c")
-        .arg("source /build/dev-env && set -e && dontInstall=1 && dontFixup=1 && genericBuild")
+        .arg("source /build/dev-env && set -e && dontFixup=1 && genericBuild")
         .current_dir("/build/")
         .uid(1000)
         .gid(1000)
