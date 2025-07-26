@@ -59,14 +59,19 @@ pub struct ThreadUsage {
     voluntary_context_switches: AtomicU64,
 }
 
+const UPDATING: u64 = 1 << 63;
+
 impl ThreadUsage {
     pub fn start(&self, start: u64) {
         self.last_start.store(start, Ordering::Relaxed);
     }
 
     pub fn stop(&self, end: u64) {
-        let start = self.last_start.swap(0, Ordering::Relaxed);
-        self.total_ns.fetch_add(end - start, Ordering::Relaxed);
+        let start = self.last_start.load(Ordering::SeqCst);
+        self.total_ns
+            .fetch_add(UPDATING | (end - start), Ordering::SeqCst);
+        self.last_start.store(0, Ordering::SeqCst);
+        self.total_ns.fetch_and(!UPDATING, Ordering::SeqCst);
     }
 
     pub fn record_user_execution_time(&self, delta_t: u64) {
@@ -88,7 +93,9 @@ pub fn collect(memory: &MemoryUsage, thread: &ThreadUsage) -> Rusage {
     let mut total_ns = thread.total_ns.load(Ordering::Relaxed);
 
     let last_start = thread.last_start.load(Ordering::Relaxed);
-    if last_start != 0 {
+    if total_ns & UPDATING != 0 {
+        total_ns &= !UPDATING;
+    } else if last_start != 0 {
         total_ns += default_backend_offset().saturating_sub(last_start);
     }
 
