@@ -1,4 +1,4 @@
-use core::cmp;
+use core::{cmp, mem::MaybeUninit};
 
 use alloc::{
     boxed::Box,
@@ -9,6 +9,8 @@ use alloc::{
 };
 use async_trait::async_trait;
 use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
+use usize_conversions::FromUsize;
+use x86_64::VirtAddr;
 
 use crate::{
     error::{ErrorKind, Result, bail, ensure, err},
@@ -592,6 +594,10 @@ impl File for CpuinfoFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct MeminfoFile {
@@ -705,6 +711,10 @@ impl File for MeminfoFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -1060,6 +1070,10 @@ impl File for NetDevFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct SelfLink {
@@ -1159,7 +1173,9 @@ pub struct ProcessInos {
     fd_dir: u64,
     exe_link: u64,
     maps_file: u64,
+    mem_file: u64,
     stat_file: u64,
+    status_file: u64,
     task_dir: u64,
 }
 
@@ -1171,7 +1187,9 @@ impl ProcessInos {
             fd_dir: new_ino(),
             exe_link: new_ino(),
             maps_file: new_ino(),
+            mem_file: new_ino(),
             stat_file: new_ino(),
+            status_file: new_ino(),
             task_dir: new_ino(),
         }
     }
@@ -1190,8 +1208,12 @@ struct ProcessDir {
     exe_link_watchers: Arc<Watchers>,
     maps_file_lock_record: LazyFileLockRecord,
     maps_file_watchers: Arc<Watchers>,
+    mem_file_lock_record: LazyFileLockRecord,
+    mem_file_watchers: Arc<Watchers>,
     stat_file_lock_record: LazyFileLockRecord,
     stat_file_watchers: Arc<Watchers>,
+    status_file_lock_record: LazyFileLockRecord,
+    status_file_watchers: Arc<Watchers>,
     task_dir_lock_record: LazyFileLockRecord,
     task_dir_watchers: Arc<Watchers>,
 }
@@ -1211,8 +1233,12 @@ impl ProcessDir {
             exe_link_watchers: Arc::new(Watchers::new()),
             maps_file_lock_record: LazyFileLockRecord::new(),
             maps_file_watchers: Arc::new(Watchers::new()),
+            mem_file_lock_record: LazyFileLockRecord::new(),
+            mem_file_watchers: Arc::new(Watchers::new()),
             stat_file_lock_record: LazyFileLockRecord::new(),
             stat_file_watchers: Arc::new(Watchers::new()),
+            status_file_lock_record: LazyFileLockRecord::new(),
+            status_file_watchers: Arc::new(Watchers::new()),
             task_dir_lock_record: LazyFileLockRecord::new(),
             task_dir_watchers: Arc::new(Watchers::new()),
         })
@@ -1301,11 +1327,23 @@ impl Directory for ProcessDir {
                 self.maps_file_lock_record.get().clone(),
                 self.maps_file_watchers.clone(),
             ),
+            b"mem" => MemFile::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.mem_file_lock_record.get().clone(),
+                self.mem_file_watchers.clone(),
+            ),
             b"stat" => ProcessStatFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.stat_file_lock_record.get().clone(),
                 self.stat_file_watchers.clone(),
+            ),
+            b"status" => ProcessStatusFile::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.status_file_lock_record.get().clone(),
+                self.status_file_watchers.clone(),
             ),
             b"task" => ProcessTaskDir::new(
                 location.clone(),
@@ -1418,9 +1456,19 @@ impl Directory for ProcessDir {
             name: DirEntryName::FileName(FileName::new(b"maps").unwrap()),
         });
         entries.push(DirEntry {
+            ino: process.inos.mem_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"mem").unwrap()),
+        });
+        entries.push(DirEntry {
             ino: process.inos.stat_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.status_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"status").unwrap()),
         });
         entries.push(DirEntry {
             ino: process.inos.task_dir,
@@ -2128,6 +2176,144 @@ impl File for MapsFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+}
+
+struct MemFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl MemFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            process,
+            file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for MemFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.mem_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o666)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for MemFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let virtual_memory = thread.lock().virtual_memory().clone();
+
+        let mut buffer = MaybeUninit::<[u8; 4096]>::uninit();
+        let buffer = buffer.as_bytes_mut();
+        let len = buf.buffer_len();
+        for i in (0..len).step_by(buffer.len()) {
+            let chunk_len = cmp::min(buffer.len(), len - i);
+            let buffer = &mut buffer[..chunk_len];
+            let addr = VirtAddr::try_new(u64::from_usize(offset + i))?;
+            let buffer = virtual_memory.read_uninit_bytes(addr, buffer)?;
+            buf.write(i, buffer)?;
+        }
+        Ok(len)
+    }
+
+    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let virtual_memory = thread.lock().virtual_memory().clone();
+
+        let mut buffer = [0; 4096];
+        let len = buf.buffer_len();
+        for i in (0..len).step_by(buffer.len()) {
+            let chunk_len = cmp::min(buffer.len(), len - i);
+            let buffer = &mut buffer[..chunk_len];
+            buf.read(i, buffer)?;
+            let addr = VirtAddr::try_new(u64::from_usize(offset + i))?;
+            virtual_memory.write_bytes(addr, buffer)?;
+        }
+        Ok(len)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct ProcessStatFile {
@@ -2160,7 +2346,7 @@ impl INode for ProcessStatFile {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.maps_file,
+            ino: process.inos.stat_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -2237,6 +2423,124 @@ impl File for ProcessStatFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+}
+
+struct ProcessStatusFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    file_lock_record: Arc<FileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl ProcessStatusFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        file_lock_record: Arc<FileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            process,
+            file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for ProcessStatusFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.status_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+        &self.file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for ProcessStatusFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let stat = thread.lock().status();
+        let offset = cmp::min(offset, stat.len());
+        let stat = &stat[offset..];
+        let len = cmp::min(stat.len(), buf.buffer_len());
+        buf.write(0, &stat[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -2834,6 +3138,10 @@ impl File for TaskCommFile {
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
     }
+
+    fn deleted(&self) -> bool {
+        false
+    }
 }
 
 struct StatFile {
@@ -2956,6 +3264,10 @@ impl File for StatFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }
 
@@ -3084,5 +3396,9 @@ impl File for UptimeFile {
 
     fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
     }
 }

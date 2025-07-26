@@ -1316,6 +1316,10 @@ impl File for TmpFsFile {
             todo!()
         }
     }
+
+    fn deleted(&self) -> bool {
+        self.internal.read().links == 0
+    }
 }
 
 pub struct TmpFsSymlink {

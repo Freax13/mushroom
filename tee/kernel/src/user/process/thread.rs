@@ -4,13 +4,13 @@ use core::{
     ffi::{CStr, c_void},
     fmt::Debug,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
-    pin::Pin,
+    pin::{Pin, pin},
     sync::atomic::{AtomicU32, Ordering},
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 use crate::{
-    error::bail,
+    error::{bail, ensure},
     exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable},
@@ -21,8 +21,9 @@ use crate::{
     spin::mutex::{Mutex, MutexGuard},
     time,
     user::process::{
+        WaitFilter, WaitResult,
         memory::PageFaultError,
-        syscall::args::{TimerId, Timespec},
+        syscall::args::{PtraceEvent, TimerId, Timespec},
         thread::running_state::{ExitAction, ThreadRunningState},
     },
 };
@@ -85,6 +86,10 @@ pub struct Thread {
     pub affinity: AtomicApBitmap, // TODO: Use this
     pub nice: AtomicCell<Nice>,
     pub inos: ThreadInos,
+    /// Notifications sent from the tracer to the tracee.
+    pub ptrace_tracer_notify: Notify,
+    /// Notifications sent from the tracee to the tracer.
+    pub ptrace_tracee_notify: Notify,
 }
 
 pub struct ThreadState {
@@ -101,6 +106,12 @@ pub struct ThreadState {
     pub vfork_done: Option<oneshot::Sender<()>>,
     task_comm: Option<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     no_new_privs: bool,
+
+    /// The thread that traces this thread.
+    pub tracer: Weak<Thread>,
+    pub ptrace_state: PtraceState,
+    /// Threads that are traced by this thread.
+    pub tracees: Vec<Weak<Thread>>,
 }
 
 impl Thread {
@@ -116,10 +127,10 @@ impl Thread {
         cpu_state: CpuState,
         affinity: ApBitmap,
         nice: Nice,
-    ) -> Self {
-        Self {
+    ) -> Arc<Self> {
+        let thread = Self {
             tid,
-            process,
+            process: process.clone(),
             signal_notify: Notify::new(),
             running_state: ThreadRunningState::new(),
             usage: ThreadUsage::default(),
@@ -134,13 +145,21 @@ impl Thread {
                 vfork_done,
                 task_comm: None,
                 no_new_privs: false,
+                tracer: Weak::new(),
+                ptrace_state: PtraceState::default(),
+                tracees: Vec::new(),
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
             affinity: AtomicApBitmap::new(affinity),
             nice: AtomicCell::new(nice),
             inos: ThreadInos::new(),
-        }
+            ptrace_tracer_notify: Notify::new(),
+            ptrace_tracee_notify: Notify::new(),
+        };
+        let thread = Arc::new(thread);
+        process.add_thread(Arc::downgrade(&thread));
+        thread
     }
 
     pub fn spawn(self: Arc<Self>) {
@@ -183,7 +202,7 @@ impl Thread {
         });
     }
 
-    pub fn empty(tid: u32) -> Self {
+    pub fn empty(tid: u32) -> Arc<Self> {
         Self::new(
             tid,
             Process::new(
@@ -239,14 +258,13 @@ impl Thread {
     }
 
     pub async fn run(self: Arc<Self>) {
-        self.process.add_thread(Arc::downgrade(&self));
         let mut preemption_state = PreemptionState::new();
         loop {
             let exit_action = {
                 let running_state = self.watch();
                 let run_future = async {
                     loop {
-                        self.try_deliver_signal().await.unwrap();
+                        self.deliver_signals().await.unwrap();
 
                         let clone = self.clone();
                         let exit = clone.run_userspace().unwrap();
@@ -354,10 +372,7 @@ impl Thread {
 
     /// Returns true if the signal was not already queued.
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
-        let mut guard = self.lock();
-        let res = guard.pending_signals.add(sig_info);
-        self.signal_notify.notify();
-        res
+        self.lock().queue_signal(sig_info)
     }
 
     /// Try to queue a signal and kill the process if the signal is already pending.
@@ -368,69 +383,125 @@ impl Thread {
         }
     }
 
-    async fn try_deliver_signal(self: &Arc<Self>) -> Result<()> {
-        self.process.wait_until_not_stopped().await;
+    async fn deliver_signals(self: &Arc<Self>) -> Result<()> {
+        loop {
+            let wait_thread = self.signal_notify.wait().fuse();
+            let ptrace_wait = self.ptrace_tracee_notify.wait().fuse();
+            let wait_process = self.process.signals_notify.wait().fuse();
+            let process_not_stopped_fut = self.process.wait_until_not_stopped().fuse();
+            let mut wait_thread = pin!(wait_thread);
+            let mut ptrace_wait = pin!(ptrace_wait);
+            let mut wait_process = pin!(wait_process);
+            let mut process_not_stopped_fut = pin!(process_not_stopped_fut);
 
-        let mut state = self.lock();
-        while let Some(sig_info) = state.pop_signal() {
-            let virtual_memory = state.virtual_memory.clone();
-            let sigaction = state.signal_handler_table.get(sig_info.signal);
+            let mut state = self.lock();
+            loop {
+                let (sig_info, bypass_ptrace) = if let Some(sig_info) = state.pop_signal() {
+                    (sig_info, false)
+                } else if let PtraceState::SignalRestart(sig_info) = state.ptrace_state {
+                    state.ptrace_state = PtraceState::Running;
+                    (sig_info, true)
+                } else {
+                    break;
+                };
 
-            match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
-                (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => {
-                    // Ignore
+                if !bypass_ptrace
+                    && sig_info.signal != Signal::KILL
+                    && let Some(tracer) = state.tracer.upgrade()
+                {
+                    state.ptrace_state = PtraceState::Signal {
+                        sig_info,
+                        reported: false,
+                    };
+                    drop(state);
+
+                    tracer.ptrace_tracer_notify.notify();
+                    drop(tracer);
+
+                    state = self.lock();
                     continue;
                 }
-                (
-                    Sigaction::SIG_DFL,
-                    signal @ (Signal::HUP
-                    | Signal::INT
-                    | Signal::ABRT
-                    | Signal::USR1
-                    | Signal::SEGV
-                    | Signal::USR2
-                    | Signal::PIPE
-                    | Signal::TERM),
-                )
-                | (_, signal @ Signal::KILL) => {
-                    // Terminate.
-                    drop(state);
-                    self.process.exit_group(WStatus::signaled(signal));
-                    return core::future::pending().await;
+
+                let virtual_memory = state.virtual_memory.clone();
+                let sigaction = state.signal_handler_table.get(sig_info.signal);
+
+                match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
+                    (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => {
+                        // Ignore
+                        continue;
+                    }
+                    (
+                        Sigaction::SIG_DFL,
+                        signal @ (Signal::HUP
+                        | Signal::INT
+                        | Signal::ABRT
+                        | Signal::USR1
+                        | Signal::SEGV
+                        | Signal::USR2
+                        | Signal::PIPE
+                        | Signal::TERM),
+                    )
+                    | (_, signal @ Signal::KILL) => {
+                        // Terminate.
+                        drop(state);
+                        self.process.exit_group(WStatus::signaled(signal));
+                        return core::future::pending().await;
+                    }
+                    (_, Signal::STOP) => continue,
+                    (Sigaction::SIG_DFL, signal) => {
+                        todo!("unimplemented default for signal {signal:?}")
+                    }
+                    (Sigaction::SIG_IGN, _) => continue,
+                    _ => {}
                 }
-                (_, Signal::STOP) => continue,
-                (Sigaction::SIG_DFL, signal) => {
-                    todo!("unimplemented default for signal {signal:?}")
+
+                let thread_sigmask = state.sigmask;
+                state.sigmask |= sigaction.sa_mask;
+                if !sigaction.sa_flags.contains(SigactionFlags::NODEFER) {
+                    state.sigmask.add(sig_info.signal);
                 }
-                (Sigaction::SIG_IGN, _) => continue,
-                _ => {}
+                let sigaltstack = state.sigaltstack;
+                state.sigaltstack.flags |= StackFlags::ONSTACK;
+                if sigaltstack.flags.contains(StackFlags::AUTODISARM)
+                    && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
+                {
+                    state.sigaltstack.flags |= StackFlags::DISABLE;
+                }
+                drop(state);
+
+                let mut cpu_state = self.cpu_state.lock();
+                cpu_state.start_signal_handler(
+                    sig_info,
+                    sigaction,
+                    sigaltstack,
+                    thread_sigmask,
+                    &virtual_memory,
+                )?;
+
+                state = self.lock();
             }
 
-            let thread_sigmask = state.sigmask;
-            state.sigmask |= sigaction.sa_mask;
-            if !sigaction.sa_flags.contains(SigactionFlags::NODEFER) {
-                state.sigmask.add(sig_info.signal);
-            }
-            let sigaltstack = state.sigaltstack;
-            state.sigaltstack.flags |= StackFlags::ONSTACK;
-            if sigaltstack.flags.contains(StackFlags::AUTODISARM)
-                && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
-            {
-                state.sigaltstack.flags |= StackFlags::DISABLE;
+            // If the process is not stopped and the thread is not in a ptrace
+            // stop, return. Following this, the event loop will enter
+            // userspace. If that's not the case, we want and potentially
+            // deliver more signals.
+            let is_process_not_stopped = process_not_stopped_fut
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready();
+            let is_in_ptrace_stop = state.ptrace_state.is_stopped();
+            if !is_in_ptrace_stop && is_process_not_stopped {
+                return Ok(());
             }
             drop(state);
 
-            let mut cpu_state = self.cpu_state.lock();
-            return cpu_state.start_signal_handler(
-                sig_info,
-                sigaction,
-                sigaltstack,
-                thread_sigmask,
-                &virtual_memory,
-            );
+            select_biased! {
+                _ = wait_thread => {}
+                _ = wait_process => {}
+                _ = process_not_stopped_fut => {}
+                _ = ptrace_wait => {}
+            }
         }
-
-        Ok(())
     }
 
     /// Returns a future that resolves when the process has a pending signal
@@ -438,6 +509,7 @@ impl Thread {
     async fn wait_for_signal(&self) -> bool {
         loop {
             let thread_notify_wait = self.signal_notify.wait();
+            let ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
             let process_notify_wait = self.process.signals_notify.wait();
 
             let mut guard = self.lock();
@@ -447,7 +519,8 @@ impl Thread {
             drop(guard);
 
             select_biased! {
-                () = thread_notify_wait.fuse() => {},
+                () = thread_notify_wait.fuse() => {}
+                () = ptrace_tracee_wait.fuse() => {}
                 () = process_notify_wait.fuse() => {}
             }
         }
@@ -518,6 +591,85 @@ impl Thread {
                 .find(|t| t.tid() == tid)
         })
     }
+
+    pub fn poll_wait_for_tracee(&self, filter: WaitFilter) -> WaitResult {
+        let children = self
+            .lock()
+            .tracees
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|tracee| match filter {
+                WaitFilter::Any => true,
+                WaitFilter::ExactPid(pid) => tracee.tid() == pid,
+                WaitFilter::ExactPgid(_) => false, // TODO
+            })
+            .collect::<Vec<_>>();
+        let mut children = children
+            .iter()
+            .map(|tracee| (tracee, tracee.lock()))
+            .filter(|(_, guard)| core::ptr::eq(guard.tracer.as_ptr(), self))
+            .peekable();
+        if children.peek().is_none() {
+            return WaitResult::NoChild;
+        }
+
+        children
+            .find_map(|(tracee, mut guard)| {
+                let wstatus = match guard.ptrace_state {
+                    PtraceState::Running | PtraceState::SignalRestart { .. } => return None,
+                    PtraceState::Signal {
+                        sig_info,
+                        ref mut reported,
+                    } => {
+                        if *reported {
+                            return None;
+                        }
+                        *reported = true;
+                        WStatus::stopped(sig_info.signal)
+                    }
+                    PtraceState::Exit { ref mut reported } => {
+                        if *reported {
+                            return None;
+                        }
+                        *reported = true;
+                        WStatus::ptrace_event(PtraceEvent::Exit)
+                    }
+                };
+                Some(WaitResult::Ready {
+                    pid: tracee.tid(),
+                    wstatus,
+                    rusage: guard.get_rusage(),
+                })
+            })
+            .unwrap_or(WaitResult::NotReady)
+    }
+
+    pub fn set_tracer(self: &Arc<Self>, tracer: Weak<Thread>, stop: bool) -> Result<()> {
+        if core::ptr::eq(Arc::as_ptr(self), tracer.as_ptr()) {
+            todo!()
+        }
+
+        if let Some(tracer) = tracer.upgrade() {
+            let mut guard = tracer.lock();
+            guard.tracees.push(Arc::downgrade(self));
+        }
+
+        let mut guard = self.lock();
+        ensure!(guard.tracer.strong_count() == 0, Perm);
+        guard.tracer = tracer;
+
+        if stop {
+            guard.queue_signal(SigInfo {
+                signal: Signal::STOP,
+                code: SigInfoCode::KERNEL,
+                fields: SigFields::None,
+            });
+        }
+
+        drop(guard);
+
+        Ok(())
+    }
 }
 
 pub struct ThreadGuard<'a> {
@@ -538,7 +690,7 @@ impl ThreadGuard<'_> {
         new_clear_child_tid: Option<Pointer<u32>>,
         new_tls: Option<NewTls>,
         vfork_done: Option<oneshot::Sender<()>>,
-    ) -> Thread {
+    ) -> Arc<Thread> {
         let process = new_process.unwrap_or_else(|| self.process().clone());
         let virtual_memory = new_virtual_memory.unwrap_or_else(|| self.virtual_memory().clone());
         let signal_handler_table =
@@ -675,6 +827,15 @@ impl ThreadGuard<'_> {
             // "SIGKILL and SIGSTOP cannot be (...) blocked (...)."
             mask.remove(Signal::KILL);
             mask.remove(Signal::STOP);
+
+            // If the thread is in a ptrace stop, only SIGKILL can be
+            // delivered. All other signals have to wait until the thread exits
+            // the ptrace stop.
+            if self.ptrace_state.is_stopped() {
+                mask = Sigset::all();
+                mask.remove(Signal::KILL);
+            }
+
             if self.pending_signal_info.is_none() {
                 self.pending_signal_info = self.pending_signals.pop(mask);
             }
@@ -686,7 +847,7 @@ impl ThreadGuard<'_> {
             // Check if the signal needs to be handled. If the signal handler
             // wants to ignore the signal we just skip it.
             let handler = self.signal_handler_table.get(pending_signal_info.signal);
-            let ignored = match (handler.sa_handler_or_sigaction, pending_signal_info.signal) {
+            let mut ignored = match (handler.sa_handler_or_sigaction, pending_signal_info.signal) {
                 (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => true,
                 (
                     Sigaction::SIG_DFL,
@@ -711,6 +872,11 @@ impl ThreadGuard<'_> {
                 (Sigaction::SIG_IGN, _) => true,
                 _ => false,
             };
+            // If the thread is being traced, we alway deliver a signal stop
+            // event.
+            if self.tracer.strong_count() != 0 {
+                ignored = false;
+            }
             if ignored {
                 // Try again.
                 self.pending_signal_info = None;
@@ -836,6 +1002,35 @@ impl ThreadGuard<'_> {
         buffer
     }
 
+    pub fn status(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        write!(buffer, "Name:\t").unwrap();
+        buffer.extend_from_slice(&self.task_comm());
+        writeln!(buffer).unwrap();
+
+        writeln!(buffer, "Umask:\t{0:4o}", *self.process().umask.lock()).unwrap();
+
+        writeln!(buffer, "Tgid:\t{}", self.process().pid()).unwrap();
+
+        writeln!(buffer, "Ngid:\t0").unwrap();
+
+        writeln!(buffer, "Pid:\t{}", self.process().pid()).unwrap();
+
+        writeln!(buffer, "Ppid:\t{}", self.process().ppid()).unwrap();
+
+        writeln!(
+            buffer,
+            "Ppid:\t{}",
+            self.tracer.upgrade().map_or(0, |thread| thread.tid())
+        )
+        .unwrap();
+
+        // TODO: More
+
+        buffer
+    }
+
     pub fn task_comm(&self) -> ArrayVec<u8, TASK_COMM_CAPACITY> {
         self.task_comm
             .clone()
@@ -853,6 +1048,21 @@ impl ThreadGuard<'_> {
     pub fn set_no_new_privs(&mut self) {
         self.no_new_privs = true;
     }
+
+    /// Returns true if the signal was not already queued.
+    pub fn queue_signal(&mut self, sig_info: SigInfo) -> bool {
+        match sig_info.signal {
+            Signal::CONT | Signal::KILL => self.process().stop_state.cont(),
+            Signal::STOP => self.process().stop_state.stop(),
+            _ => {}
+        }
+
+        let added = self.pending_signals.add(sig_info);
+        if added {
+            self.thread.signal_notify.notify();
+        }
+        added
+    }
 }
 
 impl Deref for ThreadGuard<'_> {
@@ -866,6 +1076,21 @@ impl Deref for ThreadGuard<'_> {
 impl DerefMut for ThreadGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
+    }
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        let this = self as *const _;
+        let state = self.state.get_mut();
+        for tracee in state.tracees.iter().filter_map(Weak::upgrade) {
+            let mut guard = tracee.lock();
+            if core::ptr::eq(guard.tracer.as_ptr(), this) {
+                guard.ptrace_state = PtraceState::Running;
+                drop(guard);
+                tracee.ptrace_tracee_notify.notify();
+            }
+        }
     }
 }
 
@@ -896,6 +1121,10 @@ pub struct Sigset(u64);
 impl Sigset {
     pub const fn empty() -> Self {
         Self(0)
+    }
+
+    pub const fn all() -> Self {
+        Self(!0)
     }
 
     pub fn add(&mut self, signal: Signal) {
@@ -1075,14 +1304,22 @@ impl SigInfoCode {
     pub const ILL_ILLOPN: Self = Self(2);
     pub const KERNEL: Self = Self(0x80);
     pub const TIMER: Self = Self(-2);
+    pub const TKILL: Self = Self(-6);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum SigFields {
     None,
+    Kill(SigKill),
     Timer(SigTimer),
     SigChld(SigChld),
     SigFault(SigFault),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SigKill {
+    pub pid: u32,
+    pub uid: Uid,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1237,5 +1474,29 @@ impl Gid {
 
     pub fn get(self) -> u32 {
         self.0
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub enum PtraceState {
+    /// The thread is running.
+    #[default]
+    Running,
+    /// The thread was just restarted with a signal, but hasn't started running
+    /// yet. It will start running after the signal has been queued.
+    SignalRestart(SigInfo),
+    /// The thread has stopped because a signal occured.
+    Signal { sig_info: SigInfo, reported: bool },
+    /// The thread exited. Either explicitly via exit(2) or implicitely via
+    /// exit_group(2) or execve(2).
+    Exit { reported: bool },
+}
+
+impl PtraceState {
+    pub fn is_stopped(&self) -> bool {
+        match self {
+            PtraceState::Running | PtraceState::SignalRestart { .. } => false,
+            PtraceState::Signal { .. } | PtraceState::Exit { .. } => true,
+        }
     }
 }

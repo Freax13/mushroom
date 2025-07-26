@@ -1,13 +1,16 @@
-use alloc::boxed::Box;
+use core::ops::Not;
+
+use alloc::{boxed::Box, sync::Arc};
 use futures::{FutureExt, select_biased};
 
 use crate::{
     fs::fd::FileDescriptorTable,
-    rt::notify::Notify,
+    rt::{notify::Notify, spawn},
     spin::mutex::Mutex,
     user::process::{
         memory::VirtualMemory,
         syscall::{args::WStatus, cpu_state::CpuState},
+        thread::PtraceState,
     },
 };
 
@@ -70,18 +73,41 @@ impl ThreadGuard<'_> {
 }
 
 impl Thread {
-    pub fn terminate(&self, exit_status: WStatus) {
+    pub fn terminate(self: Arc<Self>, exit_status: WStatus) {
         let running_state = &self.running_state;
         let mut guard = running_state.state.lock();
 
         match *guard {
             State::Running => {
                 *guard = State::Terminated;
-                self.process.exit(exit_status, self.lock().get_rusage());
                 running_state.notify.notify();
                 drop(guard);
 
-                self.lock().do_exit();
+                spawn(async move {
+                    // If there's tracer, send a exit event.
+                    let mut guard = self.lock();
+                    if let Some(tracer) = guard.tracer.upgrade() {
+                        guard.ptrace_state = PtraceState::Exit { reported: false };
+                        drop(guard);
+                        tracer.ptrace_tracer_notify.notify();
+                        drop(tracer);
+
+                        guard = self
+                            .ptrace_tracee_notify
+                            .wait_until(|| {
+                                let guard = self.lock();
+                                guard.ptrace_state.is_stopped().not().then_some(guard)
+                            })
+                            .await;
+                    }
+                    let rusage = guard.get_rusage();
+                    drop(guard);
+
+                    self.process.exit(exit_status, rusage);
+
+                    let mut guard = self.lock();
+                    guard.do_exit();
+                });
             }
             State::Paused | State::Restart(_) => {
                 *guard = State::Terminated;

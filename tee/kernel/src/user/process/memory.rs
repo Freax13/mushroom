@@ -23,7 +23,10 @@ use crate::{
         mutex::Mutex,
         rwlock::{RwLock, WriteRwLockGuard},
     },
-    user::process::{futex::Futexes, syscall::args::Stat},
+    user::process::{
+        futex::Futexes,
+        syscall::args::{OpenFlags, Stat},
+    },
 };
 use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use bitflags::bitflags;
@@ -372,8 +375,11 @@ impl VirtualMemory {
             let offset = mapping.page_offset;
             let (major, minor, ino, path) = mapping.backing.location();
             write!(maps,"{start:08x}-{end:08x} {permissions}p {offset:05x}000 {major:02x}:{minor:02x} {ino} ").unwrap();
-            if let Some(path) = path {
+            if let Some((path, deleted)) = path {
                 maps.extend_from_slice(path.as_bytes());
+                if deleted {
+                    maps.extend_from_slice(b" (deleted)");
+                }
             }
             maps.push(b'\n');
         }
@@ -545,7 +551,7 @@ impl VirtualMemoryWriteGuard<'_> {
                 Ok(KernelPage::zeroed())
             }
 
-            fn location(&self) -> (u16, u8, u64, Option<Path>) {
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
                 (0, 0, 0, None)
             }
         }
@@ -624,7 +630,8 @@ impl VirtualMemoryWriteGuard<'_> {
                 }
             }
 
-            fn location(&self) -> (u16, u8, u64, Option<Path>) {
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
+                let deleted = self.file.deleted();
                 let path = self
                     .file
                     .path()
@@ -633,9 +640,24 @@ impl VirtualMemoryWriteGuard<'_> {
                     self.stat.major(),
                     self.stat.minor(),
                     self.stat.ino,
-                    Some(path),
+                    Some((path, deleted)),
                 )
             }
+        }
+
+        let flags = file.flags();
+        let allowed = if flags.contains(OpenFlags::WRONLY) {
+            MemoryPermissions::empty()
+        } else if flags.contains(OpenFlags::RDWR) {
+            MemoryPermissions::READ | MemoryPermissions::WRITE
+        } else {
+            // RDONLY
+            MemoryPermissions::READ
+        };
+        if shared {
+            ensure!(allowed.contains(permissions), Acces);
+        } else {
+            ensure!(allowed.contains(MemoryPermissions::READ), Acces);
         }
 
         let stat = file.stat()?;
@@ -703,8 +725,13 @@ impl VirtualMemoryWriteGuard<'_> {
                 PAGE.lock().clone()
             }
 
-            fn location(&self) -> (u16, u8, u64, Option<Path>) {
-                (0, 0, 0, Some(Path::new(b"[trampoline]".to_vec()).unwrap()))
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
+                (
+                    0,
+                    0,
+                    0,
+                    Some((Path::new(b"[trampoline]".to_vec()).unwrap(), false)),
+                )
             }
         }
 
@@ -1170,8 +1197,8 @@ impl Mapping {
 
 pub trait Backing: Send + Sync + 'static {
     fn get_initial_page(&self, offset: u64) -> Result<KernelPage>;
-    /// Returns a tuple of (major dev, minor dev, ino, path).
-    fn location(&self) -> (u16, u8, u64, Option<Path>);
+    /// Returns a tuple of (major dev, minor dev, ino, (path, deleted)).
+    fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>);
 }
 
 /// Like a `Vec<T>` but with constant time `split_at`.

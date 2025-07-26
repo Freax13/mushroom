@@ -75,6 +75,7 @@ pub trait File: INode {
         bail!(OpNotSupp)
     }
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
+    fn deleted(&self) -> bool;
 }
 
 pub fn open_file(
@@ -371,6 +372,10 @@ impl OpenFileDescription for FileFileDescription {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
         self.file.fs()
+    }
+
+    fn deleted(&self) -> bool {
+        self.file.deleted()
     }
 
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
