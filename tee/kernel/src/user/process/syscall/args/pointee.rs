@@ -38,7 +38,8 @@ use super::{
     CmsgHdr, ControlMode, Domain, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger,
     LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg,
     Pointer, RLimit, Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
-    Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, WStatus, WinSize,
+    Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, UserRegs32, UserRegs64,
+    WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2786,3 +2787,9 @@ impl From<SigEventData> for SigEventData64 {
         }
     }
 }
+
+impl Pointee for UserRegs32 {}
+impl PrimitivePointee for UserRegs32 {}
+
+impl Pointee for UserRegs64 {}
+impl PrimitivePointee for UserRegs64 {}

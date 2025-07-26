@@ -79,6 +79,12 @@ impl<'a> ThreadArg<'a> for &'a Thread {
     }
 }
 
+impl<'a> ThreadArg<'a> for &'a Arc<Thread> {
+    fn get(thread: &'a Arc<Thread>) -> Self {
+        thread
+    }
+}
+
 macro_rules! bitflags {
     (pub struct $strukt:ident {
         $(
@@ -235,6 +241,18 @@ where
             _marker: PhantomData,
         }
     }
+
+    pub fn is_null(&self) -> bool {
+        self.value == 0
+    }
+
+    pub fn get(self) -> VirtAddr {
+        VirtAddr::new(self.value)
+    }
+
+    pub fn raw(&self) -> u64 {
+        self.value
+    }
 }
 
 impl<T> Clone for Pointer<T>
@@ -247,19 +265,6 @@ where
 }
 
 impl<T> Copy for Pointer<T> where T: ?Sized {}
-
-impl<T> Pointer<T>
-where
-    T: ?Sized,
-{
-    pub fn is_null(&self) -> bool {
-        self.value == 0
-    }
-
-    pub fn get(self) -> VirtAddr {
-        VirtAddr::new(self.value)
-    }
-}
 
 impl<T> Display for Pointer<T>
 where
@@ -879,17 +884,34 @@ enum_arg! {
 pub struct WStatus(u32);
 
 impl WStatus {
-    pub fn exit(status: u8) -> Self {
-        Self(u32::from(status) << 8)
+    pub const fn exit(status: u8) -> Self {
+        Self((status as u32) << 8)
     }
 
-    pub fn signaled(signal: Signal) -> Self {
+    pub const fn signaled(signal: Signal) -> Self {
         Self(signal.get() as u32)
     }
 
-    pub fn raw(self) -> u32 {
+    pub const fn stopped(signal: Signal) -> Self {
+        Self(((signal.get() as u32) << 8) | 0x7f)
+    }
+
+    pub const fn syscall_stop() -> Self {
+        Self(((Signal::TRAP.get() as u32) << 8) | 0x7f)
+    }
+
+    pub const fn ptrace_event(event: PtraceEvent) -> Self {
+        Self(((event as u32) << 16) | ((Signal::TRAP.get() as u32) << 8) | 0x7f)
+    }
+
+    pub const fn raw(self) -> u32 {
         self.0
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum PtraceEvent {
+    Exit = 6,
 }
 
 bitflags! {
@@ -1391,6 +1413,7 @@ impl Signal {
     pub const HUP: Self = Self(1);
     pub const INT: Self = Self(2);
     pub const ILL: Self = Self(4);
+    pub const TRAP: Self = Self(5);
     pub const ABRT: Self = Self(6);
     pub const FPE: Self = Self(8);
     pub const KILL: Self = Self(9);
@@ -1409,8 +1432,8 @@ impl Signal {
         Ok(Self(value))
     }
 
-    pub fn get(&self) -> usize {
-        usize::from(self.0)
+    pub const fn get(&self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -2259,4 +2282,82 @@ bitflags! {
     pub struct TimerSettimeFlags {
         const ABSTIME = 1;
     }
+}
+
+enum_arg! {
+    pub enum PtraceOp {
+        TraceMe = 0,
+        PeekText = 1,
+        PeekData = 2,
+        // PeekUsr = 3,
+        // PokeText = 4,
+        // PokeData = 5,
+        // PokeUsr = 6,
+        Cont = 7,
+        // Kill = 8,
+        // SingleStep = 9,
+        GetRegs = 12,
+        // SetRegs = 13,
+        // GetFpregs = 14,
+        // SetFpregs = 15,
+        // GetFpxregs = 18,
+        // SetFpxregs = 19,
+        Attach = 16,
+        Detach = 17,
+        // Syscall = 24,
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UserRegs32 {
+    pub bx: u32,
+    pub cx: u32,
+    pub dx: u32,
+    pub si: u32,
+    pub di: u32,
+    pub bp: u32,
+    pub ax: u32,
+    pub ds: u32,
+    pub es: u32,
+    pub fs: u32,
+    pub gs: u32,
+    pub orig_ax: u32,
+    pub ip: u32,
+    pub cs: u32,
+    pub flags: u32,
+    pub sp: u32,
+    pub ss: u32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UserRegs64 {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub bp: u64,
+    pub bx: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub ax: u64,
+    pub cx: u64,
+    pub dx: u64,
+    pub si: u64,
+    pub di: u64,
+    pub orig_ax: u64,
+    pub ip: u64,
+    pub cs: u64,
+    pub flags: u64,
+    pub sp: u64,
+    pub ss: u64,
+    pub fs_base: u64,
+    pub gs_base: u64,
+    pub ds: u64,
+    pub es: u64,
+    pub fs: u64,
+    pub gs: u64,
 }

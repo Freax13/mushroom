@@ -322,48 +322,43 @@ impl Process {
         *self.exit_status.get().await
     }
 
-    pub async fn wait_for_child_death(
-        &self,
-        filter: WaitFilter,
-        no_hang: bool,
-    ) -> Result<Option<(u32, WStatus, Rusage)>> {
-        self.child_death_notify
-            .wait_until(|| {
-                let mut guard = self.children.lock();
-                if guard.is_empty() {
-                    return Some(Err(err!(Child)));
-                }
-
-                let opt_idx = guard
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, child)| match filter {
-                        WaitFilter::Any => true,
-                        WaitFilter::ExactPid(pid) => child.pid() == pid,
-                        WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid == pgid,
-                    })
-                    .filter(|(_, child)| child.exit_status.try_get().is_some())
-                    .map(|(i, _)| i)
-                    .next();
-
-                let Some(idx) = opt_idx else {
-                    if no_hang {
-                        return Some(Ok(None));
-                    } else {
-                        return None;
-                    }
-                };
-                let child = guard.swap_remove(idx);
-
-                let usage = *child.self_usage.lock();
-                let mut guard = self.children_usage.lock();
-                *guard = guard.merge(usage);
-                drop(guard);
-
-                let status = *child.exit_status.try_get().unwrap();
-                Some(Ok(Some((child.pid, status, usage))))
+    pub fn poll_child_death(&self, filter: WaitFilter) -> WaitResult {
+        let mut guard = self.children.lock();
+        let mut children = guard
+            .iter()
+            .enumerate()
+            .filter(|(_, child)| match filter {
+                WaitFilter::Any => true,
+                WaitFilter::ExactPid(pid) => child.pid() == pid,
+                WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid == pgid,
             })
-            .await
+            .peekable();
+
+        if children.peek().is_none() {
+            return WaitResult::NoChild;
+        }
+
+        let opt_idx = children
+            .filter(|(_, child)| child.exit_status.try_get().is_some())
+            .map(|(i, _)| i)
+            .next();
+
+        let Some(idx) = opt_idx else {
+            return WaitResult::NotReady;
+        };
+        let child = guard.swap_remove(idx);
+
+        let rusage = *child.self_usage.lock();
+        let mut guard = self.children_usage.lock();
+        *guard = guard.merge(rusage);
+        drop(guard);
+
+        let wstatus = *child.exit_status.try_get().unwrap();
+        WaitResult::Ready {
+            pid: child.pid,
+            wstatus,
+            rusage,
+        }
     }
 
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
@@ -617,7 +612,7 @@ impl Process {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum WaitFilter {
     Any,
     ExactPid(u32),
@@ -671,6 +666,29 @@ impl StopState {
     fn cont(&self) {
         self.stopped.store(false, Ordering::Relaxed);
         self.notify.notify();
+    }
+}
+
+pub enum WaitResult {
+    Ready {
+        pid: u32,
+        wstatus: WStatus,
+        rusage: Rusage,
+    },
+    NoChild,
+    NotReady,
+}
+
+impl WaitResult {
+    pub fn or_else(self, f: impl FnOnce() -> Self) -> Self {
+        match self {
+            WaitResult::Ready { .. } => self,
+            WaitResult::NoChild => f(),
+            WaitResult::NotReady => match f() {
+                other @ WaitResult::Ready { .. } => other,
+                WaitResult::NoChild | WaitResult::NotReady => self,
+            },
+        }
     }
 }
 

@@ -49,7 +49,9 @@ use crate::{
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{oneshot, spawn, r#yield},
     time::{self, now, sleep_until},
-    user::process::{ProcessGroup, memory::MemoryPermissions, syscall::args::*},
+    user::process::{
+        ProcessGroup, WaitResult, memory::MemoryPermissions, syscall::args::*, thread::PtraceState,
+    },
 };
 
 use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
@@ -201,6 +203,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetrlimit);
     handlers.register(SysGetrusage);
     handlers.register(SysSysinfo);
+    handlers.register(SysPtrace);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
     handlers.register(SysSetuid);
@@ -2026,28 +2029,48 @@ async fn wait4(
     rusage: Pointer<Rusage>,
 ) -> SyscallResult {
     let no_hang = options.contains(WaitOptions::NOHANG);
-    let pid = match pid {
+    let filter = match pid {
         ..=-2 => WaitFilter::ExactPgid(-pid as u32),
         -1 => WaitFilter::Any,
         0 => WaitFilter::ExactPgid(thread.process().process_group.lock().pgid),
         1.. => WaitFilter::ExactPid(pid as u32),
     };
 
-    let opt = thread.process().wait_for_child_death(pid, no_hang).await?;
-    let Some((tid, status, usage)) = opt else {
-        return Ok(0);
-    };
+    let process = &**thread.process();
+    loop {
+        let wait_child = process.child_death_notify.wait();
+        let wait_ptrace = thread.ptrace_tracer_notify.wait();
 
-    if !wstatus.is_null() {
-        let addr = wstatus.get();
-        virtual_memory.write_bytes(addr, bytes_of(&status))?;
+        let res = process
+            .poll_child_death(filter)
+            .or_else(|| thread.poll_wait_for_tracee(filter));
+        match res {
+            WaitResult::Ready {
+                pid,
+                wstatus: status,
+                rusage: usage,
+            } => {
+                if !wstatus.is_null() {
+                    let addr = wstatus.get();
+                    virtual_memory.write_bytes(addr, bytes_of(&status))?;
+                }
+
+                if !rusage.is_null() {
+                    virtual_memory.write_with_abi(rusage, usage, abi)?;
+                }
+
+                return Ok(u64::from(pid));
+            }
+            WaitResult::NoChild => bail!(Child),
+            WaitResult::NotReady => {
+                if no_hang {
+                    return Ok(0);
+                }
+            }
+        }
+
+        future::select(wait_child, wait_ptrace).await;
     }
-
-    if !rusage.is_null() {
-        virtual_memory.write_with_abi(rusage, usage, abi)?;
-    }
-
-    Ok(u64::from(tid))
 }
 
 #[syscall(i386 = 37, amd64 = 62)]
@@ -2714,6 +2737,175 @@ fn sysinfo(
         abi,
     )?;
     Ok(0)
+}
+
+#[syscall(i386 = 26, amd64 = 101)]
+fn ptrace(
+    abi: Abi,
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    request: PtraceOp,
+    pid: u32,
+    addr: Pointer<c_void>,
+    data: Pointer<c_void>,
+) -> SyscallResult {
+    match request {
+        PtraceOp::TraceMe => {
+            let parent = thread
+                .process()
+                .parent
+                .upgrade()
+                .expect("TODO")
+                .thread_group_leader();
+            thread.set_tracer(parent, false)?;
+            Ok(0)
+        }
+        PtraceOp::PeekText | PtraceOp::PeekData => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let word = guard
+                .virtual_memory()
+                .read_with_abi(addr.cast::<Pointer<c_void>>(), abi)?;
+            drop(guard);
+
+            virtual_memory.write_with_abi(data.cast(), word, abi)?;
+            Ok(0)
+        }
+        PtraceOp::Cont => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let mut guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            if !data.is_null() {
+                let PtraceState::Signal { mut sig_info, .. } = guard.ptrace_state else {
+                    todo!()
+                };
+                sig_info.signal = Signal::new(u8::try_from(data.raw())?)?;
+                guard.ptrace_state = PtraceState::SignalRestart(sig_info);
+            } else {
+                guard.ptrace_state = PtraceState::Running;
+            }
+            tracee.ptrace_tracee_notify.notify();
+
+            Ok(0)
+        }
+        PtraceOp::GetRegs => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let registers = tracee.cpu_state.lock().registers;
+            match abi {
+                Abi::I386 => {
+                    let user_regs = UserRegs32 {
+                        bx: registers.rbx as u32,
+                        cx: registers.rcx as u32,
+                        dx: registers.rdx as u32,
+                        si: registers.rsi as u32,
+                        di: registers.rdi as u32,
+                        bp: registers.rbp as u32,
+                        ax: registers.rax as u32,
+                        ds: u32::from(registers.ds),
+                        es: u32::from(registers.es),
+                        fs: u32::from(registers.fs),
+                        gs: u32::from(registers.gs),
+                        orig_ax: registers.rax as u32, // TODO
+                        ip: registers.rip as u32,
+                        cs: u32::from(registers.cs),
+                        flags: registers.rflags as u32,
+                        sp: registers.rsp as u32,
+                        ss: u32::from(registers.ss),
+                    };
+                    virtual_memory.write(data.cast(), user_regs)?;
+                }
+                Abi::Amd64 => {
+                    let user_regs = UserRegs64 {
+                        r15: registers.r15,
+                        r14: registers.r14,
+                        r13: registers.r13,
+                        r12: registers.r12,
+                        bp: registers.rbp,
+                        bx: registers.rbx,
+                        r11: registers.r11,
+                        r10: registers.r10,
+                        r9: registers.r9,
+                        r8: registers.r8,
+                        ax: registers.rax,
+                        cx: registers.rcx,
+                        dx: registers.rdx,
+                        si: registers.rsi,
+                        di: registers.rdi,
+                        orig_ax: registers.rax, // TODO
+                        ip: registers.rip,
+                        cs: u64::from(registers.cs),
+                        flags: registers.rflags,
+                        sp: registers.rsp,
+                        ss: u64::from(registers.ss),
+                        fs_base: registers.fs_base,
+                        gs_base: 0, // TODO
+                        ds: u64::from(registers.ds),
+                        es: u64::from(registers.es),
+                        fs: u64::from(registers.fs),
+                        gs: u64::from(registers.gs),
+                    };
+                    virtual_memory.write(data.cast(), user_regs)?;
+                }
+            }
+
+            Ok(0)
+        }
+        PtraceOp::Attach => {
+            let tracee = Thread::find_by_tid(pid).ok_or(err!(Srch))?;
+            tracee.set_tracer(Arc::downgrade(thread), true)?;
+
+            Ok(0)
+        }
+        PtraceOp::Detach => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let mut guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            guard.tracer = Weak::new();
+            guard.ptrace_state = PtraceState::Running;
+            tracee.ptrace_tracee_notify.notify();
+
+            if !data.is_null() {
+                todo!();
+            }
+
+            Ok(0)
+        }
+    }
 }
 
 #[syscall(i386 = 199, amd64 = 102)]
