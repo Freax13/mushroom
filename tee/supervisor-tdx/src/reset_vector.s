@@ -52,7 +52,7 @@ jmp fail_32bit
 
 .code64
 entry64bit:
-# 3.3 Clean R8. This registers is controlled by the hypervisor
+# 3.3 Clean R8. This register is controlled by the hypervisor
 xor r8, r8
 
 # 4. Fill the SS, DS and CS registers.
@@ -69,10 +69,10 @@ mov cr0, rax
 mov rax, cr4
 or rax, (1 << 9) | (1 << 10) | (1 << 18)
 mov cr4, rax
-# 5.2 Enable AVX
+# 5.2 Enable AVX and AVX-512
 xor rcx, rcx
 xgetbv
-or rax, 7
+or rax, (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 7)
 xsetbv
 # 5.3 Enable Write Protection
 mov rax, cr0

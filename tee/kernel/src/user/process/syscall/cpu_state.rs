@@ -19,7 +19,7 @@ use x86_64::{
         control::Cr2,
         model_specific::{LStar, SFMask},
         rflags::RFlags,
-        xcontrol::XCr0Flags,
+        xcontrol::{XCr0, XCr0Flags},
     },
     structures::{DescriptorTablePointer, gdt::Entry, idt::PageFaultErrorCode},
 };
@@ -398,7 +398,7 @@ impl CpuState {
                 let sw_bytes = FpxSwBytes {
                     magic1: FP_XSTATE_MAGIC1,
                     extended_size: extended_size as u32,
-                    xfeatures: (XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX).bits(),
+                    xfeatures: XSaveArea::flags().bits(),
                     xstate_size: xsave_data.len() as u32,
                     padding: [0; 7],
                 };
@@ -423,7 +423,7 @@ impl CpuState {
                 let sw_bytes = FpxSwBytes {
                     magic1: FP_XSTATE_MAGIC1,
                     extended_size: extended_size as u32,
-                    xfeatures: (XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX).bits(),
+                    xfeatures: XSaveArea::flags().bits(),
                     xstate_size: xsave_data.len() as u32,
                     padding: [0; 7],
                 };
@@ -680,15 +680,25 @@ impl XSaveArea {
         Self { data }
     }
 
+    pub fn flags() -> XCr0Flags {
+        XCr0::read()
+            & (XCr0Flags::X87
+                | XCr0Flags::SSE
+                | XCr0Flags::AVX
+                | XCr0Flags::OPMASK
+                | XCr0Flags::ZMM_HI256
+                | XCr0Flags::HI16_ZMM)
+    }
+
     fn save(&mut self) {
-        let save_mask = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
+        let save_mask = Self::flags();
         unsafe {
             _xsaveopt64(self.data.as_mut_ptr(), save_mask.bits());
         }
     }
 
     fn load(&self) {
-        let rs_mask = XCr0Flags::X87 | XCr0Flags::SSE | XCr0Flags::AVX;
+        let rs_mask = Self::flags();
         unsafe {
             _xrstor64(self.data.as_ptr(), rs_mask.bits());
         }
