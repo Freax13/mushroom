@@ -24,7 +24,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     char_dev::char::PtyData,
-    error::{Result, err},
+    error::{Result, bail, err},
     fs::{
         StaticFile,
         fd::FileDescriptorTable,
@@ -505,13 +505,13 @@ impl Process {
             .collect()
     }
 
-    pub fn get_itimer(&self, which: ITimerWhich) -> ITimerval {
+    pub fn get_itimer(&self, which: ITimerWhich) -> Result<ITimerval> {
         let timer = match which {
             ITimerWhich::Real => &self.real_itimer,
-            ITimerWhich::Virtual => todo!(),
-            ITimerWhich::Prof => todo!(),
+            ITimerWhich::Virtual => bail!(Inval),
+            ITimerWhich::Prof => bail!(Inval),
         };
-        timer.get_time().into()
+        Ok(timer.get_time().into())
     }
 
     pub fn set_itimer(self: &Arc<Self>, which: ITimerWhich, value: ITimerval) -> ITimerval {

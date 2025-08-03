@@ -1254,7 +1254,7 @@ fn getitimer(
     which: ITimerWhich,
     curr_value: Pointer<ITimerval>,
 ) -> SyscallResult {
-    let current = thread.process().get_itimer(which);
+    let current = thread.process().get_itimer(which)?;
     virtual_memory.write_with_abi(curr_value, current, abi)?;
     Ok(0)
 }
