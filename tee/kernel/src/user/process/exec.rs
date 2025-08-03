@@ -156,7 +156,7 @@ impl VirtualMemory {
 
             // Map more memory for each new page we write to.
             if addr.is_aligned(0x1000u64) {
-                self.modify().mmap_zero(
+                self.modify().mmap_private_zero(
                     Bias::Fixed(addr),
                     0x1000,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
@@ -180,7 +180,7 @@ impl VirtualMemory {
                 .take(value.len())
                 .filter(|addr| addr.is_aligned(0x1000u64))
             {
-                self.modify().mmap_zero(
+                self.modify().mmap_private_zero(
                     Bias::Fixed(addr),
                     0x1000,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,

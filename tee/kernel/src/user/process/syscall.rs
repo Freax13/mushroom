@@ -677,38 +677,37 @@ fn mmap(
         ensure!(bias.is_aligned(0x1000u64), Inval);
     }
 
-    if flags.contains(MmapFlags::SHARED_VALIDATE) {
+    let permissions = MemoryPermissions::from(prot);
+    let addr = if flags.contains(MmapFlags::SHARED_VALIDATE) {
         todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::SHARED) {
-        assert!(!flags.contains(MmapFlags::ANONYMOUS));
-        let fd = FdNum::parse(fd, abi)?;
-        let fd = fdtable.get(fd)?;
-
-        let permissions = MemoryPermissions::from(prot);
-        let addr =
+        if flags.contains(MmapFlags::ANONYMOUS) {
             virtual_memory
                 .modify()
-                .mmap_file(bias, length, fd, offset, permissions, true)?;
-        Ok(addr.as_u64())
-    } else if flags.contains(MmapFlags::PRIVATE) {
-        if flags.contains(MmapFlags::ANONYMOUS) {
-            let permissions = MemoryPermissions::from(prot);
-            let addr = virtual_memory.modify().mmap_zero(bias, length, permissions);
-            Ok(addr.as_u64())
+                .mmap_shared_zero(bias, length, permissions)
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
-
-            let permissions = MemoryPermissions::from(prot);
-            let addr =
-                virtual_memory
-                    .modify()
-                    .mmap_file(bias, length, fd, offset, permissions, false)?;
-            Ok(addr.as_u64())
+            virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions, true)?
+        }
+    } else if flags.contains(MmapFlags::PRIVATE) {
+        if flags.contains(MmapFlags::ANONYMOUS) {
+            virtual_memory
+                .modify()
+                .mmap_private_zero(bias, length, permissions)
+        } else {
+            let fd = FdNum::parse(fd, abi)?;
+            let fd = fdtable.get(fd)?;
+            virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions, false)?
         }
     } else {
         bail!(Inval)
-    }
+    };
+    Ok(addr.as_u64())
 }
 
 #[syscall(i386 = 192)]
