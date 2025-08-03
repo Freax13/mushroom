@@ -436,6 +436,7 @@ impl Thread {
                         Sigaction::SIG_DFL,
                         signal @ (Signal::HUP
                         | Signal::INT
+                        | Signal::ILL
                         | Signal::ABRT
                         | Signal::USR1
                         | Signal::SEGV
@@ -859,6 +860,7 @@ impl ThreadGuard<'_> {
                     Sigaction::SIG_DFL,
                     Signal::HUP
                     | Signal::INT
+                    | Signal::ILL
                     | Signal::ABRT
                     | Signal::USR1
                     | Signal::SEGV
