@@ -91,6 +91,7 @@ impl CharDev for Ptmx {
                         ),
                         locked: true,
                         master_closed: false,
+                        slave_connected: false,
                         num_slaves: 0,
                         termios: Termios::default(),
                         input_buffer: ArrayVec::new(),
@@ -135,6 +136,10 @@ struct PtyDataInternal {
 
     locked: bool,
     master_closed: bool,
+    /// Starts out as `false` and is set to `true` when the first slave
+    /// connects. Once that's done, this field stays `true` (it's not reset
+    /// when slaves close even when all slaves close).
+    slave_connected: bool,
     num_slaves: usize,
 
     termios: Termios,
@@ -150,6 +155,7 @@ impl Pty {
         // Increment the reference count for the slave.
         let mut guard = data.internal.lock();
         ensure!(!guard.locked, Io);
+        guard.slave_connected = true;
         guard.num_slaves += 1;
         drop(guard);
         Ok(Self {
@@ -212,7 +218,7 @@ impl OpenFileDescription for Pty {
         if self.master {
             ready_events.set(
                 Events::READ,
-                !guard.output_buffer.is_empty() || guard.num_slaves == 0,
+                !guard.output_buffer.is_empty() || (guard.slave_connected && guard.num_slaves == 0),
             );
             ready_events.set(
                 Events::WRITE,
@@ -258,7 +264,7 @@ impl OpenFileDescription for Pty {
         let mut guard = self.data.internal.lock();
         if self.master {
             if guard.output_buffer.is_empty() {
-                if guard.num_slaves == 0 {
+                if guard.slave_connected && guard.num_slaves == 0 {
                     bail!(Io);
                 } else {
                     bail!(Again);
