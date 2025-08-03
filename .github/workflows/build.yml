@@ -181,6 +181,7 @@ jobs:
           - dejagnu
           - gnutls
           - elfutils
+          - swtpm
         tee:
           - snp
           - tdx

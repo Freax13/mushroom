@@ -981,21 +981,29 @@ pub fn exchange(
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct DirEntry {
     pub ino: u64,
     pub ty: FileType,
     pub name: DirEntryName,
 }
 
-impl DirEntry {
+#[derive(Clone)]
+pub struct OffsetDirEntry {
+    pub entry: DirEntry,
+    pub offset: u64,
+}
+
+impl OffsetDirEntry {
     pub fn len(&self) -> usize {
-        let len = 19 + self.name.as_ref().len() + 1;
+        let len = 19 + self.entry.name.as_ref().len() + 1;
         len.next_multiple_of(8)
     }
 }
 
-pub struct OldDirEntry(pub DirEntry);
+pub struct OldDirEntry(pub OffsetDirEntry);
 
+#[derive(Clone)]
 pub enum DirEntryName {
     FileName(FileName<'static>),
     Dot,

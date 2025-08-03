@@ -60,7 +60,7 @@ impl OpenFileDescription for Timer {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        self.internal.lock().flags = flags;
+        self.internal.lock().flags.update(flags);
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {

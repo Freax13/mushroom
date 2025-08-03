@@ -4,7 +4,7 @@ use core::{
     cell::SyncUnsafeCell,
     cmp::{self, Ordering},
     fmt::{self, Display, Write},
-    iter::Step,
+    iter::{Step, repeat_with},
     mem::{MaybeUninit, needs_drop},
     num::NonZeroU32,
     ops::{Bound, Range},
@@ -543,7 +543,12 @@ impl VirtualMemoryWriteGuard<'_> {
         addr
     }
 
-    pub fn mmap_zero(&mut self, bias: Bias, len: u64, permissions: MemoryPermissions) -> VirtAddr {
+    pub fn mmap_private_zero(
+        &mut self,
+        bias: Bias,
+        len: u64,
+        permissions: MemoryPermissions,
+    ) -> VirtAddr {
         struct ZeroBacking;
 
         impl Backing for ZeroBacking {
@@ -563,6 +568,48 @@ impl VirtualMemoryWriteGuard<'_> {
             ZeroBacking,
             0,
             false,
+            Arc::new(Futexes::new()),
+        )
+    }
+
+    pub fn mmap_shared_zero(
+        &mut self,
+        bias: Bias,
+        len: u64,
+        permissions: MemoryPermissions,
+    ) -> VirtAddr {
+        struct ZeroBacking {
+            pages: Mutex<Vec<KernelPage>>,
+        }
+
+        impl Backing for ZeroBacking {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
+                let mut pages = self.pages.lock();
+                let page = &mut pages[usize_from(offset)];
+                page.make_mut(true)?;
+                page.clone()
+            }
+
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
+                (0, 0, 0, None)
+            }
+        }
+
+        let backing = ZeroBacking {
+            pages: Mutex::new(
+                repeat_with(KernelPage::zeroed)
+                    .take(usize_from(len).div_ceil(0x1000))
+                    .collect(),
+            ),
+        };
+
+        self.mmap(
+            bias,
+            len,
+            permissions,
+            backing,
+            0,
+            true,
             Arc::new(Futexes::new()),
         )
     }
@@ -685,7 +732,7 @@ impl VirtualMemoryWriteGuard<'_> {
     }
 
     pub fn allocate_stack(&mut self, bias: Bias, len: u64) -> VirtAddr {
-        self.mmap_zero(
+        self.mmap_private_zero(
             bias,
             len,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
@@ -937,7 +984,7 @@ impl VirtualMemoryWriteGuard<'_> {
                     bail!(NoMem)
                 }
 
-                self.mmap_zero(
+                self.mmap_private_zero(
                     Bias::Fixed(old_brk_end),
                     brk_end - old_brk_end,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,

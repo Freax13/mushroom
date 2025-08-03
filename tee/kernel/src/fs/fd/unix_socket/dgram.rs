@@ -17,11 +17,12 @@ use crate::{
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::process::{
+        limits::CurrentNoFileLimit,
         memory::VirtualMemory,
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
-                SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+                SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -112,7 +113,7 @@ impl OpenFileDescription for DgramUnixSocket {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        self.internal.lock().flags = flags;
+        self.internal.lock().flags.update(flags);
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
@@ -142,6 +143,25 @@ impl OpenFileDescription for DgramUnixSocket {
 
         let len = self.read(buf)?;
         Ok((len, None))
+    }
+
+    fn recv_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        _: &FileDescriptorTable,
+        _: CurrentNoFileLimit,
+    ) -> Result<usize> {
+        ensure!(msg_hdr.namelen == 0, IsConn);
+        ensure!(msg_hdr.flags == 0, Inval);
+
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let len = self.read(&mut vectored_buf)?;
+
+        msg_hdr.controllen = 0;
+
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
@@ -218,6 +238,14 @@ impl OpenFileDescription for DgramUnixSocket {
 
             future::select(read_wait, write_wait).await;
         }
+    }
+
+    fn get_socket_name(&self) -> Result<SocketAddr> {
+        Ok(SocketAddr::Unix(SocketAddrUnix::Unnamed))
+    }
+
+    fn get_peer_name(&self) -> Result<SocketAddr> {
+        Ok(SocketAddr::Unix(SocketAddrUnix::Unnamed))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

@@ -8,6 +8,7 @@ use core::{
 use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
+    format,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -42,6 +43,7 @@ use crate::{
     },
     time::{now, sleep_until},
     user::process::{
+        limits::CurrentNoFileLimit,
         memory::{VirtualMemory, WriteToVec},
         syscall::{
             args::{
@@ -189,8 +191,9 @@ struct BindGuard<'a> {
 }
 
 impl BindGuard<'_> {
-    pub fn bind(self, mode: Weak<Once<Mode>>) {
+    pub fn bind(self, mode: Weak<Once<Mode>>, ino: u64) {
         self.port_data.entries.push(PortDataEntry {
+            ino,
             ip_version: self.ip_version,
             local_ip: self.local_ip,
             remote_addr: None,
@@ -203,6 +206,7 @@ impl BindGuard<'_> {
 }
 
 struct PortDataEntry {
+    ino: u64,
     ip_version: IpVersion,
     local_ip: Option<IpAddr>,
     remote_addr: Option<net::SocketAddr>,
@@ -313,7 +317,7 @@ impl TcpSocket {
         self.activate_notify.notify();
 
         // Complete the bind operation.
-        bind_guard.bind(Arc::downgrade(&bound.mode));
+        bind_guard.bind(Arc::downgrade(&bound.mode), self.ino);
 
         Ok(true)
     }
@@ -331,7 +335,7 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        self.internal.lock().flags = flags;
+        self.internal.lock().flags.update(flags);
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
@@ -374,7 +378,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(SocketAddr::from(active.remote_addr))
     }
 
-    fn listen(&self, backlog: usize) -> Result<()> {
+    fn listen(&self, backlog: usize, _: &FileAccessContext) -> Result<()> {
         // Make sure that the backlog is never empty.
         let backlog = cmp::max(backlog, 1);
 
@@ -795,6 +799,25 @@ impl OpenFileDescription for TcpSocket {
         Ok((len, None))
     }
 
+    fn recv_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        _: &FileDescriptorTable,
+        _: CurrentNoFileLimit,
+    ) -> Result<usize> {
+        ensure!(msg_hdr.namelen == 0, IsConn);
+        ensure!(msg_hdr.flags == 0, Inval);
+
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let len = self.read(&mut vectored_buf)?;
+
+        msg_hdr.controllen = 0;
+
+        Ok(len)
+    }
+
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
@@ -854,7 +877,7 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn path(&self) -> Result<Path> {
-        todo!()
+        Path::new(format!("socket:[{}]", self.ino).into_bytes())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -1223,7 +1246,7 @@ impl NetTcpFile {
                 let retransmit = 0u32;
                 let uid = entry.effective_uid.get();
                 let timeout = 0u32;
-                let ino = i; // TODO
+                let ino = entry.ino;
 
                 write!(buffer, "{i:>4}: ").unwrap();
                 for octet in local_ip.as_octets().iter().copied().rev() {

@@ -32,6 +32,7 @@ use crate::{
             epoll::Epoll,
             eventfd::EventFd,
             inotify::Inotify,
+            mem::MemFd,
             path::PathFd,
             pipe,
             stream_buffer::{self, SpliceBlockedError},
@@ -39,10 +40,10 @@ use crate::{
             unix_socket::{DgramUnixSocket, SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
-            self, DirEntry, FileAccessContext, Link, OldDirEntry, Permission, create_char_dev,
-            create_directory, create_fifo, create_file, create_link, create_socket, devtmpfs,
-            hard_link, lookup_and_resolve_link, lookup_link, procfs, read_soft_link, unlink_dir,
-            unlink_file,
+            self, FileAccessContext, Link, OffsetDirEntry, OldDirEntry, Permission,
+            create_char_dev, create_directory, create_fifo, create_file, create_link,
+            create_socket, devtmpfs, hard_link, lookup_and_resolve_link, lookup_link, procfs,
+            read_soft_link, unlink_dir, unlink_file,
         },
         path::Path,
     },
@@ -305,6 +306,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysProcessVmReadv);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
+    handlers.register(SysMemfdCreate);
     handlers.register(SysCopyFileRange);
     handlers.register(SysFchmodat2);
 
@@ -636,6 +638,7 @@ async fn poll_impl(
 #[syscall(i386 = 19, amd64 = 8)]
 fn lseek(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     fd: FdNum,
     offset: u64,
     whence: Whence,
@@ -643,7 +646,7 @@ fn lseek(
     let offset = usize_from(offset);
 
     let fd = fdtable.get(fd)?;
-    let offset = fd.seek(offset, whence)?;
+    let offset = fd.seek(offset, whence, &mut ctx)?;
 
     let offset = u64::from_usize(offset);
     Ok(offset)
@@ -676,38 +679,37 @@ fn mmap(
         ensure!(bias.is_aligned(0x1000u64), Inval);
     }
 
-    if flags.contains(MmapFlags::SHARED_VALIDATE) {
+    let permissions = MemoryPermissions::from(prot);
+    let addr = if flags.contains(MmapFlags::SHARED_VALIDATE) {
         todo!("{bias:?} {length} {prot:?} {flags:?} {fd} {offset}");
     } else if flags.contains(MmapFlags::SHARED) {
-        assert!(!flags.contains(MmapFlags::ANONYMOUS));
-        let fd = FdNum::parse(fd, abi)?;
-        let fd = fdtable.get(fd)?;
-
-        let permissions = MemoryPermissions::from(prot);
-        let addr =
+        if flags.contains(MmapFlags::ANONYMOUS) {
             virtual_memory
                 .modify()
-                .mmap_file(bias, length, fd, offset, permissions, true)?;
-        Ok(addr.as_u64())
-    } else if flags.contains(MmapFlags::PRIVATE) {
-        if flags.contains(MmapFlags::ANONYMOUS) {
-            let permissions = MemoryPermissions::from(prot);
-            let addr = virtual_memory.modify().mmap_zero(bias, length, permissions);
-            Ok(addr.as_u64())
+                .mmap_shared_zero(bias, length, permissions)
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
-
-            let permissions = MemoryPermissions::from(prot);
-            let addr =
-                virtual_memory
-                    .modify()
-                    .mmap_file(bias, length, fd, offset, permissions, false)?;
-            Ok(addr.as_u64())
+            virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions, true)?
+        }
+    } else if flags.contains(MmapFlags::PRIVATE) {
+        if flags.contains(MmapFlags::ANONYMOUS) {
+            virtual_memory
+                .modify()
+                .mmap_private_zero(bias, length, permissions)
+        } else {
+            let fd = FdNum::parse(fd, abi)?;
+            let fd = fdtable.get(fd)?;
+            virtual_memory
+                .modify()
+                .mmap_file(bias, length, fd, offset, permissions, false)?
         }
     } else {
         bail!(Inval)
-    }
+    };
+    Ok(addr.as_u64())
 }
 
 #[syscall(i386 = 192)]
@@ -1254,7 +1256,7 @@ fn getitimer(
     which: ITimerWhich,
     curr_value: Pointer<ITimerval>,
 ) -> SyscallResult {
-    let current = thread.process().get_itimer(which);
+    let current = thread.process().get_itimer(which)?;
     virtual_memory.write_with_abi(curr_value, current, abi)?;
     Ok(0)
 }
@@ -1638,10 +1640,15 @@ fn bind(
 }
 
 #[syscall(i386 = 363, amd64 = 50)]
-fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
+fn listen(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    backlog: i32,
+) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let backlog = cmp::max(0, backlog) as usize;
-    fd.listen(backlog)?;
+    fd.listen(backlog, &ctx)?;
     Ok(0)
 }
 
@@ -1701,11 +1708,7 @@ fn socketpair(
 
             match r#type.socket_type {
                 SocketType::Stream => {
-                    let (half1, half2) = StreamUnixSocket::new_pair(
-                        r#type.flags,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
-                    );
+                    let (half1, half2) = StreamUnixSocket::new_pair(r#type.flags, &ctx);
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
                 }
@@ -1829,6 +1832,8 @@ async fn clone(
             process.process_group.lock().clone(),
             *process.limits.read(),
             *process.umask.lock(),
+            process.mm_arg_start(),
+            process.mm_arg_end(),
         ))
     };
 
@@ -2007,7 +2012,7 @@ async fn execve(
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let (cpu_state, exe) = virtual_memory.start_executable(
+    let res = virtual_memory.start_executable(
         pathname,
         link,
         &fd,
@@ -2021,9 +2026,7 @@ async fn execve(
     // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
-    thread
-        .process()
-        .execve(virtual_memory, cpu_state, fdtable, exe);
+    thread.process().execve(virtual_memory, fdtable, res);
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
@@ -3494,6 +3497,16 @@ fn prctl(
     arg5: u64,
 ) -> SyscallResult {
     match op {
+        PrctlOp::SetPdeathsig => {
+            let signal = u8::try_from(arg2)?;
+            if signal != 0 {
+                let signal = Signal::new(signal)?;
+                thread.process().set_parent_death_signal(signal);
+            } else {
+                thread.process().clear_parent_death_signal();
+            }
+            Ok(0)
+        }
         PrctlOp::SetDumpable => {
             let dumpable = arg2;
             match dumpable {
@@ -3854,7 +3867,7 @@ fn getdents64(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
     fd: FdNum,
-    dirent: Pointer<[DirEntry]>,
+    dirent: Pointer<[OffsetDirEntry]>,
     count: u64,
 ) -> SyscallResult {
     let capacity = usize_from(count);
@@ -5475,6 +5488,21 @@ fn getrandom(
         total_len += len;
     }
     Ok(total_len.try_into()?)
+}
+
+#[syscall(i386 = 356, amd64 = 319)]
+fn memfd_create(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    #[state] ctx: FileAccessContext,
+    name: Pointer<CString>,
+    flags: MemfdCreateFlags,
+) -> SyscallResult {
+    let name = virtual_memory.read_cstring(name, 249)?;
+    let fd = MemFd::new(name, flags, &ctx);
+    let fd = fdtable.insert(fd, FdFlags::from(flags), no_file_limit)?;
+    Ok(fd.get() as u64)
 }
 
 #[syscall(i386 = 377, amd64 = 326)]

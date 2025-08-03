@@ -15,14 +15,16 @@ use alloc::{
     vec::Vec,
 };
 use arrayvec::ArrayVec;
+use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
 use limits::{CurrentStackLimit, Limits};
 use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
+use x86_64::VirtAddr;
 
 use crate::{
     char_dev::char::PtyData,
-    error::{Result, err},
+    error::{Result, bail, err},
     fs::{
         StaticFile,
         fd::FileDescriptorTable,
@@ -38,6 +40,7 @@ use crate::{
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
     user::process::{
+        exec::ExecResult,
         syscall::args::{
             ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
             SigEvent, TimerId,
@@ -48,10 +51,7 @@ use crate::{
 
 use self::{
     memory::VirtualMemory,
-    syscall::{
-        args::{Signal, WStatus},
-        cpu_state::CpuState,
-    },
+    syscall::args::{Signal, WStatus},
     thread::{
         PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread, WeakThread,
         new_tid, running_state::ExecveValues,
@@ -98,6 +98,9 @@ pub struct Process {
     real_itimer: Timer,
     timers: Mutex<BTreeMap<TimerId, Timer>>,
     pub cpu_time: Time<CpuTimeBackend>,
+    mm_arg_start: AtomicCell<VirtAddr>,
+    mm_arg_end: AtomicCell<VirtAddr>,
+    parent_death_signal: AtomicCell<Option<Signal>>,
 }
 
 impl Process {
@@ -112,6 +115,8 @@ impl Process {
         process_group: Arc<ProcessGroup>,
         limits: Limits,
         umask: FileMode,
+        mm_arg_start: VirtAddr,
+        mm_arg_end: VirtAddr,
     ) -> Arc<Self> {
         let file_name = exe.location.file_name().unwrap();
         let task_comm = file_name
@@ -154,6 +159,9 @@ impl Process {
             ),
             timers: Mutex::new(BTreeMap::new()),
             cpu_time: Time::new_in_arc(CpuTimeBackend::default()),
+            mm_arg_start: AtomicCell::new(mm_arg_start),
+            mm_arg_end: AtomicCell::new(mm_arg_end),
+            parent_death_signal: AtomicCell::new(None),
         });
 
         if let Some(parent) = parent.upgrade() {
@@ -239,19 +247,20 @@ impl Process {
     pub fn execve(
         &self,
         virtual_memory: VirtualMemory,
-        cpu_state: CpuState,
         fdtable: FileDescriptorTable,
-        exe: Link,
+        res: ExecResult,
     ) {
         *self.timers.lock() = BTreeMap::new();
-        *self.exe.write() = exe;
+        *self.exe.write() = res.exe;
+        self.set_mm_arg_start(res.mm_arg_start);
+        self.set_mm_arg_end(res.mm_arg_end);
         let mut threads = self.threads.lock();
 
         // Restart the thread leader.
         let leader = threads[0].upgrade().unwrap();
         leader.execve(ExecveValues {
             virtual_memory,
-            cpu_state,
+            cpu_state: res.cpu_state,
             fdtable,
         });
 
@@ -311,7 +320,12 @@ impl Process {
         }
 
         let mut children = core::mem::take(&mut *self.children.lock());
-        INIT_THREAD.process().children.lock().append(&mut children);
+        for child in children.iter() {
+            child.queue_parent_death_signal();
+        }
+        let init_process = INIT_THREAD.process();
+        init_process.children.lock().append(&mut children);
+        init_process.child_death_notify.notify();
     }
 
     pub fn thread_group_leader(&self) -> Weak<Thread> {
@@ -491,13 +505,13 @@ impl Process {
             .collect()
     }
 
-    pub fn get_itimer(&self, which: ITimerWhich) -> ITimerval {
+    pub fn get_itimer(&self, which: ITimerWhich) -> Result<ITimerval> {
         let timer = match which {
             ITimerWhich::Real => &self.real_itimer,
-            ITimerWhich::Virtual => todo!(),
-            ITimerWhich::Prof => todo!(),
+            ITimerWhich::Virtual => bail!(Inval),
+            ITimerWhich::Prof => bail!(Inval),
         };
-        timer.get_time().into()
+        Ok(timer.get_time().into())
     }
 
     pub fn set_itimer(self: &Arc<Self>, which: ITimerWhich, value: ITimerval) -> ITimerval {
@@ -565,6 +579,41 @@ impl Process {
         );
 
         Ok(())
+    }
+
+    pub fn mm_arg_start(&self) -> VirtAddr {
+        self.mm_arg_start.load()
+    }
+
+    pub fn set_mm_arg_start(&self, addr: VirtAddr) {
+        self.mm_arg_start.store(addr);
+    }
+
+    pub fn mm_arg_end(&self) -> VirtAddr {
+        self.mm_arg_end.load()
+    }
+
+    pub fn set_mm_arg_end(&self, addr: VirtAddr) {
+        self.mm_arg_end.store(addr);
+    }
+
+    pub fn clear_parent_death_signal(&self) {
+        self.parent_death_signal.store(None);
+    }
+
+    pub fn set_parent_death_signal(&self, signal: Signal) {
+        self.parent_death_signal.store(Some(signal));
+    }
+
+    pub fn queue_parent_death_signal(&self) {
+        let Some(signal) = self.parent_death_signal.load() else {
+            return;
+        };
+        self.queue_signal(SigInfo {
+            signal,
+            code: SigInfoCode::KERNEL,
+            fields: SigFields::None,
+        });
     }
 
     #[cfg(not(feature = "harden"))]

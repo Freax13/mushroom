@@ -18,6 +18,7 @@ use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
         fd::{Events, FdFlags, FileDescriptorTable},
+        node::FileAccessContext,
         path::Path,
     },
     user::process::{
@@ -136,7 +137,7 @@ macro_rules! enum_arg {
             $variant:ident = $expr:expr,
         )*
     }) => {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum $enuhm {
             $(
                 $variant = $expr,
@@ -1619,6 +1620,7 @@ impl SyscallArg for Nice {
 
 enum_arg! {
     pub enum PrctlOp {
+        SetPdeathsig = 1,
         SetDumpable = 4,
         SetName = 15,
         GetName = 16,
@@ -2370,4 +2372,40 @@ pub struct UserRegs64 {
     pub es: u64,
     pub fs: u64,
     pub gs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Ucred {
+    pub pid: u32,
+    pub uid: Uid,
+    pub gid: Gid,
+}
+
+impl From<&FileAccessContext> for Ucred {
+    fn from(ctx: &FileAccessContext) -> Self {
+        Self {
+            pid: ctx.process.as_ref().unwrap().pid(),
+            uid: ctx.filesystem_user_id,
+            gid: ctx.filesystem_group_id,
+        }
+    }
+}
+
+bitflags! {
+    pub struct MemfdCreateFlags {
+        const CLOEXEC = 1 << 0;
+        // const ALLOW_SEALING = 1 << 1;
+        // const HUGETLB = 1 << 2;
+        // const NOEXEC_SEAL = 1 << 3;
+        // const EXEC = 1 << 4;
+    }
+}
+
+impl From<MemfdCreateFlags> for FdFlags {
+    fn from(value: MemfdCreateFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(MemfdCreateFlags::CLOEXEC));
+        flags
+    }
 }

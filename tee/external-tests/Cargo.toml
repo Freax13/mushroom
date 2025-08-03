@@ -5,5 +5,5 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0.81"
-nix = { version = "0.30.1", default-features = false, features = ["mount", "time"] }
+nix = { version = "0.30.1", default-features = false, features = ["mount", "process", "time"] }
 tar = "0.4.40"

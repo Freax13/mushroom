@@ -218,6 +218,8 @@ impl Thread {
                 ProcessGroup::new(tid, Arc::new(Session::new(tid))),
                 Limits::default(),
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
+                VirtAddr::zero(),
+                VirtAddr::zero(),
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
@@ -434,6 +436,7 @@ impl Thread {
                         Sigaction::SIG_DFL,
                         signal @ (Signal::HUP
                         | Signal::INT
+                        | Signal::ILL
                         | Signal::ABRT
                         | Signal::USR1
                         | Signal::SEGV
@@ -797,22 +800,26 @@ impl ThreadGuard<'_> {
         let virtual_memory = VirtualMemory::new();
 
         // Load the elf.
-        let (cpu_state, _path) = virtual_memory.start_executable(
+        let process = self.process().clone();
+        let res = virtual_memory.start_executable(
             path,
             link,
             fd,
             argv,
             envp,
             ctx,
-            self.process().cwd(),
+            process.cwd(),
             stack_limit,
         )?;
 
         // Success! Commit the new state to the thread.
 
         self.virtual_memory = Arc::new(virtual_memory);
-        *self.thread.cpu_state.lock() = cpu_state;
+        *self.thread.cpu_state.lock() = res.cpu_state;
         self.clear_child_tid = Pointer::NULL;
+        *process.exe.write() = res.exe;
+        process.set_mm_arg_start(res.mm_arg_start);
+        process.set_mm_arg_end(res.mm_arg_end);
 
         Ok(())
     }
@@ -853,6 +860,7 @@ impl ThreadGuard<'_> {
                     Sigaction::SIG_DFL,
                     Signal::HUP
                     | Signal::INT
+                    | Signal::ILL
                     | Signal::ABRT
                     | Signal::USR1
                     | Signal::SEGV
