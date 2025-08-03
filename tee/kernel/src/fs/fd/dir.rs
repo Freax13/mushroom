@@ -1,20 +1,21 @@
 use core::future::pending;
 
 use crate::{
-    error::{bail, ensure},
+    error::{bail, ensure, err},
     fs::{
         FileSystem,
-        node::{FileAccessContext, Link, directory::Directory},
+        node::{FileAccessContext, Link, OffsetDirEntry, directory::Directory},
         path::Path,
     },
     spin::mutex::Mutex,
     user::process::{
-        syscall::args::{FileMode, OpenFlags, Timespec},
+        syscall::args::{FileMode, OpenFlags, Timespec, Whence},
         thread::{Gid, Uid},
     },
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
+use usize_conversions::FromUsize;
 
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
@@ -29,7 +30,10 @@ pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<StrongFileD
     Ok(StrongFileDescriptor::from(DirectoryFileDescription {
         flags,
         dir,
-        entries: Mutex::new(None),
+        internal: Mutex::new(InternalDirectoryFileDescription {
+            entries: None,
+            offset: 0,
+        }),
         file_lock,
     }))
 }
@@ -37,8 +41,13 @@ pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<StrongFileD
 struct DirectoryFileDescription {
     flags: OpenFlags,
     dir: Arc<dyn Directory>,
-    entries: Mutex<Option<Vec<DirEntry>>>,
+    internal: Mutex<InternalDirectoryFileDescription>,
     file_lock: FileLock,
+}
+
+struct InternalDirectoryFileDescription {
+    entries: Option<Vec<DirEntry>>,
+    offset: usize,
 }
 
 #[async_trait]
@@ -87,6 +96,38 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.dir.fs()
     }
 
+    fn seek(&self, offset: usize, whence: Whence, ctx: &mut FileAccessContext) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        match whence {
+            Whence::Set | Whence::Data => guard.offset = offset,
+            Whence::Cur => {
+                guard.offset = guard
+                    .offset
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
+            Whence::End => {
+                if guard.entries.is_none() {
+                    guard.entries = Some(Directory::list_entries(&*self.dir, ctx)?);
+                }
+                let entries = guard.entries.as_ref().unwrap();
+
+                let size = entries.len();
+                guard.offset = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
+            Whence::Hole => bail!(Inval),
+        }
+
+        // When the offset is at the start, remove the cached entries.
+        if guard.offset == 0 {
+            guard.entries = None;
+        }
+
+        Ok(guard.offset)
+    }
+
     fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<Link> {
         Ok(Link {
             location: self.dir.location().clone(),
@@ -98,25 +139,30 @@ impl OpenFileDescription for DirectoryFileDescription {
         &self,
         mut capacity: usize,
         ctx: &mut FileAccessContext,
-    ) -> Result<Vec<DirEntry>> {
-        let mut guard = self.entries.lock();
-        if guard.is_none() {
-            *guard = Some(Directory::list_entries(&*self.dir, ctx)?);
+    ) -> Result<Vec<OffsetDirEntry>> {
+        let mut guard = self.internal.lock();
+        if guard.entries.is_none() {
+            guard.entries = Some(Directory::list_entries(&*self.dir, ctx)?);
         }
-        let entries = guard.as_mut().unwrap();
-
-        let mut ret = Vec::new();
-        while let Some(last) = entries.last() {
-            if let Some(new_capacity) = capacity.checked_sub(last.len()) {
-                ret.push(entries.pop().unwrap());
+        let entries = guard.entries.as_ref().unwrap();
+        let entries = entries
+            .iter()
+            .enumerate()
+            .skip(guard.offset)
+            .map(|(i, entry)| OffsetDirEntry {
+                entry: entry.clone(),
+                offset: u64::from_usize(i),
+            })
+            .take_while(|entry| {
+                let Some(new_capacity) = capacity.checked_sub(entry.len()) else {
+                    return false;
+                };
                 capacity = new_capacity;
-            } else {
-                ensure!(!ret.is_empty(), Inval);
-                break;
-            }
-        }
-
-        Ok(ret)
+                true
+            })
+            .collect::<Vec<_>>();
+        guard.offset += entries.len();
+        Ok(entries)
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {

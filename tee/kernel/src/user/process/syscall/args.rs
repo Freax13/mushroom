@@ -136,7 +136,7 @@ macro_rules! enum_arg {
             $variant:ident = $expr:expr,
         )*
     }) => {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum $enuhm {
             $(
                 $variant = $expr,

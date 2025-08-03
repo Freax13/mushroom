@@ -39,10 +39,10 @@ use crate::{
             unix_socket::{DgramUnixSocket, SeqPacketUnixSocket, StreamUnixSocket},
         },
         node::{
-            self, DirEntry, FileAccessContext, Link, OldDirEntry, Permission, create_char_dev,
-            create_directory, create_fifo, create_file, create_link, create_socket, devtmpfs,
-            hard_link, lookup_and_resolve_link, lookup_link, procfs, read_soft_link, unlink_dir,
-            unlink_file,
+            self, FileAccessContext, Link, OffsetDirEntry, OldDirEntry, Permission,
+            create_char_dev, create_directory, create_fifo, create_file, create_link,
+            create_socket, devtmpfs, hard_link, lookup_and_resolve_link, lookup_link, procfs,
+            read_soft_link, unlink_dir, unlink_file,
         },
         path::Path,
     },
@@ -636,6 +636,7 @@ async fn poll_impl(
 #[syscall(i386 = 19, amd64 = 8)]
 fn lseek(
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     fd: FdNum,
     offset: u64,
     whence: Whence,
@@ -643,7 +644,7 @@ fn lseek(
     let offset = usize_from(offset);
 
     let fd = fdtable.get(fd)?;
-    let offset = fd.seek(offset, whence)?;
+    let offset = fd.seek(offset, whence, &mut ctx)?;
 
     let offset = u64::from_usize(offset);
     Ok(offset)
@@ -3854,7 +3855,7 @@ fn getdents64(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
     fd: FdNum,
-    dirent: Pointer<[DirEntry]>,
+    dirent: Pointer<[OffsetDirEntry]>,
     count: u64,
 ) -> SyscallResult {
     let capacity = usize_from(count);

@@ -21,7 +21,7 @@ use crate::{
     error::{Error, Result, bail, ensure},
     fs::{
         StatFs,
-        node::{DirEntry, OldDirEntry},
+        node::{OffsetDirEntry, OldDirEntry},
         path::{PATH_MAX, Path},
     },
     user::process::{
@@ -1098,22 +1098,22 @@ impl From<Sigset> for Sigset64 {
     }
 }
 
-impl Pointee for DirEntry {}
+impl Pointee for OffsetDirEntry {}
 
-impl WritablePointee for DirEntry {
+impl WritablePointee for OffsetDirEntry {
     fn write(&self, addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<usize> {
         let dirent = LinuxDirent64 {
-            ino: self.ino,
-            off: i64::try_from(self.len())?,
+            ino: self.entry.ino,
+            off: self.offset as i64,
             reclen: u16::try_from(self.len())?,
-            ty: self.ty as u8,
+            ty: self.entry.ty as u8,
             name: [],
             _padding: [0; 5],
         };
         vm.write_bytes(addr, bytes_of(&dirent))?;
-        vm.write_bytes(addr + 19u64, self.name.as_ref())?;
+        vm.write_bytes(addr + 19u64, self.entry.name.as_ref())?;
         vm.write_bytes(
-            addr + 19u64 + u64::from_usize(self.name.as_ref().len()),
+            addr + 19u64 + u64::from_usize(self.entry.name.as_ref().len()),
             &[0],
         )?;
 
@@ -1121,7 +1121,7 @@ impl WritablePointee for DirEntry {
     }
 }
 
-impl AbiAgnosticPointee for DirEntry {}
+impl AbiAgnosticPointee for OffsetDirEntry {}
 
 impl Pointee for OldDirEntry {}
 
@@ -1130,15 +1130,15 @@ impl WritablePointee for OldDirEntry {
         let len = self.len(abi);
 
         let dirent = OldLinuxDirent {
-            ino: self.0.ino,
-            off: u64::from_usize(len),
+            ino: self.0.entry.ino,
+            off: self.0.offset,
             reclen: u16::try_from(len)?,
         };
         let base_len = vm.write_with_abi(Pointer::new(addr.as_u64()), dirent, abi)?;
-        vm.write_bytes(addr + u64::from_usize(base_len), self.0.name.as_ref())?;
+        vm.write_bytes(addr + u64::from_usize(base_len), self.0.entry.name.as_ref())?;
         vm.write_bytes(
-            addr + u64::from_usize(base_len + self.0.name.as_ref().len()),
-            &[0, self.0.ty as u8],
+            addr + u64::from_usize(base_len + self.0.entry.name.as_ref().len()),
+            &[0, self.0.entry.ty as u8],
         )?;
         Ok(len)
     }
@@ -1150,7 +1150,7 @@ impl OldDirEntry {
             Abi::I386 => size_of::<<OldLinuxDirent as AbiDependentPointee>::I386>(),
             Abi::Amd64 => size_of::<<OldLinuxDirent as AbiDependentPointee>::Amd64>(),
         };
-        let len = base_size + self.0.name.as_ref().len() + 2;
+        let len = base_size + self.0.entry.name.as_ref().len() + 2;
         len.next_multiple_of(8)
     }
 }

@@ -14,7 +14,7 @@ use crate::{
     char_dev::char::PtyData,
     error::{bail, ensure, err},
     fs::{
-        node::{DirEntryName, DynINode, FileAccessContext, new_ino},
+        node::{DirEntryName, DynINode, FileAccessContext, OffsetDirEntry, new_ino},
         path::FileName,
     },
     memory::page::KernelPage,
@@ -563,9 +563,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn seek(&self, offset: usize, whence: Whence) -> Result<usize> {
+    fn seek(&self, offset: usize, whence: Whence, ctx: &mut FileAccessContext) -> Result<usize> {
         let _ = offset;
         let _ = whence;
+        let _ = ctx;
         bail!(SPipe)
     }
 
@@ -791,8 +792,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotDir)
     }
 
-    fn getdents64(&self, capacity: usize, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
+    fn getdents64(
+        &self,
+        capacity: usize,
+        ctx: &mut FileAccessContext,
+    ) -> Result<Vec<OffsetDirEntry>> {
         let _ = capacity;
+        let _ = ctx;
         bail!(NotDir)
     }
 

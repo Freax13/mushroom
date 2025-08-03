@@ -137,7 +137,7 @@ impl OpenFileDescription for Null {
         Ok(Ok(0))
     }
 
-    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+    fn seek(&self, _offset: usize, _: Whence, _: &mut FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
@@ -263,7 +263,7 @@ impl OpenFileDescription for Zero {
         })
     }
 
-    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+    fn seek(&self, _offset: usize, _: Whence, _: &mut FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
@@ -391,7 +391,7 @@ impl OpenFileDescription for Full {
         })
     }
 
-    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+    fn seek(&self, _offset: usize, _: Whence, _: &mut FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
@@ -520,7 +520,7 @@ impl OpenFileDescription for Random {
         })
     }
 
-    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+    fn seek(&self, _offset: usize, _: Whence, _: &mut FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
@@ -640,7 +640,7 @@ impl OpenFileDescription for URandom {
         })
     }
 
-    fn seek(&self, _offset: usize, _: Whence) -> Result<usize> {
+    fn seek(&self, _offset: usize, _: Whence, _: &mut FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
