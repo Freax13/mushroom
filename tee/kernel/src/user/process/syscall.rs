@@ -4212,6 +4212,7 @@ async fn openat(
     flags: OpenFlags,
     mode: u64,
 ) -> SyscallResult {
+    let mut flags = flags;
     let filename = virtual_memory.read(filename)?;
     let start_dir = start_dir_for_path(&thread, &fdtable, dfd, &filename, &mut ctx)?;
 
@@ -4232,10 +4233,15 @@ async fn openat(
         StrongFileDescriptor::from(path_fd)
     } else {
         let link = if flags.contains(OpenFlags::CREAT) {
+            ensure!(!flags.contains(OpenFlags::TMPFILE), Inval);
             let mut mode = FileMode::from_bits_truncate(mode);
             mode &= !*thread.process().umask.lock();
             create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
         } else {
+            if flags.contains(OpenFlags::TMPFILE) {
+                ensure!(flags.intersects(OpenFlags::WRONLY | OpenFlags::RDWR), Inval);
+            }
+
             let link = if flags.contains(OpenFlags::NOFOLLOW) {
                 lookup_link(start_dir, &filename, &mut ctx)?
             } else {
@@ -4243,12 +4249,14 @@ async fn openat(
             };
 
             let stat = link.node.stat()?;
-            if flags.contains(OpenFlags::DIRECTORY) {
+            if flags.contains(OpenFlags::TMPFILE) || flags.contains(OpenFlags::DIRECTORY) {
                 ensure!(stat.mode.ty() == FileType::Dir, NotDir);
             } else if flags.intersects(OpenFlags::WRONLY | OpenFlags::RDWR) {
                 ensure!(stat.mode.ty() != FileType::Dir, IsDir);
             }
-            if flags.contains(OpenFlags::WRONLY) {
+            if flags.contains(OpenFlags::TMPFILE) {
+                ctx.check_permissions(&stat, Permission::Execute)?;
+            } else if flags.contains(OpenFlags::WRONLY) {
                 ctx.check_permissions(&stat, Permission::Write)?;
             } else if flags.contains(OpenFlags::RDWR) {
                 ctx.check_permissions(&stat, Permission::Read)?;
@@ -4257,7 +4265,14 @@ async fn openat(
                 ctx.check_permissions(&stat, Permission::Read)?;
             }
 
-            link
+            if flags.contains(OpenFlags::TMPFILE) {
+                flags.remove(OpenFlags::DIRECTORY);
+                let mut mode = FileMode::from_bits_truncate(mode);
+                mode &= !*thread.process().umask.lock();
+                link.node.create_tmp_file(mode, &ctx)?
+            } else {
+                link
+            }
         };
 
         let fd = link

@@ -29,6 +29,10 @@ macro_rules! dir_impls {
             Directory::create_file(self, file_name, mode, ctx)
         }
 
+        fn create_tmp_file(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<Link> {
+            Directory::create_tmp_file(self, mode, ctx)
+        }
+
         fn create_dir(
             &self,
             file_name: FileName<'static>,
@@ -158,6 +162,7 @@ pub trait Directory: INode {
         mode: FileMode,
         ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>>;
+    fn create_tmp_file(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<Link>;
     fn create_dir(
         &self,
         file_name: FileName<'static>,

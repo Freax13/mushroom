@@ -751,6 +751,10 @@ impl Directory for DevPtsDirectory {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,

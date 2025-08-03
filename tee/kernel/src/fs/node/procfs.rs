@@ -220,6 +220,10 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -821,6 +825,10 @@ impl Directory for NetDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -1378,6 +1386,10 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -1786,6 +1798,10 @@ impl Directory for FdDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -1883,13 +1899,27 @@ impl Directory for FdDir {
 
     fn hard_link(
         &self,
-        _oldname: FileName<'static>,
-        _follow_symlink: bool,
-        _new_dir: DynINode,
-        _newname: FileName<'static>,
-        _: &FileAccessContext,
+        oldname: FileName<'static>,
+        follow_symlink: bool,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        ctx: &FileAccessContext,
     ) -> Result<Option<Path>> {
-        bail!(NoEnt)
+        ensure!(follow_symlink, Loop);
+
+        let file_name = oldname.as_bytes();
+        let file_name = core::str::from_utf8(file_name).map_err(|_| err!(NoEnt))?;
+        let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
+        let fd_num = FdNum::new(fd_num);
+
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let guard = thread.fdtable.lock();
+        let fd = guard.get(fd_num)?;
+        drop(guard);
+
+        fd.link_into(new_dir, newname, ctx)?;
+        Ok(None)
     }
 }
 
@@ -2804,6 +2834,10 @@ impl Directory for ProcessTaskDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -3049,6 +3083,10 @@ impl Directory for TaskDir {
         _: FileMode,
         _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
         bail!(NoEnt)
     }
 

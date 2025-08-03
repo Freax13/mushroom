@@ -120,6 +120,13 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    /// Create a temporary unnamed file in the file system.
+    fn create_tmp_file(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<Link> {
+        let _ = mode;
+        let _ = ctx;
+        bail!(NotDir)
+    }
+
     fn create_dir(
         &self,
         file_name: FileName<'static>,

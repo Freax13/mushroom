@@ -805,6 +805,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
         FileMode::all(),
         Uid::SUPER_USER,
         Gid::SUPER_USER,
+        true,
     );
     StaticFile::init_file().copy_to(&file).unwrap();
     let location = LinkLocation::new(ROOT_NODE.clone(), FileName::new(b"init").unwrap());

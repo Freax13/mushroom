@@ -30,6 +30,7 @@ use crate::{
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, btree_map::Entry},
+    format,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -137,6 +138,7 @@ impl TmpFsDir {
                     mode,
                     ctx.filesystem_user_id,
                     ctx.filesystem_group_id,
+                    false,
                 );
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
                 internal.update_times();
@@ -149,6 +151,32 @@ impl TmpFsDir {
             }
             Entry::Occupied(entry) => Ok(Err(entry.get().link())),
         }
+    }
+
+    fn link_tmpfile(
+        &self,
+        newname: FileName<'static>,
+        file: Arc<TmpFsFile>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let internal = &mut *guard;
+        ctx.check_permissions(&internal.ownership, Permission::Write)?;
+        let entry = internal.items.entry(newname.clone());
+        let Entry::Vacant(entry) = entry else {
+            bail!(Exist);
+        };
+
+        let location = LinkLocation::new(self.this.upgrade().unwrap(), entry.key().clone());
+        file.increase_link_count();
+        entry.insert(TmpFsDirEntry::File(location.clone(), file));
+        internal.update_times();
+        drop(guard);
+
+        self.watchers()
+            .send_event(InotifyMask::CREATE, None, Some(newname));
+
+        Ok(())
     }
 }
 
@@ -289,6 +317,24 @@ impl Directory for TmpFsDir {
                 node: file,
             })
         })
+    }
+
+    fn create_tmp_file(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<Link> {
+        let guard = self.internal.lock();
+        ctx.check_permissions(&guard.ownership, Permission::Write)?;
+        drop(guard);
+        let node = TmpFsFile::new(
+            self.fs.clone(),
+            mode,
+            ctx.filesystem_user_id,
+            ctx.filesystem_group_id,
+            true,
+        );
+        let filename = FileName::new(format!("#{}", node.ino).as_bytes())
+            .unwrap()
+            .into_owned();
+        let location = LinkLocation::new(self.this.upgrade().unwrap(), filename);
+        Ok(Link { location, node })
     }
 
     fn create_link(
@@ -983,7 +1029,7 @@ struct TmpFsFileInternal {
 }
 
 impl TmpFsFile {
-    pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid) -> Arc<Self> {
+    pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid, tmpfile: bool) -> Arc<Self> {
         let now = now(ClockId::Realtime);
 
         Arc::new_cyclic(|this| Self {
@@ -996,7 +1042,7 @@ impl TmpFsFile {
                 atime: now,
                 mtime: now,
                 ctime: now,
-                links: 1,
+                links: if tmpfile { 0 } else { 1 },
             }),
             file_lock_record: LazyFileLockRecord::new(),
             watchers: Watchers::new(),
@@ -1315,6 +1361,17 @@ impl File for TmpFsFile {
         } else {
             todo!()
         }
+    }
+
+    fn link_into(
+        &self,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let new_dir =
+            Arc::<dyn Any + Send + Sync>::downcast::<TmpFsDir>(new_dir).map_err(|_| err!(XDev))?;
+        new_dir.link_tmpfile(newname, self.this.upgrade().unwrap(), ctx)
     }
 
     fn deleted(&self) -> bool {
