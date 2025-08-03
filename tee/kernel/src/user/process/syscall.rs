@@ -32,6 +32,7 @@ use crate::{
             epoll::Epoll,
             eventfd::EventFd,
             inotify::Inotify,
+            mem::MemFd,
             path::PathFd,
             pipe,
             stream_buffer::{self, SpliceBlockedError},
@@ -305,6 +306,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysProcessVmReadv);
     handlers.register(SysRenameat2);
     handlers.register(SysGetrandom);
+    handlers.register(SysMemfdCreate);
     handlers.register(SysCopyFileRange);
     handlers.register(SysFchmodat2);
 
@@ -5486,6 +5488,21 @@ fn getrandom(
         total_len += len;
     }
     Ok(total_len.try_into()?)
+}
+
+#[syscall(i386 = 356, amd64 = 319)]
+fn memfd_create(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    #[state] ctx: FileAccessContext,
+    name: Pointer<CString>,
+    flags: MemfdCreateFlags,
+) -> SyscallResult {
+    let name = virtual_memory.read_cstring(name, 249)?;
+    let fd = MemFd::new(name, flags, &ctx);
+    let fd = fdtable.insert(fd, FdFlags::from(flags), no_file_limit)?;
+    Ok(fd.get() as u64)
 }
 
 #[syscall(i386 = 377, amd64 = 326)]

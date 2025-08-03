@@ -74,6 +74,7 @@ pub mod epoll;
 pub mod eventfd;
 pub mod file;
 pub mod inotify;
+pub mod mem;
 pub mod path;
 pub mod pipe;
 mod std;

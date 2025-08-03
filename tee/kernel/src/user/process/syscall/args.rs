@@ -2391,3 +2391,21 @@ impl From<&FileAccessContext> for Ucred {
         }
     }
 }
+
+bitflags! {
+    pub struct MemfdCreateFlags {
+        const CLOEXEC = 1 << 0;
+        // const ALLOW_SEALING = 1 << 1;
+        // const HUGETLB = 1 << 2;
+        // const NOEXEC_SEAL = 1 << 3;
+        // const EXEC = 1 << 4;
+    }
+}
+
+impl From<MemfdCreateFlags> for FdFlags {
+    fn from(value: MemfdCreateFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(MemfdCreateFlags::CLOEXEC));
+        flags
+    }
+}
