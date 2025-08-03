@@ -928,9 +928,7 @@ impl INode for PtsChar {
         guard.ownership.chown(uid, gid, ctx)
     }
 
-    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {
-        todo!()
-    }
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
     fn truncate(&self, _length: usize) -> Result<()> {
         todo!()
