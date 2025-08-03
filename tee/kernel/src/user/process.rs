@@ -323,7 +323,9 @@ impl Process {
         for child in children.iter() {
             child.queue_parent_death_signal();
         }
-        INIT_THREAD.process().children.lock().append(&mut children);
+        let init_process = INIT_THREAD.process();
+        init_process.children.lock().append(&mut children);
+        init_process.child_death_notify.notify();
     }
 
     pub fn thread_group_leader(&self) -> Weak<Thread> {
