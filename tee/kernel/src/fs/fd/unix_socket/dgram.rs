@@ -22,7 +22,7 @@ use crate::{
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
-                SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+                SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -238,6 +238,14 @@ impl OpenFileDescription for DgramUnixSocket {
 
             future::select(read_wait, write_wait).await;
         }
+    }
+
+    fn get_socket_name(&self) -> Result<SocketAddr> {
+        Ok(SocketAddr::Unix(SocketAddrUnix::Unnamed))
+    }
+
+    fn get_peer_name(&self) -> Result<SocketAddr> {
+        Ok(SocketAddr::Unix(SocketAddrUnix::Unnamed))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
