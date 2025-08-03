@@ -667,7 +667,10 @@ fn mmap(
     let bias = if flags.contains(MmapFlags::FIXED) {
         Bias::Fixed(addr.get())
     } else {
-        Bias::Dynamic(abi)
+        Bias::Dynamic {
+            abi,
+            map_32bit: flags.contains(MmapFlags::_32BIT),
+        }
     };
 
     ensure!(length != 0, Inval);
