@@ -347,6 +347,16 @@ impl OpenFileDescription for StreamUnixSocket {
                             .collect::<Result<_>>()?;
                         ancillary_data.rights = Some(fds);
                     }
+                    (1, 2) => {
+                        // SCM_CREDENTIALS
+                        ensure!(buffer_len >= size_of::<Ucred>(), Inval);
+
+                        ensure!(ancillary_data.cred.is_none(), Inval);
+
+                        let cred = vm.read(msg_hdr.control.bytes_offset(len).cast())?;
+                        // TODO: Validate cred
+                        ancillary_data.cred = Some(cred);
+                    }
                     _ => bail!(Inval),
                 }
 
@@ -782,6 +792,7 @@ struct MessageBoundary {
 #[derive(Default)]
 struct AncillaryData {
     rights: Option<Vec<StrongFileDescriptor>>,
+    cred: Option<Ucred>,
 }
 
 impl Buffer {
