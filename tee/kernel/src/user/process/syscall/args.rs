@@ -18,6 +18,7 @@ use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
         fd::{Events, FdFlags, FileDescriptorTable},
+        node::FileAccessContext,
         path::Path,
     },
     user::process::{
@@ -2371,4 +2372,22 @@ pub struct UserRegs64 {
     pub es: u64,
     pub fs: u64,
     pub gs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Ucred {
+    pub pid: u32,
+    pub uid: Uid,
+    pub gid: Gid,
+}
+
+impl From<&FileAccessContext> for Ucred {
+    fn from(ctx: &FileAccessContext) -> Self {
+        Self {
+            pid: ctx.process.as_ref().unwrap().pid(),
+            uid: ctx.filesystem_user_id,
+            gid: ctx.filesystem_group_id,
+        }
+    }
 }

@@ -12,6 +12,7 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
+use bytemuck::bytes_of;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{align_down, align_up};
 
@@ -41,7 +42,7 @@ use crate::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
                 Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
-                SocketAddrUnix, SocketType, Stat, Timespec, pointee::SizedPointee,
+                SocketAddrUnix, SocketType, Stat, Timespec, Ucred, pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -98,9 +99,10 @@ impl StreamUnixSocket {
 
     pub fn new_pair(
         flags: OpenFlags,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> (StrongFileDescriptor, StrongFileDescriptor) {
+        let cred = Ucred::from(ctx);
+
         let (read_half1, write_half2) = LockedBuffer::new();
         let (read_half2, write_half1) = LockedBuffer::new();
         (
@@ -111,8 +113,8 @@ impl StreamUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        uid,
-                        gid,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
                     ),
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
@@ -121,6 +123,8 @@ impl StreamUnixSocket {
                     write_half: write_half1,
                     read_half: read_half1,
                     peername: SocketAddrUnix::Unnamed,
+                    localcred: cred,
+                    peercred: cred,
                 })),
                 file_lock: FileLock::anonymous(),
             }),
@@ -131,8 +135,8 @@ impl StreamUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        uid,
-                        gid,
+                        ctx.filesystem_user_id,
+                        ctx.filesystem_group_id,
                     ),
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
@@ -141,6 +145,8 @@ impl StreamUnixSocket {
                     write_half: write_half2,
                     read_half: read_half2,
                     peername: SocketAddrUnix::Unnamed,
+                    localcred: cred,
+                    peercred: cred,
                 })),
                 file_lock: FileLock::anonymous(),
             }),
@@ -477,7 +483,20 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(ty.to_le_bytes().to_vec())
             }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
-            (1, 17) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PASSCRED
+            (1, 16) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PASSCRED
+            (1, 17) => {
+                // SO_PEERCRED
+                let cred = match self.mode.get() {
+                    Some(Mode::Active(active)) => active.peercred,
+                    Some(Mode::Passive(active)) => active.localcred,
+                    None => Ucred {
+                        pid: 0,
+                        uid: Uid::UNCHANGED,
+                        gid: Gid::UNCHANGED,
+                    },
+                };
+                Ok(bytes_of(&cred).to_vec())
+            }
             (1, 38) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PROTOCOL
             _ => bail!(Inval),
         }
@@ -510,7 +529,7 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(SocketAddr::Unix(active.peername.clone()))
     }
 
-    fn listen(&self, backlog: usize) -> Result<()> {
+    fn listen(&self, backlog: usize, ctx: &FileAccessContext) -> Result<()> {
         let mut initialized = false;
         let mode = self.mode.call_once(|| {
             initialized = true;
@@ -520,6 +539,7 @@ impl OpenFileDescription for StreamUnixSocket {
                     queue: VecDeque::new(),
                     backlog: 0,
                 }),
+                localcred: Ucred::from(ctx),
             })
         });
         if initialized {
@@ -603,6 +623,8 @@ impl OpenFileDescription for StreamUnixSocket {
                 let res = self
                     .mode
                     .init(|| {
+                        let cred = Ucred::from(&*ctx);
+
                         let (read_half1, write_half2) = LockedBuffer::new();
                         let (read_half2, write_half1) = LockedBuffer::new();
 
@@ -610,6 +632,8 @@ impl OpenFileDescription for StreamUnixSocket {
                             write_half: write_half2,
                             read_half: read_half2,
                             peername: self.socketname.lock().clone(),
+                            peercred: cred,
+                            localcred: passive.localcred,
                         });
                         passive.connect_notify.notify();
 
@@ -619,6 +643,8 @@ impl OpenFileDescription for StreamUnixSocket {
                             write_half: write_half1,
                             read_half: read_half1,
                             peername: server.socketname.lock().clone(),
+                            peercred: passive.localcred,
+                            localcred: cred,
                         })
                     })
                     .map(drop)
@@ -733,6 +759,9 @@ struct Active {
     write_half: LockedBuffer,
     read_half: LockedBuffer,
     peername: SocketAddrUnix,
+    #[expect(dead_code)]
+    localcred: Ucred,
+    peercred: Ucred,
 }
 
 struct Buffer {
@@ -1007,6 +1036,7 @@ impl BufferGuard<'_> {
 struct Passive {
     connect_notify: Notify,
     internal: Mutex<PassiveInternal>,
+    localcred: Ucred,
 }
 
 struct PassiveInternal {

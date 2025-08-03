@@ -1638,10 +1638,15 @@ fn bind(
 }
 
 #[syscall(i386 = 363, amd64 = 50)]
-fn listen(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, backlog: i32) -> SyscallResult {
+fn listen(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    backlog: i32,
+) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let backlog = cmp::max(0, backlog) as usize;
-    fd.listen(backlog)?;
+    fd.listen(backlog, &ctx)?;
     Ok(0)
 }
 
@@ -1701,11 +1706,7 @@ fn socketpair(
 
             match r#type.socket_type {
                 SocketType::Stream => {
-                    let (half1, half2) = StreamUnixSocket::new_pair(
-                        r#type.flags,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
-                    );
+                    let (half1, half2) = StreamUnixSocket::new_pair(r#type.flags, &ctx);
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
                 }

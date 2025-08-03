@@ -378,7 +378,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(SocketAddr::from(active.remote_addr))
     }
 
-    fn listen(&self, backlog: usize) -> Result<()> {
+    fn listen(&self, backlog: usize, _: &FileAccessContext) -> Result<()> {
         // Make sure that the backlog is never empty.
         let backlog = cmp::max(backlog, 1);
 

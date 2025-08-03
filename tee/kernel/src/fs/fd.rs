@@ -662,8 +662,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
-    fn listen(&self, backlog: usize) -> Result<()> {
+    fn listen(&self, backlog: usize, ctx: &FileAccessContext) -> Result<()> {
         let _ = backlog;
+        let _ = ctx;
         bail!(NotSock)
     }
 
