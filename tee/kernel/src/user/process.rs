@@ -100,6 +100,7 @@ pub struct Process {
     pub cpu_time: Time<CpuTimeBackend>,
     mm_arg_start: AtomicCell<VirtAddr>,
     mm_arg_end: AtomicCell<VirtAddr>,
+    parent_death_signal: AtomicCell<Option<Signal>>,
 }
 
 impl Process {
@@ -160,6 +161,7 @@ impl Process {
             cpu_time: Time::new_in_arc(CpuTimeBackend::default()),
             mm_arg_start: AtomicCell::new(mm_arg_start),
             mm_arg_end: AtomicCell::new(mm_arg_end),
+            parent_death_signal: AtomicCell::new(None),
         });
 
         if let Some(parent) = parent.upgrade() {
@@ -318,6 +320,9 @@ impl Process {
         }
 
         let mut children = core::mem::take(&mut *self.children.lock());
+        for child in children.iter() {
+            child.queue_parent_death_signal();
+        }
         INIT_THREAD.process().children.lock().append(&mut children);
     }
 
@@ -588,6 +593,25 @@ impl Process {
 
     pub fn set_mm_arg_end(&self, addr: VirtAddr) {
         self.mm_arg_end.store(addr);
+    }
+
+    pub fn clear_parent_death_signal(&self) {
+        self.parent_death_signal.store(None);
+    }
+
+    pub fn set_parent_death_signal(&self, signal: Signal) {
+        self.parent_death_signal.store(Some(signal));
+    }
+
+    pub fn queue_parent_death_signal(&self) {
+        let Some(signal) = self.parent_death_signal.load() else {
+            return;
+        };
+        self.queue_signal(SigInfo {
+            signal,
+            code: SigInfoCode::KERNEL,
+            fields: SigFields::None,
+        });
     }
 
     #[cfg(not(feature = "harden"))]

@@ -3495,6 +3495,16 @@ fn prctl(
     arg5: u64,
 ) -> SyscallResult {
     match op {
+        PrctlOp::SetPdeathsig => {
+            let signal = u8::try_from(arg2)?;
+            if signal != 0 {
+                let signal = Signal::new(signal)?;
+                thread.process().set_parent_death_signal(signal);
+            } else {
+                thread.process().clear_parent_death_signal();
+            }
+            Ok(0)
+        }
         PrctlOp::SetDumpable => {
             let dumpable = arg2;
             match dumpable {
