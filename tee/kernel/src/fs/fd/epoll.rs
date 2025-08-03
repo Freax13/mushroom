@@ -5,6 +5,7 @@ use crate::fs::fd::WeakFileDescriptor;
 use crate::fs::node::{FileAccessContext, new_ino};
 use crate::fs::ownership::Ownership;
 use crate::fs::path::Path;
+use crate::rt::futures_unordered::FuturesUnorderedBuilder;
 use crate::rt::notify::Notify;
 use crate::spin::mutex::Mutex;
 use crate::user::process::thread::{Gid, Uid};
@@ -13,7 +14,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use async_trait::async_trait;
 use futures::future::{Either, select};
-use futures::stream::{FuturesUnordered, StreamExt};
 use futures::{FutureExt, select_biased};
 
 use crate::error::{Result, bail, ensure, err};
@@ -113,23 +113,25 @@ impl Epoll {
 
     /// Waits for an fd to become ready and also returns a non-blocking iterator to may return more ready fds.
     async fn poll(&self, consume_oneshot: bool) -> (EpollEvent, impl Iterator<Item = EpollEvent>) {
-        let mut futures = FuturesUnordered::new();
+        let mut builder = FuturesUnorderedBuilder::new();
         loop {
             let wait = self.notify.wait();
 
-            futures.clear();
-            futures.extend(self.ready_futures(consume_oneshot));
+            builder.extend(self.ready_futures(consume_oneshot));
+            let mut futures = builder.finish();
 
             let ready = futures.next();
 
             let Either::Left((res, wait)) = select(ready, wait).await else {
                 // The interested list was modified. Start over.
+                builder = futures.reset();
                 continue;
             };
             let Some(ready_fd) = res else {
                 // There are no file descriptors at all. Wait for the
                 // interested list to change and start over.
                 wait.await;
+                builder = futures.reset();
                 continue;
             };
 

@@ -14,6 +14,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use intrusive_collections::{XorLinkedList, XorLinkedListAtomicLink, intrusive_adapter};
 use log::warn;
 
+pub mod futures_unordered;
 pub mod mpmc;
 pub mod mpsc;
 pub mod notify;
