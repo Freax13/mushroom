@@ -220,6 +220,10 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -821,6 +825,10 @@ impl Directory for NetDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -1378,6 +1386,10 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -1783,6 +1795,10 @@ impl Directory for FdDir {
         _: FileMode,
         _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
         bail!(NoEnt)
     }
 
@@ -2804,6 +2820,10 @@ impl Directory for ProcessTaskDir {
         bail!(NoEnt)
     }
 
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
     fn create_dir(
         &self,
         _: FileName<'static>,
@@ -3049,6 +3069,10 @@ impl Directory for TaskDir {
         _: FileMode,
         _: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
         bail!(NoEnt)
     }
 
