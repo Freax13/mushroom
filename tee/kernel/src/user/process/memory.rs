@@ -516,7 +516,7 @@ impl VirtualMemoryWriteGuard<'_> {
 
         let addr = match bias {
             Bias::Fixed(bias) => bias,
-            Bias::Dynamic(abi) => self.guard.find_free_address(len, abi),
+            Bias::Dynamic { abi, map_32bit } => self.guard.find_free_address(len, abi, map_32bit),
         };
 
         let start = addr;
@@ -1013,7 +1013,7 @@ impl VirtualMemoryState {
         }
     }
 
-    fn find_free_address(&mut self, size: u64, abi: Abi) -> VirtAddr {
+    fn find_free_address(&mut self, size: u64, abi: Abi, map_32: bool) -> VirtAddr {
         assert_ne!(size, 0);
         assert!(
             size < (1 << 47),
@@ -1026,8 +1026,14 @@ impl VirtualMemoryState {
         let size = size + Size4KiB::SIZE * 2;
 
         let dynamic_base_address = match abi {
-            Abi::I386 => 0xff00_0000,
-            Abi::Amd64 => 0x7fff_0000_0000,
+            Abi::I386 => 0xc000_0000,
+            Abi::Amd64 => {
+                if map_32 {
+                    0x7fff_f000
+                } else {
+                    0x7fff_0000_0000
+                }
+            }
         };
         let dynamic_base_address = VirtAddr::new(dynamic_base_address);
 
@@ -1125,14 +1131,14 @@ where
 #[derive(Debug, Clone, Copy)]
 pub enum Bias {
     Fixed(VirtAddr),
-    Dynamic(Abi),
+    Dynamic { abi: Abi, map_32bit: bool },
 }
 
 impl Bias {
     fn page_offset(&self) -> PageOffset {
         match self {
-            Bias::Fixed(bias) => bias.page_offset(),
-            Bias::Dynamic(_) => PageOffset::new(0),
+            Self::Fixed(bias) => bias.page_offset(),
+            Self::Dynamic { .. } => PageOffset::new(0),
         }
     }
 }

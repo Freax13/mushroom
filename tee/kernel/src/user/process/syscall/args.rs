@@ -452,6 +452,7 @@ bitflags! {
         const SHARED_VALIDATE = (1 << 0) | (1 << 1);
         const FIXED = 1 << 4;
         const ANONYMOUS = 1 << 5;
+        const _32BIT = 1 << 6;
         const DENYWRITE = 1 << 11;
         const LOCKED = 1 << 13;
         const NORESERVE = 1 << 14;

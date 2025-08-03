@@ -129,7 +129,11 @@ impl VirtualMemory {
 
         // Create stack.
         let len = stack_limit.get();
-        let stack = self.modify().allocate_stack(Bias::Dynamic(E::ABI), len) + len;
+        let bias = Bias::Dynamic {
+            abi: E::ABI,
+            map_32bit: false,
+        };
+        let stack = self.modify().allocate_stack(bias, len) + len;
 
         // Sum up the number of pointer-sized values that need to be placed in
         // a contigous chunk of memory.
