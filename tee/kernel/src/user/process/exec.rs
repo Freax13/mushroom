@@ -215,7 +215,7 @@ impl VirtualMemory {
         write(0);
 
         // write auxv.
-        const MAX_NUM_AUX_VECTORS: usize = 9;
+        const MAX_NUM_AUX_VECTORS: usize = 10;
         #[derive(Clone, Copy)]
         enum AuxVector {
             End = 0,
@@ -226,6 +226,7 @@ impl VirtualMemory {
             Base = 7,
             Entry = 9,
             ClkTck = 17,
+            Secure = 23,
             Random = 25,
         }
         let aux_vectors = info
@@ -239,6 +240,7 @@ impl VirtualMemory {
                 (AuxVector::Base, at_base.unwrap_or_default()),
                 (AuxVector::Entry, info.entry),
                 (AuxVector::ClkTck, 100),
+                (AuxVector::Secure, 0),
                 (
                     AuxVector::Random,
                     write_bytes(&random_bytes(), &mut str_addr)?.as_u64(),
