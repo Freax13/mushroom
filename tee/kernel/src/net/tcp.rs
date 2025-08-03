@@ -42,6 +42,7 @@ use crate::{
     },
     time::{now, sleep_until},
     user::process::{
+        limits::CurrentNoFileLimit,
         memory::{VirtualMemory, WriteToVec},
         syscall::{
             args::{
@@ -793,6 +794,25 @@ impl OpenFileDescription for TcpSocket {
             active.read_half.read(buf)?
         };
         Ok((len, None))
+    }
+
+    fn recv_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        _: &FileDescriptorTable,
+        _: CurrentNoFileLimit,
+    ) -> Result<usize> {
+        ensure!(msg_hdr.namelen == 0, IsConn);
+        ensure!(msg_hdr.flags == 0, Inval);
+
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let len = self.read(&mut vectored_buf)?;
+
+        msg_hdr.controllen = 0;
+
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
