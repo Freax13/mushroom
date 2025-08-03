@@ -11,10 +11,9 @@ use bit_field::{BitArray, BitField};
 use bytemuck::{Zeroable, bytes_of, bytes_of_mut, checked};
 use constants::{ApBitmap, ApIndex};
 use futures::{
-    FutureExt, StreamExt,
+    FutureExt,
     future::{self, Either, Fuse},
     select_biased,
-    stream::FuturesUnordered,
 };
 use kernel_macros::syscall;
 use log::warn;
@@ -48,7 +47,7 @@ use crate::{
         path::Path,
     },
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
-    rt::{oneshot, spawn, r#yield},
+    rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
     time::{self, now, sleep_until},
     user::process::{
         ProcessGroup, WaitResult,
@@ -563,10 +562,8 @@ async fn poll_impl(
         .collect::<Result<Vec<_>>>()?;
 
     let mut num_non_zero = 0;
-    let mut futures = FuturesUnordered::new();
+    let mut builder = FuturesUnorderedBuilder::new();
     loop {
-        futures.clear();
-
         for pollfd in pollfds.iter_mut() {
             if pollfd.fd.get() < 0 {
                 pollfd.revents = PollEvents::empty();
@@ -575,7 +572,7 @@ async fn poll_impl(
                 let revents = fd.poll_ready(events).map_or(Events::empty(), Events::from);
                 pollfd.revents = PollEvents::from(revents);
 
-                futures.push(async move { fd.ready(events).await });
+                builder.push(async move { fd.ready(events).await });
             } else {
                 pollfd.revents = PollEvents::NVAL;
             }
@@ -597,6 +594,7 @@ async fn poll_impl(
 
         // Wait for a file descriptor to become ready or for the timeout to
         // expire.
+        let mut futures = builder.finish();
         let ready_fut = async {
             let ready = futures.next().await;
 
@@ -625,6 +623,7 @@ async fn poll_impl(
                 break;
             }
         }
+        builder = futures.reset();
     }
 
     // Write the results back.
@@ -1071,11 +1070,9 @@ async fn select_impl(
         .map(|req_exceptfds| vec![0; req_exceptfds.len()]);
 
     let deadline = timeout.map(|timeout| now(ClockId::Monotonic) + timeout);
-    let mut futures = FuturesUnordered::new();
+    let mut builder = FuturesUnorderedBuilder::new();
 
     let set = loop {
-        futures.clear();
-
         let mut set = 0;
 
         for i in 0..numfds {
@@ -1114,7 +1111,7 @@ async fn select_impl(
                 set += 1;
             }
 
-            futures.push(async move { fd.ready(events).await });
+            builder.push(async move { fd.ready(events).await });
         }
 
         if set != 0 {
@@ -1123,24 +1120,29 @@ async fn select_impl(
 
         if let Some(deadline) = deadline {
             // If there are no fds to select from, just sleep and return.
-            if futures.is_empty() {
+            if builder.is_empty() {
                 sleep_until(deadline, ClockId::Monotonic).await;
                 break 0;
             }
 
             let sleep_until = pin!(sleep_until(deadline, ClockId::Monotonic));
+            let mut futures = builder.finish();
             let res = future::select(futures.next(), sleep_until).await;
 
             // Break out of the loop if the timeout expired.
             if matches!(res, Either::Right(_)) {
                 break 0;
             }
+
+            builder = futures.reset();
         } else {
             // If there are no fds to select from, just return.
+            let mut futures = builder.finish();
             let res = futures.next().await;
             if res.is_none() {
                 break 0;
             }
+            builder = futures.reset();
         }
     };
 
