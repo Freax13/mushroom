@@ -1830,6 +1830,8 @@ async fn clone(
             process.process_group.lock().clone(),
             *process.limits.read(),
             *process.umask.lock(),
+            process.mm_arg_start(),
+            process.mm_arg_end(),
         ))
     };
 
@@ -2008,7 +2010,7 @@ async fn execve(
 
     // Create a new virtual memory and CPU state.
     let virtual_memory = VirtualMemory::new();
-    let (cpu_state, exe) = virtual_memory.start_executable(
+    let res = virtual_memory.start_executable(
         pathname,
         link,
         &fd,
@@ -2022,9 +2024,7 @@ async fn execve(
     // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
-    thread
-        .process()
-        .execve(virtual_memory, cpu_state, fdtable, exe);
+    thread.process().execve(virtual_memory, fdtable, res);
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }

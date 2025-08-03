@@ -13,7 +13,7 @@ use alloc::{borrow::ToOwned, ffi::CString, vec};
 use bytemuck::{Zeroable, bytes_of_mut};
 use usize_conversions::FromUsize;
 use x86_64::{
-    align_up,
+    VirtAddr, align_up,
     instructions::random::RdRand,
     structures::paging::{PageSize, Size4KiB},
 };
@@ -45,7 +45,7 @@ impl VirtualMemory {
         ctx: &mut FileAccessContext,
         cwd: Link,
         stack_limit: CurrentStackLimit,
-    ) -> Result<(CpuState, Link)> {
+    ) -> Result<ExecResult> {
         self.modify().map_sigreturn_trampoline();
 
         let mut header = [0; 4];
@@ -56,40 +56,43 @@ impl VirtualMemory {
                 let mut header = ElfIdent::zeroed();
                 fd.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
 
-                let state = match header.verify()? {
+                match header.verify()? {
                     Abi::I386 => self.start_elf::<elf::ElfLoaderParams32>(
+                        link,
                         fd,
                         argv,
                         envp,
                         ctx,
                         cwd,
                         stack_limit,
-                    )?,
+                    ),
                     Abi::Amd64 => self.start_elf::<elf::ElfLoaderParams64>(
+                        link,
                         fd,
                         argv,
                         envp,
                         ctx,
                         cwd,
                         stack_limit,
-                    )?,
-                };
-                Ok((state, link))
+                    ),
+                }
             }
             [b'#', b'!', ..] => self.start_shebang(path, &***fd, argv, envp, ctx, cwd, stack_limit),
             _ => bail!(NoExec),
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn start_elf<E>(
         &self,
+        link: Link,
         file: &FileDescriptor,
         argv: &[impl AsRef<CStr>],
         envp: &[impl AsRef<CStr>],
         ctx: &mut FileAccessContext,
         cwd: Link,
         stack_limit: CurrentStackLimit,
-    ) -> Result<CpuState>
+    ) -> Result<ExecResult>
     where
         E: ElfLoaderParams,
     {
@@ -171,9 +174,9 @@ impl VirtualMemory {
         };
 
         let mut str_addr = start_str_addr;
-        let mut write_bytes = |value: &[u8]| {
+        let write_bytes = |value: &[u8], str_addr: &mut VirtAddr| {
             // Map more memory for each new page we write to.
-            for addr in (str_addr..)
+            for addr in (*str_addr..)
                 .take(value.len())
                 .filter(|addr| addr.is_aligned(0x1000u64))
             {
@@ -184,24 +187,29 @@ impl VirtualMemory {
                 );
             }
 
-            let addr = str_addr;
-            self.write_bytes(str_addr, value)?;
-            str_addr += u64::from_usize(value.len());
+            let addr = *str_addr;
+            self.write_bytes(*str_addr, value)?;
+            *str_addr += u64::from_usize(value.len());
             Result::<_>::Ok(addr)
         };
-        let mut write_str = |value: &CStr| write_bytes(value.to_bytes_with_nul());
+        let write_str = |value: &CStr, str_addr: &mut VirtAddr| {
+            write_bytes(value.to_bytes_with_nul(), str_addr)
+        };
 
         // write argc + argv.
         write(u64::from_usize(argv.len())); // argc
         for arg in argv {
-            let arg = write_str(arg.as_ref())?;
+            let arg = write_str(arg.as_ref(), &mut str_addr)?;
             write(arg.as_u64());
         }
         write(0);
 
+        let mm_arg_start = start_str_addr;
+        let mm_arg_end = str_addr;
+
         // write enpv.
         for env in envp {
-            let env = write_str(env.as_ref())?;
+            let env = write_str(env.as_ref(), &mut str_addr)?;
             write(env.as_u64());
         }
         write(0);
@@ -231,7 +239,10 @@ impl VirtualMemory {
                 (AuxVector::Base, at_base.unwrap_or_default()),
                 (AuxVector::Entry, info.entry),
                 (AuxVector::ClkTck, 100),
-                (AuxVector::Random, write_bytes(&random_bytes())?.as_u64()),
+                (
+                    AuxVector::Random,
+                    write_bytes(&random_bytes(), &mut str_addr)?.as_u64(),
+                ),
                 (AuxVector::End, 0),
             ]);
         assert!(aux_vectors.clone().count() <= MAX_NUM_AUX_VECTORS);
@@ -245,7 +256,12 @@ impl VirtualMemory {
             Abi::Amd64 => 0x2b,
         };
         let cpu_state = CpuState::new(cs, entrypoint, stack.as_u64());
-        Ok(cpu_state)
+        Ok(ExecResult {
+            cpu_state,
+            exe: link,
+            mm_arg_start,
+            mm_arg_end,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -258,7 +274,7 @@ impl VirtualMemory {
         ctx: &mut FileAccessContext,
         cwd: Link,
         stack_limit: CurrentStackLimit,
-    ) -> Result<(CpuState, Link)> {
+    ) -> Result<ExecResult> {
         let mut bytes = [0; 128];
         let len = file.pread(0, &mut KernelReadBuf::new(&mut bytes))?;
         let bytes = &bytes[..len];
@@ -340,4 +356,11 @@ fn random_bytes() -> [u8; 16] {
     let mut buffer = [0; 16];
     buffer.fill_with(|| random_iter.next().unwrap());
     buffer
+}
+
+pub struct ExecResult {
+    pub cpu_state: CpuState,
+    pub exe: Link,
+    pub mm_arg_start: VirtAddr,
+    pub mm_arg_end: VirtAddr,
 }
