@@ -8,6 +8,7 @@ use core::{
 use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
+    format,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -190,8 +191,9 @@ struct BindGuard<'a> {
 }
 
 impl BindGuard<'_> {
-    pub fn bind(self, mode: Weak<Once<Mode>>) {
+    pub fn bind(self, mode: Weak<Once<Mode>>, ino: u64) {
         self.port_data.entries.push(PortDataEntry {
+            ino,
             ip_version: self.ip_version,
             local_ip: self.local_ip,
             remote_addr: None,
@@ -204,6 +206,7 @@ impl BindGuard<'_> {
 }
 
 struct PortDataEntry {
+    ino: u64,
     ip_version: IpVersion,
     local_ip: Option<IpAddr>,
     remote_addr: Option<net::SocketAddr>,
@@ -314,7 +317,7 @@ impl TcpSocket {
         self.activate_notify.notify();
 
         // Complete the bind operation.
-        bind_guard.bind(Arc::downgrade(&bound.mode));
+        bind_guard.bind(Arc::downgrade(&bound.mode), self.ino);
 
         Ok(true)
     }
@@ -874,7 +877,7 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn path(&self) -> Result<Path> {
-        todo!()
+        Path::new(format!("socket:[{}]", self.ino).into_bytes())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -1243,7 +1246,7 @@ impl NetTcpFile {
                 let retransmit = 0u32;
                 let uid = entry.effective_uid.get();
                 let timeout = 0u32;
-                let ino = i; // TODO
+                let ino = entry.ino;
 
                 write!(buffer, "{i:>4}: ").unwrap();
                 for octet in local_ip.as_octets().iter().copied().rev() {
