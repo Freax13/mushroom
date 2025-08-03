@@ -152,6 +152,32 @@ impl TmpFsDir {
             Entry::Occupied(entry) => Ok(Err(entry.get().link())),
         }
     }
+
+    fn link_tmpfile(
+        &self,
+        newname: FileName<'static>,
+        file: Arc<TmpFsFile>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let internal = &mut *guard;
+        ctx.check_permissions(&internal.ownership, Permission::Write)?;
+        let entry = internal.items.entry(newname.clone());
+        let Entry::Vacant(entry) = entry else {
+            bail!(Exist);
+        };
+
+        let location = LinkLocation::new(self.this.upgrade().unwrap(), entry.key().clone());
+        file.increase_link_count();
+        entry.insert(TmpFsDirEntry::File(location.clone(), file));
+        internal.update_times();
+        drop(guard);
+
+        self.watchers()
+            .send_event(InotifyMask::CREATE, None, Some(newname));
+
+        Ok(())
+    }
 }
 
 impl INode for TmpFsDir {
@@ -1335,6 +1361,17 @@ impl File for TmpFsFile {
         } else {
             todo!()
         }
+    }
+
+    fn link_into(
+        &self,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let new_dir =
+            Arc::<dyn Any + Send + Sync>::downcast::<TmpFsDir>(new_dir).map_err(|_| err!(XDev))?;
+        new_dir.link_tmpfile(newname, self.this.upgrade().unwrap(), ctx)
     }
 
     fn deleted(&self) -> bool {

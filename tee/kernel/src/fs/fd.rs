@@ -804,6 +804,18 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn link_into(
+        &self,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let _ = new_dir;
+        let _ = newname;
+        let _ = ctx;
+        bail!(XDev)
+    }
+
     fn as_pipe_read_half(&self) -> Option<&stream_buffer::ReadHalf> {
         None
     }

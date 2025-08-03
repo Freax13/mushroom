@@ -4,8 +4,8 @@ use crate::{
     error::{bail, ensure, err},
     fs::{
         FileSystem,
-        node::{FileAccessContext, INode, LinkLocation},
-        path::Path,
+        node::{DynINode, FileAccessContext, INode, LinkLocation},
+        path::{FileName, Path},
     },
     memory::page::KernelPage,
     spin::mutex::Mutex,
@@ -75,6 +75,17 @@ pub trait File: INode {
         bail!(OpNotSupp)
     }
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
+    fn link_into(
+        &self,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let _ = new_dir;
+        let _ = newname;
+        let _ = ctx;
+        bail!(OpNotSupp)
+    }
     fn deleted(&self) -> bool;
 }
 
@@ -372,6 +383,20 @@ impl OpenFileDescription for FileFileDescription {
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
         self.file.fs()
+    }
+
+    fn link_into(
+        &self,
+        new_dir: DynINode,
+        newname: FileName<'static>,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        // Make sure that O_EXCL is not set.
+        let guard = self.internal.lock();
+        ensure!(!guard.flags.contains(OpenFlags::EXCL), NoEnt);
+        drop(guard);
+
+        self.file.link_into(new_dir, newname, ctx)
     }
 
     fn deleted(&self) -> bool {
