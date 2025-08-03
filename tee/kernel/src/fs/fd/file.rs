@@ -131,7 +131,7 @@ impl OpenFileDescription for FileFileDescription {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        self.internal.lock().flags = flags;
+        self.internal.lock().flags.update(flags);
     }
 
     fn path(&self) -> Result<Path> {

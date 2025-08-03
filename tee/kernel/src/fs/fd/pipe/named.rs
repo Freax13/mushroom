@@ -209,7 +209,7 @@ impl OpenFileDescription for ReadHalf {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        *self.flags.lock() = flags;
+        self.flags.lock().update(flags);
         self.read_half.notify();
     }
 
@@ -286,7 +286,7 @@ impl OpenFileDescription for WriteHalf {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        *self.flags.lock() = flags;
+        self.flags.lock().update(flags);
         self.write_half.notify();
     }
 
@@ -368,7 +368,7 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     fn set_flags(&self, flags: OpenFlags) {
-        *self.flags.lock() = flags;
+        self.flags.lock().update(flags);
         self.read_half.notify();
         self.write_half.notify();
     }
