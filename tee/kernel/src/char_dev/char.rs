@@ -22,7 +22,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FdFlags, FileLock, FileLockRecord, LazyFileLockRecord, NonEmptyEvents,
+            BsdFileLock, BsdFileLockRecord, Events, FdFlags, LazyBsdFileLockRecord, NonEmptyEvents,
             OpenFileDescription, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
             common_ioctl, dir::open_dir, inotify::Watchers, stream_buffer,
             unix_socket::StreamUnixSocket,
@@ -111,7 +111,7 @@ impl CharDev for Ptmx {
             flags,
             master: true,
             data,
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         }))
     }
 }
@@ -120,7 +120,7 @@ struct Pty {
     flags: OpenFlags,
     master: bool,
     data: Arc<PtyData>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 pub struct PtyData {
@@ -162,7 +162,7 @@ impl Pty {
             flags,
             master: false,
             data,
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         })
     }
 }
@@ -387,8 +387,8 @@ impl OpenFileDescription for Pty {
         bail!(NoDev)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 
     fn ioctl(
@@ -652,7 +652,7 @@ pub struct DevPtsDirectory {
     this: Weak<Self>,
     ino: u64,
     location: LinkLocation,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -662,7 +662,7 @@ impl DevPtsDirectory {
             this: this.clone(),
             ino: new_ino(),
             location,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -712,8 +712,8 @@ impl INode for DevPtsDirectory {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -944,7 +944,7 @@ impl INode for PtsChar {
         todo!()
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
         todo!()
     }
 

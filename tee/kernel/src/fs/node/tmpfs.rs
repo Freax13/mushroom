@@ -6,7 +6,7 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileLockRecord, KernelReadBuf, KernelWriteBuf, LazyFileLockRecord,
+            BsdFileLockRecord, KernelReadBuf, KernelWriteBuf, LazyBsdFileLockRecord,
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
@@ -80,7 +80,7 @@ pub struct TmpFsDir {
     ino: u64,
     this: Weak<Self>,
     location: LinkLocation,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     internal: Mutex<TmpFsDirInternal>,
 }
@@ -108,7 +108,7 @@ impl TmpFsDir {
             ino: new_ino(),
             this: this_weak.clone(),
             location,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             internal: Mutex::new(TmpFsDirInternal {
                 ownership: Ownership::new(mode, uid, gid),
@@ -254,8 +254,8 @@ impl INode for TmpFsDir {
         }
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -358,7 +358,7 @@ impl Directory for TmpFsDir {
                     mtime: now,
                     ctime: now,
                 }),
-                file_lock_record: Arc::new(FileLockRecord::new()),
+                bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
                 watchers: Watchers::new(),
             });
             TmpFsDirEntry::Symlink(location, link)
@@ -1014,7 +1014,7 @@ pub struct TmpFsFile {
     ino: u64,
     this: Weak<Self>,
     internal: RwLock<TmpFsFileInternal>,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     futexes: Lazy<Arc<Futexes>>,
 }
@@ -1044,7 +1044,7 @@ impl TmpFsFile {
                 ctime: now,
                 links: if tmpfile { 0 } else { 1 },
             }),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             futexes: Lazy::new(|| Arc::new(Futexes::new())),
         })
@@ -1120,8 +1120,8 @@ impl INode for TmpFsFile {
         guard.buffer.truncate(len)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1383,7 +1383,7 @@ pub struct TmpFsSymlink {
     fs: Arc<TmpFs>,
     ino: u64,
     target: Path,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Watchers,
     internal: Mutex<TmpFsSymlinkInternal>,
 }
@@ -1466,8 +1466,8 @@ impl INode for TmpFsSymlink {
         bail!(Loop)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1481,7 +1481,7 @@ pub struct TmpFsCharDev {
     major: u16,
     minor: u8,
     internal: Mutex<TmpFsCharDevInternal>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Watchers,
 }
 
@@ -1499,7 +1499,7 @@ impl TmpFsCharDev {
             internal: Mutex::new(TmpFsCharDevInternal {
                 ownership: Ownership::new(mode, uid, gid),
             }),
-            file_lock_record: Arc::new(FileLockRecord::new()),
+            bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
             watchers: Watchers::new(),
         }
     }
@@ -1552,8 +1552,8 @@ impl INode for TmpFsCharDev {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1565,7 +1565,7 @@ pub struct TmpFsFifo {
     fs: Arc<TmpFs>,
     ino: u64,
     internal: Mutex<TmpFsFifoInternal>,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     named_pipe: NamedPipe,
 }
@@ -1582,7 +1582,7 @@ impl TmpFsFifo {
             internal: Mutex::new(TmpFsFifoInternal {
                 ownership: Ownership::new(mode, uid, gid),
             }),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             named_pipe: NamedPipe::new(),
         }
@@ -1650,8 +1650,8 @@ impl INode for TmpFsFifo {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1663,7 +1663,7 @@ pub struct TmpFsSocket {
     fs: Arc<TmpFs>,
     ino: u64,
     internal: Mutex<TmpFsSocketInternal>,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     socket: Weak<OpenFileDescriptionData<StreamUnixSocket>>,
 }
@@ -1686,7 +1686,7 @@ impl TmpFsSocket {
             internal: Mutex::new(TmpFsSocketInternal {
                 ownership: Ownership::new(mode, uid, gid),
             }),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             socket,
         }
@@ -1741,8 +1741,8 @@ impl INode for TmpFsSocket {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {

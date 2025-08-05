@@ -17,8 +17,8 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            FileDescriptor, FileLockRecord, LazyFileLockRecord, ReadBuf, StrongFileDescriptor,
-            WriteBuf,
+            BsdFileLockRecord, FileDescriptor, LazyBsdFileLockRecord, ReadBuf,
+            StrongFileDescriptor, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
             inotify::Watchers,
@@ -82,12 +82,12 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         fs: fs.clone(),
         ino: new_ino(),
         location,
-        file_lock_record: LazyFileLockRecord::new(),
+        bsd_file_lock_record: LazyBsdFileLockRecord::new(),
         watchers: Watchers::new(),
         cpuinfo_file: CpuinfoFile::new(fs.clone()),
         meminfo_file: MeminfoFile::new(fs.clone()),
         net_dir_ino: new_ino(),
-        net_dir_file_lock_record: Arc::new(FileLockRecord::new()),
+        net_dir_bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
         net_dir_watchers: Arc::new(Watchers::new()),
         net_dev_file: NetDevFile::new(fs.clone()),
         net_tcp_file: NetTcpFile::new(fs.clone(), IpVersion::V4),
@@ -96,7 +96,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
             parent: this.clone(),
             fs: fs.clone(),
             ino: new_ino(),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         }),
         stat_file: StatFile::new(fs.clone()),
@@ -109,12 +109,12 @@ struct ProcFsRoot {
     fs: Arc<ProcFs>,
     ino: u64,
     location: LinkLocation,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     cpuinfo_file: Arc<CpuinfoFile>,
     meminfo_file: Arc<MeminfoFile>,
     net_dir_ino: u64,
-    net_dir_file_lock_record: Arc<FileLockRecord>,
+    net_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
     net_dir_watchers: Arc<Watchers>,
     net_dev_file: Arc<NetDevFile>,
     net_tcp_file: Arc<NetTcpFile>,
@@ -168,8 +168,8 @@ impl INode for ProcFsRoot {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -191,7 +191,7 @@ impl Directory for ProcFsRoot {
             b"net" => NetDir::new(
                 location.clone(),
                 self.fs.clone(),
-                self.net_dir_file_lock_record.clone(),
+                self.net_dir_bsd_file_lock_record.clone(),
                 self.net_dir_watchers.clone(),
                 self.net_dev_file.clone(),
                 self.net_tcp_file.clone(),
@@ -387,7 +387,7 @@ struct CpuinfoFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -397,7 +397,7 @@ impl CpuinfoFile {
             this: this.clone(),
             fs,
             ino: new_ino(),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -564,8 +564,8 @@ impl INode for CpuinfoFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -608,7 +608,7 @@ struct MeminfoFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -618,7 +618,7 @@ impl MeminfoFile {
             this: this.clone(),
             fs,
             ino: new_ino(),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -682,8 +682,8 @@ impl INode for MeminfoFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -727,7 +727,7 @@ struct NetDir {
     location: LinkLocation,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
     net_dev_file: Arc<NetDevFile>,
     net_tcp_file: Arc<NetTcpFile>,
@@ -738,7 +738,7 @@ impl NetDir {
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
         net_dev_file: Arc<NetDevFile>,
         net_tcp_file: Arc<NetTcpFile>,
@@ -749,7 +749,7 @@ impl NetDir {
             location,
             fs: fs.clone(),
             ino: new_ino(),
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
             net_dev_file,
             net_tcp_file,
@@ -802,8 +802,8 @@ impl INode for NetDir {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -972,7 +972,7 @@ struct NetDevFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -982,7 +982,7 @@ impl NetDevFile {
             this: this.clone(),
             fs,
             ino: new_ino(),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -1044,8 +1044,8 @@ impl INode for NetDevFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1088,7 +1088,7 @@ struct SelfLink {
     parent: Weak<ProcFsRoot>,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -1167,8 +1167,8 @@ impl INode for SelfLink {
         bail!(Loop)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1210,23 +1210,23 @@ struct ProcessDir {
     location: LinkLocation,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
-    cmdline_file_lock_record: LazyFileLockRecord,
+    cmdline_bsd_file_lock_record: LazyBsdFileLockRecord,
     cmdline_file_watchers: Arc<Watchers>,
-    fd_file_lock_record: LazyFileLockRecord,
+    fd_bsd_file_lock_record: LazyBsdFileLockRecord,
     fd_file_watchers: Arc<Watchers>,
-    exe_link_lock_record: LazyFileLockRecord,
+    exe_link_lock_record: LazyBsdFileLockRecord,
     exe_link_watchers: Arc<Watchers>,
-    maps_file_lock_record: LazyFileLockRecord,
+    maps_bsd_file_lock_record: LazyBsdFileLockRecord,
     maps_file_watchers: Arc<Watchers>,
-    mem_file_lock_record: LazyFileLockRecord,
+    mem_bsd_file_lock_record: LazyBsdFileLockRecord,
     mem_file_watchers: Arc<Watchers>,
-    stat_file_lock_record: LazyFileLockRecord,
+    stat_bsd_file_lock_record: LazyBsdFileLockRecord,
     stat_file_watchers: Arc<Watchers>,
-    status_file_lock_record: LazyFileLockRecord,
+    status_bsd_file_lock_record: LazyBsdFileLockRecord,
     status_file_watchers: Arc<Watchers>,
-    task_dir_lock_record: LazyFileLockRecord,
+    task_dir_bsd_lock_record: LazyBsdFileLockRecord,
     task_dir_watchers: Arc<Watchers>,
 }
 
@@ -1237,23 +1237,23 @@ impl ProcessDir {
             location,
             fs,
             process,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
-            cmdline_file_lock_record: LazyFileLockRecord::new(),
+            cmdline_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             cmdline_file_watchers: Arc::new(Watchers::new()),
-            fd_file_lock_record: LazyFileLockRecord::new(),
+            fd_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             fd_file_watchers: Arc::new(Watchers::new()),
-            exe_link_lock_record: LazyFileLockRecord::new(),
+            exe_link_lock_record: LazyBsdFileLockRecord::new(),
             exe_link_watchers: Arc::new(Watchers::new()),
-            maps_file_lock_record: LazyFileLockRecord::new(),
+            maps_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             maps_file_watchers: Arc::new(Watchers::new()),
-            mem_file_lock_record: LazyFileLockRecord::new(),
+            mem_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             mem_file_watchers: Arc::new(Watchers::new()),
-            stat_file_lock_record: LazyFileLockRecord::new(),
+            stat_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             stat_file_watchers: Arc::new(Watchers::new()),
-            status_file_lock_record: LazyFileLockRecord::new(),
+            status_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             status_file_watchers: Arc::new(Watchers::new()),
-            task_dir_lock_record: LazyFileLockRecord::new(),
+            task_dir_bsd_lock_record: LazyBsdFileLockRecord::new(),
             task_dir_watchers: Arc::new(Watchers::new()),
         })
     }
@@ -1304,8 +1304,8 @@ impl INode for ProcessDir {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1325,14 +1325,14 @@ impl Directory for ProcessDir {
             b"cmdline" => CmdlineFile::new(
                 self.fs.clone(),
                 self.process.clone(),
-                self.cmdline_file_lock_record.get().clone(),
+                self.cmdline_bsd_file_lock_record.get().clone(),
                 self.cmdline_file_watchers.clone(),
             ),
             b"fd" => FdDir::new(
                 location.clone(),
                 self.fs.clone(),
                 self.process.clone(),
-                self.fd_file_lock_record.get().clone(),
+                self.fd_bsd_file_lock_record.get().clone(),
                 self.fd_file_watchers.clone(),
             ),
             b"exe" => ExeLink::new(
@@ -1344,32 +1344,32 @@ impl Directory for ProcessDir {
             b"maps" => MapsFile::new(
                 self.fs.clone(),
                 self.process.clone(),
-                self.maps_file_lock_record.get().clone(),
+                self.maps_bsd_file_lock_record.get().clone(),
                 self.maps_file_watchers.clone(),
             ),
             b"mem" => MemFile::new(
                 self.fs.clone(),
                 self.process.clone(),
-                self.mem_file_lock_record.get().clone(),
+                self.mem_bsd_file_lock_record.get().clone(),
                 self.mem_file_watchers.clone(),
             ),
             b"stat" => ProcessStatFile::new(
                 self.fs.clone(),
                 self.process.clone(),
-                self.stat_file_lock_record.get().clone(),
+                self.stat_bsd_file_lock_record.get().clone(),
                 self.stat_file_watchers.clone(),
             ),
             b"status" => ProcessStatusFile::new(
                 self.fs.clone(),
                 self.process.clone(),
-                self.status_file_lock_record.get().clone(),
+                self.status_bsd_file_lock_record.get().clone(),
                 self.status_file_watchers.clone(),
             ),
             b"task" => ProcessTaskDir::new(
                 location.clone(),
                 self.fs.clone(),
                 self.process.clone(),
-                self.task_dir_lock_record.get().clone(),
+                self.task_dir_bsd_lock_record.get().clone(),
                 self.task_dir_watchers.clone(),
             ),
             _ => bail!(NoEnt),
@@ -1553,7 +1553,7 @@ struct CmdlineFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -1561,14 +1561,14 @@ impl CmdlineFile {
     pub fn new(
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -1625,8 +1625,8 @@ impl INode for CmdlineFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1686,7 +1686,7 @@ struct FdDir {
     location: LinkLocation,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -1695,7 +1695,7 @@ impl FdDir {
         location: LinkLocation,
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -1703,7 +1703,7 @@ impl FdDir {
             location,
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -1754,8 +1754,8 @@ impl INode for FdDir {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -1930,7 +1930,7 @@ pub struct FdINode {
     uid: Uid,
     gid: Gid,
     fd: FileDescriptor,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -1941,7 +1941,7 @@ impl FdINode {
         uid: Uid,
         gid: Gid,
         fd: FileDescriptor,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Self {
         Self {
@@ -1950,7 +1950,7 @@ impl FdINode {
             uid,
             gid,
             fd,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         }
     }
@@ -2019,14 +2019,14 @@ impl INode for FdINode {
             location,
             node: Arc::new(FollowedFdINode {
                 fd: self.fd.clone(),
-                file_lock_record: self.file_lock_record.clone(),
+                bsd_file_lock_record: self.bsd_file_lock_record.clone(),
                 watchers: self.watchers.clone(),
             }),
         }))
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2037,7 +2037,7 @@ impl INode for FdINode {
 /// This is the INode that's returned after following the link at an fd inode.
 struct FollowedFdINode {
     fd: FileDescriptor,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2142,8 +2142,8 @@ impl INode for FollowedFdINode {
         }
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2154,7 +2154,7 @@ impl INode for FollowedFdINode {
 struct ExeLink {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2162,13 +2162,13 @@ impl ExeLink {
     pub fn new(
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -2238,8 +2238,8 @@ impl INode for ExeLink {
         Ok(Some(process.exe()))
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2251,7 +2251,7 @@ struct MapsFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2259,14 +2259,14 @@ impl MapsFile {
     pub fn new(
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -2319,8 +2319,8 @@ impl INode for MapsFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2365,7 +2365,7 @@ struct MemFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2373,14 +2373,14 @@ impl MemFile {
     pub fn new(
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -2433,8 +2433,8 @@ impl INode for MemFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2499,7 +2499,7 @@ struct ProcessStatFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2507,14 +2507,14 @@ impl ProcessStatFile {
     pub fn new(
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -2567,8 +2567,8 @@ impl INode for ProcessStatFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2613,7 +2613,7 @@ struct ProcessStatusFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2621,14 +2621,14 @@ impl ProcessStatusFile {
     pub fn new(
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -2681,8 +2681,8 @@ impl INode for ProcessStatusFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2743,7 +2743,7 @@ struct ProcessTaskDir {
     location: LinkLocation,
     fs: Arc<ProcFs>,
     process: Weak<Process>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2752,7 +2752,7 @@ impl ProcessTaskDir {
         location: LinkLocation,
         fs: Arc<ProcFs>,
         process: Weak<Process>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -2760,7 +2760,7 @@ impl ProcessTaskDir {
             location,
             fs,
             process,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -2811,8 +2811,8 @@ impl INode for ProcessTaskDir {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -2982,9 +2982,9 @@ struct TaskDir {
     location: LinkLocation,
     fs: Arc<ProcFs>,
     thread: Weak<Thread>,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
-    comm_file_lock_record: LazyFileLockRecord,
+    comm_bsd_file_lock_record: LazyBsdFileLockRecord,
     comm_file_watchers: Arc<Watchers>,
 }
 
@@ -2995,9 +2995,9 @@ impl TaskDir {
             location,
             fs,
             thread,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
-            comm_file_lock_record: LazyFileLockRecord::new(),
+            comm_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             comm_file_watchers: Arc::new(Watchers::new()),
         })
     }
@@ -3048,8 +3048,8 @@ impl INode for TaskDir {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -3069,7 +3069,7 @@ impl Directory for TaskDir {
             b"comm" => TaskCommFile::new(
                 self.fs.clone(),
                 self.thread.clone(),
-                self.comm_file_lock_record.get().clone(),
+                self.comm_bsd_file_lock_record.get().clone(),
                 self.comm_file_watchers.clone(),
             ),
             _ => bail!(NoEnt),
@@ -3218,7 +3218,7 @@ struct TaskCommFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     thread: Weak<Thread>,
-    file_lock_record: Arc<FileLockRecord>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -3226,14 +3226,14 @@ impl TaskCommFile {
     pub fn new(
         fs: Arc<ProcFs>,
         thread: Weak<Thread>,
-        file_lock_record: Arc<FileLockRecord>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
             thread,
-            file_lock_record,
+            bsd_file_lock_record,
             watchers,
         })
     }
@@ -3291,8 +3291,8 @@ impl INode for TaskCommFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 
     fn watchers(&self) -> &Watchers {
@@ -3335,7 +3335,7 @@ struct StatFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -3345,7 +3345,7 @@ impl StatFile {
             this: this.clone(),
             fs,
             ino: new_ino(),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -3418,8 +3418,8 @@ impl INode for StatFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {
@@ -3462,7 +3462,7 @@ struct UptimeFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -3472,7 +3472,7 @@ impl UptimeFile {
             this: this.clone(),
             fs,
             ino: new_ino(),
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -3550,8 +3550,8 @@ impl INode for UptimeFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {

@@ -13,8 +13,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
-            ReadBuf, StrongFileDescriptor, WriteBuf, stream_buffer,
+            BsdFileLock, Events, LazyBsdFileLockRecord, NonEmptyEvents, OpenFileDescription,
+            PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, LinkLocation},
         path::Path,
@@ -37,7 +37,7 @@ pub struct Null {
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[register]
@@ -52,13 +52,13 @@ impl CharDev for Null {
         fs: Arc<dyn FileSystem>,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        static RECORD: LazyBsdFileLockRecord = LazyBsdFileLockRecord::new();
         Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
-            file_lock: FileLock::new(RECORD.get().clone()),
+            bsd_file_lock: BsdFileLock::new(RECORD.get().clone()),
         }))
     }
 }
@@ -149,8 +149,8 @@ impl OpenFileDescription for Null {
         bail!(NoDev)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -159,7 +159,7 @@ pub struct Zero {
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[register]
@@ -174,13 +174,13 @@ impl CharDev for Zero {
         fs: Arc<dyn FileSystem>,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        static RECORD: LazyBsdFileLockRecord = LazyBsdFileLockRecord::new();
         Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
-            file_lock: FileLock::new(RECORD.get().clone()),
+            bsd_file_lock: BsdFileLock::new(RECORD.get().clone()),
         }))
     }
 }
@@ -279,8 +279,8 @@ impl OpenFileDescription for Zero {
         Some(Arc::new(Futexes::new()))
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -289,7 +289,7 @@ pub struct Full {
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[register]
@@ -304,13 +304,13 @@ impl CharDev for Full {
         fs: Arc<dyn FileSystem>,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        static RECORD: LazyBsdFileLockRecord = LazyBsdFileLockRecord::new();
         Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
-            file_lock: FileLock::new(RECORD.get().clone()),
+            bsd_file_lock: BsdFileLock::new(RECORD.get().clone()),
         }))
     }
 }
@@ -407,8 +407,8 @@ impl OpenFileDescription for Full {
         Some(Arc::new(Futexes::new()))
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -422,7 +422,7 @@ pub struct Random {
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[register]
@@ -437,13 +437,13 @@ impl CharDev for Random {
         fs: Arc<dyn FileSystem>,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        static RECORD: LazyBsdFileLockRecord = LazyBsdFileLockRecord::new();
         Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
-            file_lock: FileLock::new(RECORD.get().clone()),
+            bsd_file_lock: BsdFileLock::new(RECORD.get().clone()),
         }))
     }
 }
@@ -532,8 +532,8 @@ impl OpenFileDescription for Random {
         bail!(NoDev)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -542,7 +542,7 @@ pub struct URandom {
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[register]
@@ -557,13 +557,13 @@ impl CharDev for URandom {
         fs: Arc<dyn FileSystem>,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        static RECORD: LazyBsdFileLockRecord = LazyBsdFileLockRecord::new();
         Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
-            file_lock: FileLock::new(RECORD.get().clone()),
+            bsd_file_lock: BsdFileLock::new(RECORD.get().clone()),
         }))
     }
 }
@@ -652,7 +652,7 @@ impl OpenFileDescription for URandom {
         bail!(NoDev)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }

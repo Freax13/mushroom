@@ -21,14 +21,14 @@ use crate::user::process::syscall::args::{
     EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
 };
 
-use super::{Events, FileDescriptor, FileLock, NonEmptyEvents, OpenFileDescription};
+use super::{BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription};
 
 pub struct Epoll {
     ino: u64,
     internal: Mutex<EpollInternal>,
     /// The wakers on this notify are woken every time the interest list is updated.
     notify: Notify,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct EpollInternal {
@@ -45,7 +45,7 @@ impl Epoll {
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
             notify: Notify::new(),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         }
     }
 
@@ -274,8 +274,8 @@ impl OpenFileDescription for Epoll {
         NonEmptyEvents::READ
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 

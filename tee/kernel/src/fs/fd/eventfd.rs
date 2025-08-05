@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
-use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf};
+use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf};
 use crate::{
     error::{Result, ensure, err},
     fs::{
@@ -25,7 +25,7 @@ pub struct EventFd {
     internal: Mutex<EventFdInternal>,
     notify: Notify,
     counter: AtomicU64,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct EventFdInternal {
@@ -41,7 +41,7 @@ impl EventFd {
             }),
             notify: Notify::new(),
             counter: AtomicU64::new(u64::from(initval)),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         }
     }
 }
@@ -148,7 +148,7 @@ impl OpenFileDescription for EventFd {
         Ok(ANON_INODE_FS.clone())
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }

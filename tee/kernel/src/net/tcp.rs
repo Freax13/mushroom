@@ -20,7 +20,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptorTable, FileLock, FileLockRecord, LazyFileLockRecord,
+            BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
             NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
             WriteBuf, common_ioctl,
             file::{File, open_file},
@@ -1018,7 +1018,7 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
     }
 }
@@ -1167,7 +1167,7 @@ pub struct NetTcpFile {
     fs: Arc<ProcFs>,
     pub ino: u64,
     ip_version: IpVersion,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
 }
 
@@ -1178,7 +1178,7 @@ impl NetTcpFile {
             fs,
             ino: new_ino(),
             ip_version,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -1313,8 +1313,8 @@ impl INode for NetTcpFile {
         bail!(Acces)
     }
 
-    fn file_lock_record(&self) -> &Arc<FileLockRecord> {
-        self.file_lock_record.get()
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
     }
 
     fn watchers(&self) -> &Watchers {

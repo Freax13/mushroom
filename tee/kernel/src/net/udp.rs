@@ -19,7 +19,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptorTable, FileLock, NonEmptyEvents, OpenFileDescription,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             common_ioctl,
         },
@@ -648,7 +648,7 @@ impl OpenFileDescription for UdpSocket {
         todo!()
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
     }
 

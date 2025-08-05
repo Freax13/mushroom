@@ -10,8 +10,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
-            WriteBuf, stream_buffer,
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            StrongFileDescriptor, WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, Link},
         path::Path,
@@ -94,12 +94,12 @@ impl NamedPipe {
                 }
             }
 
-            let file_lock = FileLock::new(link.node.file_lock_record().clone());
+            let bsd_file_lock = BsdFileLock::new(link.node.bsd_file_lock_record().clone());
             StrongFileDescriptor::from(WriteHalf {
                 link,
                 write_half,
                 flags: Mutex::new(flags),
-                file_lock,
+                bsd_file_lock,
             })
         } else if flags.contains(OpenFlags::RDWR) {
             let (read_half, write_half) =
@@ -134,13 +134,13 @@ impl NamedPipe {
                     }
                 };
 
-            let file_lock = FileLock::new(link.node.file_lock_record().clone());
+            let bsd_file_lock = BsdFileLock::new(link.node.bsd_file_lock_record().clone());
             StrongFileDescriptor::from(FullReadWrite {
                 link,
                 read_half,
                 write_half,
                 flags: Mutex::new(flags),
-                file_lock,
+                bsd_file_lock,
             })
         } else {
             let read_half = if let Some(read_half) = guard.read_half.upgrade() {
@@ -184,12 +184,12 @@ impl NamedPipe {
                 }
             }
 
-            let file_lock = FileLock::new(link.node.file_lock_record().clone());
+            let bsd_file_lock = BsdFileLock::new(link.node.bsd_file_lock_record().clone());
             StrongFileDescriptor::from(ReadHalf {
                 link,
                 read_half,
                 flags: Mutex::new(flags),
-                file_lock,
+                bsd_file_lock,
             })
         })
     }
@@ -199,7 +199,7 @@ struct ReadHalf {
     link: Link,
     read_half: Arc<stream_buffer::ReadHalf>,
     flags: Mutex<OpenFlags>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[async_trait]
@@ -267,8 +267,8 @@ impl OpenFileDescription for ReadHalf {
         }
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -276,7 +276,7 @@ struct WriteHalf {
     link: Link,
     write_half: Arc<stream_buffer::WriteHalf>,
     flags: Mutex<OpenFlags>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[async_trait]
@@ -348,8 +348,8 @@ impl OpenFileDescription for WriteHalf {
         self.write_half.ready_for_write(count).await
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -358,7 +358,7 @@ struct FullReadWrite {
     read_half: Arc<stream_buffer::ReadHalf>,
     write_half: Arc<stream_buffer::WriteHalf>,
     flags: Mutex<OpenFlags>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[async_trait]
@@ -444,7 +444,7 @@ impl OpenFileDescription for FullReadWrite {
         self.write_half.ready_for_write(count).await
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }

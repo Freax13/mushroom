@@ -11,7 +11,7 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileDescriptorTable, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
             VectoredUserBuf, WriteBuf,
         },
         node::FileAccessContext,
@@ -198,7 +198,7 @@ impl OpenFileDescription for NetlinkSocket {
         NonEmptyEvents::select(read_fut, write_fut).await
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
     }
 }

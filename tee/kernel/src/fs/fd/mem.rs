@@ -5,7 +5,7 @@ use crate::{
     error::Result,
     fs::{
         FileSystem,
-        fd::{Events, FileLock, NonEmptyEvents, OpenFileDescription},
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -99,7 +99,7 @@ impl OpenFileDescription for MemFd {
         todo!()
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
     }
 }

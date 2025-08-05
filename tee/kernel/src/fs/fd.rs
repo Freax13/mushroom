@@ -473,7 +473,7 @@ impl FileDescriptorTable {
             uid,
             gid,
             StrongFileDescriptor::downgrade(&entry.fd),
-            entry.file_lock_record.get().clone(),
+            entry.bsd_file_lock_record.get().clone(),
             entry.watchers.clone(),
         )))
     }
@@ -500,7 +500,7 @@ struct FileDescriptorTableEntry {
     ino: u64,
     fd: StrongFileDescriptor,
     flags: FdFlags,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Arc<Watchers>,
 }
 
@@ -510,7 +510,7 @@ impl FileDescriptorTableEntry {
             ino: new_ino(),
             fd,
             flags,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Arc::new(Watchers::new()),
         }
     }
@@ -884,7 +884,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn file_lock(&self) -> Result<&FileLock>;
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock>;
 
     /// For path file descriptors, this method should return the pointed to
     /// link.
@@ -1060,23 +1060,23 @@ pub async fn do_write_io<R>(
     }
 }
 
-pub struct LazyFileLockRecord {
-    file_lock_record: Lazy<Arc<FileLockRecord>>,
+pub struct LazyBsdFileLockRecord {
+    bsd_file_lock_record: Lazy<Arc<BsdFileLockRecord>>,
 }
 
-impl LazyFileLockRecord {
+impl LazyBsdFileLockRecord {
     pub const fn new() -> Self {
         Self {
-            file_lock_record: Lazy::new(Default::default),
+            bsd_file_lock_record: Lazy::new(Default::default),
         }
     }
 
-    pub fn get(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    pub fn get(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 }
 
-pub struct FileLockRecord {
+pub struct BsdFileLockRecord {
     /// -1  => exclusive
     /// 0   => unlocked
     /// 1.. => shared
@@ -1084,7 +1084,7 @@ pub struct FileLockRecord {
     notify: Notify,
 }
 
-impl FileLockRecord {
+impl BsdFileLockRecord {
     pub fn new() -> Self {
         Self {
             counter: AtomicI64::new(0),
@@ -1093,19 +1093,19 @@ impl FileLockRecord {
     }
 }
 
-impl Default for FileLockRecord {
+impl Default for BsdFileLockRecord {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub struct FileLock {
-    record: Arc<FileLockRecord>,
+pub struct BsdFileLock {
+    record: Arc<BsdFileLockRecord>,
     state: Mutex<FileLockState>,
 }
 
-impl FileLock {
-    pub fn new(record: Arc<FileLockRecord>) -> Self {
+impl BsdFileLock {
+    pub fn new(record: Arc<BsdFileLockRecord>) -> Self {
         Self {
             record,
             state: Mutex::new(FileLockState::Unlocked),
@@ -1113,7 +1113,7 @@ impl FileLock {
     }
 
     pub fn anonymous() -> Self {
-        Self::new(Arc::new(FileLockRecord::new()))
+        Self::new(Arc::new(BsdFileLockRecord::new()))
     }
 
     pub async fn lock_shared(&self, non_blocking: bool) -> Result<()> {
@@ -1184,7 +1184,7 @@ impl FileLock {
     }
 }
 
-impl Drop for FileLock {
+impl Drop for BsdFileLock {
     fn drop(&mut self) {
         self.unlock();
     }

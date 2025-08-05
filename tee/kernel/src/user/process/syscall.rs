@@ -2304,13 +2304,13 @@ async fn flock(
     );
 
     let fd = fdtable.get(fd)?;
-    let file_lock = fd.file_lock()?;
+    let bsd_file_lock = fd.bsd_file_lock()?;
     if lock_shared {
-        file_lock.lock_shared(non_blocking).await?;
+        bsd_file_lock.lock_shared(non_blocking).await?;
     } else if lock_exclusive {
-        file_lock.lock_exclusive(non_blocking).await?;
+        bsd_file_lock.lock_exclusive(non_blocking).await?;
     } else {
-        file_lock.unlock();
+        bsd_file_lock.unlock();
     }
     Ok(0)
 }
