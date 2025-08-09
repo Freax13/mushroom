@@ -4831,7 +4831,9 @@ async fn ppoll(
     }
 
     let deadline = if !timeout.is_null() {
-        Some(Some(virtual_memory.read_with_abi(timeout, abi)?))
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        let deadline = now(ClockId::Monotonic) + timeout;
+        Some(Some(deadline))
     } else {
         Some(None)
     };
