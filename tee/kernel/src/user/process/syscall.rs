@@ -49,7 +49,7 @@ use crate::{
     },
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
-    time::{self, now, sleep_until},
+    time::{self, Tick, now, sleep_until},
     user::process::{
         ProcessGroup, WaitResult,
         memory::MemoryPermissions,
@@ -4059,14 +4059,7 @@ fn clock_getres(
     res: Pointer<Timespec>,
 ) -> SyscallResult {
     if !res.is_null() {
-        virtual_memory.write_with_abi(
-            res,
-            Timespec {
-                tv_sec: 0,
-                tv_nsec: 1,
-            },
-            abi,
-        )?;
+        virtual_memory.write_with_abi(res, Tick::resolution(), abi)?;
     }
     Ok(0)
 }
