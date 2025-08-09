@@ -1201,6 +1201,7 @@ pub struct ProcessInos {
     exe_link: u64,
     maps_file: u64,
     mem_file: u64,
+    root_symlink: u64,
     stat_file: u64,
     status_file: u64,
     task_dir: u64,
@@ -1216,6 +1217,7 @@ impl ProcessInos {
             exe_link: new_ino(),
             maps_file: new_ino(),
             mem_file: new_ino(),
+            root_symlink: new_ino(),
             stat_file: new_ino(),
             status_file: new_ino(),
             task_dir: new_ino(),
@@ -1243,6 +1245,8 @@ struct ProcessDir {
     mem_bsd_file_lock_record: LazyBsdFileLockRecord,
     mem_unix_file_lock_record: LazyUnixFileLockRecord,
     mem_file_watchers: Arc<Watchers>,
+    root_bsd_file_lock_record: LazyBsdFileLockRecord,
+    root_file_watchers: Arc<Watchers>,
     stat_bsd_file_lock_record: LazyBsdFileLockRecord,
     stat_unix_file_lock_record: LazyUnixFileLockRecord,
     stat_file_watchers: Arc<Watchers>,
@@ -1275,6 +1279,8 @@ impl ProcessDir {
             mem_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             mem_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             mem_file_watchers: Arc::new(Watchers::new()),
+            root_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            root_file_watchers: Arc::new(Watchers::new()),
             stat_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             stat_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             stat_file_watchers: Arc::new(Watchers::new()),
@@ -1383,6 +1389,12 @@ impl Directory for ProcessDir {
                 self.mem_bsd_file_lock_record.get().clone(),
                 self.mem_unix_file_lock_record.get().clone(),
                 self.mem_file_watchers.clone(),
+            ),
+            b"root" => RootLink::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.root_bsd_file_lock_record.get().clone(),
+                self.root_file_watchers.clone(),
             ),
             b"stat" => ProcessStatFile::new(
                 self.fs.clone(),
@@ -1521,6 +1533,11 @@ impl Directory for ProcessDir {
             ino: process.inos.mem_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"mem").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.root_symlink,
+            ty: FileType::Link,
+            name: DirEntryName::FileName(FileName::new(b"root").unwrap()),
         });
         entries.push(DirEntry {
             ino: process.inos.stat_file,
@@ -2546,6 +2563,99 @@ impl File for MemFile {
 
     fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
         &self.unix_file_lock_record
+    }
+}
+
+struct RootLink {
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl RootLink {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            fs,
+            process,
+            bsd_file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for RootLink {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.root_symlink,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        bail!(Loop)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn read_link(&self, _: &FileAccessContext) -> Result<Path> {
+        Ok(Path::root())
+    }
+
+    fn try_resolve_link(
+        &self,
+        _start_dir: Link,
+        _: LinkLocation,
+        ctx: &mut FileAccessContext,
+    ) -> Result<Option<Link>> {
+        ctx.follow_symlink()?;
+        Ok(Some(Link::root()))
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Loop)
+    }
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
     }
 }
 
