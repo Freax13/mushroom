@@ -2647,7 +2647,7 @@ pub struct SigEvent64 {
 }
 
 #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
-#[repr(C)]
+#[repr(C, u32)]
 pub enum SigEventData32 {
     Signal {
         _padding: [u8; 8],
@@ -2662,11 +2662,11 @@ pub enum SigEventData32 {
     ThreadId {
         tid: u32,
         _padding: [u8; 4],
-    },
+    } = 4,
 }
 
 #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
-#[repr(C)]
+#[repr(C, u32)]
 pub enum SigEventData64 {
     Signal {
         _padding: [u8; 16],
@@ -2681,7 +2681,7 @@ pub enum SigEventData64 {
     ThreadId {
         tid: u32,
         _padding: [u8; 12],
-    },
+    } = 4,
 }
 
 #[derive(Clone, Copy, CheckedBitPattern, NoUninit)]
