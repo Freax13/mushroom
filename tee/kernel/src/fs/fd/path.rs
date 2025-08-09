@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-use super::{Events, FileLock, NonEmptyEvents, OpenFileDescription};
+use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription};
 
 pub struct PathFd {
     link: Link,
@@ -66,7 +66,7 @@ impl OpenFileDescription for PathFd {
         pending().await
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         bail!(BadF)
     }
 

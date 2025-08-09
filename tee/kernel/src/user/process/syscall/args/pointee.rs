@@ -35,11 +35,11 @@ use crate::{
 };
 
 use super::{
-    CmsgHdr, ControlMode, Domain, FdNum, ITimerspec, ITimerval, InputMode, Iovec, Linger,
-    LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OutputMode, PSelectSigsetArg,
-    Pointer, RLimit, Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
-    Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserRegs32,
-    UserRegs64, WStatus, WinSize,
+    CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec, ITimerval,
+    InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset,
+    OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent, SigEventData, SocketAddr,
+    SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval,
+    Timezone, Ucred, UserRegs32, UserRegs64, WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.
@@ -2822,3 +2822,112 @@ impl PrimitivePointee for UserRegs64 {}
 
 impl Pointee for Ucred {}
 impl PrimitivePointee for Ucred {}
+
+impl Pointee for Flock {}
+
+impl AbiDependentPointee for Flock {
+    type I386 = Flock32;
+    type Amd64 = Flock64;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Flock32 {
+    r#type: i16,
+    whence: i16,
+    start: u32,
+    len: u32,
+    pid: u32,
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Flock64 {
+    r#type: i16,
+    whence: i16,
+    _padding: u32,
+    start: u64,
+    len: u64,
+    pid: u32,
+    _padding2: u32,
+}
+
+impl TryFrom<Flock32> for Flock {
+    type Error = Error;
+
+    fn try_from(value: Flock32) -> Result<Self> {
+        Ok(Self {
+            r#type: FlockType::try_from(value.r#type)?,
+            whence: FlockWhence::try_from(value.whence)?,
+            start: u64::from(value.start),
+            len: u64::from(value.len),
+            pid: value.pid,
+        })
+    }
+}
+
+impl TryFrom<Flock64> for Flock {
+    type Error = Error;
+
+    fn try_from(value: Flock64) -> Result<Self> {
+        Ok(Self {
+            r#type: FlockType::try_from(value.r#type)?,
+            whence: FlockWhence::try_from(value.whence)?,
+            start: value.start,
+            len: value.len,
+            pid: value.pid,
+        })
+    }
+}
+
+impl From<Flock> for Flock32 {
+    fn from(value: Flock) -> Self {
+        Self {
+            r#type: value.r#type as i16,
+            whence: value.whence as i16,
+            start: value.start as u32,
+            len: value.len as u32,
+            pid: value.pid,
+        }
+    }
+}
+
+impl From<Flock> for Flock64 {
+    fn from(value: Flock) -> Self {
+        Self {
+            r#type: value.r#type as i16,
+            whence: value.whence as i16,
+            _padding: 0,
+            start: value.start,
+            len: value.len,
+            pid: value.pid,
+            _padding2: 0,
+        }
+    }
+}
+
+impl TryFrom<i16> for FlockType {
+    type Error = Error;
+
+    fn try_from(value: i16) -> Result<Self> {
+        Ok(match value {
+            0 => Self::Rd,
+            1 => Self::Wr,
+            2 => Self::Un,
+            _ => bail!(Inval),
+        })
+    }
+}
+
+impl TryFrom<i16> for FlockWhence {
+    type Error = Error;
+
+    fn try_from(value: i16) -> Result<Self> {
+        Ok(match value {
+            0 => Self::Set,
+            1 => Self::Cur,
+            2 => Self::End,
+            _ => bail!(Inval),
+        })
+    }
+}

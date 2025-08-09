@@ -8,7 +8,7 @@ use crate::{
     error::{Result, ensure, err},
     fs::{
         FileSystem,
-        fd::{Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf},
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -200,7 +200,7 @@ impl OpenFileDescription for Timer {
         Ok(8)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
     }
 }

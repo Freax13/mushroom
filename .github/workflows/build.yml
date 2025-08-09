@@ -182,6 +182,7 @@ jobs:
           - gnutls
           - elfutils
           - swtpm
+          - tinysparql
         tee:
           - snp
           - tdx

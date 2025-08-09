@@ -16,7 +16,7 @@ use alloc::{boxed::Box, format, sync::Arc};
 use async_trait::async_trait;
 
 use super::{
-    super::{Events, FileLock, OpenFileDescription, stream_buffer},
+    super::{BsdFileLock, Events, OpenFileDescription, stream_buffer},
     CAPACITY, PIPE_BUF,
 };
 use crate::{
@@ -59,7 +59,7 @@ pub struct ReadHalf {
     internal: Arc<Mutex<Internal>>,
     stream_buffer: stream_buffer::ReadHalf,
     flags: Mutex<OpenFlags>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[async_trait]
@@ -142,8 +142,8 @@ impl OpenFileDescription for ReadHalf {
         Some(&self.stream_buffer)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -152,7 +152,7 @@ pub struct WriteHalf {
     internal: Arc<Mutex<Internal>>,
     stream_buffer: stream_buffer::WriteHalf,
     flags: Mutex<OpenFlags>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[async_trait::async_trait]
@@ -239,8 +239,8 @@ impl OpenFileDescription for WriteHalf {
         self.stream_buffer.ready_for_write(count).await
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -263,14 +263,14 @@ pub fn new(flags: Pipe2Flags, uid: Uid, gid: Gid) -> (ReadHalf, WriteHalf) {
             internal: internal.clone(),
             stream_buffer: read_half,
             flags: Mutex::new(flags),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         },
         WriteHalf {
             ino,
             internal,
             stream_buffer: write_half,
             flags: Mutex::new(flags | OpenFlags::WRONLY),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         },
     )
 }

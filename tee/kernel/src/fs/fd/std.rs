@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use log::debug;
 
 use super::{
-    Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf, pipe::anon::PIPE_FS,
+    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+    pipe::anon::PIPE_FS,
 };
 use crate::{
     error::{Result, ensure},
@@ -25,7 +26,7 @@ use crate::{
 pub struct Stdin {
     ino: u64,
     internal: Mutex<StdinInternal>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct StdinInternal {
@@ -39,7 +40,7 @@ impl Stdin {
             internal: Mutex::new(StdinInternal {
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         }
     }
 }
@@ -103,15 +104,15 @@ impl OpenFileDescription for Stdin {
         pending().await
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
 pub struct Stdout {
     ino: u64,
     internal: Mutex<StdoutInternal>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct StdoutInternal {
@@ -125,7 +126,7 @@ impl Stdout {
             internal: Mutex::new(StdoutInternal {
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         }
     }
 }
@@ -197,15 +198,15 @@ impl OpenFileDescription for Stdout {
         }
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 
 pub struct Stderr {
     ino: u64,
     internal: Mutex<StderrInternal>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct StderrInternal {
@@ -219,7 +220,7 @@ impl Stderr {
             internal: Mutex::new(StderrInternal {
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         }
     }
 }
@@ -291,7 +292,7 @@ impl OpenFileDescription for Stderr {
         }
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }

@@ -16,7 +16,7 @@ use bytemuck::bytes_of;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{align_down, align_up};
 
-use super::super::{Events, FileLock, OpenFileDescription};
+use super::super::{BsdFileLock, Events, OpenFileDescription};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
@@ -62,7 +62,7 @@ pub struct StreamUnixSocket {
     socketname: Mutex<SocketAddrUnix>,
     activate_notify: Notify,
     mode: Once<Mode>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[derive(Clone)]
@@ -93,7 +93,7 @@ impl StreamUnixSocket {
             socketname: Mutex::new(SocketAddrUnix::Unnamed),
             activate_notify: Notify::new(),
             mode: Once::new(),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         })
     }
 
@@ -126,7 +126,7 @@ impl StreamUnixSocket {
                     localcred: cred,
                     peercred: cred,
                 })),
-                file_lock: FileLock::anonymous(),
+                bsd_file_lock: BsdFileLock::anonymous(),
             }),
             StrongFileDescriptor::new_cyclic(|this| Self {
                 this: this.clone(),
@@ -148,7 +148,7 @@ impl StreamUnixSocket {
                     localcred: cred,
                     peercred: cred,
                 })),
-                file_lock: FileLock::anonymous(),
+                bsd_file_lock: BsdFileLock::anonymous(),
             }),
         )
     }
@@ -598,7 +598,7 @@ impl OpenFileDescription for StreamUnixSocket {
             socketname: self.socketname.clone(),
             activate_notify: Notify::new(),
             mode: Once::with_value(Mode::Active(active)),
-            file_lock: FileLock::anonymous(),
+            bsd_file_lock: BsdFileLock::anonymous(),
         });
         Ok((socket, addr))
     }
@@ -760,8 +760,8 @@ impl OpenFileDescription for StreamUnixSocket {
         bail!(BadF)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 

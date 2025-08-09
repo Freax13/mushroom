@@ -576,6 +576,7 @@ enum_arg! {
         SetFd = 2,
         GetFl = 3,
         SetFl = 4,
+        GetLk = 5,
         SetLk = 6,
         SetLkW = 7,
         SetOwn = 8,
@@ -2410,4 +2411,27 @@ impl From<MemfdCreateFlags> for FdFlags {
         flags.set(Self::CLOEXEC, value.contains(MemfdCreateFlags::CLOEXEC));
         flags
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Flock {
+    pub r#type: FlockType,
+    pub whence: FlockWhence,
+    pub start: u64,
+    pub len: u64,
+    pub pid: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FlockType {
+    Rd = 0,
+    Wr = 1,
+    Un = 2,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FlockWhence {
+    Set = 0,
+    Cur = 1,
+    End = 2,
 }

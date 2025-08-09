@@ -35,7 +35,7 @@ use crate::{
 };
 
 use super::{
-    Events, FileLock, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData, ReadBuf,
+    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData, ReadBuf,
     StrongFileDescriptor,
 };
 
@@ -246,7 +246,7 @@ impl OpenFileDescription for Inotify {
         Ok(())
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
     }
 }

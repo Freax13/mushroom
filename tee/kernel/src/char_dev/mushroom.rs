@@ -9,8 +9,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            Events, FileLock, LazyFileLockRecord, NonEmptyEvents, OpenFileDescription, PipeBlocked,
-            StrongFileDescriptor, WriteBuf, stream_buffer,
+            BsdFileLock, Events, LazyBsdFileLockRecord, NonEmptyEvents, OpenFileDescription,
+            PipeBlocked, StrongFileDescriptor, WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, LinkLocation},
         path::Path,
@@ -31,7 +31,7 @@ pub struct Output {
     flags: OpenFlags,
     stat: Stat,
     fs: Arc<dyn FileSystem>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 #[register]
@@ -46,13 +46,13 @@ impl CharDev for Output {
         fs: Arc<dyn FileSystem>,
         _: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        static RECORD: LazyFileLockRecord = LazyFileLockRecord::new();
+        static RECORD: LazyBsdFileLockRecord = LazyBsdFileLockRecord::new();
         Ok(StrongFileDescriptor::from(Self {
             location,
             flags,
             stat,
             fs,
-            file_lock: FileLock::new(RECORD.get().clone()),
+            bsd_file_lock: BsdFileLock::new(RECORD.get().clone()),
         }))
     }
 }
@@ -137,7 +137,7 @@ impl OpenFileDescription for Output {
         Ok(self.fs.clone())
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }

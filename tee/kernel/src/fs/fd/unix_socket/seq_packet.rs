@@ -4,7 +4,7 @@ use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
 use async_trait::async_trait;
 use futures::future;
 
-use super::super::{Events, FileLock, OpenFileDescription};
+use super::super::{BsdFileLock, Events, OpenFileDescription};
 use crate::{
     error::{Result, bail},
     fs::{
@@ -30,7 +30,7 @@ pub struct SeqPacketUnixSocket {
     internal: Mutex<SeqPacketUnixSocketInternal>,
     write_half: WriteHalf,
     read_half: ReadHalf,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct SeqPacketUnixSocketInternal {
@@ -77,7 +77,7 @@ impl SeqPacketUnixSocket {
                 }),
                 write_half: write_half1,
                 read_half: read_half1,
-                file_lock: FileLock::anonymous(),
+                bsd_file_lock: BsdFileLock::anonymous(),
             },
             Self {
                 ino: new_ino(),
@@ -91,7 +91,7 @@ impl SeqPacketUnixSocket {
                 }),
                 write_half: write_half2,
                 read_half: read_half2,
-                file_lock: FileLock::anonymous(),
+                bsd_file_lock: BsdFileLock::anonymous(),
             },
         )
     }
@@ -210,8 +210,8 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         bail!(BadF)
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
 

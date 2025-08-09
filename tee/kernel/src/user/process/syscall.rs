@@ -27,7 +27,8 @@ use crate::{
         StatFs,
         fd::{
             Events, FdFlags, FileDescriptorTable, KernelReadBuf, KernelWriteBuf, OffsetBuf,
-            ReadBuf, StrongFileDescriptor, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
+            ReadBuf, StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf,
+            VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             inotify::Inotify,
@@ -2194,8 +2195,11 @@ fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult 
     Ok(0)
 }
 
-#[syscall(i386 = 55, amd64 = 72)]
-fn fcntl(
+#[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
+async fn fcntl(
+    abi: Abi,
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
@@ -2225,14 +2229,99 @@ fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
-        FcntlCmd::SetLk
-        | FcntlCmd::SetLkW
-        | FcntlCmd::SetOwn
-        | FcntlCmd::GetOwn
-        | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx
-        | FcntlCmd::OfdSetLk
-        | FcntlCmd::OfdSetLkW => {
+        FcntlCmd::GetLk => {
+            let record = fd.unix_file_lock_record()?;
+            let pointer = Pointer::<Flock>::new(arg);
+            let flock = virtual_memory.read_with_abi(pointer, abi)?;
+
+            let start = match flock.whence {
+                FlockWhence::Set => flock.start,
+                FlockWhence::Cur => todo!(),
+                FlockWhence::End => todo!(),
+            };
+            let lock = UnixLock {
+                owner: UnixLockOwner::process(&fdtable),
+                start,
+                len: flock.len,
+                ty: match flock.r#type {
+                    FlockType::Rd => UnixLockType::Read,
+                    FlockType::Wr => UnixLockType::Write,
+                    FlockType::Un => todo!(),
+                },
+                pid: Some(thread.process().pid()),
+            };
+
+            let flock = if let Some(lock) = record.find_conflict(lock) {
+                Flock {
+                    r#type: match lock.ty {
+                        UnixLockType::Read => FlockType::Rd,
+                        UnixLockType::Write => FlockType::Wr,
+                    },
+                    whence: FlockWhence::Set,
+                    start: lock.start,
+                    len: lock.len,
+                    pid: lock.pid.unwrap_or(!0),
+                }
+            } else {
+                Flock {
+                    r#type: FlockType::Un,
+                    ..flock
+                }
+            };
+
+            virtual_memory.write_with_abi(pointer, flock, abi)?;
+
+            Ok(0)
+        }
+        FcntlCmd::SetLk | FcntlCmd::OfdSetLk | FcntlCmd::SetLkW | FcntlCmd::OfdSetLkW => {
+            let record = fd.unix_file_lock_record()?;
+            let pointer = Pointer::<Flock>::new(arg);
+            let flock = virtual_memory.read_with_abi(pointer, abi)?;
+
+            let (owner, pid) = match cmd {
+                FcntlCmd::SetLk | FcntlCmd::SetLkW => (
+                    UnixLockOwner::process(&fdtable),
+                    Some(thread.process().pid()),
+                ),
+                FcntlCmd::OfdSetLk | FcntlCmd::OfdSetLkW => {
+                    ensure!(flock.pid == 0, Inval);
+                    (UnixLockOwner::ofd(&**fd), None)
+                }
+                _ => unreachable!(),
+            };
+            let start = match flock.whence {
+                FlockWhence::Set => flock.start,
+                FlockWhence::Cur => todo!(),
+                FlockWhence::End => todo!(),
+            };
+            let ty = match flock.r#type {
+                FlockType::Rd => Some(UnixLockType::Read),
+                FlockType::Wr => Some(UnixLockType::Write),
+                FlockType::Un => None,
+            };
+            if let Some(ty) = ty {
+                let lock = UnixLock {
+                    owner,
+                    start,
+                    len: flock.len,
+                    ty,
+                    pid,
+                };
+
+                match cmd {
+                    FcntlCmd::SetLk | FcntlCmd::OfdSetLk => {
+                        record.lock(lock).map_err(|_| err!(Acces))?
+                    }
+                    FcntlCmd::SetLkW | FcntlCmd::OfdSetLkW => record.lock_wait(lock).await,
+                    _ => unreachable!(),
+                }
+            } else {
+                record.unlock(owner, start, flock.len)
+            }
+
+            Ok(0)
+        }
+        FcntlCmd::SetOwn | FcntlCmd::GetOwn | FcntlCmd::SetOwnEx | FcntlCmd::GetOwnEx => {
             // TODO: Implement this
             warn!("{cmd} not implemented");
             Ok(0)
@@ -2240,51 +2329,27 @@ fn fcntl(
     }
 }
 
-#[syscall(i386 = 221)]
-fn fcntl64(
+#[syscall(i386 = 221, interruptable, restartable)]
+async fn fcntl64(
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
 ) -> SyscallResult {
-    let (fd, flags) = fdtable.get_with_flags(fd_num)?;
-
-    match cmd {
-        FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
-            let fd = fdtable.get_strong(fd_num)?;
-            let min = i32::try_from(arg)?;
-
-            let mut flags = FdFlags::empty();
-            flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
-
-            let fd_num = fdtable.insert_after(min, fd, flags, no_file_limit)?;
-            Ok(fd_num.get().try_into()?)
-        }
-        FcntlCmd::GetFd => Ok(flags.bits()),
-        FcntlCmd::SetFd => {
-            fdtable.set_flags(fd_num, FdFlags::from_bits_truncate(arg))?;
-            Ok(0)
-        }
-        FcntlCmd::GetFl => Ok(fd.flags().bits()),
-        FcntlCmd::SetFl => {
-            let flags = OpenFlags::from_bits_truncate(arg);
-            fd.set_flags(flags);
-            Ok(0)
-        }
-        FcntlCmd::SetLk
-        | FcntlCmd::SetLkW
-        | FcntlCmd::SetOwn
-        | FcntlCmd::GetOwn
-        | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx
-        | FcntlCmd::OfdSetLk
-        | FcntlCmd::OfdSetLkW => {
-            // TODO: Implement this
-            warn!("{cmd} not implemented");
-            Ok(0)
-        }
-    }
+    fcntl(
+        Abi::Amd64,
+        thread,
+        virtual_memory,
+        fdtable,
+        no_file_limit,
+        fd_num,
+        cmd,
+        arg,
+    )
+    .await
 }
 
 #[syscall(i386 = 143, amd64 = 73, interruptable, restartable)]
@@ -2304,13 +2369,13 @@ async fn flock(
     );
 
     let fd = fdtable.get(fd)?;
-    let file_lock = fd.file_lock()?;
+    let bsd_file_lock = fd.bsd_file_lock()?;
     if lock_shared {
-        file_lock.lock_shared(non_blocking).await?;
+        bsd_file_lock.lock_shared(non_blocking).await?;
     } else if lock_exclusive {
-        file_lock.lock_exclusive(non_blocking).await?;
+        bsd_file_lock.lock_exclusive(non_blocking).await?;
     } else {
-        file_lock.unlock();
+        bsd_file_lock.unlock();
     }
     Ok(0)
 }

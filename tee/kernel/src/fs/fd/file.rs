@@ -24,8 +24,8 @@ use crate::{
 };
 
 use super::{
-    Events, FileLock, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
-    StrongFileDescriptor, WriteBuf, stream_buffer,
+    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
+    StrongFileDescriptor, UnixFileLockRecord, WriteBuf, stream_buffer,
 };
 
 pub trait File: INode {
@@ -87,6 +87,7 @@ pub trait File: INode {
         bail!(OpNotSupp)
     }
     fn deleted(&self) -> bool;
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord>;
 }
 
 pub fn open_file(
@@ -109,17 +110,17 @@ struct InternalFileFileDescription {
 pub struct FileFileDescription {
     file: Arc<dyn File>,
     location: LinkLocation,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
     internal: Mutex<InternalFileFileDescription>,
 }
 
 impl FileFileDescription {
     pub fn new(file: Arc<dyn File>, location: LinkLocation, flags: OpenFlags) -> Self {
-        let file_lock = FileLock::new(file.file_lock_record().clone());
+        let bsd_file_lock = BsdFileLock::new(file.bsd_file_lock_record().clone());
         Self {
             file,
             location,
-            file_lock,
+            bsd_file_lock,
             internal: Mutex::new(InternalFileFileDescription {
                 flags,
                 cursor_idx: 0,
@@ -423,8 +424,12 @@ impl OpenFileDescription for FileFileDescription {
         }
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+
+    fn unix_file_lock_record(&self) -> Result<&Arc<UnixFileLockRecord>> {
+        Ok(self.file.unix_file_lock_record())
     }
 }
 

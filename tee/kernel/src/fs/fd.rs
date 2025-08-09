@@ -4,9 +4,10 @@ use core::{
     cmp,
     ffi::c_void,
     mem::offset_of,
-    num::NonZeroU8,
-    ops::{BitOr, BitOrAssign, Deref, Not},
+    num::{NonZeroU8, NonZeroUsize},
+    ops::{BitOr, BitOrAssign, Bound, Deref, Not},
     pin::pin,
+    ptr::NonNull,
     sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
@@ -40,7 +41,7 @@ use crate::{
 };
 use alloc::{
     boxed::Box,
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map::Entry},
     format,
     sync::{Arc, Weak},
     vec::Vec,
@@ -258,6 +259,12 @@ impl Drop for StrongFileDescriptor {
         debug_assert_ne!(val, 0);
         if val == 1 {
             self.close_notify.notify();
+
+            // Release all unix locks held by the fd.
+            if let Ok(record) = self.ofd.unix_file_lock_record() {
+                let owner = UnixLockOwner::ofd(&self.ofd);
+                record.unlock_all(owner);
+            }
         }
     }
 }
@@ -286,13 +293,13 @@ impl PartialEq<dyn OpenFileDescription> for WeakFileDescriptor {
 }
 
 pub struct FileDescriptorTable {
-    table: Mutex<BTreeMap<i32, FileDescriptorTableEntry>>,
+    internal: Mutex<InternalFileDescriptorTable>,
 }
 
 impl FileDescriptorTable {
     pub const fn empty() -> Self {
         Self {
-            table: Mutex::new(BTreeMap::new()),
+            internal: Mutex::new(InternalFileDescriptorTable::empty()),
         }
     }
 
@@ -337,15 +344,98 @@ impl FileDescriptorTable {
         self.insert_after(0, fd, flags, no_file_limit)
     }
 
-    fn find_free_fd_num(
-        table: &BTreeMap<i32, FileDescriptorTableEntry>,
+    pub fn insert_after(
+        &self,
         min: i32,
+        fd: impl Into<StrongFileDescriptor>,
+        flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
-    ) -> Result<i32> {
+    ) -> Result<FdNum> {
+        self.internal
+            .lock()
+            .insert_after(min, fd, flags, no_file_limit)
+    }
+
+    pub fn replace(
+        &self,
+        fd_num: FdNum,
+        fd: impl Into<StrongFileDescriptor>,
+        flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<()> {
+        self.internal
+            .lock()
+            .replace(fd_num, fd, flags, no_file_limit)
+    }
+
+    pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
+        self.get_with_flags(fd_num).map(|(fd, _flags)| fd)
+    }
+
+    pub fn get_with_flags(&self, fd_num: FdNum) -> Result<(FileDescriptor, FdFlags)> {
+        self.internal.lock().get_with_flags(fd_num)
+    }
+
+    pub fn get_strong(&self, fd_num: FdNum) -> Result<StrongFileDescriptor> {
+        self.get_strong_with_flags(fd_num).map(|(fd, _flags)| fd)
+    }
+
+    pub fn get_strong_with_flags(&self, fd_num: FdNum) -> Result<(StrongFileDescriptor, FdFlags)> {
+        self.internal.lock().get_strong_with_flags(fd_num)
+    }
+
+    pub fn set_flags(&self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
+        self.internal.lock().set_flags(fd_num, flags)
+    }
+
+    pub fn close(&self, fd_num: FdNum) -> Result<()> {
+        self.internal.lock().close(fd_num)
+    }
+
+    pub fn prepare_for_execve(&self) -> Self {
+        Self {
+            internal: Mutex::new(self.internal.lock().prepare_for_execve()),
+        }
+    }
+
+    pub fn list_entries(&self) -> Vec<DirEntry> {
+        self.internal.lock().list_entries()
+    }
+
+    pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
+        self.internal.lock().get_node(fs, fd_num, uid, gid)
+    }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, write: impl fmt::Write) -> fmt::Result {
+        self.internal.lock().dump(indent, write)
+    }
+}
+
+impl Clone for FileDescriptorTable {
+    fn clone(&self) -> Self {
+        Self {
+            internal: self.internal.clone(),
+        }
+    }
+}
+
+struct InternalFileDescriptorTable {
+    table: BTreeMap<i32, FileDescriptorTableEntry>,
+}
+
+impl InternalFileDescriptorTable {
+    pub const fn empty() -> Self {
+        Self {
+            table: BTreeMap::new(),
+        }
+    }
+
+    fn find_free_fd_num(&self, min: i32, no_file_limit: CurrentNoFileLimit) -> Result<i32> {
         ensure!(min < no_file_limit.get() as i32, Inval);
         let min = cmp::max(0, min);
 
-        let fd_iter = table.keys().copied().skip_while(|i| *i < min);
+        let fd_iter = self.table.keys().copied().skip_while(|i| *i < min);
         let mut counter_iter = min..no_file_limit.get() as i32;
 
         fd_iter
@@ -357,15 +447,14 @@ impl FileDescriptorTable {
     }
 
     pub fn insert_after(
-        &self,
+        &mut self,
         min: i32,
         fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
-        let mut guard = self.table.lock();
-        let fd_num = Self::find_free_fd_num(&guard, min, no_file_limit)?;
-        guard.insert(
+        let fd_num = self.find_free_fd_num(min, no_file_limit)?;
+        self.table.insert(
             fd_num,
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
         );
@@ -373,7 +462,7 @@ impl FileDescriptorTable {
     }
 
     pub fn replace(
-        &self,
+        &mut self,
         fd_num: FdNum,
         fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
@@ -381,8 +470,10 @@ impl FileDescriptorTable {
     ) -> Result<()> {
         ensure!(fd_num.get() < no_file_limit.get() as i32, BadF);
 
-        let mut guard = self.table.lock();
-        guard.insert(
+        // Close the previous ofd. If there was none, that's fine too.
+        let _ = self.close(fd_num);
+
+        self.table.insert(
             fd_num.get(),
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
         );
@@ -390,67 +481,53 @@ impl FileDescriptorTable {
         Ok(())
     }
 
-    pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
-        self.get_with_flags(fd_num).map(|(fd, _flags)| fd)
-    }
-
     pub fn get_with_flags(&self, fd_num: FdNum) -> Result<(FileDescriptor, FdFlags)> {
         self.table
-            .lock()
             .get(&fd_num.get())
             .map(|fd| (StrongFileDescriptor::downgrade(&fd.fd), fd.flags))
             .ok_or(err!(BadF))
     }
 
-    pub fn get_strong(&self, fd_num: FdNum) -> Result<StrongFileDescriptor> {
-        self.get_strong_with_flags(fd_num).map(|(fd, _flags)| fd)
-    }
-
     pub fn get_strong_with_flags(&self, fd_num: FdNum) -> Result<(StrongFileDescriptor, FdFlags)> {
         self.table
-            .lock()
             .get(&fd_num.get())
             .map(|fd| (fd.fd.clone(), fd.flags))
             .ok_or(err!(BadF))
     }
 
-    pub fn set_flags(&self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
-        let mut guard = self.table.lock();
-        let entry = guard.get_mut(&fd_num.get()).ok_or(err!(BadF))?;
+    pub fn set_flags(&mut self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
+        let entry = self.table.get_mut(&fd_num.get()).ok_or(err!(BadF))?;
         entry.flags = flags;
         Ok(())
     }
 
-    pub fn close(&self, fd_num: FdNum) -> Result<()> {
-        self.table
-            .lock()
-            .remove(&fd_num.get())
-            .map(drop)
-            .ok_or(err!(BadF))
+    pub fn close(&mut self, fd_num: FdNum) -> Result<()> {
+        let entry = self.table.remove(&fd_num.get()).ok_or(err!(BadF))?;
+        if let Ok(record) = entry.fd.unix_file_lock_record() {
+            record.unlock_all(UnixLockOwner::fdtable(NonNull::from_ref(self)));
+        }
+        Ok(())
     }
 
     pub fn prepare_for_execve(&self) -> Self {
-        let guard = self.table.lock();
         // Unshare the entries and skip any entries with CLOEXEC set.
         Self {
-            table: Mutex::new(
-                guard
-                    .iter()
-                    .filter(|(_, entry)| !entry.flags.contains(FdFlags::CLOEXEC))
-                    .map(|(fd, entry)| {
-                        (
-                            *fd,
-                            FileDescriptorTableEntry::new(entry.fd.clone(), entry.flags),
-                        )
-                    })
-                    .collect(),
-            ),
+            table: self
+                .table
+                .iter()
+                .filter(|(_, entry)| !entry.flags.contains(FdFlags::CLOEXEC))
+                .map(|(fd, entry)| {
+                    (
+                        *fd,
+                        FileDescriptorTableEntry::new(entry.fd.clone(), entry.flags),
+                    )
+                })
+                .collect(),
         }
     }
 
     pub fn list_entries(&self) -> Vec<DirEntry> {
-        let guard = self.table.lock();
-        guard
+        self.table
             .iter()
             .map(|(num, entry)| DirEntry {
                 ino: entry.ino,
@@ -465,15 +542,14 @@ impl FileDescriptorTable {
     }
 
     pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
-        let guard = self.table.lock();
-        let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
+        let entry = self.table.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(
             fs,
             entry.ino,
             uid,
             gid,
             StrongFileDescriptor::downgrade(&entry.fd),
-            entry.file_lock_record.get().clone(),
+            entry.bsd_file_lock_record.get().clone(),
             entry.watchers.clone(),
         )))
     }
@@ -482,7 +558,7 @@ impl FileDescriptorTable {
     pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
         writeln!(write, "{:indent$}fd table:", "")?;
         let indent = indent + 2;
-        for (num, fd) in self.table.lock().iter() {
+        for (num, fd) in self.table.iter() {
             writeln!(
                 write,
                 "{:indent$}{num} {} {:?} ino={:?}",
@@ -496,11 +572,34 @@ impl FileDescriptorTable {
     }
 }
 
+impl Clone for InternalFileDescriptorTable {
+    fn clone(&self) -> Self {
+        Self {
+            table: self
+                .table
+                .iter()
+                .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone(), fd.flags)))
+                .collect(),
+        }
+    }
+}
+
+impl Drop for InternalFileDescriptorTable {
+    fn drop(&mut self) {
+        // Close all file descriptors. "Closing" a file descriptor has some
+        // more side-effects like releasing all unix locks.
+        while let Some(first) = self.table.first_entry() {
+            let fd_num = *first.key();
+            self.close(FdNum::new(fd_num)).unwrap();
+        }
+    }
+}
+
 struct FileDescriptorTableEntry {
     ino: u64,
     fd: StrongFileDescriptor,
     flags: FdFlags,
-    file_lock_record: LazyFileLockRecord,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Arc<Watchers>,
 }
 
@@ -510,23 +609,8 @@ impl FileDescriptorTableEntry {
             ino: new_ino(),
             fd,
             flags,
-            file_lock_record: LazyFileLockRecord::new(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Arc::new(Watchers::new()),
-        }
-    }
-}
-
-impl Clone for FileDescriptorTable {
-    fn clone(&self) -> Self {
-        // Copy the table.
-        let table = self
-            .table
-            .lock()
-            .iter()
-            .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone(), fd.flags)))
-            .collect();
-        Self {
-            table: Mutex::new(table),
         }
     }
 }
@@ -884,7 +968,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn file_lock(&self) -> Result<&FileLock>;
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock>;
+
+    fn unix_file_lock_record(&self) -> Result<&Arc<UnixFileLockRecord>> {
+        bail!(BadF)
+    }
 
     /// For path file descriptors, this method should return the pointed to
     /// link.
@@ -1060,23 +1148,23 @@ pub async fn do_write_io<R>(
     }
 }
 
-pub struct LazyFileLockRecord {
-    file_lock_record: Lazy<Arc<FileLockRecord>>,
+pub struct LazyBsdFileLockRecord {
+    bsd_file_lock_record: Lazy<Arc<BsdFileLockRecord>>,
 }
 
-impl LazyFileLockRecord {
+impl LazyBsdFileLockRecord {
     pub const fn new() -> Self {
         Self {
-            file_lock_record: Lazy::new(Default::default),
+            bsd_file_lock_record: Lazy::new(Default::default),
         }
     }
 
-    pub fn get(&self) -> &Arc<FileLockRecord> {
-        &self.file_lock_record
+    pub fn get(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
     }
 }
 
-pub struct FileLockRecord {
+pub struct BsdFileLockRecord {
     /// -1  => exclusive
     /// 0   => unlocked
     /// 1.. => shared
@@ -1084,7 +1172,7 @@ pub struct FileLockRecord {
     notify: Notify,
 }
 
-impl FileLockRecord {
+impl BsdFileLockRecord {
     pub fn new() -> Self {
         Self {
             counter: AtomicI64::new(0),
@@ -1093,19 +1181,19 @@ impl FileLockRecord {
     }
 }
 
-impl Default for FileLockRecord {
+impl Default for BsdFileLockRecord {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub struct FileLock {
-    record: Arc<FileLockRecord>,
+pub struct BsdFileLock {
+    record: Arc<BsdFileLockRecord>,
     state: Mutex<FileLockState>,
 }
 
-impl FileLock {
-    pub fn new(record: Arc<FileLockRecord>) -> Self {
+impl BsdFileLock {
+    pub fn new(record: Arc<BsdFileLockRecord>) -> Self {
         Self {
             record,
             state: Mutex::new(FileLockState::Unlocked),
@@ -1113,7 +1201,7 @@ impl FileLock {
     }
 
     pub fn anonymous() -> Self {
-        Self::new(Arc::new(FileLockRecord::new()))
+        Self::new(Arc::new(BsdFileLockRecord::new()))
     }
 
     pub async fn lock_shared(&self, non_blocking: bool) -> Result<()> {
@@ -1184,7 +1272,7 @@ impl FileLock {
     }
 }
 
-impl Drop for FileLock {
+impl Drop for BsdFileLock {
     fn drop(&mut self) {
         self.unlock();
     }
@@ -1194,4 +1282,318 @@ enum FileLockState {
     Unlocked,
     Shared,
     Exclusive,
+}
+
+pub struct LazyUnixFileLockRecord {
+    unix_file_lock_record: Lazy<Arc<UnixFileLockRecord>>,
+}
+
+impl LazyUnixFileLockRecord {
+    pub const fn new() -> Self {
+        Self {
+            unix_file_lock_record: Lazy::new(Default::default),
+        }
+    }
+
+    pub fn get(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
+}
+
+pub struct UnixFileLockRecord {
+    notify: Notify,
+    state: Mutex<UnixFileLockRecordState>,
+}
+
+impl UnixFileLockRecord {
+    pub fn new() -> Self {
+        Self {
+            notify: Notify::new(),
+            state: Mutex::new(UnixFileLockRecordState::new()),
+        }
+    }
+
+    pub fn find_conflict(&self, lock: UnixLock) -> Option<UnixLock> {
+        let guard = self.state.lock();
+        guard.find_conflict(lock)
+    }
+
+    /// Try to acquire a lock. If there's a conflicting lock, return it.
+    pub fn lock(&self, lock: UnixLock) -> Result<(), ()> {
+        if lock.len == 0 {
+            return Ok(());
+        }
+
+        let mut guard = self.state.lock();
+        guard.lock(lock)?;
+        self.notify.notify();
+        Ok(())
+    }
+
+    /// Try to acquire a lock. If there's a conflicting lock, return it.
+    pub async fn lock_wait(&self, lock: UnixLock) {
+        self.notify.wait_until(|| self.lock(lock).ok()).await;
+    }
+
+    /// Release a lock.
+    pub fn unlock(&self, owner: UnixLockOwner, start: u64, len: u64) {
+        if len == 0 {
+            return;
+        }
+
+        let mut guard = self.state.lock();
+        guard.unlock(owner, start, len);
+        drop(guard);
+        self.notify.notify();
+    }
+
+    /// Release a lock.
+    pub fn unlock_all(&self, owner: UnixLockOwner) {
+        let mut guard = self.state.lock();
+        guard.unlock_all(owner);
+        drop(guard);
+        self.notify.notify();
+    }
+}
+
+impl Default for UnixFileLockRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct UnixFileLockRecordState {
+    locks: BTreeMap<(u64, UnixLockOwner), UnixLockData>,
+}
+
+impl UnixFileLockRecordState {
+    fn new() -> Self {
+        Self {
+            locks: BTreeMap::new(),
+        }
+    }
+
+    /// Try to find a lock that conflicts with the given new lock.
+    pub fn find_conflict(&self, lock: UnixLock) -> Option<UnixLock> {
+        debug_assert_ne!(lock.len, 0);
+
+        let end = lock.start + lock.len;
+        self.locks
+            .range(..(end, lock.owner))
+            .rev()
+            // Only consider locks that overlap.
+            .filter(|((start, _), l)| *start < end && lock.start < (*start + l.len))
+            // Only consider locks by other owners.
+            .filter(|((_, owner), _)| *owner != lock.owner)
+            // Check the lock type to determine if there's a conflict.
+            .find(|(_, l)| l.ty == UnixLockType::Write || lock.ty == UnixLockType::Write)
+            .map(|(&(start, owner), l)| UnixLock {
+                owner,
+                start,
+                len: l.len,
+                ty: l.ty,
+                pid: l.pid,
+            })
+    }
+
+    /// Take a lock.
+    pub fn lock(&mut self, mut lock: UnixLock) -> Result<(), ()> {
+        debug_assert_ne!(lock.len, 0);
+
+        if self.find_conflict(lock).is_some() {
+            return Err(());
+        }
+
+        // Remove all overlapping locks.
+        self.unlock(lock.owner, lock.start, lock.len);
+
+        // Coalesce with a lock starting where this new lock ends if it has the
+        // same type and pid.
+        let end = lock.start + lock.len;
+        if let Entry::Occupied(entry) = self.locks.entry((end, lock.owner))
+            && entry.get().ty == lock.ty
+            && entry.get().pid == lock.pid
+        {
+            let removed = entry.remove();
+            lock.len += removed.len;
+        }
+
+        // Try to find a lock ending where this new lock starts.
+        let mut cursor = self
+            .locks
+            .upper_bound_mut(Bound::Excluded(&(lock.start, lock.owner)));
+        let prev = loop {
+            let Some((&(current_start, current_owner), l)) = cursor.peek_prev() else {
+                break None;
+            };
+
+            // Skip over all locks by different owners.
+            if current_owner != lock.owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            let current_end = current_start + l.len;
+            if current_end == lock.start {
+                break Some(l);
+            } else {
+                debug_assert!(current_end < lock.start);
+                break None;
+            }
+        };
+
+        // If the previous lock has the same type and pid, coalesce.
+        if let Some(l) = prev.filter(|l| l.ty == lock.ty && l.pid == lock.pid) {
+            l.len += lock.len;
+        } else {
+            // Otherwise create a new entry.
+            self.locks.insert(
+                (lock.start, lock.owner),
+                UnixLockData {
+                    len: lock.len,
+                    ty: lock.ty,
+                    pid: lock.pid,
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    // Release a lock.
+    pub fn unlock(&mut self, owner: UnixLockOwner, start: u64, len: u64) {
+        debug_assert_ne!(len, 0);
+
+        // Try to find a lock that starts before `end` and ends after `end`. If
+        // there is such a lock, split it in two.
+        let end = start + len;
+        let mut cursor = self.locks.upper_bound_mut(Bound::Excluded(&(end, owner)));
+        loop {
+            let Some((&(current_start, current_owner), lock)) = cursor.peek_prev() else {
+                return;
+            };
+
+            // Skip over all locks by different owners.
+            if current_owner != owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            let current_end = current_start + lock.len;
+            let Some(new_len) = current_end.checked_sub(end).filter(|&len| len > 0) else {
+                break;
+            };
+
+            // Shrink the existing lock ...
+            lock.len = end - current_start;
+
+            // ... and add a new one after it.
+            let new_data = UnixLockData {
+                len: new_len,
+                ty: lock.ty,
+                pid: lock.pid,
+            };
+            cursor.insert_after((end, owner), new_data).unwrap();
+            break;
+        }
+
+        // At this point, we know that all locks end at the same offset or
+        // before `end`. Remove all locks that start at or after `start`.
+        loop {
+            let Some((&(current_start, current_owner), _)) = cursor.peek_prev() else {
+                return;
+            };
+
+            // Skip over all locks by different owners.
+            if current_owner != owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            if current_start < start {
+                break;
+            }
+
+            cursor.remove_prev().unwrap();
+        }
+
+        // At this point, we know that all locks end at the same offset or
+        // before `end` and start before `start`. If there's a lock that starts
+        // before `start` and ends after `start`, truncate it.
+        while let Some((&(current_start, current_owner), lock)) = cursor.peek_prev() {
+            if current_owner != owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            let current_end = current_start + lock.len;
+            if current_end < start {
+                break;
+            }
+
+            let Some(new_len) = start.checked_sub(current_start).filter(|&len| len > 0) else {
+                break;
+            };
+            lock.len = new_len;
+            break;
+        }
+    }
+
+    /// Release all locks by the given owner.
+    pub fn unlock_all(&mut self, owner: UnixLockOwner) {
+        self.locks.retain(|&(_, o), _| o != owner);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct UnixLockData {
+    len: u64,
+    ty: UnixLockType,
+    pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnixLock {
+    pub owner: UnixLockOwner,
+    pub ty: UnixLockType,
+    pub start: u64,
+    pub len: u64,
+    pub pid: Option<u32>,
+}
+
+/// An opaque handle identifying the owner of a lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnixLockOwner(NonZeroUsize);
+
+impl UnixLockOwner {
+    /// Create an ownership instance associated with a process.
+    ///
+    /// Despite the name and all the documentation around this, the ownership
+    /// is actually tied to the file descriptor table, not the process. If the
+    /// file descriptor table is shared between multiple processes, locks will
+    /// be shared between these processes even though locks are ostensibly tied
+    /// to a single process.
+    pub fn process(fdtable: &FileDescriptorTable) -> Self {
+        let ptr = fdtable.internal.as_ptr_mut();
+        let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        Self::fdtable(ptr)
+    }
+
+    /// Create an ownership instance associated with a process.
+    ///
+    /// See [`Self::process`].
+    fn fdtable(fdtable: NonNull<InternalFileDescriptorTable>) -> Self {
+        Self(fdtable.addr())
+    }
+
+    /// Create an ownership instance associated with a open file description.
+    pub fn ofd(fd: &dyn OpenFileDescription) -> Self {
+        Self(NonNull::from(fd).addr())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnixLockType {
+    Read,
+    Write,
 }

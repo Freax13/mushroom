@@ -20,13 +20,14 @@ use usize_conversions::FromUsize;
 use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
 
 use super::{
-    Events, FileLock, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor, WriteBuf,
+    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
+    WriteBuf,
 };
 
 pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::WRONLY), IsDir);
     ensure!(!flags.contains(OpenFlags::RDWR), IsDir);
-    let file_lock = FileLock::new(dir.file_lock_record().clone());
+    let bsd_file_lock = BsdFileLock::new(dir.bsd_file_lock_record().clone());
     Ok(StrongFileDescriptor::from(DirectoryFileDescription {
         flags,
         dir,
@@ -34,7 +35,7 @@ pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<StrongFileD
             entries: None,
             offset: 0,
         }),
-        file_lock,
+        bsd_file_lock,
     }))
 }
 
@@ -42,7 +43,7 @@ struct DirectoryFileDescription {
     flags: OpenFlags,
     dir: Arc<dyn Directory>,
     internal: Mutex<InternalDirectoryFileDescription>,
-    file_lock: FileLock,
+    bsd_file_lock: BsdFileLock,
 }
 
 struct InternalDirectoryFileDescription {
@@ -177,7 +178,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         }
     }
 
-    fn file_lock(&self) -> Result<&FileLock> {
-        Ok(&self.file_lock)
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
     }
 }
