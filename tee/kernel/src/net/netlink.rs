@@ -104,6 +104,17 @@ impl OpenFileDescription for NetlinkSocket {
         Ok(())
     }
 
+    fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        Ok(match (level, optname) {
+            (1, 3) => {
+                // SO_TYPE
+                let ty = SocketType::Raw as u32;
+                ty.to_le_bytes().to_vec()
+            }
+            _ => bail!(Inval),
+        })
+    }
+
     fn get_socket_name(&self) -> Result<SocketAddr> {
         let addr = self
             .connection

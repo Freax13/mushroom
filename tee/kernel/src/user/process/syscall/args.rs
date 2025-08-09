@@ -1753,6 +1753,7 @@ bitflags! {
     pub struct SentToFlags {
         const OOB = 1 << 0;
         const NOSIGNAL = 1 << 14;
+        const MORE = 1 << 15;
     }
 }
 
