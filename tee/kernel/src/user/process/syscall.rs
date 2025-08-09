@@ -26,9 +26,9 @@ use crate::{
     fs::{
         StatFs,
         fd::{
-            Events, FdFlags, FileDescriptorTable, KernelReadBuf, KernelWriteBuf, OffsetBuf,
-            ReadBuf, StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf,
-            VectoredUserBuf, WriteBuf, do_io, do_write_io,
+            Events, FdFlags, FileDescriptorTable, KernelWriteBuf, OffsetBuf, ReadBuf,
+            StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
+            WriteBuf, do_io, do_write_io,
             epoll::Epoll,
             eventfd::EventFd,
             inotify::Inotify,
@@ -1309,6 +1309,7 @@ async fn sendfile(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
     out: FdNum,
     r#in: FdNum,
     offset: Pointer<Offset>,
@@ -1320,49 +1321,54 @@ async fn sendfile(
 
     let mut offset_value = if !offset.is_null() {
         let offset_value = virtual_memory.read_with_abi(offset, abi)?;
-        let offset_value = usize::try_from(offset_value.0)?;
-        Some(offset_value)
+        usize::try_from(offset_value.0)?
     } else {
-        None
+        r#in.seek(0, Whence::Cur, &mut ctx)?
     };
 
-    let mut buffer = [0; 8192];
+    // Clamp the count to the file size.
+    let stat = r#in.stat()?;
+    let count = cmp::min(count, (stat.size as usize).saturating_sub(offset_value));
+
+    let mut buffer = [0; 0x1000];
     let mut total_len = 0;
     while total_len < count {
-        let chunk_len = cmp::min(count - total_len, buffer.len());
+        let page_offset = offset_value / 0x1000;
+        let offset_in_page = offset_value % 0x1000;
+        let chunk_len = cmp::min(0x1000 - offset_in_page, count - total_len);
+
+        let buffer = &mut buffer[offset_in_page..];
         let buffer = &mut buffer[..chunk_len];
 
-        let len = do_io(&**r#in, Events::READ, || {
-            if let Some(offset_value) = offset_value {
-                r#in.pread(offset_value, &mut KernelReadBuf::new(buffer))
-            } else {
-                r#in.read(&mut KernelReadBuf::new(buffer))
-            }
-        })
-        .await?;
-        let buffer = &buffer[..len];
-        if buffer.is_empty() {
-            break;
-        }
-        total_len += buffer.len();
-        if let Some(offset_value) = &mut offset_value {
-            *offset_value += buffer.len();
-        }
+        let page = r#in.get_page(page_offset, false)?;
+        page.read(offset_in_page, buffer);
 
-        let mut buffer = buffer;
-        while !buffer.is_empty() {
-            let n = do_write_io(&**r#in, buffer.len(), || {
-                out.write(&KernelWriteBuf::new(buffer))
-            })
-            .await?;
-            buffer = &buffer[n..];
+        let res = do_write_io(&**r#in, buffer.len(), || {
+            out.write(&KernelWriteBuf::new(buffer))
+        })
+        .await;
+        match res {
+            Ok(0) => break,
+            Ok(n) => {
+                total_len += n;
+                offset_value += n;
+            }
+            Err(err) => {
+                if total_len == 0 {
+                    return Err(err);
+                } else {
+                    break;
+                }
+            }
         }
     }
 
     if !offset.is_null() {
-        let offset_value = i64::try_from(offset_value.unwrap())?;
+        let offset_value = i64::try_from(offset_value)?;
         let offset_value = Offset(offset_value);
         virtual_memory.write_with_abi(offset, offset_value, abi)?;
+    } else {
+        r#in.seek(offset_value, Whence::Set, &mut ctx)?;
     }
 
     let len = u64::from_usize(total_len);
@@ -1373,6 +1379,7 @@ async fn sendfile(
 async fn sendfile64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     out: FdNum,
     r#in: FdNum,
     offset: Pointer<LongOffset>,
@@ -1382,6 +1389,7 @@ async fn sendfile64(
         Abi::Amd64,
         virtual_memory,
         fdtable,
+        ctx,
         out,
         r#in,
         offset.cast(),
