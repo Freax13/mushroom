@@ -49,7 +49,7 @@ use crate::{
     },
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
-    time::{self, now, sleep_until},
+    time::{self, Tick, now, sleep_until},
     user::process::{
         ProcessGroup, WaitResult,
         memory::MemoryPermissions,
@@ -4059,14 +4059,7 @@ fn clock_getres(
     res: Pointer<Timespec>,
 ) -> SyscallResult {
     if !res.is_null() {
-        virtual_memory.write_with_abi(
-            res,
-            Timespec {
-                tv_sec: 0,
-                tv_nsec: 1,
-            },
-            abi,
-        )?;
+        virtual_memory.write_with_abi(res, Tick::resolution(), abi)?;
     }
     Ok(0)
 }
@@ -4831,7 +4824,9 @@ async fn ppoll(
     }
 
     let deadline = if !timeout.is_null() {
-        Some(Some(virtual_memory.read_with_abi(timeout, abi)?))
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        let deadline = now(ClockId::Monotonic) + timeout;
+        Some(Some(deadline))
     } else {
         Some(None)
     };

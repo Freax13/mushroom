@@ -1094,6 +1094,13 @@ impl Tick {
     pub fn saturating_sub(self, rhs: Self) -> TickDelta {
         TickDelta(i64::try_from(self.0.saturating_sub(rhs.0)).unwrap())
     }
+
+    pub fn resolution() -> Timespec {
+        Timespec {
+            tv_sec: 0,
+            tv_nsec: Self::DIVISOR as u32,
+        }
+    }
 }
 
 impl Add<TickDelta> for Tick {
