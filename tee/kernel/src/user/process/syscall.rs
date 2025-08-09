@@ -2329,52 +2329,27 @@ async fn fcntl(
     }
 }
 
-#[syscall(i386 = 221)]
-fn fcntl64(
+#[syscall(i386 = 221, interruptable, restartable)]
+async fn fcntl64(
+    thread: Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
 ) -> SyscallResult {
-    let (fd, flags) = fdtable.get_with_flags(fd_num)?;
-
-    match cmd {
-        FcntlCmd::DupFd | FcntlCmd::DupFdCloExec => {
-            let fd = fdtable.get_strong(fd_num)?;
-            let min = i32::try_from(arg)?;
-
-            let mut flags = FdFlags::empty();
-            flags.set(FdFlags::CLOEXEC, matches!(cmd, FcntlCmd::DupFdCloExec));
-
-            let fd_num = fdtable.insert_after(min, fd, flags, no_file_limit)?;
-            Ok(fd_num.get().try_into()?)
-        }
-        FcntlCmd::GetFd => Ok(flags.bits()),
-        FcntlCmd::SetFd => {
-            fdtable.set_flags(fd_num, FdFlags::from_bits_truncate(arg))?;
-            Ok(0)
-        }
-        FcntlCmd::GetFl => Ok(fd.flags().bits()),
-        FcntlCmd::SetFl => {
-            let flags = OpenFlags::from_bits_truncate(arg);
-            fd.set_flags(flags);
-            Ok(0)
-        }
-        FcntlCmd::GetLk
-        | FcntlCmd::SetLk
-        | FcntlCmd::SetLkW
-        | FcntlCmd::SetOwn
-        | FcntlCmd::GetOwn
-        | FcntlCmd::SetOwnEx
-        | FcntlCmd::GetOwnEx
-        | FcntlCmd::OfdSetLk
-        | FcntlCmd::OfdSetLkW => {
-            // TODO: Implement this
-            warn!("{cmd} not implemented");
-            Ok(0)
-        }
-    }
+    fcntl(
+        Abi::Amd64,
+        thread,
+        virtual_memory,
+        fdtable,
+        no_file_limit,
+        fd_num,
+        cmd,
+        arg,
+    )
+    .await
 }
 
 #[syscall(i386 = 143, amd64 = 73, interruptable, restartable)]
