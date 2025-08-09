@@ -7,7 +7,8 @@ use crate::{
         FileSystem, StatFs,
         fd::{
             BsdFileLockRecord, KernelReadBuf, KernelWriteBuf, LazyBsdFileLockRecord,
-            OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
+            LazyUnixFileLockRecord, OpenFileDescriptionData, PipeBlocked, ReadBuf,
+            StrongFileDescriptor, UnixFileLockRecord, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
             inotify::{Watchers, next_cookie},
@@ -1015,6 +1016,7 @@ pub struct TmpFsFile {
     this: Weak<Self>,
     internal: RwLock<TmpFsFileInternal>,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
     futexes: Lazy<Arc<Futexes>>,
 }
@@ -1045,6 +1047,7 @@ impl TmpFsFile {
                 links: if tmpfile { 0 } else { 1 },
             }),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
             futexes: Lazy::new(|| Arc::new(Futexes::new())),
         })
@@ -1376,6 +1379,10 @@ impl File for TmpFsFile {
 
     fn deleted(&self) -> bool {
         self.internal.read().links == 0
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }
 

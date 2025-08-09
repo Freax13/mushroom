@@ -145,6 +145,10 @@ impl<T, I> Mutex<T, I> {
     pub fn into_inner(self) -> T {
         self.cell.into_inner()
     }
+
+    pub fn as_ptr_mut(&self) -> *mut T {
+        self.cell.get()
+    }
 }
 
 unsafe impl<T, I> Send for Mutex<T, I> where T: Send {}

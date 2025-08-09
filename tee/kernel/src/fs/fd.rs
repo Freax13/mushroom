@@ -4,9 +4,10 @@ use core::{
     cmp,
     ffi::c_void,
     mem::offset_of,
-    num::NonZeroU8,
-    ops::{BitOr, BitOrAssign, Deref, Not},
+    num::{NonZeroU8, NonZeroUsize},
+    ops::{BitOr, BitOrAssign, Bound, Deref, Not},
     pin::pin,
+    ptr::NonNull,
     sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
@@ -40,7 +41,7 @@ use crate::{
 };
 use alloc::{
     boxed::Box,
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map::Entry},
     format,
     sync::{Arc, Weak},
     vec::Vec,
@@ -258,6 +259,12 @@ impl Drop for StrongFileDescriptor {
         debug_assert_ne!(val, 0);
         if val == 1 {
             self.close_notify.notify();
+
+            // Release all unix locks held by the fd.
+            if let Ok(record) = self.ofd.unix_file_lock_record() {
+                let owner = UnixLockOwner::ofd(&self.ofd);
+                record.unlock_all(owner);
+            }
         }
     }
 }
@@ -463,6 +470,9 @@ impl InternalFileDescriptorTable {
     ) -> Result<()> {
         ensure!(fd_num.get() < no_file_limit.get() as i32, BadF);
 
+        // Close the previous ofd. If there was none, that's fine too.
+        let _ = self.close(fd_num);
+
         self.table.insert(
             fd_num.get(),
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
@@ -492,7 +502,11 @@ impl InternalFileDescriptorTable {
     }
 
     pub fn close(&mut self, fd_num: FdNum) -> Result<()> {
-        self.table.remove(&fd_num.get()).map(drop).ok_or(err!(BadF))
+        let entry = self.table.remove(&fd_num.get()).ok_or(err!(BadF))?;
+        if let Ok(record) = entry.fd.unix_file_lock_record() {
+            record.unlock_all(UnixLockOwner::fdtable(NonNull::from_ref(self)));
+        }
+        Ok(())
     }
 
     pub fn prepare_for_execve(&self) -> Self {
@@ -566,6 +580,17 @@ impl Clone for InternalFileDescriptorTable {
                 .iter()
                 .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone(), fd.flags)))
                 .collect(),
+        }
+    }
+}
+
+impl Drop for InternalFileDescriptorTable {
+    fn drop(&mut self) {
+        // Close all file descriptors. "Closing" a file descriptor has some
+        // more side-effects like releasing all unix locks.
+        while let Some(first) = self.table.first_entry() {
+            let fd_num = *first.key();
+            self.close(FdNum::new(fd_num)).unwrap();
         }
     }
 }
@@ -945,6 +970,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock>;
 
+    fn unix_file_lock_record(&self) -> Result<&Arc<UnixFileLockRecord>> {
+        bail!(BadF)
+    }
+
     /// For path file descriptors, this method should return the pointed to
     /// link.
     fn path_fd_link(&self) -> Option<&Link> {
@@ -1253,4 +1282,318 @@ enum FileLockState {
     Unlocked,
     Shared,
     Exclusive,
+}
+
+pub struct LazyUnixFileLockRecord {
+    unix_file_lock_record: Lazy<Arc<UnixFileLockRecord>>,
+}
+
+impl LazyUnixFileLockRecord {
+    pub const fn new() -> Self {
+        Self {
+            unix_file_lock_record: Lazy::new(Default::default),
+        }
+    }
+
+    pub fn get(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
+}
+
+pub struct UnixFileLockRecord {
+    notify: Notify,
+    state: Mutex<UnixFileLockRecordState>,
+}
+
+impl UnixFileLockRecord {
+    pub fn new() -> Self {
+        Self {
+            notify: Notify::new(),
+            state: Mutex::new(UnixFileLockRecordState::new()),
+        }
+    }
+
+    pub fn find_conflict(&self, lock: UnixLock) -> Option<UnixLock> {
+        let guard = self.state.lock();
+        guard.find_conflict(lock)
+    }
+
+    /// Try to acquire a lock. If there's a conflicting lock, return it.
+    pub fn lock(&self, lock: UnixLock) -> Result<(), ()> {
+        if lock.len == 0 {
+            return Ok(());
+        }
+
+        let mut guard = self.state.lock();
+        guard.lock(lock)?;
+        self.notify.notify();
+        Ok(())
+    }
+
+    /// Try to acquire a lock. If there's a conflicting lock, return it.
+    pub async fn lock_wait(&self, lock: UnixLock) {
+        self.notify.wait_until(|| self.lock(lock).ok()).await;
+    }
+
+    /// Release a lock.
+    pub fn unlock(&self, owner: UnixLockOwner, start: u64, len: u64) {
+        if len == 0 {
+            return;
+        }
+
+        let mut guard = self.state.lock();
+        guard.unlock(owner, start, len);
+        drop(guard);
+        self.notify.notify();
+    }
+
+    /// Release a lock.
+    pub fn unlock_all(&self, owner: UnixLockOwner) {
+        let mut guard = self.state.lock();
+        guard.unlock_all(owner);
+        drop(guard);
+        self.notify.notify();
+    }
+}
+
+impl Default for UnixFileLockRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct UnixFileLockRecordState {
+    locks: BTreeMap<(u64, UnixLockOwner), UnixLockData>,
+}
+
+impl UnixFileLockRecordState {
+    fn new() -> Self {
+        Self {
+            locks: BTreeMap::new(),
+        }
+    }
+
+    /// Try to find a lock that conflicts with the given new lock.
+    pub fn find_conflict(&self, lock: UnixLock) -> Option<UnixLock> {
+        debug_assert_ne!(lock.len, 0);
+
+        let end = lock.start + lock.len;
+        self.locks
+            .range(..(end, lock.owner))
+            .rev()
+            // Only consider locks that overlap.
+            .filter(|((start, _), l)| *start < end && lock.start < (*start + l.len))
+            // Only consider locks by other owners.
+            .filter(|((_, owner), _)| *owner != lock.owner)
+            // Check the lock type to determine if there's a conflict.
+            .find(|(_, l)| l.ty == UnixLockType::Write || lock.ty == UnixLockType::Write)
+            .map(|(&(start, owner), l)| UnixLock {
+                owner,
+                start,
+                len: l.len,
+                ty: l.ty,
+                pid: l.pid,
+            })
+    }
+
+    /// Take a lock.
+    pub fn lock(&mut self, mut lock: UnixLock) -> Result<(), ()> {
+        debug_assert_ne!(lock.len, 0);
+
+        if self.find_conflict(lock).is_some() {
+            return Err(());
+        }
+
+        // Remove all overlapping locks.
+        self.unlock(lock.owner, lock.start, lock.len);
+
+        // Coalesce with a lock starting where this new lock ends if it has the
+        // same type and pid.
+        let end = lock.start + lock.len;
+        if let Entry::Occupied(entry) = self.locks.entry((end, lock.owner))
+            && entry.get().ty == lock.ty
+            && entry.get().pid == lock.pid
+        {
+            let removed = entry.remove();
+            lock.len += removed.len;
+        }
+
+        // Try to find a lock ending where this new lock starts.
+        let mut cursor = self
+            .locks
+            .upper_bound_mut(Bound::Excluded(&(lock.start, lock.owner)));
+        let prev = loop {
+            let Some((&(current_start, current_owner), l)) = cursor.peek_prev() else {
+                break None;
+            };
+
+            // Skip over all locks by different owners.
+            if current_owner != lock.owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            let current_end = current_start + l.len;
+            if current_end == lock.start {
+                break Some(l);
+            } else {
+                debug_assert!(current_end < lock.start);
+                break None;
+            }
+        };
+
+        // If the previous lock has the same type and pid, coalesce.
+        if let Some(l) = prev.filter(|l| l.ty == lock.ty && l.pid == lock.pid) {
+            l.len += lock.len;
+        } else {
+            // Otherwise create a new entry.
+            self.locks.insert(
+                (lock.start, lock.owner),
+                UnixLockData {
+                    len: lock.len,
+                    ty: lock.ty,
+                    pid: lock.pid,
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    // Release a lock.
+    pub fn unlock(&mut self, owner: UnixLockOwner, start: u64, len: u64) {
+        debug_assert_ne!(len, 0);
+
+        // Try to find a lock that starts before `end` and ends after `end`. If
+        // there is such a lock, split it in two.
+        let end = start + len;
+        let mut cursor = self.locks.upper_bound_mut(Bound::Excluded(&(end, owner)));
+        loop {
+            let Some((&(current_start, current_owner), lock)) = cursor.peek_prev() else {
+                return;
+            };
+
+            // Skip over all locks by different owners.
+            if current_owner != owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            let current_end = current_start + lock.len;
+            let Some(new_len) = current_end.checked_sub(end).filter(|&len| len > 0) else {
+                break;
+            };
+
+            // Shrink the existing lock ...
+            lock.len = end - current_start;
+
+            // ... and add a new one after it.
+            let new_data = UnixLockData {
+                len: new_len,
+                ty: lock.ty,
+                pid: lock.pid,
+            };
+            cursor.insert_after((end, owner), new_data).unwrap();
+            break;
+        }
+
+        // At this point, we know that all locks end at the same offset or
+        // before `end`. Remove all locks that start at or after `start`.
+        loop {
+            let Some((&(current_start, current_owner), _)) = cursor.peek_prev() else {
+                return;
+            };
+
+            // Skip over all locks by different owners.
+            if current_owner != owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            if current_start < start {
+                break;
+            }
+
+            cursor.remove_prev().unwrap();
+        }
+
+        // At this point, we know that all locks end at the same offset or
+        // before `end` and start before `start`. If there's a lock that starts
+        // before `start` and ends after `start`, truncate it.
+        while let Some((&(current_start, current_owner), lock)) = cursor.peek_prev() {
+            if current_owner != owner {
+                cursor.prev().unwrap();
+                continue;
+            }
+
+            let current_end = current_start + lock.len;
+            if current_end < start {
+                break;
+            }
+
+            let Some(new_len) = start.checked_sub(current_start).filter(|&len| len > 0) else {
+                break;
+            };
+            lock.len = new_len;
+            break;
+        }
+    }
+
+    /// Release all locks by the given owner.
+    pub fn unlock_all(&mut self, owner: UnixLockOwner) {
+        self.locks.retain(|&(_, o), _| o != owner);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct UnixLockData {
+    len: u64,
+    ty: UnixLockType,
+    pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnixLock {
+    pub owner: UnixLockOwner,
+    pub ty: UnixLockType,
+    pub start: u64,
+    pub len: u64,
+    pub pid: Option<u32>,
+}
+
+/// An opaque handle identifying the owner of a lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnixLockOwner(NonZeroUsize);
+
+impl UnixLockOwner {
+    /// Create an ownership instance associated with a process.
+    ///
+    /// Despite the name and all the documentation around this, the ownership
+    /// is actually tied to the file descriptor table, not the process. If the
+    /// file descriptor table is shared between multiple processes, locks will
+    /// be shared between these processes even though locks are ostensibly tied
+    /// to a single process.
+    pub fn process(fdtable: &FileDescriptorTable) -> Self {
+        let ptr = fdtable.internal.as_ptr_mut();
+        let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        Self::fdtable(ptr)
+    }
+
+    /// Create an ownership instance associated with a process.
+    ///
+    /// See [`Self::process`].
+    fn fdtable(fdtable: NonNull<InternalFileDescriptorTable>) -> Self {
+        Self(fdtable.addr())
+    }
+
+    /// Create an ownership instance associated with a open file description.
+    pub fn ofd(fd: &dyn OpenFileDescription) -> Self {
+        Self(NonNull::from(fd).addr())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnixLockType {
+    Read,
+    Write,
 }

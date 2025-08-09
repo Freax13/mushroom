@@ -21,8 +21,8 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
-            NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
-            WriteBuf, common_ioctl,
+            LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf, common_ioctl,
             file::{File, open_file},
             inotify::Watchers,
             stream_buffer,
@@ -1168,6 +1168,7 @@ pub struct NetTcpFile {
     pub ino: u64,
     ip_version: IpVersion,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
 }
 
@@ -1179,6 +1180,7 @@ impl NetTcpFile {
             ino: new_ino(),
             ip_version,
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -1350,5 +1352,9 @@ impl File for NetTcpFile {
 
     fn deleted(&self) -> bool {
         false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }

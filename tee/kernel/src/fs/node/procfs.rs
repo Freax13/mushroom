@@ -17,8 +17,8 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            BsdFileLockRecord, FileDescriptor, LazyBsdFileLockRecord, ReadBuf,
-            StrongFileDescriptor, WriteBuf,
+            BsdFileLockRecord, FileDescriptor, LazyBsdFileLockRecord, LazyUnixFileLockRecord,
+            ReadBuf, StrongFileDescriptor, UnixFileLockRecord, WriteBuf,
             dir::open_dir,
             file::{File, open_file},
             inotify::Watchers,
@@ -388,6 +388,7 @@ struct CpuinfoFile {
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
 }
 
@@ -398,6 +399,7 @@ impl CpuinfoFile {
             fs,
             ino: new_ino(),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -602,6 +604,10 @@ impl File for CpuinfoFile {
     fn deleted(&self) -> bool {
         false
     }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
+    }
 }
 
 struct MeminfoFile {
@@ -609,6 +615,7 @@ struct MeminfoFile {
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
 }
 
@@ -619,6 +626,7 @@ impl MeminfoFile {
             fs,
             ino: new_ino(),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -719,6 +727,10 @@ impl File for MeminfoFile {
 
     fn deleted(&self) -> bool {
         false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }
 
@@ -973,6 +985,7 @@ struct NetDevFile {
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
 }
 
@@ -983,6 +996,7 @@ impl NetDevFile {
             fs,
             ino: new_ino(),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -1081,6 +1095,10 @@ impl File for NetDevFile {
 
     fn deleted(&self) -> bool {
         false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }
 
@@ -1213,18 +1231,23 @@ struct ProcessDir {
     bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     cmdline_bsd_file_lock_record: LazyBsdFileLockRecord,
+    cmdline_unix_file_lock_record: LazyUnixFileLockRecord,
     cmdline_file_watchers: Arc<Watchers>,
     fd_bsd_file_lock_record: LazyBsdFileLockRecord,
     fd_file_watchers: Arc<Watchers>,
     exe_link_lock_record: LazyBsdFileLockRecord,
     exe_link_watchers: Arc<Watchers>,
     maps_bsd_file_lock_record: LazyBsdFileLockRecord,
+    maps_unix_file_lock_record: LazyUnixFileLockRecord,
     maps_file_watchers: Arc<Watchers>,
     mem_bsd_file_lock_record: LazyBsdFileLockRecord,
+    mem_unix_file_lock_record: LazyUnixFileLockRecord,
     mem_file_watchers: Arc<Watchers>,
     stat_bsd_file_lock_record: LazyBsdFileLockRecord,
+    stat_unix_file_lock_record: LazyUnixFileLockRecord,
     stat_file_watchers: Arc<Watchers>,
     status_bsd_file_lock_record: LazyBsdFileLockRecord,
+    status_unix_file_lock_record: LazyUnixFileLockRecord,
     status_file_watchers: Arc<Watchers>,
     task_dir_bsd_lock_record: LazyBsdFileLockRecord,
     task_dir_watchers: Arc<Watchers>,
@@ -1240,18 +1263,23 @@ impl ProcessDir {
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             cmdline_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            cmdline_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             cmdline_file_watchers: Arc::new(Watchers::new()),
             fd_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             fd_file_watchers: Arc::new(Watchers::new()),
             exe_link_lock_record: LazyBsdFileLockRecord::new(),
             exe_link_watchers: Arc::new(Watchers::new()),
             maps_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            maps_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             maps_file_watchers: Arc::new(Watchers::new()),
             mem_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            mem_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             mem_file_watchers: Arc::new(Watchers::new()),
             stat_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            stat_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             stat_file_watchers: Arc::new(Watchers::new()),
             status_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            status_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             status_file_watchers: Arc::new(Watchers::new()),
             task_dir_bsd_lock_record: LazyBsdFileLockRecord::new(),
             task_dir_watchers: Arc::new(Watchers::new()),
@@ -1326,6 +1354,7 @@ impl Directory for ProcessDir {
                 self.fs.clone(),
                 self.process.clone(),
                 self.cmdline_bsd_file_lock_record.get().clone(),
+                self.cmdline_unix_file_lock_record.get().clone(),
                 self.cmdline_file_watchers.clone(),
             ),
             b"fd" => FdDir::new(
@@ -1345,24 +1374,28 @@ impl Directory for ProcessDir {
                 self.fs.clone(),
                 self.process.clone(),
                 self.maps_bsd_file_lock_record.get().clone(),
+                self.maps_unix_file_lock_record.get().clone(),
                 self.maps_file_watchers.clone(),
             ),
             b"mem" => MemFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.mem_bsd_file_lock_record.get().clone(),
+                self.mem_unix_file_lock_record.get().clone(),
                 self.mem_file_watchers.clone(),
             ),
             b"stat" => ProcessStatFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.stat_bsd_file_lock_record.get().clone(),
+                self.stat_unix_file_lock_record.get().clone(),
                 self.stat_file_watchers.clone(),
             ),
             b"status" => ProcessStatusFile::new(
                 self.fs.clone(),
                 self.process.clone(),
                 self.status_bsd_file_lock_record.get().clone(),
+                self.status_unix_file_lock_record.get().clone(),
                 self.status_file_watchers.clone(),
             ),
             b"task" => ProcessTaskDir::new(
@@ -1554,6 +1587,7 @@ struct CmdlineFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -1562,6 +1596,7 @@ impl CmdlineFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -1569,6 +1604,7 @@ impl CmdlineFile {
             fs,
             process,
             bsd_file_lock_record,
+            unix_file_lock_record,
             watchers,
         })
     }
@@ -1678,6 +1714,10 @@ impl File for CmdlineFile {
 
     fn deleted(&self) -> bool {
         false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
     }
 }
 
@@ -2252,6 +2292,7 @@ struct MapsFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2260,6 +2301,7 @@ impl MapsFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -2267,6 +2309,7 @@ impl MapsFile {
             fs,
             process,
             bsd_file_lock_record,
+            unix_file_lock_record,
             watchers,
         })
     }
@@ -2359,6 +2402,10 @@ impl File for MapsFile {
     fn deleted(&self) -> bool {
         false
     }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
 }
 
 struct MemFile {
@@ -2366,6 +2413,7 @@ struct MemFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2374,6 +2422,7 @@ impl MemFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -2381,6 +2430,7 @@ impl MemFile {
             fs,
             process,
             bsd_file_lock_record,
+            unix_file_lock_record,
             watchers,
         })
     }
@@ -2493,6 +2543,10 @@ impl File for MemFile {
     fn deleted(&self) -> bool {
         false
     }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
 }
 
 struct ProcessStatFile {
@@ -2500,6 +2554,7 @@ struct ProcessStatFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2508,6 +2563,7 @@ impl ProcessStatFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -2515,6 +2571,7 @@ impl ProcessStatFile {
             fs,
             process,
             bsd_file_lock_record,
+            unix_file_lock_record,
             watchers,
         })
     }
@@ -2607,6 +2664,10 @@ impl File for ProcessStatFile {
     fn deleted(&self) -> bool {
         false
     }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
 }
 
 struct ProcessStatusFile {
@@ -2614,6 +2675,7 @@ struct ProcessStatusFile {
     fs: Arc<ProcFs>,
     process: Weak<Process>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -2622,6 +2684,7 @@ impl ProcessStatusFile {
         fs: Arc<ProcFs>,
         process: Weak<Process>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -2629,6 +2692,7 @@ impl ProcessStatusFile {
             fs,
             process,
             bsd_file_lock_record,
+            unix_file_lock_record,
             watchers,
         })
     }
@@ -2720,6 +2784,10 @@ impl File for ProcessStatusFile {
 
     fn deleted(&self) -> bool {
         false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
     }
 }
 
@@ -2985,6 +3053,7 @@ struct TaskDir {
     bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     comm_bsd_file_lock_record: LazyBsdFileLockRecord,
+    comm_unix_file_lock_record: LazyUnixFileLockRecord,
     comm_file_watchers: Arc<Watchers>,
 }
 
@@ -2998,6 +3067,7 @@ impl TaskDir {
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             comm_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            comm_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             comm_file_watchers: Arc::new(Watchers::new()),
         })
     }
@@ -3070,6 +3140,7 @@ impl Directory for TaskDir {
                 self.fs.clone(),
                 self.thread.clone(),
                 self.comm_bsd_file_lock_record.get().clone(),
+                self.comm_unix_file_lock_record.get().clone(),
                 self.comm_file_watchers.clone(),
             ),
             _ => bail!(NoEnt),
@@ -3219,6 +3290,7 @@ struct TaskCommFile {
     fs: Arc<ProcFs>,
     thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
 }
 
@@ -3227,6 +3299,7 @@ impl TaskCommFile {
         fs: Arc<ProcFs>,
         thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
@@ -3234,6 +3307,7 @@ impl TaskCommFile {
             fs,
             thread,
             bsd_file_lock_record,
+            unix_file_lock_record,
             watchers,
         })
     }
@@ -3329,6 +3403,10 @@ impl File for TaskCommFile {
     fn deleted(&self) -> bool {
         false
     }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
 }
 
 struct StatFile {
@@ -3336,6 +3414,7 @@ struct StatFile {
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
 }
 
@@ -3346,6 +3425,7 @@ impl StatFile {
             fs,
             ino: new_ino(),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -3456,6 +3536,10 @@ impl File for StatFile {
     fn deleted(&self) -> bool {
         false
     }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
+    }
 }
 
 struct UptimeFile {
@@ -3463,6 +3547,7 @@ struct UptimeFile {
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
 }
 
@@ -3473,6 +3558,7 @@ impl UptimeFile {
             fs,
             ino: new_ino(),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
         })
     }
@@ -3587,5 +3673,9 @@ impl File for UptimeFile {
 
     fn deleted(&self) -> bool {
         false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }

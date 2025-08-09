@@ -25,7 +25,7 @@ use crate::{
 
 use super::{
     BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
-    StrongFileDescriptor, WriteBuf, stream_buffer,
+    StrongFileDescriptor, UnixFileLockRecord, WriteBuf, stream_buffer,
 };
 
 pub trait File: INode {
@@ -87,6 +87,7 @@ pub trait File: INode {
         bail!(OpNotSupp)
     }
     fn deleted(&self) -> bool;
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord>;
 }
 
 pub fn open_file(
@@ -425,6 +426,10 @@ impl OpenFileDescription for FileFileDescription {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+
+    fn unix_file_lock_record(&self) -> Result<&Arc<UnixFileLockRecord>> {
+        Ok(self.file.unix_file_lock_record())
     }
 }
 
