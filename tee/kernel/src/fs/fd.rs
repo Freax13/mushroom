@@ -286,13 +286,13 @@ impl PartialEq<dyn OpenFileDescription> for WeakFileDescriptor {
 }
 
 pub struct FileDescriptorTable {
-    table: Mutex<BTreeMap<i32, FileDescriptorTableEntry>>,
+    internal: Mutex<InternalFileDescriptorTable>,
 }
 
 impl FileDescriptorTable {
     pub const fn empty() -> Self {
         Self {
-            table: Mutex::new(BTreeMap::new()),
+            internal: Mutex::new(InternalFileDescriptorTable::empty()),
         }
     }
 
@@ -337,15 +337,98 @@ impl FileDescriptorTable {
         self.insert_after(0, fd, flags, no_file_limit)
     }
 
-    fn find_free_fd_num(
-        table: &BTreeMap<i32, FileDescriptorTableEntry>,
+    pub fn insert_after(
+        &self,
         min: i32,
+        fd: impl Into<StrongFileDescriptor>,
+        flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
-    ) -> Result<i32> {
+    ) -> Result<FdNum> {
+        self.internal
+            .lock()
+            .insert_after(min, fd, flags, no_file_limit)
+    }
+
+    pub fn replace(
+        &self,
+        fd_num: FdNum,
+        fd: impl Into<StrongFileDescriptor>,
+        flags: impl Into<FdFlags>,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<()> {
+        self.internal
+            .lock()
+            .replace(fd_num, fd, flags, no_file_limit)
+    }
+
+    pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
+        self.get_with_flags(fd_num).map(|(fd, _flags)| fd)
+    }
+
+    pub fn get_with_flags(&self, fd_num: FdNum) -> Result<(FileDescriptor, FdFlags)> {
+        self.internal.lock().get_with_flags(fd_num)
+    }
+
+    pub fn get_strong(&self, fd_num: FdNum) -> Result<StrongFileDescriptor> {
+        self.get_strong_with_flags(fd_num).map(|(fd, _flags)| fd)
+    }
+
+    pub fn get_strong_with_flags(&self, fd_num: FdNum) -> Result<(StrongFileDescriptor, FdFlags)> {
+        self.internal.lock().get_strong_with_flags(fd_num)
+    }
+
+    pub fn set_flags(&self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
+        self.internal.lock().set_flags(fd_num, flags)
+    }
+
+    pub fn close(&self, fd_num: FdNum) -> Result<()> {
+        self.internal.lock().close(fd_num)
+    }
+
+    pub fn prepare_for_execve(&self) -> Self {
+        Self {
+            internal: Mutex::new(self.internal.lock().prepare_for_execve()),
+        }
+    }
+
+    pub fn list_entries(&self) -> Vec<DirEntry> {
+        self.internal.lock().list_entries()
+    }
+
+    pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
+        self.internal.lock().get_node(fs, fd_num, uid, gid)
+    }
+
+    #[cfg(not(feature = "harden"))]
+    pub fn dump(&self, indent: usize, write: impl fmt::Write) -> fmt::Result {
+        self.internal.lock().dump(indent, write)
+    }
+}
+
+impl Clone for FileDescriptorTable {
+    fn clone(&self) -> Self {
+        Self {
+            internal: self.internal.clone(),
+        }
+    }
+}
+
+struct InternalFileDescriptorTable {
+    table: BTreeMap<i32, FileDescriptorTableEntry>,
+}
+
+impl InternalFileDescriptorTable {
+    pub const fn empty() -> Self {
+        Self {
+            table: BTreeMap::new(),
+        }
+    }
+
+    fn find_free_fd_num(&self, min: i32, no_file_limit: CurrentNoFileLimit) -> Result<i32> {
         ensure!(min < no_file_limit.get() as i32, Inval);
         let min = cmp::max(0, min);
 
-        let fd_iter = table.keys().copied().skip_while(|i| *i < min);
+        let fd_iter = self.table.keys().copied().skip_while(|i| *i < min);
         let mut counter_iter = min..no_file_limit.get() as i32;
 
         fd_iter
@@ -357,15 +440,14 @@ impl FileDescriptorTable {
     }
 
     pub fn insert_after(
-        &self,
+        &mut self,
         min: i32,
         fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<FdNum> {
-        let mut guard = self.table.lock();
-        let fd_num = Self::find_free_fd_num(&guard, min, no_file_limit)?;
-        guard.insert(
+        let fd_num = self.find_free_fd_num(min, no_file_limit)?;
+        self.table.insert(
             fd_num,
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
         );
@@ -373,7 +455,7 @@ impl FileDescriptorTable {
     }
 
     pub fn replace(
-        &self,
+        &mut self,
         fd_num: FdNum,
         fd: impl Into<StrongFileDescriptor>,
         flags: impl Into<FdFlags>,
@@ -381,8 +463,7 @@ impl FileDescriptorTable {
     ) -> Result<()> {
         ensure!(fd_num.get() < no_file_limit.get() as i32, BadF);
 
-        let mut guard = self.table.lock();
-        guard.insert(
+        self.table.insert(
             fd_num.get(),
             FileDescriptorTableEntry::new(fd.into(), flags.into()),
         );
@@ -390,67 +471,49 @@ impl FileDescriptorTable {
         Ok(())
     }
 
-    pub fn get(&self, fd_num: FdNum) -> Result<FileDescriptor> {
-        self.get_with_flags(fd_num).map(|(fd, _flags)| fd)
-    }
-
     pub fn get_with_flags(&self, fd_num: FdNum) -> Result<(FileDescriptor, FdFlags)> {
         self.table
-            .lock()
             .get(&fd_num.get())
             .map(|fd| (StrongFileDescriptor::downgrade(&fd.fd), fd.flags))
             .ok_or(err!(BadF))
     }
 
-    pub fn get_strong(&self, fd_num: FdNum) -> Result<StrongFileDescriptor> {
-        self.get_strong_with_flags(fd_num).map(|(fd, _flags)| fd)
-    }
-
     pub fn get_strong_with_flags(&self, fd_num: FdNum) -> Result<(StrongFileDescriptor, FdFlags)> {
         self.table
-            .lock()
             .get(&fd_num.get())
             .map(|fd| (fd.fd.clone(), fd.flags))
             .ok_or(err!(BadF))
     }
 
-    pub fn set_flags(&self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
-        let mut guard = self.table.lock();
-        let entry = guard.get_mut(&fd_num.get()).ok_or(err!(BadF))?;
+    pub fn set_flags(&mut self, fd_num: FdNum, flags: FdFlags) -> Result<()> {
+        let entry = self.table.get_mut(&fd_num.get()).ok_or(err!(BadF))?;
         entry.flags = flags;
         Ok(())
     }
 
-    pub fn close(&self, fd_num: FdNum) -> Result<()> {
-        self.table
-            .lock()
-            .remove(&fd_num.get())
-            .map(drop)
-            .ok_or(err!(BadF))
+    pub fn close(&mut self, fd_num: FdNum) -> Result<()> {
+        self.table.remove(&fd_num.get()).map(drop).ok_or(err!(BadF))
     }
 
     pub fn prepare_for_execve(&self) -> Self {
-        let guard = self.table.lock();
         // Unshare the entries and skip any entries with CLOEXEC set.
         Self {
-            table: Mutex::new(
-                guard
-                    .iter()
-                    .filter(|(_, entry)| !entry.flags.contains(FdFlags::CLOEXEC))
-                    .map(|(fd, entry)| {
-                        (
-                            *fd,
-                            FileDescriptorTableEntry::new(entry.fd.clone(), entry.flags),
-                        )
-                    })
-                    .collect(),
-            ),
+            table: self
+                .table
+                .iter()
+                .filter(|(_, entry)| !entry.flags.contains(FdFlags::CLOEXEC))
+                .map(|(fd, entry)| {
+                    (
+                        *fd,
+                        FileDescriptorTableEntry::new(entry.fd.clone(), entry.flags),
+                    )
+                })
+                .collect(),
         }
     }
 
     pub fn list_entries(&self) -> Vec<DirEntry> {
-        let guard = self.table.lock();
-        guard
+        self.table
             .iter()
             .map(|(num, entry)| DirEntry {
                 ino: entry.ino,
@@ -465,8 +528,7 @@ impl FileDescriptorTable {
     }
 
     pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
-        let guard = self.table.lock();
-        let entry = guard.get(&fd_num.get()).ok_or(err!(NoEnt))?;
+        let entry = self.table.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(
             fs,
             entry.ino,
@@ -482,7 +544,7 @@ impl FileDescriptorTable {
     pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
         writeln!(write, "{:indent$}fd table:", "")?;
         let indent = indent + 2;
-        for (num, fd) in self.table.lock().iter() {
+        for (num, fd) in self.table.iter() {
             writeln!(
                 write,
                 "{:indent$}{num} {} {:?} ino={:?}",
@@ -493,6 +555,18 @@ impl FileDescriptorTable {
             )?;
         }
         Ok(())
+    }
+}
+
+impl Clone for InternalFileDescriptorTable {
+    fn clone(&self) -> Self {
+        Self {
+            table: self
+                .table
+                .iter()
+                .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone(), fd.flags)))
+                .collect(),
+        }
     }
 }
 
@@ -512,21 +586,6 @@ impl FileDescriptorTableEntry {
             flags,
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Arc::new(Watchers::new()),
-        }
-    }
-}
-
-impl Clone for FileDescriptorTable {
-    fn clone(&self) -> Self {
-        // Copy the table.
-        let table = self
-            .table
-            .lock()
-            .iter()
-            .map(|(num, fd)| (*num, FileDescriptorTableEntry::new(fd.fd.clone(), fd.flags)))
-            .collect();
-        Self {
-            table: Mutex::new(table),
         }
     }
 }
