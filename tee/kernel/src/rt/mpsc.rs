@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use core::{
+    iter::from_fn,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -103,6 +104,10 @@ impl<T> Receiver<T> {
         }
 
         RecvFuture(self).await
+    }
+
+    pub fn try_iter(&self) -> impl Iterator<Item = T> {
+        from_fn(|| self.0.lock().values.pop_front())
     }
 
     pub fn sender(&self) -> Sender<T> {
