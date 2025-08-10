@@ -1421,6 +1421,7 @@ impl Signal {
     pub const ILL: Self = Self(4);
     pub const TRAP: Self = Self(5);
     pub const ABRT: Self = Self(6);
+    pub const BUS: Self = Self(7);
     pub const FPE: Self = Self(8);
     pub const KILL: Self = Self(9);
     pub const USR1: Self = Self(10);

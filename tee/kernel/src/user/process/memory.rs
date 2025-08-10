@@ -6,8 +6,8 @@ use core::{
     fmt::{self, Display, Write},
     iter::{Step, repeat_with},
     mem::{MaybeUninit, needs_drop},
-    num::NonZeroU32,
-    ops::{Bound, Range},
+    num::{NonZeroU32, NonZeroUsize},
+    ops::{Bound, Range, RangeBounds},
     ptr::{NonNull, drop_in_place},
 };
 
@@ -18,6 +18,7 @@ use crate::{
         page::{KernelPage, UserPage},
         pagetable::{Pagetables, check_user_address},
     },
+    rt::mpsc,
     spin::{
         lazy::Lazy,
         mutex::Mutex,
@@ -28,7 +29,12 @@ use crate::{
         syscall::args::{OpenFlags, Stat},
     },
 };
-use alloc::{collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, btree_map::Entry},
+    ffi::CString,
+    sync::Arc,
+    vec::Vec,
+};
 use bitflags::bitflags;
 use either::Either;
 use log::debug;
@@ -65,6 +71,7 @@ pub const SIGRETURN_TRAMPOLINE_AMD64: u64 = SIGRETURN_TRAMPOLINE_PAGE + 0x10;
 
 pub struct VirtualMemory {
     state: RwLock<VirtualMemoryState>,
+    mapping_ctrl: MappingCtrl,
     pagetables: Pagetables,
     usage: MemoryUsage,
 }
@@ -116,7 +123,7 @@ impl VirtualMemory {
 
         // Clone the backing memory.
         for (page, mapping) in guard.mappings.iter_mut() {
-            let mapping = mapping.get_mut().clone()?;
+            let mapping = mapping.get_mut().clone(this.mapping_ctrl.clone())?;
             new_state.mappings.insert(*page, Mutex::new(mapping));
         }
 
@@ -481,8 +488,10 @@ impl VirtualMemory {
 
 impl Default for VirtualMemory {
     fn default() -> Self {
+        let (mapping_ctrl, unmap_rx) = MappingCtrl::new();
         Self {
-            state: RwLock::new(VirtualMemoryState::new()),
+            state: RwLock::new(VirtualMemoryState::new(unmap_rx)),
+            mapping_ctrl,
             pagetables: Pagetables::new().unwrap(),
             usage: MemoryUsage::default(),
         }
@@ -501,6 +510,42 @@ pub struct VirtualMemoryWriteGuard<'a> {
 }
 
 impl VirtualMemoryWriteGuard<'_> {
+    pub fn handle_async_unmap(&mut self) {
+        let state = &mut *self.guard;
+        for op in state.unmap_rx.try_iter() {
+            for (mapping_start, mapping) in state.mappings.iter_mut() {
+                let mapping = mapping.get_mut();
+
+                // Check if the flush operation targeted this mapping.
+                if mapping.backing.ino() != op.ino {
+                    continue;
+                }
+
+                // Make the offsets relative to the page offset of the mapping.
+                let start = op.start.saturating_sub(mapping.page_offset);
+                let Some(end) = op.end.checked_sub(mapping.page_offset) else {
+                    continue;
+                };
+                let end = cmp::min(end, u64::from_usize(mapping.pages.len()));
+
+                // Remove cached pages from the mapping. This will cause them
+                // to be refetched from the underlying file.
+                mapping
+                    .pages
+                    .remove_range(usize_from(start)..usize_from(end + 1));
+
+                // Convert the offsets into virtual addresses.
+                let start = *mapping_start + start;
+                let end = *mapping_start + end;
+
+                // Flush the pages.
+                self.virtual_memory
+                    .pagetables
+                    .try_unmap_user_pages(start..=end);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn mmap(
         &mut self,
@@ -528,6 +573,7 @@ impl VirtualMemoryWriteGuard<'_> {
 
         let size = usize_from(end_page - start_page) + 1;
         let pages = SparseSplitVec::new(size);
+        backing.register(&self.virtual_memory.mapping_ctrl);
         self.guard.mappings.insert(
             start_page,
             Mutex::new(Mapping {
@@ -537,6 +583,7 @@ impl VirtualMemoryWriteGuard<'_> {
                 pages,
                 shared,
                 futexes,
+                mapping_ctrl: self.virtual_memory.mapping_ctrl.clone(),
             }),
         );
 
@@ -554,6 +601,10 @@ impl VirtualMemoryWriteGuard<'_> {
         impl Backing for ZeroBacking {
             fn get_initial_page(&self, _offset: u64) -> Result<KernelPage> {
                 Ok(KernelPage::zeroed())
+            }
+
+            fn ino(&self) -> u64 {
+                0
             }
 
             fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
@@ -588,6 +639,10 @@ impl VirtualMemoryWriteGuard<'_> {
                 let page = &mut pages[usize_from(offset)];
                 page.make_mut(true)?;
                 page.clone()
+            }
+
+            fn ino(&self) -> u64 {
+                0
             }
 
             fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
@@ -677,6 +732,10 @@ impl VirtualMemoryWriteGuard<'_> {
                 }
             }
 
+            fn ino(&self) -> u64 {
+                self.stat.ino
+            }
+
             fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
                 let deleted = self.file.deleted();
                 let path = self
@@ -689,6 +748,14 @@ impl VirtualMemoryWriteGuard<'_> {
                     self.stat.ino,
                     Some((path, deleted)),
                 )
+            }
+
+            fn register(&self, mapping_ctrl: &MappingCtrl) {
+                self.file.register(mapping_ctrl);
+            }
+
+            fn unregister(&self, mapping_ctrl: &MappingCtrl) {
+                self.file.unregister(mapping_ctrl);
             }
         }
 
@@ -770,6 +837,10 @@ impl VirtualMemoryWriteGuard<'_> {
             fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
                 assert_eq!(offset, 0);
                 PAGE.lock().clone()
+            }
+
+            fn ino(&self) -> u64 {
+                0
             }
 
             fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
@@ -1003,13 +1074,15 @@ impl VirtualMemoryWriteGuard<'_> {
 struct VirtualMemoryState {
     mappings: BTreeMap<Page, Mutex<Mapping>>,
     brk_end: VirtAddr,
+    unmap_rx: mpsc::Receiver<UnmapCommand>,
 }
 
 impl VirtualMemoryState {
-    pub fn new() -> Self {
+    pub fn new(unmap_rx: mpsc::Receiver<UnmapCommand>) -> Self {
         Self {
             mappings: BTreeMap::new(),
             brk_end: VirtAddr::zero(),
+            unmap_rx,
         }
     }
 
@@ -1165,6 +1238,7 @@ pub struct Mapping {
     shared: bool,
     pages: SparseSplitVec<UserPage>,
     futexes: Arc<Futexes>,
+    mapping_ctrl: MappingCtrl,
 }
 
 impl Mapping {
@@ -1198,6 +1272,9 @@ impl Mapping {
     pub fn split_off(&mut self, offset: u64) -> Self {
         let pages = self.pages.split_off(usize_from(offset));
 
+        let mapping_ctrl = self.mapping_ctrl.clone();
+        self.backing.register(&mapping_ctrl);
+
         Self {
             backing: self.backing.clone(),
             page_offset: self.page_offset + offset,
@@ -1205,10 +1282,11 @@ impl Mapping {
             pages,
             shared: self.shared,
             futexes: self.futexes.clone(),
+            mapping_ctrl,
         }
     }
 
-    pub fn clone(&mut self) -> Result<Self> {
+    fn clone(&mut self, mapping_ctrl: MappingCtrl) -> Result<Self> {
         let mut pages = SparseSplitVec::new(self.pages.len());
         for (i, page) in self.pages.iter_mut() {
             *pages.get_mut(i).unwrap() = Some(page.clone()?);
@@ -1220,6 +1298,8 @@ impl Mapping {
             Arc::new(Futexes::new())
         };
 
+        self.backing.register(&mapping_ctrl);
+
         Ok(Self {
             backing: self.backing.clone(),
             page_offset: self.page_offset,
@@ -1227,6 +1307,7 @@ impl Mapping {
             pages,
             shared: self.shared,
             futexes,
+            mapping_ctrl,
         })
     }
 
@@ -1248,10 +1329,24 @@ impl Mapping {
     }
 }
 
-pub trait Backing: Send + Sync + 'static {
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        self.backing.unregister(&self.mapping_ctrl);
+    }
+}
+
+trait Backing: Send + Sync + 'static {
     fn get_initial_page(&self, offset: u64) -> Result<KernelPage>;
+    fn ino(&self) -> u64;
     /// Returns a tuple of (major dev, minor dev, ino, (path, deleted)).
     fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>);
+
+    fn register(&self, mapping_ctrl: &MappingCtrl) {
+        let _ = mapping_ctrl;
+    }
+    fn unregister(&self, mapping_ctrl: &MappingCtrl) {
+        let _ = mapping_ctrl;
+    }
 }
 
 /// Like a `Vec<T>` but with constant time `split_at`.
@@ -1490,4 +1585,76 @@ impl WriteToVec for Vec<u8> {
         }
         core::fmt::write(&mut WriteImpl(self), args)
     }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MappingCtrl(mpsc::Sender<UnmapCommand>);
+
+impl MappingCtrl {
+    fn new() -> (Self, mpsc::Receiver<UnmapCommand>) {
+        let (tx, rx) = mpsc::new();
+        (Self(tx), rx)
+    }
+}
+
+pub struct MappingsCtrl {
+    senders: Mutex<BTreeMap<MappingCtrl, NonZeroUsize>>,
+}
+
+impl MappingsCtrl {
+    pub const fn new() -> Self {
+        Self {
+            senders: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    pub fn register(&self, ctrl: MappingCtrl) {
+        let mut guard = self.senders.lock();
+        match guard.entry(ctrl) {
+            Entry::Vacant(entry) => {
+                entry.insert(NonZeroUsize::MIN);
+            }
+            Entry::Occupied(mut entry) => {
+                let new_counter = entry.get().checked_add(1).unwrap();
+                *entry.get_mut() = new_counter;
+            }
+        }
+    }
+
+    pub fn unregister(&self, ctrl: MappingCtrl) {
+        let mut guard = self.senders.lock();
+        match guard.entry(ctrl) {
+            Entry::Vacant(_) => unreachable!(),
+            Entry::Occupied(mut entry) => {
+                if let Some(new_counter) = NonZeroUsize::new(entry.get().get() - 1) {
+                    *entry.get_mut() = new_counter;
+                } else {
+                    entry.remove();
+                }
+            }
+        }
+    }
+
+    pub fn unmap(&self, ino: u64, pages: impl RangeBounds<u64>) {
+        let start = match pages.start_bound() {
+            Bound::Included(idx) => *idx,
+            Bound::Excluded(idx) => *idx + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match pages.end_bound() {
+            Bound::Included(idx) => *idx,
+            Bound::Excluded(idx) => *idx - 1,
+            Bound::Unbounded => !0,
+        };
+
+        let mut guard = self.senders.lock();
+        guard.retain(|tx, _| tx.0.send(UnmapCommand { ino, start, end }).is_ok());
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnmapCommand {
+    ino: u64,
+    start: u64,
+    end: u64,
 }

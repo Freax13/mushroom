@@ -24,6 +24,7 @@ use crate::{
     time::now,
     user::process::{
         futex::Futexes,
+        memory::{MappingCtrl, MappingsCtrl},
         syscall::args::{ClockId, FallocateMode, InotifyMask, OpenFlags, SocketAddrUnix},
         thread::{Gid, Uid},
     },
@@ -36,6 +37,7 @@ use alloc::{
     vec::Vec,
 };
 use async_trait::async_trait;
+use usize_conversions::FromUsize;
 
 use super::{
     DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
@@ -1019,6 +1021,7 @@ pub struct TmpFsFile {
     unix_file_lock_record: LazyUnixFileLockRecord,
     watchers: Watchers,
     futexes: Lazy<Arc<Futexes>>,
+    mappings_ctrl: Lazy<MappingsCtrl>,
 }
 
 struct TmpFsFileInternal {
@@ -1050,6 +1053,7 @@ impl TmpFsFile {
             unix_file_lock_record: LazyUnixFileLockRecord::new(),
             watchers: Watchers::new(),
             futexes: Lazy::new(|| Arc::new(Futexes::new())),
+            mappings_ctrl: Lazy::new(MappingsCtrl::new),
         })
     }
 
@@ -1117,10 +1121,19 @@ impl INode for TmpFsFile {
 
     fn truncate(&self, len: usize) -> Result<()> {
         let mut guard = self.internal.write();
+        guard.buffer.truncate(len)?;
+
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
-        guard.buffer.truncate(len)
+        drop(guard);
+
+        if let Some(mappings_ctrl) = self.mappings_ctrl.try_get() {
+            let start = u64::from_usize(len.div_ceil(0x1000));
+            mappings_ctrl.unmap(self.ino, start..);
+        }
+
+        Ok(())
     }
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
@@ -1140,6 +1153,14 @@ impl File for TmpFsFile {
 
     fn futexes(&self) -> Option<Arc<Futexes>> {
         Some(self.futexes.clone())
+    }
+
+    fn register(&self, mapping_ctrl: &MappingCtrl) {
+        self.mappings_ctrl.register(mapping_ctrl.clone());
+    }
+
+    fn unregister(&self, mapping_ctrl: &MappingCtrl) {
+        self.mappings_ctrl.unregister(mapping_ctrl.clone());
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize> {

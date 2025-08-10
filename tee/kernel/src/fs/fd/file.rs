@@ -11,6 +11,7 @@ use crate::{
     spin::mutex::Mutex,
     user::process::{
         futex::Futexes,
+        memory::MappingCtrl,
         syscall::args::{FallocateMode, InotifyMask, OpenFlags, Timespec},
         thread::{Gid, Uid},
     },
@@ -32,6 +33,13 @@ pub trait File: INode {
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage>;
     fn futexes(&self) -> Option<Arc<Futexes>> {
         None
+    }
+    fn register(&self, mapping_ctrl: &MappingCtrl) {
+        let _ = mapping_ctrl;
+    }
+
+    fn unregister(&self, mapping_ctrl: &MappingCtrl) {
+        let _ = mapping_ctrl;
     }
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize>;
     fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize>;
@@ -410,6 +418,14 @@ impl OpenFileDescription for FileFileDescription {
 
     fn futexes(&self) -> Option<Arc<Futexes>> {
         self.file.futexes()
+    }
+
+    fn register(&self, mapping_ctrl: &MappingCtrl) {
+        self.file.register(mapping_ctrl);
+    }
+
+    fn unregister(&self, mapping_ctrl: &MappingCtrl) {
+        self.file.unregister(mapping_ctrl);
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {

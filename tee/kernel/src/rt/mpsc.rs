@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 use core::{
+    cmp,
+    iter::from_fn,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
@@ -39,6 +41,28 @@ impl<T> Sender<T> {
         }
 
         Ok(())
+    }
+}
+
+impl<T> PartialEq for Sender<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T> Eq for Sender<T> {}
+
+impl<T> PartialOrd for Sender<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for Sender<T> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        let this = self.0.as_ptr() as *const ();
+        let other = other.0.as_ptr() as *const ();
+        this.cmp(&other)
     }
 }
 
@@ -103,6 +127,10 @@ impl<T> Receiver<T> {
         }
 
         RecvFuture(self).await
+    }
+
+    pub fn try_iter(&self) -> impl Iterator<Item = T> {
+        from_fn(|| self.0.lock().values.pop_front())
     }
 
     pub fn sender(&self) -> Sender<T> {
