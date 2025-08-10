@@ -805,7 +805,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = buf;
         let _ = flags;
         let _ = addr;
-        bail!(Inval)
+        bail!(NotSock)
     }
 
     fn send_msg(
@@ -821,7 +821,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = msg_hdr;
         let _ = flags;
         let _ = fdtable;
-        bail!(Inval)
+        bail!(NotSock)
     }
 
     fn recv_from(
@@ -831,7 +831,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     ) -> Result<(usize, Option<SocketAddr>)> {
         let _ = buf;
         let _ = flags;
-        bail!(Inval)
+        bail!(NotSock)
     }
 
     fn recv_msg(
@@ -847,7 +847,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = msg_hdr;
         let _ = fdtable;
         let _ = no_file_limit;
-        bail!(Inval)
+        bail!(NotSock)
     }
 
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
