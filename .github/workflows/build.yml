@@ -183,6 +183,7 @@ jobs:
           - elfutils
           - swtpm
           - tinysparql
+          - pulseaudio
         tee:
           - snp
           - tdx
