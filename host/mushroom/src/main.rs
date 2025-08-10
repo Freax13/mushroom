@@ -51,6 +51,7 @@ struct ConfigArgs {
     #[arg(long,
         value_name = "PATH",
         env = "SUPERVISOR_SNP",
+        default_value = option_env!("DEFAULT_PATH_SUPERVISOR_SNP"),
         required_unless_present = "tee",
         required_if_eq_any([("tee", "auto"), ("tee", "snp")]),
     )]
@@ -61,13 +62,19 @@ struct ConfigArgs {
         long,
         value_name = "PATH",
         env = "SUPERVISOR_TDX",
+        default_value = option_env!("DEFAULT_PATH_SUPERVISOR_TDX"),
         required_unless_present = "tee",
         required_if_eq_any([("tee", "auto"), ("tee", "tdx")]),
     )]
     #[cfg(feature = "tdx")]
     supervisor_tdx: Option<PathBuf>,
     /// Path to the kernel.
-    #[arg(long, value_name = "PATH", env = "KERNEL")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "KERNEL",
+        default_value = option_env!("DEFAULT_PATH_KERNEL"),
+    )]
     kernel: PathBuf,
     /// Path to the binary to run.
     #[arg(long, value_name = "PATH", env = "INIT")]
