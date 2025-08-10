@@ -27,7 +27,7 @@ use crate::{
     user::process::{
         futex::Futexes,
         limits::CurrentNoFileLimit,
-        memory::VirtualMemory,
+        memory::{MappingCtrl, VirtualMemory},
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
@@ -916,6 +916,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn futexes(&self) -> Option<Arc<Futexes>> {
         None
+    }
+
+    fn register(&self, mapping_ctrl: &MappingCtrl) {
+        let _ = mapping_ctrl;
+    }
+
+    fn unregister(&self, mapping_ctrl: &MappingCtrl) {
+        let _ = mapping_ctrl;
     }
 
     async fn epoll_wait(&self, max_events: usize) -> Result<Vec<EpollEvent>> {

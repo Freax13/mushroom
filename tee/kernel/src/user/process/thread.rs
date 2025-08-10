@@ -338,6 +338,7 @@ impl Thread {
 
     fn run_userspace(&self) -> Result<Exit> {
         let virtual_memory = self.lock().virtual_memory().clone();
+        virtual_memory.modify().handle_async_unmap();
         let mut guard = self.cpu_state.lock();
         let start = time::default_backend_offset();
         let exit = guard.run_user(&virtual_memory)?;
