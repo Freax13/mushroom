@@ -357,13 +357,13 @@ impl Thread {
         let virtual_memory = self.lock().virtual_memory().clone();
         let res = virtual_memory.handle_page_fault(page_fault.addr, page_fault.code);
         if let Err(err) = res {
-            let code = match err {
-                PageFaultError::Unmapped(_) => SigInfoCode::SEGV_MAPERR,
-                PageFaultError::MissingPermissions(_) => SigInfoCode::SEGV_ACCERR,
-                PageFaultError::Other(_) => SigInfoCode::KERNEL,
+            let (signal, code) = match err {
+                PageFaultError::Unmapped(_) => (Signal::SEGV, SigInfoCode::SEGV_MAPERR),
+                PageFaultError::MissingPermissions(_) => (Signal::SEGV, SigInfoCode::SEGV_ACCERR),
+                PageFaultError::Other(_) => (Signal::BUS, SigInfoCode::BUS_ADRERR),
             };
             let sig_info = SigInfo {
-                signal: Signal::SEGV,
+                signal,
                 code,
                 fields: SigFields::SigFault(SigFault {
                     addr: page_fault.addr,
@@ -1311,6 +1311,7 @@ impl SigInfoCode {
     pub const SEGV_MAPERR: Self = Self(1);
     pub const SEGV_ACCERR: Self = Self(2);
     pub const ILL_ILLOPN: Self = Self(2);
+    pub const BUS_ADRERR: Self = Self(2);
     pub const KERNEL: Self = Self(0x80);
     pub const TIMER: Self = Self(-2);
     pub const TKILL: Self = Self(-6);
