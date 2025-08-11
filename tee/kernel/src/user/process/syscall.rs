@@ -2210,6 +2210,7 @@ async fn fcntl(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
+    #[state] mut ctx: FileAccessContext,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
@@ -2244,8 +2245,12 @@ async fn fcntl(
 
             let start = match flock.whence {
                 FlockWhence::Set => flock.start,
-                FlockWhence::Cur => todo!(),
-                FlockWhence::End => todo!(),
+                FlockWhence::Cur => u64::from_usize(fd.seek(0, Whence::Cur, &mut ctx)?)
+                    .checked_add_signed(flock.start as i64)
+                    .unwrap(),
+                FlockWhence::End => u64::try_from(fd.stat()?.size)?
+                    .checked_add_signed(flock.start as i64)
+                    .unwrap(),
             };
             let lock = UnixLock {
                 owner: UnixLockOwner::process(&fdtable),
@@ -2299,8 +2304,12 @@ async fn fcntl(
             };
             let start = match flock.whence {
                 FlockWhence::Set => flock.start,
-                FlockWhence::Cur => todo!(),
-                FlockWhence::End => todo!(),
+                FlockWhence::Cur => u64::from_usize(fd.seek(0, Whence::Cur, &mut ctx)?)
+                    .checked_add_signed(flock.start as i64)
+                    .unwrap(),
+                FlockWhence::End => u64::try_from(fd.stat()?.size)?
+                    .checked_add_signed(flock.start as i64)
+                    .unwrap(),
             };
             let ty = match flock.r#type {
                 FlockType::Rd => Some(UnixLockType::Read),
@@ -2343,6 +2352,7 @@ async fn fcntl64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
+    #[state] ctx: FileAccessContext,
     fd_num: FdNum,
     cmd: FcntlCmd,
     arg: u64,
@@ -2353,6 +2363,7 @@ async fn fcntl64(
         virtual_memory,
         fdtable,
         no_file_limit,
+        ctx,
         fd_num,
         cmd,
         arg,
