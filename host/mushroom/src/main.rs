@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Display},
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -97,7 +97,7 @@ struct IoArgs {
     /// By default the inputs are hashed using sha256. A different hash can be
     /// specified by prepending `<HASH-TYPE>:` (e.g. `sha384:`) to the path.
     #[arg(long, value_name = "PATH")]
-    input: Vec<PathBuf>,
+    input: Vec<String>,
     /// Path to store the output.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
@@ -115,19 +115,19 @@ impl IoArgs {
     fn inputs(&self) -> Result<Vec<Input<Vec<u8>>>> {
         let mut inputs = Vec::with_capacity(self.input.len());
         for input in self.input.iter() {
-            let mut input: &Path = input;
+            let mut input = &**input;
 
             let mut hash_type = HashType::Sha256;
-            if let Ok(path) = input.strip_prefix("sha256:") {
+            if let Some(path) = input.strip_prefix("sha256:") {
                 hash_type = HashType::Sha256;
                 input = path;
-            } else if let Ok(path) = input.strip_prefix("sha384:") {
+            } else if let Some(path) = input.strip_prefix("sha384:") {
                 hash_type = HashType::Sha384;
                 input = path;
             }
 
             let bytes = std::fs::read(input)
-                .with_context(|| format!("failed to read input file {}", input.display()))?;
+                .with_context(|| format!("failed to read input file {input}"))?;
             inputs.push(Input { bytes, hash_type });
         }
         Ok(inputs)
