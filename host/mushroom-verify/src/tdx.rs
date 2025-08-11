@@ -8,6 +8,7 @@ use x86_64::{PhysAddr, structures::paging::PhysFrame};
 
 use crate::{InputHash, OutputHash, hex};
 
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {
     #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]

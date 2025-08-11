@@ -24,6 +24,7 @@ pub mod snp;
 #[cfg(feature = "tdx")]
 mod tdx;
 
+#[derive(Clone)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -31,6 +32,7 @@ mod tdx;
 )]
 pub struct Configuration(ConfigurationImpl);
 
+#[derive(Clone)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),

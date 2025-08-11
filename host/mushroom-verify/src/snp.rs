@@ -16,6 +16,7 @@ use vcek_kds::Vcek;
 
 use crate::{InputHash, OutputHash, hex};
 
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct Configuration {
     #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
