@@ -18,7 +18,8 @@ vcek-kds = { workspace = true, optional = true }
 x86_64 = { version = "0.15.1", default-features = false, optional = true }
 
 [features]
-default = ["snp", "tdx"]
+default = ["snp", "tdx", "insecure"]
 snp = ["dep:bytemuck", "dep:p384", "dep:snp-types", "dep:vcek-kds"]
 tdx = ["dep:tdx-types", "dep:x86_64"]
+insecure = ["dep:bytemuck"]
 serde = ["dep:serde", "snp-types?/serde", "tdx-types?/serde"]

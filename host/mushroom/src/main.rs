@@ -316,9 +316,6 @@ async fn run(run: RunCommand) -> Result<()> {
         }
         #[cfg(feature = "insecure")]
         Tee::Insecure => {
-            if run.io.attestation_report.is_some() {
-                warn!("No attestation report will be produced in insecure mode.");
-            }
             if run.profile_folder.is_some() {
                 warn!("Profiling in insecure mode is currently not supported.");
             }
@@ -327,10 +324,9 @@ async fn run(run: RunCommand) -> Result<()> {
     };
 
     std::fs::write(run.io.output, result.output).context("failed to write output")?;
-    if let Some((path, attestation_report)) =
-        run.io.attestation_report.zip(result.attestation_report)
-    {
-        std::fs::write(path, attestation_report).context("failed to write attestation report")?;
+    if let Some(path) = run.io.attestation_report {
+        std::fs::write(path, result.attestation_report)
+            .context("failed to write attestation report")?;
     }
 
     Ok(())
@@ -445,6 +441,8 @@ async fn verify(run: VerifyCommand) -> Result<()> {
             .context("failed to read supervisor-tdx file")?;
             Configuration::new_tdx(&supervisor_tdx, &kernel, &init, run.tcb_args.tee_tcb_svn())
         }
+        #[cfg(feature = "insecure")]
+        ReportType::Insecure => Configuration::new_insecure(),
     };
 
     configuration.verify(input_hash, output_hash, &attestation_report)?;
@@ -459,6 +457,8 @@ enum ReportType {
     Snp,
     #[cfg(feature = "tdx")]
     Tdx,
+    #[cfg(feature = "insecure")]
+    Insecure,
 }
 
 fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<ReportType> {
@@ -468,7 +468,7 @@ fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<
         #[cfg(feature = "tdx")]
         TeeWithAuto::Tdx => Ok(ReportType::Tdx),
         #[cfg(feature = "insecure")]
-        TeeWithAuto::Insecure => bail!("Can't verify output produced in insecure mode."),
+        TeeWithAuto::Insecure => Ok(ReportType::Insecure),
         TeeWithAuto::Auto => {
             #[cfg(feature = "snp")]
             {
@@ -483,6 +483,13 @@ fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<
             #[cfg(feature = "tdx")]
             if Quote::parse(attestation_report).is_ok() {
                 return Ok(ReportType::Tdx);
+            }
+            #[cfg(feature = "insecure")]
+            if Configuration::new_insecure()
+                .verify_and_extract(attestation_report)
+                .is_ok()
+            {
+                return Ok(ReportType::Insecure);
             }
             bail!("Can't determine attestation report type.")
         }

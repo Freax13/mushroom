@@ -4,6 +4,8 @@ use io::input::{Header, MAX_HASH_SIZE};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[cfg(feature = "insecure")]
+pub use insecure::forge_insecure_attestation_report;
 pub use loader::{HashType, Input};
 #[cfg(feature = "snp")]
 pub use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
@@ -12,6 +14,8 @@ pub use tdx_types::td_quote::TeeTcbSvn;
 
 #[cfg(feature = "serde")]
 mod hex;
+#[cfg(feature = "insecure")]
+mod insecure;
 #[cfg(feature = "snp")]
 // mushroom uses some code in this module. But it shouldn't be considered part
 // of the public API.
@@ -37,6 +41,8 @@ enum ConfigurationImpl {
     Snp(snp::Configuration),
     #[cfg(feature = "tdx")]
     Tdx(tdx::Configuration),
+    #[cfg(feature = "insecure")]
+    Insecure(insecure::Configuration),
 }
 
 impl Configuration {
@@ -67,6 +73,11 @@ impl Configuration {
             init,
             tee_tcb_svn,
         )))
+    }
+
+    #[cfg(feature = "insecure")]
+    pub fn new_insecure() -> Self {
+        Self(ConfigurationImpl::Insecure(insecure::Configuration::new()))
     }
 
     /// Verify that a input with the given hash is attested to have produced an
@@ -135,6 +146,10 @@ impl Configuration {
             ConfigurationImpl::Tdx(ref configuration) => configuration
                 .verify_and_extract(attestation_report)
                 .map_err(Into::into),
+            #[cfg(feature = "insecure")]
+            ConfigurationImpl::Insecure(ref configuration) => configuration
+                .verify_and_extract(attestation_report)
+                .map_err(Into::into),
         };
         res.map_err(Error)
     }
@@ -152,6 +167,9 @@ enum ErrorImpl {
     #[cfg(feature = "tdx")]
     #[error("failed to verify TD quote")]
     Tdx(#[from] tdx::Error),
+    #[cfg(feature = "insecure")]
+    #[error("failed to verify insecure attestation report")]
+    Insecure(#[from] insecure::Error),
     #[error("expected input hash to be {}, got {}", hex(.expected), hex(.got))]
     InputHash { expected: [u8; 32], got: [u8; 32] },
     #[error("expected output length to be {expected}, got {got}")]

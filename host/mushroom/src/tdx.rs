@@ -108,7 +108,7 @@ pub fn main(
 
     Ok(MushroomResult {
         output,
-        attestation_report: Some(quote),
+        attestation_report: quote,
     })
 }
 

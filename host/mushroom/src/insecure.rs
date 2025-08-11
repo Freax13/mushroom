@@ -19,6 +19,7 @@ use constants::{
     physical_address::{DYNAMIC_2MIB, kernel, supervisor},
 };
 use loader::Input;
+use mushroom_verify::{HashedInput, InputHash, OutputHash, forge_insecure_attestation_report};
 use nix::{
     sys::{
         pthread::pthread_kill,
@@ -229,10 +230,14 @@ pub fn main(
     // Collect the output and report.
     let mut output: Vec<u8> = Vec::new();
     let res = loop {
-        let event = receiver.recv()?;
+        let event = receiver.recv().unwrap();
         match event {
             OutputEvent::Write(mut vec) => output.append(&mut vec),
-            OutputEvent::Finish(()) => break Ok(()),
+            OutputEvent::Finish(()) => {
+                let input_hash = InputHash::new(inputs.iter().map(HashedInput::new));
+                let output_hash = OutputHash::new(&output);
+                break Ok(forge_insecure_attestation_report(input_hash, output_hash));
+            }
             OutputEvent::Fail(err) => break Err(err),
         }
     };
@@ -249,11 +254,9 @@ pub fn main(
         handle.join().unwrap();
     }
 
-    res?;
-
     Ok(MushroomResult {
         output,
-        attestation_report: None,
+        attestation_report: res?,
     })
 }
 
