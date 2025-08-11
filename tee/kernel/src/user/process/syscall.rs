@@ -4217,6 +4217,7 @@ fn tgkill(thread: &Thread, tgid: u32, pid: u32, signal: Signal) -> SyscallResult
         .filter_map(Weak::upgrade)
         .find(|t| t.tid() == pid)
         .ok_or(err!(Srch))?;
+    drop(threads);
     thread.queue_signal(sig_info);
     Ok(0)
 }
