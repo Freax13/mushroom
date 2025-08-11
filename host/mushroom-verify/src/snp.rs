@@ -16,6 +16,7 @@ use vcek_kds::Vcek;
 
 use crate::{InputHash, OutputHash, hex};
 
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct Configuration {
     #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
@@ -54,12 +55,11 @@ impl Configuration {
         }
     }
 
-    /// Verify that a input with the given hash is attested to have produced an output and return its hash.
+    /// Verify that the attestation report is valid and return the hashes of the input and output.
     pub fn verify_and_extract(
         &self,
-        input_hash: InputHash,
         attestation_report: &[u8],
-    ) -> Result<OutputHash, Error> {
+    ) -> Result<(InputHash, OutputHash), Error> {
         // The VCEK is appended to the attestation report. Split the two.
         const REPORT_LEN: usize = size_of::<AttestionReport>();
         if attestation_report.len() < REPORT_LEN {
@@ -91,12 +91,6 @@ impl Configuration {
             return Err(Error::IdKeyDigest {
                 expected: self.id_key_digest,
                 got: report.id_key_digest(),
-            });
-        }
-        if report.host_data() != input_hash.0 {
-            return Err(Error::HostData {
-                expected: input_hash.0,
-                got: report.host_data(),
             });
         }
         if report.policy() != self.policy {
@@ -131,10 +125,12 @@ impl Configuration {
         let public_key = vcek.verifying_key();
         public_key.verify(&attestation_report[..=0x29f], &signature)?;
 
-        Ok(OutputHash {
+        let input_hash = InputHash::from(report.host_data());
+        let output_hash = OutputHash {
             hash: report.report_data()[..32].try_into().unwrap(),
             len: u64::from_le_bytes(report.report_data()[32..40].try_into().unwrap()),
-        })
+        };
+        Ok((input_hash, output_hash))
     }
 }
 
@@ -271,8 +267,6 @@ pub(crate) enum Error {
     Measurement { expected: [u8; 48], got: [u8; 48] },
     #[error("expected id key digest to be {}, got {}", hex(.expected), hex(.got))]
     IdKeyDigest { expected: [u8; 48], got: [u8; 48] },
-    #[error("expected host data to be {}, got {}", hex(.expected), hex(.got))]
-    HostData { expected: [u8; 32], got: [u8; 32] },
     #[error("expected policy to be {expected:?}, got {got:?}")]
     Policy {
         expected: GuestPolicy,

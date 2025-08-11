@@ -8,6 +8,7 @@ use x86_64::{PhysAddr, structures::paging::PhysFrame};
 
 use crate::{InputHash, OutputHash, hex};
 
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Configuration {
     #[cfg_attr(feature = "serde", serde(with = "crate::hex"))]
@@ -69,9 +70,8 @@ impl Configuration {
     /// Verify that a input with the given hash is attested to have produced an output and return its hash.
     pub fn verify_and_extract(
         &self,
-        input_hash: InputHash,
         attestation_report: &[u8],
-    ) -> Result<OutputHash, Error> {
+    ) -> Result<(InputHash, OutputHash), Error> {
         let quote = Quote::parse(attestation_report)?;
         quote.verify_signatures()?;
 
@@ -129,12 +129,6 @@ impl Configuration {
                 got: quote.body.mr_td,
             });
         }
-        if quote.body.mr_config_id[..32] != input_hash.0 {
-            return Err(Error::InputHash {
-                expected: input_hash.0,
-                got: quote.body.mr_config_id[..32].try_into().unwrap(),
-            });
-        }
         if quote.body.mr_config_id[32..] != [0; 16] {
             return Err(Error::MrConfigIdPad {
                 got: quote.body.mr_config_id[32..].try_into().unwrap(),
@@ -166,10 +160,13 @@ impl Configuration {
 
         // TODO: verify cpu_svn.
 
-        Ok(OutputHash {
+        let input_hash = <[u8; 32]>::try_from(&quote.body.mr_config_id[..32]).unwrap();
+        let input_hash = InputHash::from(input_hash);
+        let output_hash = OutputHash {
             hash: quote.body.report_data[..32].try_into().unwrap(),
             len: u64::from_le_bytes(quote.body.report_data[32..40].try_into().unwrap()),
-        })
+        };
+        Ok((input_hash, output_hash))
     }
 }
 
@@ -213,8 +210,6 @@ pub enum Error {
     Xfam { expected: [u8; 8], got: [u8; 8] },
     #[error("expected MRTD to be {}, got {}", hex(.expected), hex(.got))]
     MrTd { expected: [u8; 48], got: [u8; 48] },
-    #[error("expected MRCONFIGID[0:32] to be {}, got {}", hex(.expected), hex(.got))]
-    InputHash { expected: [u8; 32], got: [u8; 32] },
     #[error("expected MRCONFIGID[32:48] to be all zeros, got {}", hex(.got))]
     MrConfigIdPad { got: [u8; 16] },
     #[error("expected MROWNER to be all zeros, got {}", hex(.got))]

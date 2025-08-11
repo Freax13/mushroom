@@ -1,7 +1,8 @@
 use std::{
     fmt::{self, Display},
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::PathBuf,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -97,7 +98,7 @@ struct IoArgs {
     /// By default the inputs are hashed using sha256. A different hash can be
     /// specified by prepending `<HASH-TYPE>:` (e.g. `sha384:`) to the path.
     #[arg(long, value_name = "PATH")]
-    input: Vec<PathBuf>,
+    input: Vec<String>,
     /// Path to store the output.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
@@ -115,19 +116,22 @@ impl IoArgs {
     fn inputs(&self) -> Result<Vec<Input<Vec<u8>>>> {
         let mut inputs = Vec::with_capacity(self.input.len());
         for input in self.input.iter() {
-            let mut input: &Path = input;
+            let mut input = &**input;
 
             let mut hash_type = HashType::Sha256;
-            if let Ok(path) = input.strip_prefix("sha256:") {
+            if let Some(path) = input.strip_prefix("sha256:") {
                 hash_type = HashType::Sha256;
                 input = path;
-            } else if let Ok(path) = input.strip_prefix("sha384:") {
+            } else if let Some(path) = input.strip_prefix("sha384:") {
                 hash_type = HashType::Sha384;
+                input = path;
+            } else if let Some(path) = input.strip_prefix("sha512:") {
+                hash_type = HashType::Sha512;
                 input = path;
             }
 
             let bytes = std::fs::read(input)
-                .with_context(|| format!("failed to read input file {}", input.display()))?;
+                .with_context(|| format!("failed to read input file {input}"))?;
             inputs.push(Input { bytes, hash_type });
         }
         Ok(inputs)
@@ -174,6 +178,9 @@ struct RunCommand {
     config: ConfigArgs,
     #[command(flatten)]
     io: IoArgs,
+    /// Timeout for the workload in seconds.
+    #[arg(long, value_name = "SECONDS")]
+    timeout: Option<u64>,
     /// Collect profile information into the given folder.
     ///
     /// The collected data can be analyzed with uftrace.
@@ -223,6 +230,7 @@ async fn run(run: RunCommand) -> Result<()> {
     let kernel = std::fs::read(&run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let inputs = run.io.inputs()?;
+    let timeout = run.timeout.map_or(Duration::MAX, Duration::from_secs);
 
     let kvm_handle = KvmHandle::new()?;
 
@@ -283,6 +291,7 @@ async fn run(run: RunCommand) -> Result<()> {
                 run.config.policy.policy(),
                 vcek_cert,
                 profile_folder,
+                timeout,
             )?
         }
         #[cfg(feature = "tdx")]
@@ -312,25 +321,29 @@ async fn run(run: RunCommand) -> Result<()> {
                 profile_folder,
                 run.qgs_cid,
                 run.qgs_port,
+                timeout,
             )?
         }
         #[cfg(feature = "insecure")]
         Tee::Insecure => {
-            if run.io.attestation_report.is_some() {
-                warn!("No attestation report will be produced in insecure mode.");
-            }
             if run.profile_folder.is_some() {
                 warn!("Profiling in insecure mode is currently not supported.");
             }
-            mushroom::insecure::main(&kvm_handle, &kernel, &init, run.config.kasan, &inputs)?
+            mushroom::insecure::main(
+                &kvm_handle,
+                &kernel,
+                &init,
+                run.config.kasan,
+                &inputs,
+                timeout,
+            )?
         }
     };
 
     std::fs::write(run.io.output, result.output).context("failed to write output")?;
-    if let Some((path, attestation_report)) =
-        run.io.attestation_report.zip(result.attestation_report)
-    {
-        std::fs::write(path, attestation_report).context("failed to write attestation report")?;
+    if let Some(path) = run.io.attestation_report {
+        std::fs::write(path, result.attestation_report)
+            .context("failed to write attestation report")?;
     }
 
     Ok(())
@@ -445,6 +458,8 @@ async fn verify(run: VerifyCommand) -> Result<()> {
             .context("failed to read supervisor-tdx file")?;
             Configuration::new_tdx(&supervisor_tdx, &kernel, &init, run.tcb_args.tee_tcb_svn())
         }
+        #[cfg(feature = "insecure")]
+        ReportType::Insecure => Configuration::new_insecure(),
     };
 
     configuration.verify(input_hash, output_hash, &attestation_report)?;
@@ -459,6 +474,8 @@ enum ReportType {
     Snp,
     #[cfg(feature = "tdx")]
     Tdx,
+    #[cfg(feature = "insecure")]
+    Insecure,
 }
 
 fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<ReportType> {
@@ -468,7 +485,7 @@ fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<
         #[cfg(feature = "tdx")]
         TeeWithAuto::Tdx => Ok(ReportType::Tdx),
         #[cfg(feature = "insecure")]
-        TeeWithAuto::Insecure => bail!("Can't verify output produced in insecure mode."),
+        TeeWithAuto::Insecure => Ok(ReportType::Insecure),
         TeeWithAuto::Auto => {
             #[cfg(feature = "snp")]
             {
@@ -483,6 +500,13 @@ fn determine_report_type(tee: TeeWithAuto, attestation_report: &[u8]) -> Result<
             #[cfg(feature = "tdx")]
             if Quote::parse(attestation_report).is_ok() {
                 return Ok(ReportType::Tdx);
+            }
+            #[cfg(feature = "insecure")]
+            if Configuration::new_insecure()
+                .verify_and_extract(attestation_report)
+                .is_ok()
+            {
+                return Ok(ReportType::Insecure);
             }
             bail!("Can't determine attestation report type.")
         }

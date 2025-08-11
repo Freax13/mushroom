@@ -60,7 +60,7 @@ impl Tee {
 
 pub struct MushroomResult {
     pub output: Vec<u8>,
-    pub attestation_report: Option<Vec<u8>>,
+    pub attestation_report: Vec<u8>,
 }
 
 fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot> {

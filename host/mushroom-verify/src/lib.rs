@@ -4,6 +4,8 @@ use io::input::{Header, MAX_HASH_SIZE};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[cfg(feature = "insecure")]
+pub use insecure::forge_insecure_attestation_report;
 pub use loader::{HashType, Input};
 #[cfg(feature = "snp")]
 pub use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
@@ -12,6 +14,8 @@ pub use tdx_types::td_quote::TeeTcbSvn;
 
 #[cfg(feature = "serde")]
 mod hex;
+#[cfg(feature = "insecure")]
+mod insecure;
 #[cfg(feature = "snp")]
 // mushroom uses some code in this module. But it shouldn't be considered part
 // of the public API.
@@ -20,6 +24,7 @@ pub mod snp;
 #[cfg(feature = "tdx")]
 mod tdx;
 
+#[derive(Clone)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -27,6 +32,7 @@ mod tdx;
 )]
 pub struct Configuration(ConfigurationImpl);
 
+#[derive(Clone)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -37,6 +43,8 @@ enum ConfigurationImpl {
     Snp(snp::Configuration),
     #[cfg(feature = "tdx")]
     Tdx(tdx::Configuration),
+    #[cfg(feature = "insecure")]
+    Insecure(insecure::Configuration),
 }
 
 impl Configuration {
@@ -69,6 +77,11 @@ impl Configuration {
         )))
     }
 
+    #[cfg(feature = "insecure")]
+    pub fn new_insecure() -> Self {
+        Self(ConfigurationImpl::Insecure(insecure::Configuration::new()))
+    }
+
     /// Verify that a input with the given hash is attested to have produced an
     /// output with the given hash.
     pub fn verify(
@@ -77,7 +90,7 @@ impl Configuration {
         output_hash: OutputHash,
         attestation_report: &[u8],
     ) -> Result<(), Error> {
-        let hash = self.verify_and_extract(input_hash, attestation_report)?;
+        let hash = self.verify_and_extract_with_input(input_hash, attestation_report)?;
 
         let OutputHash {
             hash: expected_hash,
@@ -106,19 +119,38 @@ impl Configuration {
 
     /// Verify that a input with the given hash is attested to have produced an
     /// output and return its hash.
-    pub fn verify_and_extract(
+    pub fn verify_and_extract_with_input(
         &self,
         input_hash: InputHash,
         attestation_report: &[u8],
     ) -> Result<OutputHash, Error> {
+        let (input, output) = self.verify_and_extract(attestation_report)?;
+        if input_hash != input {
+            return Err(Error(ErrorImpl::InputHash {
+                expected: input_hash.0,
+                got: input.0,
+            }));
+        }
+        Ok(output)
+    }
+
+    /// Verify an attestation report and return the hashes of the input and output.
+    pub fn verify_and_extract(
+        &self,
+        attestation_report: &[u8],
+    ) -> Result<(InputHash, OutputHash), Error> {
         let res: Result<_, ErrorImpl> = match self.0 {
             #[cfg(feature = "snp")]
             ConfigurationImpl::Snp(ref configuration) => configuration
-                .verify_and_extract(input_hash, attestation_report)
+                .verify_and_extract(attestation_report)
                 .map_err(Into::into),
             #[cfg(feature = "tdx")]
             ConfigurationImpl::Tdx(ref configuration) => configuration
-                .verify_and_extract(input_hash, attestation_report)
+                .verify_and_extract(attestation_report)
+                .map_err(Into::into),
+            #[cfg(feature = "insecure")]
+            ConfigurationImpl::Insecure(ref configuration) => configuration
+                .verify_and_extract(attestation_report)
                 .map_err(Into::into),
         };
         res.map_err(Error)
@@ -137,6 +169,11 @@ enum ErrorImpl {
     #[cfg(feature = "tdx")]
     #[error("failed to verify TD quote")]
     Tdx(#[from] tdx::Error),
+    #[cfg(feature = "insecure")]
+    #[error("failed to verify insecure attestation report")]
+    Insecure(#[from] insecure::Error),
+    #[error("expected input hash to be {}, got {}", hex(.expected), hex(.got))]
+    InputHash { expected: [u8; 32], got: [u8; 32] },
     #[error("expected output length to be {expected}, got {got}")]
     OutputLength { expected: u64, got: u64 },
     #[error("expected output hash to be {}, got {}", hex(.expected), hex(.got))]
@@ -170,9 +207,19 @@ impl HashedInput {
             hash: bytes,
         }
     }
+
+    pub fn sha512(input_len: u64, hash: [u8; 64]) -> Self {
+        let mut bytes = [0; MAX_HASH_SIZE];
+        bytes[..64].copy_from_slice(&hash);
+        Self {
+            input_len,
+            hash_type: HashType::Sha512,
+            hash: bytes,
+        }
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputHash([u8; 32]);
 
 impl InputHash {
@@ -191,6 +238,12 @@ impl InputHash {
             };
         }
         InputHash(header.hash())
+    }
+}
+
+impl From<[u8; 32]> for InputHash {
+    fn from(value: [u8; 32]) -> Self {
+        Self(value)
     }
 }
 

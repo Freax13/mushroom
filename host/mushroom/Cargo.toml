@@ -9,7 +9,7 @@ required-features = ["bin"]
 
 [features]
 default = ["insecure", "snp", "tdx", "bin"]
-insecure = ["dep:snp-types", "dep:supervisor-services"]
+insecure = ["mushroom-verify?/insecure", "dep:snp-types", "dep:supervisor-services"]
 snp = ["mushroom-verify?/snp", "dep:snp-types", "dep:vcek-kds"]
 tdx = ["mushroom-verify?/tdx", "dep:qgs-client", "dep:tdx-types"]
 bin = ["dep:clap", "dep:mushroom-verify", "dep:tokio", "dep:tracing-subscriber", "dep:xdg"]

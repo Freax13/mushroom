@@ -1,7 +1,7 @@
 use bytemuck::{CheckedBitPattern, NoUninit, bytes_of};
-use sha2::{Digest, Sha256, Sha384};
+use sha2::{Digest, Sha256, Sha384, Sha512};
 
-pub const MAX_HASH_SIZE: usize = 48;
+pub const MAX_HASH_SIZE: usize = 64;
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
@@ -55,6 +55,7 @@ pub enum HashType {
     #[default]
     Sha256,
     Sha384,
+    Sha512,
 }
 
 impl HashType {
@@ -63,6 +64,7 @@ impl HashType {
         match self {
             HashType::Sha256 => hash[..32].copy_from_slice(&Sha256::digest(data)),
             HashType::Sha384 => hash[..48].copy_from_slice(&Sha384::digest(data)),
+            HashType::Sha512 => hash[..64].copy_from_slice(&Sha512::digest(data)),
         }
         hash
     }
@@ -71,6 +73,7 @@ impl HashType {
 pub enum Hasher {
     Sha256(Sha256),
     Sha384(Sha384),
+    Sha512(Sha512),
 }
 
 impl Hasher {
@@ -78,6 +81,7 @@ impl Hasher {
         match hash_type {
             HashType::Sha256 => Self::Sha256(Sha256::new()),
             HashType::Sha384 => Self::Sha384(Sha384::new()),
+            HashType::Sha512 => Self::Sha512(Sha512::new()),
         }
     }
 
@@ -85,6 +89,7 @@ impl Hasher {
         match self {
             Hasher::Sha256(hasher) => hasher.update(data),
             Hasher::Sha384(hasher) => hasher.update(data),
+            Hasher::Sha512(hasher) => hasher.update(data),
         }
     }
 
@@ -93,6 +98,7 @@ impl Hasher {
         match self {
             Hasher::Sha256(hasher) => bytes[..32].copy_from_slice(&hasher.finalize()),
             Hasher::Sha384(hasher) => bytes[..48].copy_from_slice(&hasher.finalize()),
+            Hasher::Sha512(hasher) => bytes[..64].copy_from_slice(&hasher.finalize()),
         }
         assert_eq!(hash, bytes, "input hash doesn't match hash in header");
     }
