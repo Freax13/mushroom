@@ -124,6 +124,9 @@ impl IoArgs {
             } else if let Some(path) = input.strip_prefix("sha384:") {
                 hash_type = HashType::Sha384;
                 input = path;
+            } else if let Some(path) = input.strip_prefix("sha512:") {
+                hash_type = HashType::Sha512;
+                input = path;
             }
 
             let bytes = std::fs::read(input)

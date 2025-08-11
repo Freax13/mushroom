@@ -205,6 +205,16 @@ impl HashedInput {
             hash: bytes,
         }
     }
+
+    pub fn sha512(input_len: u64, hash: [u8; 64]) -> Self {
+        let mut bytes = [0; MAX_HASH_SIZE];
+        bytes[..64].copy_from_slice(&hash);
+        Self {
+            input_len,
+            hash_type: HashType::Sha512,
+            hash: bytes,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
