@@ -2,6 +2,7 @@ use std::{
     fmt::{self, Display},
     io::ErrorKind,
     path::PathBuf,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -177,6 +178,9 @@ struct RunCommand {
     config: ConfigArgs,
     #[command(flatten)]
     io: IoArgs,
+    /// Timeout for the workload in seconds.
+    #[arg(long, value_name = "SECONDS")]
+    timeout: Option<u64>,
     /// Collect profile information into the given folder.
     ///
     /// The collected data can be analyzed with uftrace.
@@ -226,6 +230,7 @@ async fn run(run: RunCommand) -> Result<()> {
     let kernel = std::fs::read(&run.config.kernel).context("failed to read kernel file")?;
     let init = std::fs::read(run.config.init).context("failed to read init file")?;
     let inputs = run.io.inputs()?;
+    let timeout = run.timeout.map_or(Duration::MAX, Duration::from_secs);
 
     let kvm_handle = KvmHandle::new()?;
 
@@ -286,6 +291,7 @@ async fn run(run: RunCommand) -> Result<()> {
                 run.config.policy.policy(),
                 vcek_cert,
                 profile_folder,
+                timeout,
             )?
         }
         #[cfg(feature = "tdx")]
@@ -315,6 +321,7 @@ async fn run(run: RunCommand) -> Result<()> {
                 profile_folder,
                 run.qgs_cid,
                 run.qgs_port,
+                timeout,
             )?
         }
         #[cfg(feature = "insecure")]
@@ -322,7 +329,14 @@ async fn run(run: RunCommand) -> Result<()> {
             if run.profile_folder.is_some() {
                 warn!("Profiling in insecure mode is currently not supported.");
             }
-            mushroom::insecure::main(&kvm_handle, &kernel, &init, run.config.kasan, &inputs)?
+            mushroom::insecure::main(
+                &kvm_handle,
+                &kernel,
+                &init,
+                run.config.kasan,
+                &inputs,
+                timeout,
+            )?
         }
     };
 

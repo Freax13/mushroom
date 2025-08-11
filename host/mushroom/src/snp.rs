@@ -55,6 +55,7 @@ pub fn main(
     policy: GuestPolicy,
     vcek: Vcek,
     profiler_folder: Option<ProfileFolder>,
+    timeout: Duration,
 ) -> Result<MushroomResult> {
     let sev_handle = SevHandle::new()?;
 
@@ -92,11 +93,14 @@ pub fn main(
     // Collect the output and report.
     let mut output: Vec<u8> = Vec::new();
     let res = loop {
-        let event = receiver.recv().unwrap();
-        match event {
-            OutputEvent::Write(mut vec) => output.append(&mut vec),
-            OutputEvent::Finish(attestation_report) => break Ok(attestation_report),
-            OutputEvent::Fail(err) => break Err(err),
+        let res = receiver.recv_timeout(timeout);
+        match res {
+            Ok(event) => match event {
+                OutputEvent::Write(mut vec) => output.append(&mut vec),
+                OutputEvent::Finish(attestation_report) => break Ok(attestation_report),
+                OutputEvent::Fail(err) => break Err(err),
+            },
+            Err(err) => break Err(err).context("workload timed out"),
         }
     };
 

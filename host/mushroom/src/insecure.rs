@@ -64,6 +64,7 @@ pub fn main(
     init: &[u8],
     load_kasan_shadow_mappings: bool,
     inputs: &[Input<impl AsRef<[u8]>>],
+    timeout: Duration,
 ) -> Result<MushroomResult> {
     let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
     let piafb = cpuid_entries
@@ -230,15 +231,18 @@ pub fn main(
     // Collect the output and report.
     let mut output: Vec<u8> = Vec::new();
     let res = loop {
-        let event = receiver.recv().unwrap();
-        match event {
-            OutputEvent::Write(mut vec) => output.append(&mut vec),
-            OutputEvent::Finish(()) => {
-                let input_hash = InputHash::new(inputs.iter().map(HashedInput::new));
-                let output_hash = OutputHash::new(&output);
-                break Ok(forge_insecure_attestation_report(input_hash, output_hash));
-            }
-            OutputEvent::Fail(err) => break Err(err),
+        let res = receiver.recv_timeout(timeout);
+        match res {
+            Ok(event) => match event {
+                OutputEvent::Write(mut vec) => output.append(&mut vec),
+                OutputEvent::Finish(()) => {
+                    let input_hash = InputHash::new(inputs.iter().map(HashedInput::new));
+                    let output_hash = OutputHash::new(&output);
+                    break Ok(forge_insecure_attestation_report(input_hash, output_hash));
+                }
+                OutputEvent::Fail(err) => break Err(err),
+            },
+            Err(err) => break Err(err).context("workload timed out"),
         }
     };
 

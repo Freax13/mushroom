@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -49,6 +49,7 @@ pub fn main(
     profiler_folder: Option<ProfileFolder>,
     cid: u32,
     port: u32,
+    timeout: Duration,
 ) -> Result<MushroomResult> {
     // Prepare the VM.
     let (vm_context, vcpus) = VmContext::prepare_vm(
@@ -83,11 +84,14 @@ pub fn main(
     // Collect the output and report.
     let mut output: Vec<u8> = Vec::new();
     let res = loop {
-        let event = receiver.recv().unwrap();
-        match event {
-            OutputEvent::Write(mut vec) => output.append(&mut vec),
-            OutputEvent::Finish(attestation_report) => break Ok(attestation_report),
-            OutputEvent::Fail(err) => break Err(err),
+        let res = receiver.recv_timeout(timeout);
+        match res {
+            Ok(event) => match event {
+                OutputEvent::Write(mut vec) => output.append(&mut vec),
+                OutputEvent::Finish(attestation_report) => break Ok(attestation_report),
+                OutputEvent::Fail(err) => break Err(err),
+            },
+            Err(err) => break Err(err).context("workload timed out"),
         }
     };
 
