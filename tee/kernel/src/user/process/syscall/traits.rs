@@ -62,10 +62,10 @@ pub trait Syscall {
     const NO_I386: Option<usize>;
     const NO_AMD64: Option<usize>;
 
-    fn execute(
-        thread: Arc<Thread>,
+    fn execute<'a>(
+        thread: &'a Arc<Thread>,
         syscall_args: SyscallArgs,
-    ) -> impl Future<Output = SyscallResult> + Send + 'static;
+    ) -> impl Future<Output = SyscallResult> + Send + 'a;
 
     fn display(
         f: &mut dyn fmt::Write,
@@ -77,13 +77,13 @@ pub trait Syscall {
 const MAX_SYSCALL_I386_HANDLER: usize = 453;
 const MAX_SYSCALL_AMD64_HANDLER: usize = 453;
 
-type DynFuture = dyn Future<Output = SyscallResult> + Send;
+type DynFuture<'a> = dyn Future<Output = SyscallResult> + Send + 'a;
 
 #[derive(Clone, Copy)]
 struct SyscallHandler {
     create_future: for<'a> fn(
         Pin<&'a mut SyscallHandlerSlot>,
-        thread: Arc<Thread>,
+        thread: &'a Arc<Thread>,
         args: SyscallArgs,
     ) -> Pin<Placed<'a>>,
     display: fn(f: &mut dyn fmt::Write, args: SyscallArgs, thread: &ThreadGuard<'_>) -> fmt::Result,
@@ -95,7 +95,7 @@ impl SyscallHandler {
         T: Syscall,
     {
         Self {
-            create_future: |slot, thread: Arc<Thread>, args: SyscallArgs| {
+            create_future: |slot, thread: &Arc<Thread>, args: SyscallArgs| {
                 slot.place(T::execute(thread, args))
             },
             display: T::display,
@@ -141,8 +141,8 @@ impl SyscallHandlers {
         // Keep track of the future size and alignment.
 
         /// Returns the size of the return type of `T::execute`.
-        const fn return_size<T>(
-            _: fn(thread: Arc<Thread>, syscall_args: SyscallArgs) -> T,
+        const fn return_size<'a, T>(
+            _: fn(thread: &'a Arc<Thread>, syscall_args: SyscallArgs) -> T,
         ) -> usize {
             size_of::<T>()
         }
@@ -152,8 +152,8 @@ impl SyscallHandlers {
         }
 
         /// Returns the alignment of the return type of `T::execute`.
-        const fn return_align<T>(
-            _: fn(thread: Arc<Thread>, syscall_args: SyscallArgs) -> T,
+        const fn return_align<'a, T>(
+            _: fn(thread: &'a Arc<Thread>, syscall_args: SyscallArgs) -> T,
         ) -> usize {
             core::mem::align_of::<T>()
         }
@@ -163,7 +163,7 @@ impl SyscallHandlers {
         }
     }
 
-    pub async fn execute(&self, thread: Arc<Thread>, args: SyscallArgs) -> SyscallResult {
+    pub async fn execute(&self, thread: &Arc<Thread>, args: SyscallArgs) -> SyscallResult {
         let syscall_no = usize_from(args.no);
 
         let handlers: &[_] = match args.abi {
@@ -199,7 +199,7 @@ impl SyscallHandlers {
 
         let slot = SyscallHandlerSlot::new();
         let slot = pin!(slot);
-        let placed = (handler.create_future)(slot, thread.clone(), args);
+        let placed = (handler.create_future)(slot, thread, args);
         let res = placed.await;
 
         if enable_log {
@@ -267,9 +267,9 @@ impl SyscallHandlerSlot {
         }
     }
 
-    pub fn place<T>(mut self: Pin<&mut Self>, future: T) -> Pin<Placed<'_>>
+    pub fn place<'a, T>(mut self: Pin<&'a mut Self>, future: T) -> Pin<Placed<'a>>
     where
-        T: Future<Output = SyscallResult> + Send + 'static,
+        T: Future<Output = SyscallResult> + Send + 'a,
     {
         let metadata = core::ptr::metadata(&future as *const DynFuture);
 
@@ -296,16 +296,16 @@ impl SyscallHandlerSlot {
 /// A smart pointer representing a future that has been placed in a
 /// `SyscallHandlerSlot`.
 struct Placed<'a> {
-    metadata: <DynFuture as Pointee>::Metadata,
+    metadata: <DynFuture<'a> as Pointee>::Metadata,
     slot: Pin<&'a mut SyscallHandlerSlot>,
 }
 
-impl Placed<'_> {
-    fn as_ptr(&self) -> *const DynFuture {
+impl<'a> Placed<'a> {
+    fn as_ptr(&self) -> *const DynFuture<'a> {
         core::ptr::from_raw_parts(self.slot.bytes.as_ptr().cast::<()>(), self.metadata)
     }
 
-    fn as_mut_ptr(&mut self) -> *mut DynFuture {
+    fn as_mut_ptr(&mut self) -> *mut DynFuture<'a> {
         core::ptr::from_raw_parts_mut(
             self.slot.bytes.as_ptr().cast_mut().cast::<()>(),
             self.metadata,
@@ -313,8 +313,8 @@ impl Placed<'_> {
     }
 }
 
-impl Deref for Placed<'_> {
-    type Target = DynFuture;
+impl<'a> Deref for Placed<'a> {
+    type Target = DynFuture<'a>;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.as_ptr() }

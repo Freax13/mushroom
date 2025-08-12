@@ -268,8 +268,7 @@ impl Thread {
                     loop {
                         self.deliver_signals().await.unwrap();
 
-                        let clone = self.clone();
-                        let exit = clone.run_userspace().unwrap();
+                        let exit = self.run_userspace().unwrap();
 
                         match exit {
                             Exit::DivideError => {
@@ -282,7 +281,7 @@ impl Thread {
                                 };
                                 self.queue_signal_or_die(sig_info);
                             }
-                            Exit::Syscall(args) => self.clone().execute_syscall(args).await,
+                            Exit::Syscall(args) => self.execute_syscall(args).await,
                             Exit::InvalidOpcode => {
                                 let sig_info = SigInfo {
                                     signal: Signal::ILL,

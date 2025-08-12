@@ -157,7 +157,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
             const NO_AMD64: Option<usize> = #amd64;
 
             async fn execute(
-                thread: Arc<Thread>,
+                thread: &Arc<Thread>,
                 syscall_args: SyscallArgs,
             ) -> SyscallResult {
                 let abi = syscall_args.abi;
