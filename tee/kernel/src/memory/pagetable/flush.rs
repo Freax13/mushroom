@@ -298,10 +298,22 @@ impl FlushGuard for GlobalFlushGuard {
         // IPI, so the other thread thinks that the bit was never cleared and
         // it won't get cleared again because we didn't set another IPI.
         let active_aps = ACTIVE_APS.get_all();
-        let other_active_aps = active_aps & all_other_aps;
         let inactive_aps = !active_aps & all_other_aps;
-        PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(other_active_aps);
         LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(inactive_aps);
+        // Re-fetch `ACTIVE_APS` after setting `LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN`.
+        // If we don't do this, there's a race condition:
+        // +----------------------------------------------------------------------------------+
+        // | this AP                                 | other AP                               |
+        // | ...                                     | inactive                               |
+        // | read ACTIVE_APS                         |                                        |
+        // |                                         | wake up                                |
+        // |                                         | set ACTIVE_APS                         |
+        // |                                         | read LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN |
+        // | write LAZY_PENDING_GLOBAL_TLB_SHOOTDOWN |                                        |
+        // +----------------------------------------------------------------------------------+
+        let active_aps = active_aps | ACTIVE_APS.get_all();
+        let other_active_aps = active_aps & all_other_aps;
+        PENDING_GLOBAL_TLB_SHOOTDOWN.set_all(other_active_aps);
 
         // Send IPIs to all other currently active APs.
         send_tlb_ipis(other_active_aps);
@@ -309,7 +321,7 @@ impl FlushGuard for GlobalFlushGuard {
         // Flush the local TLB entry.
         tlb::flush(page.start_address());
 
-        // Wait for the APS to acknowledge the IPI.
+        // Wait for the APs to acknowledge the IPI.
         let mut remaining_aps = other_active_aps;
         while !remaining_aps.is_empty() {
             remaining_aps &= PENDING_GLOBAL_TLB_SHOOTDOWN.get_all();
