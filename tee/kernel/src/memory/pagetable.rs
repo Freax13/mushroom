@@ -30,6 +30,7 @@ use constants::{
 use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
 use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, flags};
+use usize_conversions::usize_from;
 use x86_64::{
     PhysAddr, VirtAddr,
     instructions::tlb::Pcid,
@@ -262,6 +263,44 @@ fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
     }
 
     if failed == 0 { Ok(()) } else { Err(()) }
+}
+
+/// Try to copy memory from `src` into `dest` until a null-byte is encountered.
+///
+/// Returns the number of read bytes.
+///
+/// This function is not unsafe. If the read fails for some reason `Err(())` is
+/// returned.
+#[inline(always)]
+fn try_read_cstring_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<usize, usize> {
+    let remaining: u64;
+    let failed: u64;
+    unsafe {
+        asm!(
+            "test rcx, rcx",
+            "je 67f",
+            "66:",
+            "mov {scratch:l}, byte ptr [{src}]",
+            "mov byte ptr [{dest}], {scratch:l}",
+            "inc {src}",
+            "inc {dest}",
+            "test {scratch:l}, {scratch:l}",
+            "loopne 66b",
+            "67:",
+            ".pushsection .recoverable",
+            ".quad 66b",
+            ".quad 67b",
+            ".popsection",
+            src = inout(reg) src.as_u64() => _,
+            dest = inout(reg) dest.as_mut_ptr() => _,
+            inout("rcx") dest.len() => remaining,
+            scratch = out(reg) _,
+            inout("rdx") 0u64 => failed,
+        );
+    }
+
+    let read = dest.len() - usize_from(remaining);
+    if failed == 0 { Ok(read) } else { Err(read) }
 }
 
 /// Try to copy memory from `src` into `dest`.
@@ -675,6 +714,23 @@ impl Pagetables {
         let _guard = self.activate();
 
         without_smap(|| try_read_fast(src, dest))
+    }
+
+    /// Try to copy memory from `src` into `dest` until a null-byte is encountered.
+    ///
+    /// This function is not unsafe. If the read fails for some reason `Err(())` is
+    /// returned. If `src` isn't user memory `Err(())` is returned.
+    #[inline(always)]
+    pub fn try_read_cstring_user_fast(
+        &self,
+        src: VirtAddr,
+        dest: NonNull<[u8]>,
+    ) -> Result<usize, usize> {
+        check_user_address(src, dest.len()).map_err(|_| 0usize)?;
+
+        let _guard = self.activate();
+
+        without_smap(|| try_read_cstring_fast(src, dest))
     }
 
     /// Try to copy memory from `src` into `dest`.

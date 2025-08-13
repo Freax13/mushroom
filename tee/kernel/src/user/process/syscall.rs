@@ -3672,7 +3672,7 @@ fn mount(
 ) -> SyscallResult {
     let _dev_name = virtual_memory.read(dev_name)?;
     let dir_name = virtual_memory.read(dir_name)?;
-    let r#type = virtual_memory.read_cstring(r#type, 0x10)?;
+    let r#type = virtual_memory.read_small_cstring(r#type, 0x10)?;
 
     let create_node = match r#type.as_bytes() {
         b"devtmpfs" => devtmpfs::new,

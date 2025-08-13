@@ -307,7 +307,7 @@ impl Pointee for CStr {
     fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
         let res = thread
             .virtual_memory()
-            .read_cstring(Pointer::from(addr), 1024);
+            .read_small_cstring(Pointer::from(addr), 1024);
         match res {
             Ok(value) => write!(f, "{value:?}"),
             Err(_) => write!(f, "{:#x} (invalid ptr)", addr.as_u64()),
@@ -343,7 +343,7 @@ impl AbiAgnosticPointee for Path {}
 
 impl ReadablePointee for Path {
     fn read(addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<(usize, Self)> {
-        let pathname = vm.read_cstring(Pointer::from(addr), PATH_MAX)?;
+        let pathname = vm.read_small_cstring(Pointer::from(addr), PATH_MAX)?;
         let len = pathname.to_bytes_with_nul().len();
         let value = Path::new(pathname.into_bytes())?;
         Ok((len, value))
