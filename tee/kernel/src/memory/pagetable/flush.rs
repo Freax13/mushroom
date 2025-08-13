@@ -205,6 +205,8 @@ impl ActivePageTableGuard {
             }
             if num_pages < usize::from(invlpgb.invlpgb_count_max()) {
                 builder = builder.pages(Page::range(*pages.start(), *pages.end() + 1));
+            } else {
+                state.needs_flush = ApBitmap::empty();
             }
             builder.flush();
             invlpgb.tlbsync();
