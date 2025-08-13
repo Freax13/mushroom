@@ -297,6 +297,46 @@ impl VirtualMemory {
         Ok(ret)
     }
 
+    /// Read a string from userspace.
+    pub fn read_small_cstring(
+        &self,
+        pointer: Pointer<CString>,
+        max_length: usize,
+    ) -> Result<CString> {
+        let capacity = max_length + 2;
+        let mut buf = Vec::with_capacity(capacity);
+        let dest = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
+        let dest = NonNull::from_raw_parts(dest, capacity);
+
+        let addr = pointer.get();
+        check_user_address(addr, capacity)?;
+
+        let len = 'read: {
+            for _ in 0..Self::ACCESS_RETRIES {
+                match self.pagetables.try_read_cstring_user_fast(addr, dest) {
+                    Ok(len) => break 'read len,
+                    Err(read) => self.map_addrs(
+                        addr + u64::from_usize(read) + 1,
+                        1,
+                        PageTableFlags::empty(),
+                    )?,
+                }
+            }
+
+            self.pagetables
+                .try_read_cstring_user_fast(addr, dest)
+                .unwrap()
+        };
+
+        ensure!(len < capacity, NameTooLong);
+        unsafe {
+            buf.set_len(len);
+        }
+
+        let cstr = unsafe { CString::from_vec_with_nul_unchecked(buf) };
+        Ok(cstr)
+    }
+
     pub fn set_bytes(&self, addr: VirtAddr, count: usize, byte: u8) -> Result<()> {
         if count == 0 {
             return Ok(());
