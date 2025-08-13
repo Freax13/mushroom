@@ -5,7 +5,7 @@
 use core::{
     fmt::{self, Debug, Display},
     marker::PhantomData,
-    ops::{BitAnd, BitAndAssign, BitOrAssign, Index, Not, RangeInclusive},
+    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Index, Not, RangeInclusive},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -165,10 +165,18 @@ impl ApBitmap {
     }
 }
 
+impl BitOr for ApBitmap {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
 impl BitOrAssign for ApBitmap {
     #[inline]
     fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
+        *self = *self | rhs;
     }
 }
 
