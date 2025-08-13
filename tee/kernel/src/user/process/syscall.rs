@@ -4314,7 +4314,7 @@ async fn openat(
             ensure!(!flags.contains(OpenFlags::TMPFILE), Inval);
             let mut mode = FileMode::from_bits_truncate(mode);
             mode &= !*thread.process().umask.lock();
-            create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
+            create_file(start_dir, filename, mode, flags, &mut ctx)?
         } else {
             if flags.contains(OpenFlags::TMPFILE) {
                 ensure!(flags.intersects(OpenFlags::WRONLY | OpenFlags::RDWR), Inval);
