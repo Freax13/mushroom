@@ -79,8 +79,8 @@ pub use cpu_state::init;
 
 impl Thread {
     /// Returns true if the thread should continue to run.
-    pub async fn execute_syscall(self: Arc<Self>, args: SyscallArgs) {
-        let result = SYSCALL_HANDLERS.execute(self.clone(), args).await;
+    pub async fn execute_syscall(self: &Arc<Self>, args: SyscallArgs) {
+        let result = SYSCALL_HANDLERS.execute(self, args).await;
 
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
@@ -330,7 +330,7 @@ async fn read(
 }
 
 async fn write_impl(
-    thread: Arc<Thread>,
+    thread: &Thread,
     fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     buf: impl WriteBuf,
@@ -381,7 +381,7 @@ async fn write_impl(
 
 #[syscall(i386 = 4, amd64 = 1)]
 async fn write(
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -395,7 +395,7 @@ async fn write(
 
 #[syscall(i386 = 5, amd64 = 2, interruptable, restartable)]
 async fn open(
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -815,7 +815,7 @@ impl Syscall for SysRtSigprocmask {
     const NO_I386: Option<usize> = Some(175);
     const NO_AMD64: Option<usize> = Some(14);
 
-    async fn execute(thread: Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {
+    async fn execute(thread: &Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {
         let how = <u64 as SyscallArg>::parse(syscall_args.args[0], syscall_args.abi)?;
         let set = <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[1], syscall_args.abi)?;
         let oldset =
@@ -947,7 +947,7 @@ async fn readv(
 
 #[syscall(i386 = 146, amd64 = 20)]
 async fn writev(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1489,7 +1489,7 @@ async fn accept(
 
 #[syscall(i386 = 369, amd64 = 44)]
 async fn sendto(
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
@@ -1809,7 +1809,7 @@ fn getsockopt(
 
 #[syscall(i386 = 120, amd64 = 56)]
 async fn clone(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1930,7 +1930,7 @@ async fn clone(
 
 #[syscall(i386 = 2, amd64 = 57)]
 async fn fork(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1951,7 +1951,7 @@ async fn fork(
 
 #[syscall(i386 = 190, amd64 = 58)]
 async fn vfork(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1974,7 +1974,7 @@ async fn vfork(
 
 #[syscall(i386 = 11, amd64 = 59)]
 async fn execve(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -2050,7 +2050,7 @@ async fn execve(
 }
 
 #[syscall(i386 = 1, amd64 = 60)]
-async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
+async fn exit(thread: &Thread, status: u64) -> SyscallResult {
     thread.lock().exit(WStatus::exit(status as u8));
 
     core::future::pending().await
@@ -2058,7 +2058,7 @@ async fn exit(thread: Arc<Thread>, status: u64) -> SyscallResult {
 
 #[syscall(i386 = 114, amd64 = 61, interruptable, restartable)]
 async fn wait4(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     pid: i32,
@@ -2206,7 +2206,7 @@ fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult 
 #[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
 async fn fcntl(
     abi: Abi,
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
@@ -2348,7 +2348,7 @@ async fn fcntl(
 
 #[syscall(i386 = 221, interruptable, restartable)]
 async fn fcntl64(
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] no_file_limit: CurrentNoFileLimit,
@@ -2550,7 +2550,7 @@ fn rmdir(
 
 #[syscall(i386 = 8, amd64 = 85, interruptable, restartable)]
 async fn creat(
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -2796,7 +2796,7 @@ fn getrlimit(
 #[syscall(i386 = 77, amd64 = 98)]
 async fn getrusage(
     abi: Abi,
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     who: GetRusageWho,
     usage: Pointer<Rusage>,
@@ -3393,7 +3393,7 @@ fn getsid(thread: &Thread, pid: u32) -> SyscallResult {
 
 #[syscall(i386 = 179, amd64 = 130)]
 async fn rt_sigsuspend(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     unewset: Pointer<Sigset>,
@@ -3751,7 +3751,7 @@ fn time(
 
 #[syscall(i386 = 240, amd64 = 202, interruptable, restartable)]
 async fn futex(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     uaddr: Pointer<u32>,
@@ -4086,7 +4086,7 @@ fn clock_getres(
 #[syscall(i386 = 407, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     clock_id: ClockId,
     flags: ClockNanosleepFlags,
@@ -4122,7 +4122,7 @@ async fn clock_nanosleep(
 }
 
 #[syscall(i386 = 252, amd64 = 231)]
-async fn exit_group(thread: Arc<Thread>, status: u64) -> SyscallResult {
+async fn exit_group(thread: &Thread, status: u64) -> SyscallResult {
     let process = thread.process();
     process.exit_group(WStatus::exit(status as u8));
     core::future::pending().await
@@ -4280,7 +4280,7 @@ fn start_dir_for_path(
 
 #[syscall(i386 = 295, amd64 = 257, interruptable, restartable)]
 async fn openat(
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -4292,7 +4292,7 @@ async fn openat(
 ) -> SyscallResult {
     let mut flags = flags;
     let filename = virtual_memory.read(filename)?;
-    let start_dir = start_dir_for_path(&thread, &fdtable, dfd, &filename, &mut ctx)?;
+    let start_dir = start_dir_for_path(thread, &fdtable, dfd, &filename, &mut ctx)?;
 
     let fd = if flags.contains(OpenFlags::PATH) {
         let link = if flags.contains(OpenFlags::NOFOLLOW) {
@@ -4314,7 +4314,7 @@ async fn openat(
             ensure!(!flags.contains(OpenFlags::TMPFILE), Inval);
             let mut mode = FileMode::from_bits_truncate(mode);
             mode &= !*thread.process().umask.lock();
-            create_file(start_dir, filename.clone(), mode, flags, &mut ctx)?
+            create_file(start_dir, filename, mode, flags, &mut ctx)?
         } else {
             if flags.contains(OpenFlags::TMPFILE) {
                 ensure!(flags.intersects(OpenFlags::WRONLY | OpenFlags::RDWR), Inval);
@@ -4759,7 +4759,7 @@ fn faccessat(
 
 #[syscall(i386 = 308, amd64 = 270)]
 async fn pselect6(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -4820,7 +4820,7 @@ async fn pselect6(
 
 #[syscall(i386 = 309, amd64 = 271)]
 async fn ppoll(
-    thread: Arc<Thread>,
+    thread: &Thread,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -5075,7 +5075,7 @@ fn utimensat(
 #[syscall(i386 = 319, amd64 = 281)]
 async fn epoll_pwait(
     abi: Abi,
-    thread: Arc<Thread>,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     epfd: FdNum,
