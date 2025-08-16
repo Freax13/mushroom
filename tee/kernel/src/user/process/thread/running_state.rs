@@ -129,7 +129,7 @@ impl Thread {
         running_state.notify.notify();
     }
 
-    pub async fn watch(&self) -> ExitAction {
+    pub async fn watch(&self) -> ExitAction<'_> {
         let running_state = &self.running_state;
 
         let thread_exit = running_state.notify.wait_until(|| {

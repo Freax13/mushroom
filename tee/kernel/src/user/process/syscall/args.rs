@@ -176,30 +176,6 @@ macro_rules! enum_arg {
     };
 }
 
-#[derive(Clone, Copy)]
-pub struct Ignored(());
-
-impl Display for Ignored {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ignored")
-    }
-}
-
-impl SyscallArg for Ignored {
-    fn parse(_value: u64, _: Abi) -> Result<Self> {
-        Ok(Self(()))
-    }
-
-    fn display(
-        f: &mut dyn fmt::Write,
-        _value: u64,
-        _: Abi,
-        _thread: &ThreadGuard<'_>,
-    ) -> fmt::Result {
-        write!(f, "ignored")
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pointer<T>
 where

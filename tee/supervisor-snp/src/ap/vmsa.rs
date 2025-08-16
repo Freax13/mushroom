@@ -166,7 +166,7 @@ impl Vmpl1Vmsa {
     }
 
     #[inline(always)]
-    pub fn modify(&mut self) -> VmsaModifyGuard {
+    pub fn modify(&mut self) -> VmsaModifyGuard<'_> {
         // The following code would be much more complicated if the EFER MSR
         // was obfuscated with the register protection nonce. Make sure that's
         // not the case.

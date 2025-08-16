@@ -42,7 +42,7 @@ pub struct FuturesUnordered<T> {
 }
 
 impl<T> FuturesUnordered<T> {
-    pub fn next(&mut self) -> Next<T> {
+    pub fn next(&mut self) -> Next<'_, T> {
         Next { this: self }
     }
 

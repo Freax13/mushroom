@@ -829,7 +829,7 @@ impl LockedBuffer {
         )
     }
 
-    pub fn lock(&self) -> BufferGuard {
+    pub fn lock(&self) -> BufferGuard<'_> {
         BufferGuard {
             buffer: self,
             guard: self.buffer.lock(),
