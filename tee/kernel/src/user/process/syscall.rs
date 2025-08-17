@@ -676,7 +676,7 @@ fn mmap(
     ensure!(length != 0, Inval);
     ensure!(length < (1 << 47), NoMem);
     if flags.contains(MmapFlags::ANONYMOUS) {
-        ensure!(offset % 0x1000 == 0, Inval);
+        ensure!(offset.is_multiple_of(0x1000), Inval);
     }
     if let Bias::Fixed(bias) = bias {
         ensure!(bias.is_aligned(0x1000u64), Inval);
@@ -767,7 +767,7 @@ fn munmap(
 
 #[syscall(i386 = 45, amd64 = 12)]
 fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallResult {
-    ensure!(brk_value % 0x1000 == 0, Inval);
+    ensure!(brk_value.is_multiple_of(0x1000), Inval);
 
     if brk_value != 0
         && let Ok(brk_value) = VirtAddr::try_new(brk_value)

@@ -36,7 +36,7 @@ impl<T, I> RwLock<T, I> {
 
     /// Try to acquire the lock for a read guard without spinnning.
     #[inline]
-    pub fn try_read(&self) -> Option<ReadRwLockGuard<T, I>>
+    pub fn try_read(&self) -> Option<ReadRwLockGuard<'_, T, I>>
     where
         I: InterruptGuard,
     {
@@ -96,7 +96,7 @@ impl<T, I> RwLock<T, I> {
     /// Acquire the lock for a read guard.
     #[inline]
     #[track_caller]
-    pub fn read(&self) -> ReadRwLockGuard<T, I>
+    pub fn read(&self) -> ReadRwLockGuard<'_, T, I>
     where
         I: InterruptGuard,
     {
@@ -129,7 +129,7 @@ impl<T, I> RwLock<T, I> {
 
     /// Try to acquire the lock for a write guard without spinnning.
     #[inline]
-    pub fn try_write(&self) -> Option<WriteRwLockGuard<T, I>>
+    pub fn try_write(&self) -> Option<WriteRwLockGuard<'_, T, I>>
     where
         I: InterruptGuard,
     {
@@ -146,7 +146,7 @@ impl<T, I> RwLock<T, I> {
     /// Acquire the lock for a write guard.
     #[inline]
     #[track_caller]
-    pub fn write(&self) -> WriteRwLockGuard<T, I>
+    pub fn write(&self) -> WriteRwLockGuard<'_, T, I>
     where
         I: InterruptGuard,
     {

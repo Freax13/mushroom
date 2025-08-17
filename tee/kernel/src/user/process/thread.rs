@@ -232,7 +232,7 @@ impl Thread {
         )
     }
 
-    pub fn try_lock(&self) -> Option<ThreadGuard> {
+    pub fn try_lock(&self) -> Option<ThreadGuard<'_>> {
         let state = self.state.try_lock()?;
         Some(ThreadGuard {
             thread: self,
@@ -240,7 +240,7 @@ impl Thread {
         })
     }
 
-    pub fn lock(&self) -> ThreadGuard {
+    pub fn lock(&self) -> ThreadGuard<'_> {
         ThreadGuard {
             thread: self,
             state: self.state.lock(),

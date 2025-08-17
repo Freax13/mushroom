@@ -469,6 +469,7 @@ const TIMER_PRIORITY_CLASS: PriorityClass = PriorityClass::new(RAW_TIMER_PRIORIT
 
 pub struct InterruptData {
     current_interrupt: AtomicCell<Option<Interrupt>>,
+    #[expect(dead_code)]
     disable_all_interrupts_counter: AtomicU64,
     disable_timer_interrupt_counter: AtomicU64,
 }
@@ -558,6 +559,7 @@ impl InterruptGuard for NoInterruptGuard {
 }
 
 /// An interrupt guard that blocks out all interrupts.
+#[expect(dead_code)]
 pub struct DisableAllInterruptsGuard {}
 
 impl InterruptGuard for DisableAllInterruptsGuard {

@@ -29,7 +29,7 @@ impl Path {
         Ok(Self { bytes: path.into() })
     }
 
-    pub fn segments(&self) -> impl Iterator<Item = PathSegment> {
+    pub fn segments(&self) -> impl Iterator<Item = PathSegment<'_>> {
         let mut bytes_opt = Some(&*self.bytes);
 
         let mut first = true;

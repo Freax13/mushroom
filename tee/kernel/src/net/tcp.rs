@@ -1086,7 +1086,7 @@ struct PassiveTcpSocketInternal {
 }
 
 impl PassiveTcpSocket {
-    pub fn prepare_connect(&self) -> Option<ConnectGuard> {
+    pub fn prepare_connect(&self) -> Option<ConnectGuard<'_>> {
         let guard = self.internal.lock();
         (guard.queue.len() < guard.backlog).then(|| ConnectGuard {
             passive_socket: self,

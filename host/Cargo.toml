@@ -19,7 +19,6 @@ vcek-kds = { path = "vcek-kds" }
 edition = "2024"
 
 [patch.crates-io]
-bytemuck = { git = "https://github.com/Freax13/bytemuck.git", rev = "91faa12" }
 x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "7ae7da5" }
 
 [profile.dev.package.sha2]

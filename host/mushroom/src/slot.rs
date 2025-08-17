@@ -84,7 +84,7 @@ impl Slot {
         &self.shared_mapping
     }
 
-    pub fn restricted_fd(&self) -> Option<BorrowedFd> {
+    pub fn restricted_fd(&self) -> Option<BorrowedFd<'_>> {
         self.restricted_fd.as_ref().map(OwnedFd::as_fd)
     }
 
@@ -111,7 +111,7 @@ impl Slot {
         Ok(value)
     }
 
-    pub fn shared_ptr<T>(&self, gpa: PhysAddr) -> Result<VolatilePtr<T>>
+    pub fn shared_ptr<T>(&self, gpa: PhysAddr) -> Result<VolatilePtr<'_, T>>
     where
         T: Pod,
     {
