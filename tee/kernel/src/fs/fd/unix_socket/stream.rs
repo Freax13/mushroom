@@ -23,8 +23,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
-            WriteBuf,
-            stream_buffer::{self},
+            WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,

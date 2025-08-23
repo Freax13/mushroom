@@ -1,12 +1,11 @@
 use alloc::sync::Arc;
 use core::cmp;
 
-use self::{fd::KernelWriteBuf, node::tmpfs::TmpFsFile};
-use crate::{
-    error::Result,
-    fs::{fd::file::File, node::INode},
-    spin::lazy::Lazy,
+use self::{
+    fd::{KernelWriteBuf, file::File},
+    node::{INode, tmpfs::TmpFsFile},
 };
+use crate::{error::Result, spin::lazy::Lazy};
 
 pub mod fd;
 pub mod node;

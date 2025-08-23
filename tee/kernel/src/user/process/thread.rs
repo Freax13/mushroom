@@ -25,6 +25,7 @@ use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
 use x86_64::VirtAddr;
 
+use self::running_state::{ExitAction, ThreadRunningState};
 use crate::{
     error::{Result, bail, ensure},
     exception::eoi,
@@ -47,7 +48,6 @@ use crate::{
             },
             cpu_state::{CpuState, Exit, PageFaultExit},
         },
-        thread::running_state::{ExitAction, ThreadRunningState},
         usage::{self, ThreadUsage},
     },
 };

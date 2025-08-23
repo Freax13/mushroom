@@ -20,13 +20,18 @@ use futures::{FutureExt, select_biased};
 use x86_64::VirtAddr;
 
 use self::{
+    exec::ExecResult,
     limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
-    syscall::args::{ClockId, Rusage, Signal, Timespec, WStatus},
+    syscall::args::{
+        ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
+        Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
+    },
     thread::{
         Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread,
         Uid, WeakThread, new_tid, running_state::ExecveValues,
     },
+    timer::Timer,
 };
 use crate::{
     char_dev::char::PtyData,
@@ -45,14 +50,6 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
-    user::process::{
-        exec::ExecResult,
-        syscall::args::{
-            ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
-            SigEvent, TimerId,
-        },
-        timer::Timer,
-    },
 };
 
 mod exec;

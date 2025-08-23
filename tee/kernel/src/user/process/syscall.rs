@@ -20,7 +20,10 @@ use log::warn;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{VirtAddr, align_up};
 
-use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
+use self::{
+    args::*,
+    traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
+};
 use crate::{
     char_dev::mem::random_bytes,
     error::{ErrorKind, Result, bail, ensure, err},
@@ -56,7 +59,6 @@ use crate::{
         futex::FutexScope,
         limits::{CurrentNoFileLimit, CurrentStackLimit},
         memory::{Bias, MemoryPermissions, VirtualMemory},
-        syscall::args::*,
         thread::{
             Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset,
             Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
