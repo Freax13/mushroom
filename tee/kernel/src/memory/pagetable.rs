@@ -573,6 +573,7 @@ impl Pagetables {
             return;
         }
 
+        let mut needs_flush = false;
         let _guard = self.update_lock.read();
         let pml4 = self.activate();
         for p4_index in start.p4_index()..=end.p4_index() {
@@ -652,15 +653,15 @@ impl Pagetables {
 
                     for p1_index in start.p1_index()..=end.p1_index() {
                         let pte = &pt[p1_index];
-                        unsafe {
-                            pte.try_unmap();
-                        }
+                        needs_flush |= unsafe { pte.try_unmap() };
                     }
                 }
             }
         }
 
-        pml4.flush_pages(start..=end);
+        if needs_flush {
+            pml4.flush_pages(start..=end);
+        }
     }
 
     /// Try to copy user memory from `src` into `dest`.
@@ -1266,12 +1267,18 @@ impl ActivePageTableEntry<Level1> {
     }
 
     /// Unmap a page if it's mapped or do nothing if it isn't.
-    pub unsafe fn try_unmap(&self) {
+    ///
+    /// Returns true if there previously was an entry and that entry had been
+    /// accessed.
+    pub unsafe fn try_unmap(&self) -> bool {
         let old_entry = atomic_swap(&self.entry, 0);
-        if PresentPageTableEntry::try_from(old_entry).is_ok() {
+        if let Ok(entry) = PresentPageTableEntry::try_from(old_entry) {
             unsafe {
                 self.parent_table_entry().release_reference_count_fast();
             }
+            entry.accessed()
+        } else {
+            false
         }
     }
 
