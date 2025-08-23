@@ -1840,7 +1840,7 @@ async fn clone(
             process.cwd(),
             process.process_group(),
             *process.limits.read(),
-            *process.umask.lock(),
+            process.umask(),
             process.mm_arg_start(),
             process.mm_arg_end(),
         ))
@@ -2736,7 +2736,7 @@ fn lchown(
 #[syscall(i386 = 60, amd64 = 95)]
 fn umask(thread: &Thread, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
-    let old = core::mem::replace(&mut *thread.process().umask.lock(), umask);
+    let old = thread.process().set_umask(umask);
     SyscallResult::Ok(old.bits())
 }
 
@@ -4273,7 +4273,7 @@ async fn openat(
         let link = if flags.contains(OpenFlags::CREAT) {
             ensure!(!flags.contains(OpenFlags::TMPFILE), Inval);
             let mut mode = FileMode::from_bits_truncate(mode);
-            mode &= !*thread.process().umask.lock();
+            mode &= !thread.process().umask();
             create_file(start_dir, filename, mode, flags, &mut ctx)?
         } else {
             if flags.contains(OpenFlags::TMPFILE) {
@@ -4306,7 +4306,7 @@ async fn openat(
             if flags.contains(OpenFlags::TMPFILE) {
                 flags.remove(OpenFlags::DIRECTORY);
                 let mut mode = FileMode::from_bits_truncate(mode);
-                mode &= !*thread.process().umask.lock();
+                mode &= !thread.process().umask();
                 link.node.create_tmp_file(mode, &ctx)?
             } else {
                 link
@@ -4365,7 +4365,7 @@ fn mkdirat(
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let mut mode = FileMode::from_bits_truncate(mode);
-    mode &= !*thread.process().umask.lock();
+    mode &= !thread.process().umask();
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
     Ok(0)
 }
@@ -4387,7 +4387,7 @@ fn mknodat(
     let start_dir = start_dir_for_path(thread, &fdtable, dirfd, &pathname, &mut ctx)?;
 
     let mut mode = FileMode::from_bits_truncate(mode);
-    mode &= !*thread.process().umask.lock();
+    mode &= !thread.process().umask();
 
     match ty {
         FileType::Unknown | FileType::File => {

@@ -84,7 +84,7 @@ pub struct Process {
     cwd: Mutex<Link>,
     pub process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
-    pub umask: Mutex<FileMode>,
+    umask: Mutex<FileMode>,
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
@@ -238,6 +238,14 @@ impl Process {
 
     pub fn task_comm(&self) -> ArrayVec<u8, TASK_COMM_CAPACITY> {
         self.task_comm.lock().clone()
+    }
+
+    pub fn umask(&self) -> FileMode {
+        *self.umask.lock()
+    }
+
+    pub fn set_umask(&self, umask: FileMode) -> FileMode {
+        core::mem::replace(&mut *self.umask.lock(), umask)
     }
 
     pub fn cwd(&self) -> Link {

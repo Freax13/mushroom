@@ -1011,7 +1011,7 @@ impl ThreadGuard<'_> {
         buffer.extend_from_slice(&self.task_comm());
         writeln!(buffer).unwrap();
 
-        writeln!(buffer, "Umask:\t{0:4o}", *self.process().umask.lock()).unwrap();
+        writeln!(buffer, "Umask:\t{0:4o}", self.process().umask()).unwrap();
 
         writeln!(buffer, "Tgid:\t{}", self.process().pid()).unwrap();
 
