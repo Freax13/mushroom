@@ -54,6 +54,7 @@ pub unsafe fn init() {
             guest_tsc_freq = in(reg) guest_tsc_freq,
             PROFILER_CONTROL = sym PROFILER_CONTROL,
             tsc_mhz_offset = const offset_of!(ProfilerControl, tsc_mhz),
+            options(nostack, preserves_flags),
         );
     }
 }

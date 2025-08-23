@@ -52,7 +52,11 @@ fn walk_frames() -> impl Iterator<Item = u64> {
 
     let rbp: u64;
     unsafe {
-        asm!("mov {}, rbp", out(reg) rbp);
+        asm!(
+            "mov {}, rbp",
+            out(reg) rbp,
+            options(nomem, nostack, preserves_flags),
+        );
     }
 
     let mut frame_pointer = rbp;

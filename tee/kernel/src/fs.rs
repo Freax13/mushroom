@@ -54,6 +54,7 @@ impl StaticFile {
                         inout("rsi") src => _,
                         inout("rdi") dst => _,
                         inout("rcx") size_of::<T>() * len => _,
+                        options(nostack, preserves_flags),
                     );
                 }
             }

@@ -284,6 +284,7 @@ pub fn run_vcpu() -> ! {
                                 "vmovdqu [{dst} + 32 * 14], ymm14",
                                 "vmovdqu [{dst} + 32 * 15], ymm15",
                                 dst = in(reg) buffer.as_mut_ptr(),
+                                options(preserves_flags),
                             );
                         }
 

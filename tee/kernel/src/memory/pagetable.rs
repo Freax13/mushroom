@@ -258,6 +258,7 @@ fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
             inout("rdi") dest.as_mut_ptr() => _,
             inout("rcx") dest.len() => _,
             inout("rdx") 0u64 => failed,
+            options(nostack, preserves_flags),
         );
     }
 
@@ -291,6 +292,7 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
             inout("rdi") dest.as_u64() => _,
             inout("rcx") src.len() => _,
             inout("rdx") 0u64 => failed,
+            options(readonly, nostack, preserves_flags),
         );
     }
     if failed == 0 { Ok(()) } else { Err(()) }
@@ -320,6 +322,7 @@ unsafe fn try_set_bytes_fast(dest: VirtAddr, count: usize, val: u8) -> Result<()
             inout("rdi") dest.as_u64() => _,
             inout("rcx") count => _,
             inout("rdx") 0u64 => failed,
+            options(readonly, nostack, preserves_flags),
         );
     }
     if failed == 0 { Ok(()) } else { Err(()) }
@@ -725,7 +728,7 @@ where
     let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
     if changed {
         unsafe {
-            asm!("stac");
+            asm!("stac", options(nostack, preserves_flags));
         }
     }
 
@@ -733,7 +736,7 @@ where
 
     if changed {
         unsafe {
-            asm!("clac");
+            asm!("clac", options(nostack, preserves_flags));
         }
     }
 
