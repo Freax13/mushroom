@@ -55,9 +55,9 @@ use crate::{
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
     time::{self, Tick, now, sleep_until},
     user::{
+        futex::FutexScope,
         process::{
             Process, WaitFilter, WaitResult,
-            futex::FutexScope,
             limits::{CurrentNoFileLimit, CurrentStackLimit},
             memory::{Bias, MemoryPermissions, VirtualMemory},
         },

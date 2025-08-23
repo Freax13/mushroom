@@ -11,6 +11,7 @@ use crate::{
     time::advance_time,
 };
 
+pub mod futex;
 pub mod process;
 pub mod syscall;
 pub mod thread;

@@ -55,7 +55,6 @@ use crate::{
 };
 
 mod exec;
-pub mod futex;
 pub mod limits;
 pub mod memory;
 mod timer;

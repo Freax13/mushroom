@@ -39,10 +39,8 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     time::now,
     user::{
-        process::{
-            futex::Futexes,
-            memory::{MappingCtrl, MappingsCtrl},
-        },
+        futex::Futexes,
+        process::memory::{MappingCtrl, MappingsCtrl},
         syscall::args::{
             ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, InotifyMask, OpenFlags,
             SocketAddrUnix, Stat, Timespec,

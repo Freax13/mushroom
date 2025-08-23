@@ -44,10 +44,8 @@ use crate::{
         rwlock::{RwLock, WriteRwLockGuard},
     },
     user::{
-        process::{
-            futex::{FutexScope, Futexes},
-            usage::MemoryUsage,
-        },
+        futex::{FutexScope, Futexes},
+        process::usage::MemoryUsage,
         syscall::{
             args::{
                 OpenFlags, Pointer, ProtFlags, Stat,

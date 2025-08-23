@@ -44,8 +44,8 @@ use crate::{
         mutex::{Mutex, MutexGuard},
     },
     user::{
+        futex::Futexes,
         process::{
-            futex::Futexes,
             limits::CurrentNoFileLimit,
             memory::{MappingCtrl, VirtualMemory},
         },
