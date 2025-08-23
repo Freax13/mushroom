@@ -4,12 +4,11 @@ use core::cmp;
 use async_trait::async_trait;
 use futures::future;
 
-use super::super::{BsdFileLock, Events, OpenFileDescription};
 use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
-        fd::{NonEmptyEvents, ReadBuf, WriteBuf},
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,

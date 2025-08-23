@@ -6,14 +6,15 @@ use alloc::{
 use async_trait::async_trait;
 use futures::future;
 
-use super::{CAPACITY, PIPE_BUF};
 use crate::{
     error::{Result, ensure},
     fs::{
         FileSystem,
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            StrongFileDescriptor, WriteBuf, stream_buffer,
+            StrongFileDescriptor, WriteBuf,
+            pipe::{CAPACITY, PIPE_BUF},
+            stream_buffer,
         },
         node::{FileAccessContext, Link},
         path::Path,

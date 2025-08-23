@@ -4,14 +4,14 @@ use core::future::pending;
 use async_trait::async_trait;
 use usize_conversions::FromUsize;
 
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
-    WriteBuf,
-};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            StrongFileDescriptor, WriteBuf,
+        },
         node::{DirEntry, FileAccessContext, Link, OffsetDirEntry, directory::Directory},
         path::Path,
     },

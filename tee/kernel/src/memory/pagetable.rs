@@ -19,7 +19,6 @@ use constants::{
     ApBitmap,
     physical_address::{kernel::*, *},
 };
-use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
 use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, flags};
 use x86_64::{
@@ -29,12 +28,13 @@ use x86_64::{
     structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
 };
 
-use super::{
-    frame::{allocate_frame, deallocate_frame},
-    temporary::{copy_into_frame, zero_frame},
-};
+use self::flush::{FlushGuard, GlobalFlushGuard};
 use crate::{
     error::{Result, ensure, err},
+    memory::{
+        frame::{allocate_frame, deallocate_frame},
+        temporary::{copy_into_frame, zero_frame},
+    },
     per_cpu::{PerCpu, PerCpuSync},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     user::process::memory::without_smap,

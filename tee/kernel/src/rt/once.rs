@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use super::notify::Notify;
+use crate::rt::notify::Notify;
 
 pub struct OnceCell<T> {
     state: crate::spin::once::Once<T>,

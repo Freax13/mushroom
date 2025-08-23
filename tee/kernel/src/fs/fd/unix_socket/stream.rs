@@ -16,14 +16,14 @@ use bytemuck::bytes_of;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{align_down, align_up};
 
-use super::super::{BsdFileLock, Events, OpenFileDescription};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescriptionData, PipeBlocked,
-            ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
+            BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
+            WriteBuf,
             stream_buffer::{self},
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},

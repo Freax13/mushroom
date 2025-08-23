@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use kernel_macros::register;
 use x86_64::instructions::random::RdRand;
 
-use super::CharDev;
 use crate::{
+    char_dev::CharDev,
     error::{Result, bail},
     fs::{
         FileSystem,

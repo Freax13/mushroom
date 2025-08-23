@@ -4,8 +4,8 @@ use core::{cmp, future::pending};
 use async_trait::async_trait;
 use kernel_macros::register;
 
-use super::CharDev;
 use crate::{
+    char_dev::CharDev,
     error::{Result, bail},
     fs::{
         FileSystem,

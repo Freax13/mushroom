@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::{cmp, iter::repeat};
 
-use super::{KernelPage, sparse::SparseBuffer};
 use crate::{
     error::{Result, ensure},
     fs::fd::{ReadBuf, WriteBuf},
+    memory::page::{KernelPage, buffer::sparse::SparseBuffer},
 };
 
 pub struct DenseBuffer {

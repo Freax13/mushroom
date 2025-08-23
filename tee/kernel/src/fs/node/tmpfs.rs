@@ -10,11 +10,6 @@ use core::{any::Any, cmp, ops::Deref};
 use async_trait::async_trait;
 use usize_conversions::FromUsize;
 
-use super::{
-    DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
-    directory::{Directory, dir_impls},
-    lookup_link, new_dev, new_ino,
-};
 use crate::{
     char_dev,
     error::{Result, bail, ensure, err},
@@ -31,7 +26,12 @@ use crate::{
             stream_buffer,
             unix_socket::StreamUnixSocket,
         },
-        node::Permission,
+        node::{
+            DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
+            Permission,
+            directory::{Directory, dir_impls},
+            lookup_link, new_dev, new_ino,
+        },
         ownership::Ownership,
         path::{FileName, Path},
     },

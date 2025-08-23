@@ -30,17 +30,6 @@ use x86_64::{
     },
 };
 
-use super::{
-    futex::FutexScope,
-    syscall::{
-        args::{
-            Pointer, ProtFlags,
-            pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
-        },
-        traits::Abi,
-    },
-    usage::MemoryUsage,
-};
 use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{fd::FileDescriptor, path::Path},
@@ -55,8 +44,15 @@ use crate::{
         rwlock::{RwLock, WriteRwLockGuard},
     },
     user::process::{
-        futex::Futexes,
-        syscall::args::{OpenFlags, Stat},
+        futex::{FutexScope, Futexes},
+        syscall::{
+            args::{
+                OpenFlags, Pointer, ProtFlags, Stat,
+                pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
+            },
+            traits::Abi,
+        },
+        usage::MemoryUsage,
     },
 };
 

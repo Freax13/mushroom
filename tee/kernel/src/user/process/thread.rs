@@ -25,16 +25,6 @@ use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
 use x86_64::VirtAddr;
 
-use super::{
-    Process, ProcessGroup, Session, TASK_COMM_CAPACITY,
-    limits::{CurrentStackLimit, Limits},
-    memory::{VirtualMemory, WriteToVec},
-    syscall::{
-        args::{FileMode, Nice, Pointer, Rusage, Signal, UserDesc, WStatus},
-        cpu_state::{CpuState, Exit, PageFaultExit},
-    },
-    usage::{self, ThreadUsage},
-};
 use crate::{
     error::{Result, bail, ensure},
     exception::eoi,
@@ -47,10 +37,18 @@ use crate::{
     spin::mutex::{Mutex, MutexGuard},
     time,
     user::process::{
-        WaitFilter, WaitResult,
-        memory::PageFaultError,
-        syscall::args::{PtraceEvent, TimerId, Timespec},
+        Process, ProcessGroup, Session, TASK_COMM_CAPACITY, WaitFilter, WaitResult,
+        limits::{CurrentStackLimit, Limits},
+        memory::{PageFaultError, VirtualMemory, WriteToVec},
+        syscall::{
+            args::{
+                FileMode, Nice, Pointer, PtraceEvent, Rusage, Signal, TimerId, Timespec, UserDesc,
+                WStatus,
+            },
+            cpu_state::{CpuState, Exit, PageFaultExit},
+        },
         thread::running_state::{ExitAction, ThreadRunningState},
+        usage::{self, ThreadUsage},
     },
 };
 
@@ -545,7 +543,7 @@ impl Thread {
 
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
-        use super::syscall::traits::dump_syscall_exit;
+        use crate::user::process::syscall::traits::dump_syscall_exit;
 
         writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
         let indent = indent + 2;

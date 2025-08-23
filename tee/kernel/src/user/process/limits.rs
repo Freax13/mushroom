@@ -3,7 +3,7 @@ use core::{
     ops::{Index, IndexMut},
 };
 
-use super::{
+use crate::user::process::{
     syscall::args::{ExtractableThreadState, RLimit, Resource},
     thread::ThreadGuard,
 };

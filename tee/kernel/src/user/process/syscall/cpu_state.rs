@@ -24,17 +24,16 @@ use x86_64::{
     structures::{DescriptorTablePointer, gdt::Entry, idt::PageFaultErrorCode},
 };
 
-use super::{
-    args::{Pointer, UserDesc, pointee::SizedPointee},
-    traits::{Abi, SyscallArgs, SyscallResult},
-};
 use crate::{
     error::{Result, ensure, err},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
     user::process::{
         memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
-        syscall::args::UserDescFlags,
+        syscall::{
+            args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
+            traits::{Abi, SyscallArgs, SyscallResult},
+        },
         thread::{
             SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
         },

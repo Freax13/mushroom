@@ -3,11 +3,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
-use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf};
 use crate::{
     error::{Result, ensure, err},
     fs::{
         ANON_INODE_FS, FileSystem,
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,

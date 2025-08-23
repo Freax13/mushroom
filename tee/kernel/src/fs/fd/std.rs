@@ -4,14 +4,14 @@ use core::future::pending;
 use async_trait::async_trait;
 use log::debug;
 
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
-    pipe::anon::PIPE_FS,
-};
 use crate::{
     error::{Result, ensure},
     fs::{
         FileSystem,
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            pipe::anon::PIPE_FS,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,

@@ -1,9 +1,9 @@
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
 use core::{cmp, num::NonZeroUsize, ops::Not};
 
-use super::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err};
 use crate::{
     error::{Result, bail, ensure},
+    fs::fd::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err},
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
 };

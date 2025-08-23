@@ -3,11 +3,11 @@ use core::future::pending;
 
 use async_trait::async_trait;
 
-use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription};
 use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription},
         node::{FileAccessContext, Link},
         path::Path,
     },

@@ -2,15 +2,15 @@ use alloc::{boxed::Box, format, sync::Arc};
 
 use async_trait::async_trait;
 
-use super::{
-    super::{BsdFileLock, Events, OpenFileDescription, stream_buffer},
-    CAPACITY, PIPE_BUF,
-};
 use crate::{
     error::Result,
     fs::{
         FileSystem, StatFs,
-        fd::{NonEmptyEvents, ReadBuf, WriteBuf},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            pipe::{CAPACITY, PIPE_BUF},
+            stream_buffer,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,

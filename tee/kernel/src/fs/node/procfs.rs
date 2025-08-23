@@ -12,11 +12,6 @@ use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
-use super::{
-    DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation,
-    directory::{Directory, dir_impls},
-    new_dev, new_ino,
-};
 use crate::{
     error::{ErrorKind, Result, bail, ensure, err},
     fs::{
@@ -29,7 +24,11 @@ use crate::{
             inotify::Watchers,
             unix_socket::StreamUnixSocket,
         },
-        node::DirEntryName,
+        node::{
+            DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
+            directory::{Directory, dir_impls},
+            new_dev, new_ino,
+        },
         path::{FileName, Path},
     },
     memory::page::KernelPage,

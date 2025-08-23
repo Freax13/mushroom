@@ -2,8 +2,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use usize_conversions::FromUsize;
 
-use super::syscall::args::{Rusage, Timespec, Timeval};
-use crate::time::default_backend_offset;
+use crate::{
+    time::default_backend_offset,
+    user::process::syscall::args::{Rusage, Timespec, Timeval},
+};
 
 #[derive(Default)]
 pub struct MemoryUsage {

@@ -5,21 +5,22 @@ use core::{
 };
 
 use async_trait::async_trait;
-use directory::Directory;
-use tmpfs::TmpFs;
 
-use self::tmpfs::TmpFsDir;
-use super::{
-    FileSystem,
-    fd::{
-        BsdFileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
-        unix_socket::StreamUnixSocket,
-    },
-    path::{FileName, Path, PathSegment},
+use self::{
+    directory::Directory,
+    tmpfs::{TmpFs, TmpFsDir},
 };
 use crate::{
     error::{Result, bail, ensure, err},
-    fs::ownership::Ownership,
+    fs::{
+        FileSystem,
+        fd::{
+            BsdFileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
+            unix_socket::StreamUnixSocket,
+        },
+        ownership::Ownership,
+        path::{FileName, Path, PathSegment},
+    },
     spin::{lazy::Lazy, rwlock::RwLock},
     user::process::{
         Process,

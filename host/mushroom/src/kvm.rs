@@ -1419,7 +1419,7 @@ pub struct KvmTdxExit {
 }
 
 mod hidden {
-    use super::KvmCpuidEntry2;
+    use crate::kvm::KvmCpuidEntry2;
 
     #[repr(C)]
     pub struct KvmCpuid2<const N: usize> {

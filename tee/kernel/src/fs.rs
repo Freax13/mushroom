@@ -1,9 +1,7 @@
 use alloc::sync::Arc;
 use core::cmp;
 
-use fd::KernelWriteBuf;
-use node::tmpfs::TmpFsFile;
-
+use self::{fd::KernelWriteBuf, node::tmpfs::TmpFsFile};
 use crate::{
     error::Result,
     fs::{fd::file::File, node::INode},

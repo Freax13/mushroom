@@ -1,9 +1,11 @@
 use core::ops::{Deref, DerefMut};
 
-use super::KernelPage;
 use crate::{
     error::Result,
-    memory::pagetable::{PageTableFlags, PresentPageTableEntry},
+    memory::{
+        page::KernelPage,
+        pagetable::{PageTableFlags, PresentPageTableEntry},
+    },
     user::process::memory::MemoryPermissions,
 };
 

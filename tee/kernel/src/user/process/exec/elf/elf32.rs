@@ -1,7 +1,9 @@
 use bytemuck::{Pod, Zeroable};
 
-use super::{ElfHeader, ElfIdent, ElfLoaderParams, ProgramHeaderEntry};
-use crate::user::process::syscall::traits::Abi;
+use crate::user::process::{
+    exec::elf::{ElfHeader, ElfIdent, ElfLoaderParams, ProgramHeaderEntry},
+    syscall::traits::Abi,
+};
 
 pub enum ElfLoaderParams32 {}
 

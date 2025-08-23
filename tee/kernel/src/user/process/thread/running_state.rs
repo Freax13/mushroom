@@ -3,7 +3,6 @@ use core::ops::Not;
 
 use futures::{FutureExt, select_biased};
 
-use super::{Thread, ThreadGuard};
 use crate::{
     fs::fd::FileDescriptorTable,
     rt::{notify::Notify, spawn},
@@ -11,7 +10,7 @@ use crate::{
     user::process::{
         memory::VirtualMemory,
         syscall::{args::WStatus, cpu_state::CpuState},
-        thread::PtraceState,
+        thread::{PtraceState, Thread, ThreadGuard},
     },
 };
 

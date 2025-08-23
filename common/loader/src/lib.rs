@@ -10,8 +10,9 @@ mod input;
 mod kernel;
 mod supervisor;
 
-pub use input::Input;
 pub use io::input::HashType;
+
+pub use self::input::Input;
 
 #[derive(Debug)]
 pub struct LoadCommand {

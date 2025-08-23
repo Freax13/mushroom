@@ -8,12 +8,14 @@ use futures::{
     select_biased,
 };
 
-use super::{BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
-        fd::WeakFileDescriptor,
+        fd::{
+            BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription,
+            WeakFileDescriptor,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,

@@ -3,14 +3,14 @@ use core::{future::pending, num::NonZeroU32};
 
 use async_trait::async_trait;
 
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
-    StrongFileDescriptor, UnixFileLockRecord, WriteBuf, stream_buffer,
-};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
+            StrongFileDescriptor, UnixFileLockRecord, WriteBuf, stream_buffer,
+        },
         node::{DynINode, FileAccessContext, INode, LinkLocation},
         path::{FileName, Path},
     },

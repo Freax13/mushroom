@@ -17,8 +17,8 @@ use arrayvec::ArrayVec;
 use async_trait::async_trait;
 use kernel_macros::register;
 
-use super::CharDev;
 use crate::{
+    char_dev::CharDev,
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,

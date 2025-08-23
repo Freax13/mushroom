@@ -10,15 +10,6 @@ use x86_64::{
 };
 
 use self::elf::{ElfIdent, ElfLoaderParams};
-use super::{
-    limits::CurrentStackLimit,
-    memory::{Bias, VirtualMemory},
-    syscall::{
-        args::{FileMode, OpenFlags},
-        cpu_state::CpuState,
-        traits::Abi,
-    },
-};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
@@ -27,7 +18,15 @@ use crate::{
         path::Path,
     },
     spin::lazy::Lazy,
-    user::process::memory::MemoryPermissions,
+    user::process::{
+        limits::CurrentStackLimit,
+        memory::{Bias, MemoryPermissions, VirtualMemory},
+        syscall::{
+            args::{FileMode, OpenFlags},
+            cpu_state::CpuState,
+            traits::Abi,
+        },
+    },
 };
 
 mod elf;

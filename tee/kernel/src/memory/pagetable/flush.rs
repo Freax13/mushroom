@@ -14,9 +14,9 @@ use x86_64::{
     structures::paging::Page,
 };
 
-use super::ActivePageTableGuard;
 use crate::{
     exception::{Interrupt, start_interrupt_handler},
+    memory::pagetable::ActivePageTableGuard,
     per_cpu::{PerCpu, PerCpuSync},
     spin::lazy::Lazy,
 };

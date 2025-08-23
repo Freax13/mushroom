@@ -11,8 +11,7 @@ use x86_64::{
     structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB},
 };
 
-use super::fallback_allocator::LimitedAllocator;
-use crate::{spin::mutex::Mutex, supervisor};
+use crate::{memory::heap::fallback_allocator::LimitedAllocator, spin::mutex::Mutex, supervisor};
 
 pub struct FixedSizeAllocator<A, const N: usize>
 where

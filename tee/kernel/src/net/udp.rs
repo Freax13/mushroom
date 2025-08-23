@@ -14,7 +14,6 @@ use core::{
 use async_trait::async_trait;
 use usize_conversions::usize_from;
 
-use super::netlink::{lo_interface_flags, lo_mtu};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
@@ -27,7 +26,10 @@ use crate::{
         node::FileAccessContext,
         path::Path,
     },
-    net::IpVersion,
+    net::{
+        IpVersion,
+        netlink::{lo_interface_flags, lo_mtu},
+    },
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::process::{

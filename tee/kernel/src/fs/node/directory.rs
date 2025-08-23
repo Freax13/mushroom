@@ -1,11 +1,10 @@
 use alloc::vec::Vec;
 
-use super::{Link, LinkLocation};
 use crate::{
     error::Result,
     fs::{
         fd::unix_socket::StreamUnixSocket,
-        node::{DirEntry, DynINode, FileAccessContext, INode},
+        node::{DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation},
         path::{FileName, Path},
     },
     user::process::{

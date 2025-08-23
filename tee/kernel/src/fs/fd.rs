@@ -20,27 +20,22 @@ use core::{
 
 use async_trait::async_trait;
 use bitflags::bitflags;
-use file::File;
 use futures::{
     FutureExt,
     future::{Either, select},
 };
-use inotify::Watchers;
 
-use super::{
-    FileSystem,
-    node::{
-        Link,
-        procfs::{FdINode, ProcFs},
-    },
-    path::Path,
-};
+use self::{file::File, inotify::Watchers};
 use crate::{
     char_dev::char::PtyData,
     error::{ErrorKind, Result, bail, ensure, err},
     fs::{
-        node::{DirEntry, DirEntryName, DynINode, FileAccessContext, OffsetDirEntry, new_ino},
-        path::FileName,
+        FileSystem,
+        node::{
+            DirEntry, DirEntryName, DynINode, FileAccessContext, Link, OffsetDirEntry, new_ino,
+            procfs::{FdINode, ProcFs},
+        },
+        path::{FileName, Path},
     },
     memory::page::KernelPage,
     rt::notify::Notify,
@@ -78,7 +73,7 @@ pub mod stream_buffer;
 pub mod timer;
 pub mod unix_socket;
 
-pub use buf::{
+pub use self::buf::{
     KernelReadBuf, KernelWriteBuf, OffsetBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf,
 };
 

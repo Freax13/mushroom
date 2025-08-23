@@ -1,6 +1,6 @@
-use super::node::FileAccessContext;
 use crate::{
     error::{Result, ensure},
+    fs::node::FileAccessContext,
     user::process::{
         syscall::args::FileMode,
         thread::{Gid, Uid},

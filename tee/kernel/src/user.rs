@@ -1,7 +1,7 @@
 use constants::{ApBitmap, ApIndex};
-use process::syscall;
 use x86_64::instructions::interrupts::without_interrupts;
 
+use self::process::syscall;
 use crate::{
     exception::{InterruptGuard, TimerInterruptGuard},
     memory::{frame, pagetable::flush},

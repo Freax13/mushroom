@@ -17,17 +17,15 @@ use core::{
 use arrayvec::ArrayVec;
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
-use limits::{CurrentStackLimit, Limits};
-use syscall::args::{ClockId, Rusage, Timespec};
-use thread::{Credentials, Gid, Uid};
 use x86_64::VirtAddr;
 
 use self::{
+    limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
-    syscall::args::{Signal, WStatus},
+    syscall::args::{ClockId, Rusage, Signal, Timespec, WStatus},
     thread::{
-        PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread, WeakThread,
-        new_tid, running_state::ExecveValues,
+        Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread,
+        Uid, WeakThread, new_tid, running_state::ExecveValues,
     },
 };
 use crate::{

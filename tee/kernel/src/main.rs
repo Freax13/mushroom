@@ -34,12 +34,9 @@ compiler_error!("Hardened kernels can't be profiled.");
 
 extern crate alloc;
 
-use exception::switch_stack;
-use memory::pagetable::flush;
-use user::SCHEDULER;
 use x86_64::instructions::interrupts;
 
-use crate::per_cpu::PerCpu;
+use crate::{exception::switch_stack, memory::pagetable::flush, per_cpu::PerCpu, user::SCHEDULER};
 
 mod char_dev;
 mod error;

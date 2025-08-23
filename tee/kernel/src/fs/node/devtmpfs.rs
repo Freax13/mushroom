@@ -1,10 +1,5 @@
 use alloc::sync::Arc;
 
-use super::{
-    LinkLocation,
-    directory::Directory,
-    tmpfs::{TmpFs, TmpFsDir},
-};
 use crate::{
     char_dev::{
         CharDev,
@@ -15,7 +10,11 @@ use crate::{
     error::Result,
     fs::{
         StaticFile,
-        node::FileAccessContext,
+        node::{
+            FileAccessContext, LinkLocation,
+            directory::Directory,
+            tmpfs::{TmpFs, TmpFsDir},
+        },
         path::{FileName, Path},
     },
     user::process::{

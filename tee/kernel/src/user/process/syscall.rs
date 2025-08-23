@@ -21,16 +21,6 @@ use usize_conversions::{FromUsize, usize_from};
 use x86_64::{VirtAddr, align_up};
 
 use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
-use super::{
-    Process, WaitFilter,
-    futex::FutexScope,
-    limits::{CurrentNoFileLimit, CurrentStackLimit},
-    memory::{Bias, VirtualMemory},
-    thread::{
-        Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags, Thread,
-        ThreadGuard, Uid, new_tid,
-    },
-};
 use crate::{
     char_dev::mem::random_bytes,
     error::{ErrorKind, Result, bail, ensure, err},
@@ -62,10 +52,15 @@ use crate::{
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
     time::{self, Tick, now, sleep_until},
     user::process::{
-        ProcessGroup, WaitResult,
-        memory::MemoryPermissions,
+        Process, ProcessGroup, WaitFilter, WaitResult,
+        futex::FutexScope,
+        limits::{CurrentNoFileLimit, CurrentStackLimit},
+        memory::{Bias, MemoryPermissions, VirtualMemory},
         syscall::args::*,
-        thread::{PtraceState, SigKill},
+        thread::{
+            Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset,
+            Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
+        },
     },
 };
 

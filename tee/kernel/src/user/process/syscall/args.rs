@@ -15,7 +15,6 @@ use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
 use self::pointee::{Pointee, PrimitivePointee, Timespec32};
-use super::traits::Abi;
 use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
@@ -25,6 +24,7 @@ use crate::{
     },
     user::process::{
         memory::VirtualMemory,
+        syscall::traits::Abi,
         thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
     },
 };

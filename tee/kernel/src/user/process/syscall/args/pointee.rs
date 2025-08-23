@@ -17,13 +17,6 @@ use bytemuck::{
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
-use super::{
-    CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec, ITimerval,
-    InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset,
-    OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent, SigEventData, SocketAddr,
-    SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval,
-    Timezone, Ucred, UserRegs32, UserRegs64, WStatus, WinSize,
-};
 use crate::{
     error::{Error, Result, bail, ensure},
     fs::{
@@ -33,7 +26,17 @@ use crate::{
     },
     user::process::{
         memory::VirtualMemory,
-        syscall::traits::Abi,
+        syscall::{
+            args::{
+                CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec,
+                ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr,
+                MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent,
+                SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo,
+                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserRegs32, UserRegs64,
+                WStatus, WinSize,
+            },
+            traits::Abi,
+        },
         thread::{
             Gid, SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack,
             StackFlags, ThreadGuard, UContext, Uid,
