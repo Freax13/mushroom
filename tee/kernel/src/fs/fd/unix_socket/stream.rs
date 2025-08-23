@@ -35,11 +35,7 @@ use crate::{
         once::Once,
     },
     user::{
-        process::{
-            limits::CurrentNoFileLimit,
-            memory::VirtualMemory,
-            thread::{Gid, Uid},
-        },
+        process::{limits::CurrentNoFileLimit, memory::VirtualMemory},
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
@@ -48,6 +44,7 @@ use crate::{
             },
             traits::Abi,
         },
+        thread::{Gid, Uid},
     },
 };
 

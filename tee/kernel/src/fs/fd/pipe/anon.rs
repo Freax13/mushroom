@@ -17,10 +17,10 @@ use crate::{
     },
     spin::{lazy::Lazy, mutex::Mutex},
     user::{
-        process::thread::{Gid, Uid},
         syscall::args::{
             FileMode, FileType, FileTypeAndMode, OpenFlags, Pipe2Flags, Stat, Timespec,
         },
+        thread::{Gid, Uid},
     },
 };
 

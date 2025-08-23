@@ -13,10 +13,10 @@ use crate::{
     },
     spin::mutex::Mutex,
     user::{
-        process::thread::{Gid, Uid},
         syscall::args::{
             FileMode, FileType, FileTypeAndMode, MemfdCreateFlags, OpenFlags, Stat, Timespec,
         },
+        thread::{Gid, Uid},
     },
 };
 

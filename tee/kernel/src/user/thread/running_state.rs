@@ -8,11 +8,9 @@ use crate::{
     rt::{notify::Notify, spawn},
     spin::mutex::Mutex,
     user::{
-        process::{
-            memory::VirtualMemory,
-            thread::{PtraceState, Thread, ThreadGuard},
-        },
+        process::memory::VirtualMemory,
         syscall::{args::WStatus, cpu_state::CpuState},
+        thread::{PtraceState, Thread, ThreadGuard},
     },
 };
 

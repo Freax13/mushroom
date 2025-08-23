@@ -42,12 +42,12 @@ use crate::{
         process::{
             futex::Futexes,
             memory::{MappingCtrl, MappingsCtrl},
-            thread::{Gid, Uid},
         },
         syscall::args::{
             ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, InotifyMask, OpenFlags,
             SocketAddrUnix, Stat, Timespec,
         },
+        thread::{Gid, Uid},
     },
 };
 

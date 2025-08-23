@@ -33,11 +33,7 @@ use crate::{
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
-        process::{
-            limits::CurrentNoFileLimit,
-            memory::VirtualMemory,
-            thread::{Gid, ThreadGuard, Uid},
-        },
+        process::{limits::CurrentNoFileLimit, memory::VirtualMemory},
         syscall::{
             args::{
                 FileMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags,
@@ -45,6 +41,7 @@ use crate::{
             },
             traits::Abi,
         },
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

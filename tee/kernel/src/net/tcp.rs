@@ -46,7 +46,6 @@ use crate::{
         process::{
             limits::CurrentNoFileLimit,
             memory::{VirtualMemory, WriteToVec},
-            thread::{Gid, ThreadGuard, Uid},
         },
         syscall::{
             args::{
@@ -56,6 +55,7 @@ use crate::{
             },
             traits::Abi,
         },
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

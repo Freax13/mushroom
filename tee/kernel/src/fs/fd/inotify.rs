@@ -31,10 +31,10 @@ use crate::{
     rt::notify::Notify,
     spin::{lazy::Lazy, mutex::Mutex},
     user::{
-        process::thread::{Gid, Uid},
         syscall::args::{
             FileMode, FileType, FileTypeAndMode, InotifyMask, OpenFlags, Stat, Timespec,
         },
+        thread::{Gid, Uid},
     },
 };
 

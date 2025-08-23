@@ -48,7 +48,6 @@ use crate::{
             futex::Futexes,
             limits::CurrentNoFileLimit,
             memory::{MappingCtrl, VirtualMemory},
-            thread::{Gid, ThreadGuard, Uid},
         },
         syscall::{
             args::{
@@ -58,6 +57,7 @@ use crate::{
             },
             traits::Abi,
         },
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

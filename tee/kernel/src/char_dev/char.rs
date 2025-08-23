@@ -40,10 +40,7 @@ use crate::{
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
-        process::{
-            limits::CurrentNoFileLimit,
-            thread::{Gid, ThreadGuard, Uid},
-        },
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 ExtractableThreadState, FileMode, FileType, FileTypeAndMode, InputMode, LocalMode,
@@ -51,6 +48,7 @@ use crate::{
             },
             traits::Abi,
         },
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

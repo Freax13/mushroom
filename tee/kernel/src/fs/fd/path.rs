@@ -12,8 +12,8 @@ use crate::{
         path::Path,
     },
     user::{
-        process::thread::{Gid, Uid},
         syscall::args::{FileMode, OpenFlags, Stat},
+        thread::{Gid, Uid},
     },
 };
 

@@ -54,11 +54,13 @@ use crate::{
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
     time::{self, Tick, now, sleep_until},
-    user::process::{
-        Process, WaitFilter, WaitResult,
-        futex::FutexScope,
-        limits::{CurrentNoFileLimit, CurrentStackLimit},
-        memory::{Bias, MemoryPermissions, VirtualMemory},
+    user::{
+        process::{
+            Process, WaitFilter, WaitResult,
+            futex::FutexScope,
+            limits::{CurrentNoFileLimit, CurrentStackLimit},
+            memory::{Bias, MemoryPermissions, VirtualMemory},
+        },
         thread::{
             Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset,
             Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,

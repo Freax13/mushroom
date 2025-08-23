@@ -23,11 +23,9 @@ use crate::{
     memory::page::KernelPage,
     spin::lazy::Lazy,
     user::{
-        process::{
-            futex::Futexes,
-            thread::{Gid, Uid},
-        },
+        process::futex::Futexes,
         syscall::args::{FileMode, OpenFlags, Stat, Whence},
+        thread::{Gid, Uid},
     },
 };
 

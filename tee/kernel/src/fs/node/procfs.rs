@@ -35,15 +35,12 @@ use crate::{
     net::{IpVersion, tcp::NetTcpFile},
     time::now,
     user::{
-        process::{
-            Process,
-            memory::WriteToVec,
-            thread::{Gid, Thread, Uid},
-        },
+        process::{Process, memory::WriteToVec},
         syscall::args::{
             ClockId, FallocateMode, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat,
             Timespec,
         },
+        thread::{Gid, Thread, Uid},
     },
 };
 

@@ -25,13 +25,7 @@ use crate::{
         path::{PATH_MAX, Path},
     },
     user::{
-        process::{
-            memory::VirtualMemory,
-            thread::{
-                Gid, SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack,
-                StackFlags, ThreadGuard, UContext, Uid,
-            },
-        },
+        process::memory::VirtualMemory,
         syscall::{
             args::{
                 CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec,
@@ -42,6 +36,10 @@ use crate::{
                 WStatus, WinSize,
             },
             traits::Abi,
+        },
+        thread::{
+            Gid, SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack,
+            StackFlags, ThreadGuard, UContext, Uid,
         },
     },
 };

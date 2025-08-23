@@ -23,11 +23,9 @@ use crate::{
     },
     spin::{lazy::Lazy, rwlock::RwLock},
     user::{
-        process::{
-            Process,
-            thread::{Gid, ThreadGuard, Uid},
-        },
+        process::Process,
         syscall::args::{ExtractableThreadState, FileMode, FileType, OpenFlags, Stat, Timespec},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

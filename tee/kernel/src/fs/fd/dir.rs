@@ -17,8 +17,8 @@ use crate::{
     },
     spin::mutex::Mutex,
     user::{
-        process::thread::{Gid, Uid},
         syscall::args::{FileMode, OpenFlags, Stat, Timespec, Whence},
+        thread::{Gid, Uid},
     },
 };
 

@@ -17,12 +17,9 @@ use crate::{
     memory::page::KernelPage,
     spin::mutex::Mutex,
     user::{
-        process::{
-            futex::Futexes,
-            memory::MappingCtrl,
-            thread::{Gid, Uid},
-        },
+        process::{futex::Futexes, memory::MappingCtrl},
         syscall::args::{FallocateMode, FileMode, InotifyMask, OpenFlags, Stat, Timespec, Whence},
+        thread::{Gid, Uid},
     },
 };
 

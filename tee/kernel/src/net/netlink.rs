@@ -20,11 +20,7 @@ use crate::{
     rt::{self, mpmc, mpsc},
     spin::once::Once,
     user::{
-        process::{
-            limits::CurrentNoFileLimit,
-            memory::VirtualMemory,
-            thread::{Gid, Uid},
-        },
+        process::{limits::CurrentNoFileLimit, memory::VirtualMemory},
         syscall::{
             args::{
                 FileMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr, SocketAddrNetlink,
@@ -33,6 +29,7 @@ use crate::{
             },
             traits::Abi,
         },
+        thread::{Gid, Uid},
     },
 };
 

@@ -13,6 +13,7 @@ use crate::{
 
 pub mod process;
 pub mod syscall;
+pub mod thread;
 
 pub fn run() -> ! {
     syscall::init();

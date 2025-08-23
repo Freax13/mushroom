@@ -23,10 +23,6 @@ use self::{
     exec::ExecResult,
     limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
-    thread::{
-        Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread,
-        Uid, WeakThread, new_tid, running_state::ExecveValues,
-    },
     timer::Timer,
 };
 use crate::{
@@ -46,9 +42,15 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
-    user::syscall::args::{
-        ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
-        Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
+    user::{
+        syscall::args::{
+            ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval,
+            OpenFlags, Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
+        },
+        thread::{
+            Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset,
+            Thread, Uid, WeakThread, new_tid, running_state::ExecveValues,
+        },
     },
 };
 
@@ -56,7 +58,6 @@ mod exec;
 pub mod futex;
 pub mod limits;
 pub mod memory;
-pub mod thread;
 mod timer;
 pub mod usage;
 
@@ -64,22 +65,22 @@ pub const TASK_COMM_CAPACITY: usize = 15;
 
 pub struct Process {
     pid: u32,
-    start_time: Timespec,
+    pub start_time: Timespec,
     exit_status: OnceCell<WStatus>,
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
     pub child_death_notify: Notify,
-    termination_signal: Option<Signal>,
+    pub termination_signal: Option<Signal>,
     pending_signals: Mutex<PendingSignals>,
-    signals_notify: Notify,
+    pub signals_notify: Notify,
     pub threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
     pub inos: ProcessInos,
-    exe: RwLock<Link>,
+    pub exe: RwLock<Link>,
     task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
-    stop_state: StopState,
+    pub stop_state: StopState,
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<Link>,
     process_group: Mutex<Arc<ProcessGroup>>,
@@ -422,7 +423,7 @@ impl Process {
         added
     }
 
-    fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
+    pub fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
         self.pending_signals.lock().pop(mask)
     }
 
@@ -726,7 +727,7 @@ impl AlarmState {
 }
 
 #[derive(Default)]
-struct StopState {
+pub struct StopState {
     stopped: AtomicBool,
     notify: Notify,
 }
@@ -738,11 +739,11 @@ impl StopState {
             .await;
     }
 
-    fn stop(&self) {
+    pub fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
 
-    fn cont(&self) {
+    pub fn cont(&self) {
         self.stopped.store(false, Ordering::Relaxed);
         self.notify.notify();
     }

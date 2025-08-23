@@ -17,11 +17,11 @@ use crate::{
     spin::mutex::Mutex,
     time::{now, sleep_until},
     user::{
-        process::thread::{Gid, Uid},
         syscall::args::{
             ClockId, FileMode, FileType, FileTypeAndMode, ITimerspec, OpenFlags, SetTimeFlags,
             Stat, TimerfdCreateFlags, Timespec,
         },
+        thread::{Gid, Uid},
     },
 };
 

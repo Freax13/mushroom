@@ -4,8 +4,8 @@ use core::{
 };
 
 use crate::user::{
-    process::thread::ThreadGuard,
     syscall::args::{ExtractableThreadState, RLimit, Resource},
+    thread::ThreadGuard,
 };
 
 #[derive(Clone, Copy)]
