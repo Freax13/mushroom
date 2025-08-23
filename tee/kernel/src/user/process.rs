@@ -82,7 +82,7 @@ pub struct Process {
     stop_state: StopState,
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<Link>,
-    pub process_group: Mutex<Arc<ProcessGroup>>,
+    process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
     umask: AtomicCell<FileMode>,
     /// The usage of all terminated threads.
