@@ -34,14 +34,16 @@ use crate::{
     memory::page::KernelPage,
     net::{IpVersion, tcp::NetTcpFile},
     time::now,
-    user::process::{
-        Process,
-        memory::WriteToVec,
+    user::{
+        process::{
+            Process,
+            memory::WriteToVec,
+            thread::{Gid, Thread, Uid},
+        },
         syscall::args::{
             ClockId, FallocateMode, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat,
             Timespec,
         },
-        thread::{Gid, Thread, Uid},
     },
 };
 

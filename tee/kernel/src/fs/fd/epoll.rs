@@ -22,11 +22,11 @@ use crate::{
     },
     rt::{futures_unordered::FuturesUnorderedBuilder, notify::Notify},
     spin::mutex::Mutex,
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::{
             EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
         },
-        thread::{Gid, Uid},
     },
 };
 

@@ -37,10 +37,13 @@ use crate::{
     rt::{PreemptionState, notify::Notify, oneshot, spawn},
     spin::mutex::{Mutex, MutexGuard},
     time,
-    user::process::{
-        Process, ProcessGroup, Session, TASK_COMM_CAPACITY, WaitFilter, WaitResult,
-        limits::{CurrentStackLimit, Limits},
-        memory::{PageFaultError, VirtualMemory, WriteToVec},
+    user::{
+        process::{
+            Process, ProcessGroup, Session, TASK_COMM_CAPACITY, WaitFilter, WaitResult,
+            limits::{CurrentStackLimit, Limits},
+            memory::{PageFaultError, VirtualMemory, WriteToVec},
+            usage::{self, ThreadUsage},
+        },
         syscall::{
             args::{
                 FileMode, Nice, Pointer, PtraceEvent, Rusage, Signal, TimerId, Timespec, UserDesc,
@@ -48,7 +51,6 @@ use crate::{
             },
             cpu_state::{CpuState, Exit, PageFaultExit},
         },
-        usage::{self, ThreadUsage},
     },
 };
 
@@ -543,7 +545,7 @@ impl Thread {
 
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
-        use crate::user::process::syscall::traits::dump_syscall_exit;
+        use crate::user::syscall::traits::dump_syscall_exit;
 
         writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
         let indent = indent + 2;

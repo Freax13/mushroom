@@ -42,9 +42,12 @@ use crate::{
         once::Once,
     },
     time::{now, sleep_until},
-    user::process::{
-        limits::CurrentNoFileLimit,
-        memory::{VirtualMemory, WriteToVec},
+    user::{
+        process::{
+            limits::CurrentNoFileLimit,
+            memory::{VirtualMemory, WriteToVec},
+            thread::{Gid, ThreadGuard, Uid},
+        },
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
@@ -53,7 +56,6 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

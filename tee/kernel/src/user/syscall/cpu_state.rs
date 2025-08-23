@@ -28,14 +28,16 @@ use crate::{
     error::{Result, ensure, err},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
-    user::process::{
-        memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
+    user::{
+        process::{
+            memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
+            thread::{
+                SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
+            },
+        },
         syscall::{
             args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
             traits::{Abi, SyscallArgs, SyscallResult},
-        },
-        thread::{
-            SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
         },
     },
 };

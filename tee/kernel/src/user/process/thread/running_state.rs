@@ -7,10 +7,12 @@ use crate::{
     fs::fd::FileDescriptorTable,
     rt::{notify::Notify, spawn},
     spin::mutex::Mutex,
-    user::process::{
-        memory::VirtualMemory,
+    user::{
+        process::{
+            memory::VirtualMemory,
+            thread::{PtraceState, Thread, ThreadGuard},
+        },
         syscall::{args::WStatus, cpu_state::CpuState},
-        thread::{PtraceState, Thread, ThreadGuard},
     },
 };
 

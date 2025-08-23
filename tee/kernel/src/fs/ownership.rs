@@ -1,9 +1,9 @@
 use crate::{
     error::{Result, ensure},
     fs::node::FileAccessContext,
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::FileMode,
-        thread::{Gid, Uid},
     },
 };
 

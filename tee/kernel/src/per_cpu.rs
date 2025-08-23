@@ -19,7 +19,7 @@ use crate::{
     exception::InterruptData,
     memory::{frame, pagetable::PagetablesAllocations},
     rt::SchedulerData,
-    user::process::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
+    user::syscall::cpu_state::{KernelRegisters, RawExit, Registers},
 };
 
 static COUNT: AtomicUsize = AtomicUsize::new(0);

@@ -43,10 +43,13 @@ use crate::{
         lazy::Lazy,
         mutex::{Mutex, MutexGuard},
     },
-    user::process::{
-        futex::Futexes,
-        limits::CurrentNoFileLimit,
-        memory::{MappingCtrl, VirtualMemory},
+    user::{
+        process::{
+            futex::Futexes,
+            limits::CurrentNoFileLimit,
+            memory::{MappingCtrl, VirtualMemory},
+            thread::{Gid, ThreadGuard, Uid},
+        },
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
@@ -55,7 +58,6 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

@@ -4,7 +4,7 @@ use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::{
     error::{Error, Result, bail},
-    user::process::syscall::args::Domain,
+    user::syscall::args::Domain,
 };
 
 pub mod netlink;

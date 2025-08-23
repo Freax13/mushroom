@@ -1,7 +1,6 @@
 use constants::{ApBitmap, ApIndex};
 use x86_64::instructions::interrupts::without_interrupts;
 
-use self::process::syscall;
 use crate::{
     exception::{InterruptGuard, TimerInterruptGuard},
     memory::{frame, pagetable::flush},
@@ -13,6 +12,7 @@ use crate::{
 };
 
 pub mod process;
+pub mod syscall;
 
 pub fn run() -> ! {
     syscall::init();

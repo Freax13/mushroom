@@ -17,9 +17,9 @@ use crate::{
         },
         path::{FileName, Path},
     },
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::FileMode,
-        thread::{Gid, Uid},
     },
 };
 

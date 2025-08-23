@@ -22,10 +22,12 @@ use crate::{
     },
     memory::page::KernelPage,
     spin::lazy::Lazy,
-    user::process::{
-        futex::Futexes,
+    user::{
+        process::{
+            futex::Futexes,
+            thread::{Gid, Uid},
+        },
         syscall::args::{FileMode, OpenFlags, Stat, Whence},
-        thread::{Gid, Uid},
     },
 };
 

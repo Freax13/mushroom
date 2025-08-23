@@ -1835,10 +1835,10 @@ async fn clone(
             new_tid,
             Arc::downgrade(process),
             termination_signal,
-            process.exe.read().clone(),
+            process.exe(),
             process.credentials.lock().clone(),
             process.cwd(),
-            process.process_group.lock().clone(),
+            process.process_group(),
             *process.limits.read(),
             *process.umask.lock(),
             process.mm_arg_start(),
@@ -2065,7 +2065,7 @@ async fn wait4(
     let filter = match pid {
         ..=-2 => WaitFilter::ExactPgid(-pid as u32),
         -1 => WaitFilter::Any,
-        0 => WaitFilter::ExactPgid(thread.process().process_group.lock().pgid),
+        0 => WaitFilter::ExactPgid(thread.process().pgrp()),
         1.. => WaitFilter::ExactPid(pid as u32),
     };
 
@@ -3527,11 +3527,11 @@ fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<
         }
         Which::ProcessGroup => {
             let pgid = if who == 0 {
-                thread.process().process_group.lock().pgid
+                thread.process().pgrp()
             } else {
                 who
             };
-            find_targets(&mut Process::all().filter(|p| p.process_group.lock().pgid == pgid))
+            find_targets(&mut Process::all().filter(|p| p.pgrp() == pgid))
         }
         Which::User => {
             let uid = if who == 0 { caller_ruid } else { Uid::new(who) };
@@ -4357,13 +4357,13 @@ async fn openat(
         if !flags.contains(OpenFlags::NOCTTY) {
             let session = thread.process().process_group().session();
             // Check if the session still needs a controlling terminal.
-            if session.controlling_terminal.get().is_none() {
+            if session.controlling_terminal().is_none() {
                 // Check if the process is the group leader.
-                if thread.process().pid() == session.sid {
+                if thread.process().pid() == session.sid() {
                     // Try to open the fd as a terminal.
                     if let Some(tty) = fd.as_tty() {
                         // Set the controlling terminal.
-                        session.controlling_terminal.call_once(|| tty);
+                        session.set_controlling_terminal(&tty);
                     }
                 }
             }

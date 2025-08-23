@@ -43,8 +43,11 @@ use crate::{
         mutex::Mutex,
         rwlock::{RwLock, WriteRwLockGuard},
     },
-    user::process::{
-        futex::{FutexScope, Futexes},
+    user::{
+        process::{
+            futex::{FutexScope, Futexes},
+            usage::MemoryUsage,
+        },
         syscall::{
             args::{
                 OpenFlags, Pointer, ProtFlags, Stat,
@@ -52,7 +55,6 @@ use crate::{
             },
             traits::Abi,
         },
-        usage::MemoryUsage,
     },
 };
 

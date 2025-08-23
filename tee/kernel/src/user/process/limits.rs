@@ -3,9 +3,9 @@ use core::{
     ops::{Index, IndexMut},
 };
 
-use crate::user::process::{
+use crate::user::{
+    process::thread::ThreadGuard,
     syscall::args::{ExtractableThreadState, RLimit, Resource},
-    thread::ThreadGuard,
 };
 
 #[derive(Clone, Copy)]

@@ -36,7 +36,7 @@ use crate::{
     per_cpu::{PerCpu, PerCpuSync},
     spin::lazy::Lazy,
     time,
-    user::process::syscall::cpu_state::{exception_entry, interrupt_entry},
+    user::syscall::cpu_state::{exception_entry, interrupt_entry},
 };
 
 pub fn switch_stack(f: extern "C" fn() -> !) -> ! {

@@ -12,8 +12,8 @@ use crate::{
         fd::{FileDescriptor, KernelReadBuf},
         path::Path,
     },
-    user::process::{
-        memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
+    user::{
+        process::memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
         syscall::traits::Abi,
     },
 };

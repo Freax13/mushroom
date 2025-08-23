@@ -17,9 +17,9 @@ use crate::{
         path::Path,
     },
     spin::mutex::Mutex,
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
-        thread::{Gid, Uid},
     },
 };
 

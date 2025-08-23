@@ -22,10 +22,12 @@ use crate::{
         path::{FileName, Path, PathSegment},
     },
     spin::{lazy::Lazy, rwlock::RwLock},
-    user::process::{
-        Process,
+    user::{
+        process::{
+            Process,
+            thread::{Gid, ThreadGuard, Uid},
+        },
         syscall::args::{ExtractableThreadState, FileMode, FileType, OpenFlags, Stat, Timespec},
-        thread::{Gid, ThreadGuard, Uid},
     },
 };
 

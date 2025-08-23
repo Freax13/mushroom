@@ -21,7 +21,7 @@ use crate::{
     spin::mutex::Mutex,
     user::{
         LastRunningVcpuGuard,
-        process::syscall::args::{ClockId, Timespec},
+        syscall::args::{ClockId, Timespec},
     },
 };
 

@@ -22,10 +22,12 @@ use crate::{
         node::FileAccessContext,
         path::Path,
     },
-    user::process::{
-        memory::VirtualMemory,
+    user::{
+        process::{
+            memory::VirtualMemory,
+            thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
+        },
         syscall::traits::Abi,
-        thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
     },
 };
 

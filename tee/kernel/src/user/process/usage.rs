@@ -4,7 +4,7 @@ use usize_conversions::FromUsize;
 
 use crate::{
     time::default_backend_offset,
-    user::process::syscall::args::{Rusage, Timespec, Timeval},
+    user::syscall::args::{Rusage, Timespec, Timeval},
 };
 
 #[derive(Default)]

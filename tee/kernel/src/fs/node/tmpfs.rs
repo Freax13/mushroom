@@ -38,14 +38,16 @@ use crate::{
     memory::page::{Buffer, KernelPage},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
     time::now,
-    user::process::{
-        futex::Futexes,
-        memory::{MappingCtrl, MappingsCtrl},
+    user::{
+        process::{
+            futex::Futexes,
+            memory::{MappingCtrl, MappingsCtrl},
+            thread::{Gid, Uid},
+        },
         syscall::args::{
             ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, InotifyMask, OpenFlags,
             SocketAddrUnix, Stat, Timespec,
         },
-        thread::{Gid, Uid},
     },
 };
 

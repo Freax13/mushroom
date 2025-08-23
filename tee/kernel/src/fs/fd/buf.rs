@@ -6,8 +6,8 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::Result,
-    user::process::{
-        memory::VirtualMemory,
+    user::{
+        process::memory::VirtualMemory,
         syscall::{
             args::{Iovec, Pointer},
             traits::Abi,

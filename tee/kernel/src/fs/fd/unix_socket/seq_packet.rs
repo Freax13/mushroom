@@ -15,12 +15,12 @@ use crate::{
     },
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::{
             FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SocketAddr, Stat,
             Timespec,
         },
-        thread::{Gid, Uid},
     },
 };
 

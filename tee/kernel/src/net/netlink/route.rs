@@ -7,7 +7,7 @@ use bytemuck::{Pod, Zeroable, bytes_of, pod_read_unaligned};
 use crate::{
     net::netlink::{MsgHeader, MsgHeaderFlags, NLMSG_DONE},
     rt::{mpmc, mpsc},
-    user::process::syscall::args::Domain,
+    user::syscall::args::Domain,
 };
 
 pub fn lo_mtu() -> u32 {

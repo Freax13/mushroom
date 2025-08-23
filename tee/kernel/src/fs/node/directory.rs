@@ -7,9 +7,9 @@ use crate::{
         node::{DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation},
         path::{FileName, Path},
     },
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::FileMode,
-        thread::{Gid, Uid},
     },
 };
 

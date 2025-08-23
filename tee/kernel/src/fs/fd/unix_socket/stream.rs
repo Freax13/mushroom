@@ -34,9 +34,12 @@ use crate::{
         mutex::{Mutex, MutexGuard},
         once::Once,
     },
-    user::process::{
-        limits::CurrentNoFileLimit,
-        memory::VirtualMemory,
+    user::{
+        process::{
+            limits::CurrentNoFileLimit,
+            memory::VirtualMemory,
+            thread::{Gid, Uid},
+        },
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
@@ -45,7 +48,6 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
     },
 };
 

@@ -21,9 +21,9 @@ use crate::{
     },
     rt::notify::Notify,
     spin::mutex::Mutex,
-    user::process::{
+    user::{
+        process::thread::{Gid, Uid},
         syscall::args::{FileMode, OpenFlags, Stat},
-        thread::{Gid, Uid},
     },
 };
 

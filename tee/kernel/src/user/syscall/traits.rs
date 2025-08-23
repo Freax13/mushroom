@@ -16,9 +16,9 @@ use usize_conversions::usize_from;
 use crate::{
     error::{Result, err},
     per_cpu::PerCpu,
-    user::process::{
+    user::{
+        process::thread::{Thread, ThreadGuard},
         syscall::{SYSCALL_HANDLERS, args::SyscallArg},
-        thread::{Thread, ThreadGuard},
     },
 };
 

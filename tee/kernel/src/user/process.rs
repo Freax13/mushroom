@@ -23,10 +23,6 @@ use self::{
     exec::ExecResult,
     limits::{CurrentStackLimit, Limits},
     memory::VirtualMemory,
-    syscall::args::{
-        ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
-        Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
-    },
     thread::{
         Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread,
         Uid, WeakThread, new_tid, running_state::ExecveValues,
@@ -50,13 +46,16 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
+    user::syscall::args::{
+        ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
+        Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
+    },
 };
 
 mod exec;
 pub mod futex;
 pub mod limits;
 pub mod memory;
-pub mod syscall;
 pub mod thread;
 mod timer;
 pub mod usage;
@@ -64,16 +63,16 @@ pub mod usage;
 pub const TASK_COMM_CAPACITY: usize = 15;
 
 pub struct Process {
-    pid: u32,
+    pub pid: u32,
     start_time: Timespec,
     exit_status: OnceCell<WStatus>,
-    parent: Weak<Self>,
+    pub parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
-    child_death_notify: Notify,
+    pub child_death_notify: Notify,
     termination_signal: Option<Signal>,
     pending_signals: Mutex<PendingSignals>,
     signals_notify: Notify,
-    threads: Mutex<Vec<WeakThread>>,
+    pub threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
     pub inos: ProcessInos,
@@ -83,7 +82,7 @@ pub struct Process {
     stop_state: StopState,
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<Link>,
-    process_group: Mutex<Arc<ProcessGroup>>,
+    pub process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
     pub umask: Mutex<FileMode>,
     /// The usage of all terminated threads.
@@ -99,7 +98,7 @@ pub struct Process {
 
 impl Process {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         first_tid: u32,
         parent: Weak<Self>,
         termination_signal: Option<Signal>,
@@ -176,6 +175,7 @@ impl Process {
             .map_or_else(|| if self.pid == 1 { 0 } else { 1 }, |parent| parent.pid())
     }
 
+    #[doc(alias = "pgid")]
     pub fn pgrp(&self) -> u32 {
         self.process_group.lock().pgid
     }
@@ -736,9 +736,9 @@ impl WaitResult {
 }
 
 pub struct ProcessGroup {
-    pgid: u32,
-    session: Mutex<Arc<Session>>,
-    processes: Mutex<Vec<Weak<Process>>>,
+    pub pgid: u32,
+    pub session: Mutex<Arc<Session>>,
+    pub processes: Mutex<Vec<Weak<Process>>>,
 }
 
 impl ProcessGroup {
@@ -760,7 +760,7 @@ impl ProcessGroup {
 
 pub struct Session {
     sid: u32,
-    process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
+    pub process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
     controlling_terminal: Once<Arc<PtyData>>,
 }
 

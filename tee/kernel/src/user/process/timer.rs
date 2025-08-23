@@ -9,10 +9,12 @@ use crate::{
     },
     spin::mutex::Mutex,
     time::{now, sleep_until},
-    user::process::{
-        Process,
+    user::{
+        process::{
+            Process,
+            thread::{SigFields, SigInfo, SigInfoCode, SigTimer},
+        },
         syscall::args::{ClockId, ITimerspec, SigEvent, SigEventData, Signal, TimerId, Timespec},
-        thread::{SigFields, SigInfo, SigInfoCode, SigTimer},
     },
 };
 
