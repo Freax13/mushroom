@@ -1,19 +1,18 @@
+use alloc::vec::Vec;
 use core::{
     alloc::{AllocError, Allocator, Layout},
     mem::size_of,
     ptr::NonNull,
 };
 
-use alloc::vec::Vec;
 use constants::physical_address::DYNAMIC;
 use x86_64::{
     align_down,
     structures::paging::{FrameAllocator, FrameDeallocator, PageSize, PhysFrame, Size2MiB},
 };
 
-use crate::{spin::mutex::Mutex, supervisor};
-
 use super::fallback_allocator::LimitedAllocator;
+use crate::{spin::mutex::Mutex, supervisor};
 
 pub struct FixedSizeAllocator<A, const N: usize>
 where

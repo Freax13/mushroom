@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::{
     arch::asm,
     cell::{Cell, OnceCell, RefCell},
@@ -7,7 +8,6 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use alloc::sync::Arc;
 use constants::{ApIndex, MAX_APS_COUNT};
 use x86_64::{
     VirtAddr,

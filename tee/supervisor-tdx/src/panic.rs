@@ -1,5 +1,4 @@
-use core::arch::asm;
-use core::panic::PanicInfo;
+use core::{arch::asm, panic::PanicInfo};
 
 use log::error;
 

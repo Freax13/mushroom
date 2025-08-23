@@ -1,13 +1,14 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{
     future::pending,
     iter::{from_fn, repeat_n},
 };
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 use kernel_macros::register;
 use x86_64::instructions::random::RdRand;
 
+use super::CharDev;
 use crate::{
     error::{Result, bail},
     fs::{
@@ -27,8 +28,6 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-
-use super::CharDev;
 
 const MAJOR: u16 = 1;
 

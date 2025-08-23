@@ -1,8 +1,9 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::ops::Not;
 
-use alloc::{boxed::Box, sync::Arc};
 use futures::{FutureExt, select_biased};
 
+use super::{Thread, ThreadGuard};
 use crate::{
     fs::fd::FileDescriptorTable,
     rt::{notify::Notify, spawn},
@@ -13,8 +14,6 @@ use crate::{
         thread::PtraceState,
     },
 };
-
-use super::{Thread, ThreadGuard};
 
 enum State {
     /// The thread is still active.

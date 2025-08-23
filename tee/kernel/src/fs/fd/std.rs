@@ -1,6 +1,6 @@
+use alloc::{boxed::Box, format, sync::Arc, vec};
 use core::future::pending;
 
-use alloc::{boxed::Box, format, sync::Arc, vec};
 use async_trait::async_trait;
 use log::debug;
 

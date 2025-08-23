@@ -1,3 +1,4 @@
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     cmp::{self, Reverse},
     ffi::c_void,
@@ -7,13 +8,14 @@ use core::{
     ops::Add,
 };
 
-use alloc::{sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
 use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
+use self::pointee::{Pointee, PrimitivePointee, Timespec32};
+use super::traits::Abi;
 use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
@@ -26,10 +28,6 @@ use crate::{
         thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
     },
 };
-
-use self::pointee::{Pointee, PrimitivePointee, Timespec32};
-
-use super::traits::Abi;
 
 pub mod pointee;
 

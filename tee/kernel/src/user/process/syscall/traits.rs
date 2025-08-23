@@ -9,17 +9,16 @@ use core::{
     pin::{Pin, pin},
     ptr::Pointee,
 };
-use usize_conversions::usize_from;
 
 use log::{trace, warn};
+use usize_conversions::usize_from;
 
+use super::{SYSCALL_HANDLERS, args::SyscallArg};
 use crate::{
     error::{Result, err},
     per_cpu::PerCpu,
     user::process::thread::{Thread, ThreadGuard},
 };
-
-use super::{SYSCALL_HANDLERS, args::SyscallArg};
 
 const VERBOSE: bool = false;
 

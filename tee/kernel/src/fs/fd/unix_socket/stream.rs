@@ -1,5 +1,3 @@
-use core::cmp;
-
 use alloc::{
     borrow::ToOwned,
     boxed::Box,
@@ -11,6 +9,8 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use core::cmp;
+
 use async_trait::async_trait;
 use bytemuck::bytes_of;
 use usize_conversions::{FromUsize, usize_from};

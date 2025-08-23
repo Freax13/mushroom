@@ -4,9 +4,8 @@ use core::{
     ptr::{NonNull, null_mut},
 };
 
-use crate::per_cpu::PerCpuSync;
-
 use super::{fallback_allocator::FallbackAllocator, fixed_size_allocator::FixedSizeAllocator};
+use crate::per_cpu::PerCpuSync;
 
 macro_rules! with_buckets {
     ($macro:ident) => {

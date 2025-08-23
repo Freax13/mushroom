@@ -12,6 +12,7 @@ use snp_types::{
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use x86_64::instructions::hlt;
 
+use self::vmsa::Vmpl1Vmsa;
 use crate::{
     dynamic::{allocate_memory, deallocate_memory},
     exception::{eoi, pop_pending_event, send_ipi},
@@ -20,8 +21,6 @@ use crate::{
     per_cpu::PerCpu,
     scheduler::{STARTUP_VECTOR, TIMER_VECTOR, WAKE_UP_VECTOR, start_next_ap},
 };
-
-use self::vmsa::Vmpl1Vmsa;
 
 pub mod vmsa;
 

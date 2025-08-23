@@ -1,43 +1,43 @@
 //! This module is responsible for handling CPU exceptions.
 
-use core::mem::offset_of;
-use core::sync::atomic::{AtomicU64, Ordering};
+use alloc::alloc::alloc;
 use core::{
     alloc::Layout,
     arch::{asm, naked_asm},
+    mem::offset_of,
     ptr::null_mut,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::memory::pagetable::flush;
-use crate::per_cpu::PerCpuSync;
-use crate::spin::lazy::Lazy;
-use crate::time;
-use crate::user::process::syscall::cpu_state::{exception_entry, interrupt_entry};
-use alloc::alloc::alloc;
 use constants::{TIMER_VECTOR, TLB_VECTOR};
 use crossbeam_utils::atomic::AtomicCell;
 use log::{debug, error, trace};
-use x86_64::instructions::interrupts::{self, without_interrupts};
-use x86_64::registers::control::{Cr8, PriorityClass};
-use x86_64::registers::model_specific::Msr;
-use x86_64::structures::gdt::SegmentSelector;
 use x86_64::{
     PrivilegeLevel, VirtAddr,
-    instructions::tables::load_tss,
+    instructions::{
+        interrupts::{self, without_interrupts},
+        tables::load_tss,
+    },
     registers::{
-        control::Cr2,
-        model_specific::Star,
+        control::{Cr2, Cr8, PriorityClass},
+        model_specific::{Msr, Star},
         segmentation::{CS, DS, ES, SS, Segment},
     },
     structures::{
-        gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable},
+        gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector},
         idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
         paging::Page,
         tss::TaskStateSegment,
     },
 };
 
-use crate::{memory::pagetable::entry_for_page, per_cpu::PerCpu};
+use crate::{
+    memory::pagetable::{entry_for_page, flush},
+    per_cpu::{PerCpu, PerCpuSync},
+    spin::lazy::Lazy,
+    time,
+    user::process::syscall::cpu_state::{exception_entry, interrupt_entry},
+};
 
 pub fn switch_stack(f: extern "C" fn() -> !) -> ! {
     let stack = allocate_stack();

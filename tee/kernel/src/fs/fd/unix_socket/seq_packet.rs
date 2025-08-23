@@ -1,6 +1,6 @@
+use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
 use core::cmp;
 
-use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
 use async_trait::async_trait;
 use futures::future;
 

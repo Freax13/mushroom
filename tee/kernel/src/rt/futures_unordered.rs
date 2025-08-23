@@ -1,9 +1,8 @@
+use alloc::vec::Vec;
 use core::{
     pin::Pin,
     task::{Context, Poll},
 };
-
-use alloc::vec::Vec;
 
 pub struct FuturesUnorderedBuilder<T> {
     futures: Vec<Option<T>>,

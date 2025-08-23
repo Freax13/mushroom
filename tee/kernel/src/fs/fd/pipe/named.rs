@@ -2,9 +2,11 @@ use alloc::{
     boxed::Box,
     sync::{Arc, Weak},
 };
+
 use async_trait::async_trait;
 use futures::future;
 
+use super::{CAPACITY, PIPE_BUF};
 use crate::{
     error::{Result, ensure},
     fs::{
@@ -23,8 +25,6 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-
-use super::{CAPACITY, PIPE_BUF};
 
 pub struct NamedPipe {
     internal: Mutex<NamedPipeInternal>,

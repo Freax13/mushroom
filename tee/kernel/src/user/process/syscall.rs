@@ -1,11 +1,11 @@
-use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
-
 use alloc::{
     ffi::CString,
     sync::{Arc, Weak},
     vec,
     vec::Vec,
 };
+use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
+
 use arrayvec::ArrayVec;
 use bit_field::{BitArray, BitField};
 use bytemuck::{Zeroable, bytes_of, bytes_of_mut, checked};
@@ -20,6 +20,17 @@ use log::warn;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{VirtAddr, align_up};
 
+use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
+use super::{
+    Process, WaitFilter,
+    futex::FutexScope,
+    limits::{CurrentNoFileLimit, CurrentStackLimit},
+    memory::{Bias, VirtualMemory},
+    thread::{
+        Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags, Thread,
+        ThreadGuard, Uid, new_tid,
+    },
+};
 use crate::{
     char_dev::mem::random_bytes,
     error::{ErrorKind, Result, bail, ensure, err},
@@ -55,19 +66,6 @@ use crate::{
         memory::MemoryPermissions,
         syscall::args::*,
         thread::{PtraceState, SigKill},
-    },
-};
-
-use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
-
-use super::{
-    Process, WaitFilter,
-    futex::FutexScope,
-    limits::{CurrentNoFileLimit, CurrentStackLimit},
-    memory::{Bias, VirtualMemory},
-    thread::{
-        Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags, Thread,
-        ThreadGuard, Uid, new_tid,
     },
 };
 

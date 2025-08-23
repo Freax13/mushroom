@@ -1,6 +1,6 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{future::pending, num::NonZeroU64};
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 use futures::{FutureExt, select_biased};
 

@@ -1,3 +1,4 @@
+use alloc::{vec, vec::Vec};
 use core::{
     arch::{
         global_asm,
@@ -7,7 +8,6 @@ use core::{
     mem::{offset_of, size_of},
 };
 
-use alloc::{vec, vec::Vec};
 use bit_field::BitField;
 use bytemuck::{Pod, Zeroable, bytes_of, bytes_of_mut, from_bytes, from_bytes_mut};
 use constants::TIMER_VECTOR;
@@ -24,6 +24,10 @@ use x86_64::{
     structures::{DescriptorTablePointer, gdt::Entry, idt::PageFaultErrorCode},
 };
 
+use super::{
+    args::{Pointer, UserDesc, pointee::SizedPointee},
+    traits::{Abi, SyscallArgs, SyscallResult},
+};
 use crate::{
     error::{Result, ensure, err},
     per_cpu::PerCpu,
@@ -35,11 +39,6 @@ use crate::{
             SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
         },
     },
-};
-
-use super::{
-    args::{Pointer, UserDesc, pointee::SizedPointee},
-    traits::{Abi, SyscallArgs, SyscallResult},
 };
 
 const FP_XSTATE_MAGIC1: u32 = 0x46505853;

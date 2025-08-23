@@ -1,12 +1,6 @@
 //! Concurrent page tables.
 
-use crate::{
-    error::{Result, ensure, err},
-    per_cpu::{PerCpu, PerCpuSync},
-    spin::{mutex::Mutex, rwlock::RwLock},
-    user::process::memory::without_smap,
-};
-
+use alloc::sync::Arc;
 use core::{
     arch::asm,
     cell::RefMut,
@@ -19,8 +13,6 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::spin::lazy::Lazy;
-use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use constants::{
@@ -40,6 +32,12 @@ use x86_64::{
 use super::{
     frame::{allocate_frame, deallocate_frame},
     temporary::{copy_into_frame, zero_frame},
+};
+use crate::{
+    error::{Result, ensure, err},
+    per_cpu::{PerCpu, PerCpuSync},
+    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
+    user::process::memory::without_smap,
 };
 
 pub mod flush;

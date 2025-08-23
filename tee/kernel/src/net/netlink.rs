@@ -1,6 +1,6 @@
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use core::{cmp, future::pending};
 
-use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};

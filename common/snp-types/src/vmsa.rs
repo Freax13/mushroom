@@ -1,5 +1,10 @@
 //! Related to the VMSA. The VMSA type is aware of VMSA register protection.
 
+use core::{
+    fmt::{self, Debug},
+    mem::{offset_of, size_of},
+};
+
 use bit_field::BitArray;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, Pod, Zeroable, bytes_of_mut};
@@ -13,11 +18,6 @@ use x86_64::registers::{
 };
 
 use crate::{Reserved, Uninteresting};
-
-use core::{
-    fmt::{self, Debug},
-    mem::{offset_of, size_of},
-};
 
 macro_rules! vmsa_field_accessor {
     ($ident:ident: $ty:ty) => {

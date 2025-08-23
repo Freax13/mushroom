@@ -1,12 +1,11 @@
 use core::ops::{Deref, DerefMut};
 
+use super::KernelPage;
 use crate::{
     error::Result,
     memory::pagetable::{PageTableFlags, PresentPageTableEntry},
     user::process::memory::MemoryPermissions,
 };
-
-use super::KernelPage;
 
 /// A `KernelPage` that can be mapped into userspace.
 pub struct UserPage {

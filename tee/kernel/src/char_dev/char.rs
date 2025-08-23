@@ -1,9 +1,3 @@
-use core::{
-    cmp,
-    ffi::c_void,
-    sync::atomic::{AtomicU32, Ordering},
-};
-
 use alloc::{
     boxed::Box,
     collections::btree_map::{BTreeMap, Entry},
@@ -13,10 +7,17 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::{
+    cmp,
+    ffi::c_void,
+    sync::atomic::{AtomicU32, Ordering},
+};
+
 use arrayvec::ArrayVec;
 use async_trait::async_trait;
 use kernel_macros::register;
 
+use super::CharDev;
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
@@ -50,8 +51,6 @@ use crate::{
         thread::{Gid, ThreadGuard, Uid},
     },
 };
-
-use super::CharDev;
 
 static PTYS: Mutex<BTreeMap<u32, Weak<PtyData>>> = Mutex::new(BTreeMap::new());
 

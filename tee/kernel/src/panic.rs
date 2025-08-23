@@ -48,8 +48,7 @@ fn triple_fault() -> ! {
 #[cfg(not(feature = "harden"))]
 #[inline(always)]
 fn walk_frames() -> impl Iterator<Item = u64> {
-    use core::arch::asm;
-    use core::iter::from_fn;
+    use core::{arch::asm, iter::from_fn};
 
     let rbp: u64;
     unsafe {

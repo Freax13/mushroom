@@ -1,3 +1,10 @@
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, btree_map::Entry},
+    format,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 #[cfg(not(feature = "harden"))]
 use core::fmt;
 use core::{
@@ -11,11 +18,28 @@ use core::{
     sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
+use async_trait::async_trait;
+use bitflags::bitflags;
+use file::File;
+use futures::{
+    FutureExt,
+    future::{Either, select},
+};
+use inotify::Watchers;
+
+use super::{
+    FileSystem,
+    node::{
+        Link,
+        procfs::{FdINode, ProcFs},
+    },
+    path::Path,
+};
 use crate::{
     char_dev::char::PtyData,
-    error::{bail, ensure, err},
+    error::{ErrorKind, Result, bail, ensure, err},
     fs::{
-        node::{DirEntryName, DynINode, FileAccessContext, OffsetDirEntry, new_ino},
+        node::{DirEntry, DirEntryName, DynINode, FileAccessContext, OffsetDirEntry, new_ino},
         path::FileName,
     },
     memory::page::KernelPage,
@@ -38,35 +62,6 @@ use crate::{
         },
         thread::{Gid, ThreadGuard, Uid},
     },
-};
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, btree_map::Entry},
-    format,
-    sync::{Arc, Weak},
-    vec::Vec,
-};
-use async_trait::async_trait;
-use bitflags::bitflags;
-use file::File;
-use futures::{
-    FutureExt,
-    future::{Either, select},
-};
-use inotify::Watchers;
-
-use crate::{
-    error::{ErrorKind, Result},
-    fs::node::DirEntry,
-};
-
-use super::{
-    FileSystem,
-    node::{
-        Link,
-        procfs::{FdINode, ProcFs},
-    },
-    path::Path,
 };
 
 mod buf;

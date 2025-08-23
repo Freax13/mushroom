@@ -1,4 +1,11 @@
 #[cfg(not(feature = "harden"))]
+use alloc::string::String;
+use alloc::{
+    collections::{VecDeque, btree_map::BTreeMap},
+    sync::{Arc, Weak},
+    vec::Vec,
+};
+#[cfg(not(feature = "harden"))]
 use core::fmt::{self, Write};
 use core::{
     ffi::CStr,
@@ -7,13 +14,6 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-#[cfg(not(feature = "harden"))]
-use alloc::string::String;
-use alloc::{
-    collections::{VecDeque, btree_map::BTreeMap},
-    sync::{Arc, Weak},
-    vec::Vec,
-};
 use arrayvec::ArrayVec;
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
@@ -22,6 +22,14 @@ use syscall::args::{ClockId, Rusage, Timespec};
 use thread::{Credentials, Gid, Uid};
 use x86_64::VirtAddr;
 
+use self::{
+    memory::VirtualMemory,
+    syscall::args::{Signal, WStatus},
+    thread::{
+        PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread, WeakThread,
+        new_tid, running_state::ExecveValues,
+    },
+};
 use crate::{
     char_dev::char::PtyData,
     error::{Result, bail, err},
@@ -46,15 +54,6 @@ use crate::{
             SigEvent, TimerId,
         },
         timer::Timer,
-    },
-};
-
-use self::{
-    memory::VirtualMemory,
-    syscall::args::{Signal, WStatus},
-    thread::{
-        PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread, WeakThread,
-        new_tid, running_state::ExecveValues,
     },
 };
 

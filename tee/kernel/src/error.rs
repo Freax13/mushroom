@@ -1,6 +1,6 @@
+use alloc::collections::TryReserveError;
 use core::{convert::Infallible, num::TryFromIntError};
 
-use alloc::collections::TryReserveError;
 use bytemuck::checked::CheckedCastError;
 use x86_64::addr::VirtAddrNotValid;
 
@@ -28,7 +28,9 @@ macro_rules! ensure {
     };
 }
 
-pub(crate) use {bail, ensure, err};
+pub(crate) use bail;
+pub(crate) use ensure;
+pub(crate) use err;
 
 #[derive(Clone, Copy)]
 pub struct Error {

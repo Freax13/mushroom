@@ -1,9 +1,10 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{cmp, future::pending};
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 use kernel_macros::register;
 
+use super::CharDev;
 use crate::{
     error::{Result, bail},
     fs::{
@@ -21,8 +22,6 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-
-use super::CharDev;
 
 const MAJOR: u16 = 0xf00;
 

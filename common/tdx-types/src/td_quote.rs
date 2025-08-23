@@ -7,10 +7,12 @@ use bytemuck::{
     bytes_of,
     checked::{CheckedCastError, try_pod_read_unaligned},
 };
-use p256::EncodedPoint;
-use p256::ecdsa::{
-    DerSignature, Signature, VerifyingKey,
-    signature::{DigestVerifier, Verifier},
+use p256::{
+    EncodedPoint,
+    ecdsa::{
+        DerSignature, Signature, VerifyingKey,
+        signature::{DigestVerifier, Verifier},
+    },
 };
 pub use raw::{
     AttestationType, Attributes, Body, EnclaveReportBody, Header, QeVendorId, TeeType, Version,

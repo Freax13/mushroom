@@ -1,3 +1,20 @@
+use alloc::sync::Arc;
+use core::{
+    cell::SyncUnsafeCell,
+    cmp,
+    ops::{Add, Deref, RangeInclusive, Sub},
+    pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
+    task::{Context, Poll, Waker},
+};
+
+use bit_field::BitField;
+use crossbeam_utils::atomic::AtomicCell;
+use intrusive_collections::{
+    KeyAdapter, LinkedList, LinkedListAtomicLink, RBTree, RBTreeAtomicLink, intrusive_adapter,
+};
+use log::debug;
+
 use crate::{
     error::{Result, bail},
     exception::{InterruptGuard, TimerInterruptGuard},
@@ -7,21 +24,6 @@ use crate::{
         process::syscall::args::{ClockId, Timespec},
     },
 };
-use alloc::sync::Arc;
-use bit_field::BitField;
-use core::{
-    cell::SyncUnsafeCell,
-    cmp,
-    ops::{Add, Deref, RangeInclusive, Sub},
-    pin::Pin,
-    sync::atomic::{AtomicU64, Ordering},
-    task::{Context, Poll, Waker},
-};
-use crossbeam_utils::atomic::AtomicCell;
-use intrusive_collections::{
-    KeyAdapter, LinkedList, LinkedListAtomicLink, RBTree, RBTreeAtomicLink, intrusive_adapter,
-};
-use log::debug;
 
 #[cfg(all(feature = "fake-time", feature = "real-time"))]
 compile_error!("the fake-time and real-time features are both enabled");

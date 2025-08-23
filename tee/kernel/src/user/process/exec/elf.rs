@@ -1,6 +1,6 @@
+use alloc::vec;
 use core::{cmp, mem::size_of};
 
-use alloc::vec;
 use bit_field::BitField;
 use bytemuck::{Pod, Zeroable, bytes_of_mut};
 use usize_conversions::usize_from;

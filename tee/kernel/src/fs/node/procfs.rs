@@ -1,5 +1,3 @@
-use core::{cmp, mem::MaybeUninit};
-
 use alloc::{
     boxed::Box,
     string::ToString,
@@ -7,11 +5,18 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::{cmp, mem::MaybeUninit};
+
 use async_trait::async_trait;
 use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
+use super::{
+    DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation,
+    directory::{Directory, dir_impls},
+    new_dev, new_ino,
+};
 use crate::{
     error::{ErrorKind, Result, bail, ensure, err},
     fs::{
@@ -39,12 +44,6 @@ use crate::{
         },
         thread::{Gid, Thread, Uid},
     },
-};
-
-use super::{
-    DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation,
-    directory::{Directory, dir_impls},
-    new_dev, new_ino,
 };
 
 pub struct ProcFs {

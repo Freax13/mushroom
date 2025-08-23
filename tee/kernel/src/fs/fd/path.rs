@@ -1,8 +1,9 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::future::pending;
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 
+use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription};
 use crate::{
     error::{Result, bail},
     fs::{
@@ -15,8 +16,6 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-
-use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription};
 
 pub struct PathFd {
     link: Link,

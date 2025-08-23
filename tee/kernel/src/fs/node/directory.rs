@@ -1,8 +1,11 @@
+use alloc::vec::Vec;
+
 use super::{Link, LinkLocation};
 use crate::{
+    error::Result,
     fs::{
         fd::unix_socket::StreamUnixSocket,
-        node::{DynINode, FileAccessContext, INode},
+        node::{DirEntry, DynINode, FileAccessContext, INode},
         path::{FileName, Path},
     },
     user::process::{
@@ -10,9 +13,6 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-use alloc::vec::Vec;
-
-use crate::{error::Result, fs::node::DirEntry};
 
 macro_rules! dir_impls {
     () => {

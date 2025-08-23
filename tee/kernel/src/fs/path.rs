@@ -1,9 +1,8 @@
+use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 use core::{
     fmt::{Debug, Display},
     iter::from_fn,
 };
-
-use alloc::{borrow::Cow, sync::Arc, vec::Vec};
 
 use crate::{
     error::{Result, bail, ensure},

@@ -1,5 +1,7 @@
-use core::arch::{asm, global_asm};
-use core::mem::{offset_of, size_of};
+use core::{
+    arch::{asm, global_asm},
+    mem::{offset_of, size_of},
+};
 
 use constants::{AtomicApBitmap, MAX_APS_COUNT};
 use profiler_types::{

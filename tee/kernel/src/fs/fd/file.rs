@@ -1,7 +1,14 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{future::pending, num::NonZeroU32};
 
+use async_trait::async_trait;
+
+use super::{
+    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
+    StrongFileDescriptor, UnixFileLockRecord, WriteBuf, stream_buffer,
+};
 use crate::{
-    error::{bail, ensure, err},
+    error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         node::{DynINode, FileAccessContext, INode, LinkLocation},
@@ -12,21 +19,9 @@ use crate::{
     user::process::{
         futex::Futexes,
         memory::MappingCtrl,
-        syscall::args::{FallocateMode, InotifyMask, OpenFlags, Timespec},
+        syscall::args::{FallocateMode, FileMode, InotifyMask, OpenFlags, Stat, Timespec, Whence},
         thread::{Gid, Uid},
     },
-};
-use alloc::{boxed::Box, sync::Arc};
-use async_trait::async_trait;
-
-use crate::{
-    error::Result,
-    user::process::syscall::args::{FileMode, Stat, Whence},
-};
-
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, PipeBlocked, ReadBuf,
-    StrongFileDescriptor, UnixFileLockRecord, WriteBuf, stream_buffer,
 };
 
 pub trait File: INode {

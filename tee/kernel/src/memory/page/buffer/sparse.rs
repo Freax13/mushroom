@@ -1,6 +1,5 @@
-use core::{cmp, ops::Bound};
-
 use alloc::collections::btree_map::BTreeMap;
+use core::{cmp, ops::Bound};
 
 use crate::{
     error::{Result, ensure},

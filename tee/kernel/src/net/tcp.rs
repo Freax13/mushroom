@@ -1,10 +1,3 @@
-use core::{
-    cmp,
-    ffi::c_void,
-    net::{self, IpAddr},
-    ops::Not,
-};
-
 use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
@@ -12,6 +5,13 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use core::{
+    cmp,
+    ffi::c_void,
+    net::{self, IpAddr},
+    ops::Not,
+};
+
 use async_trait::async_trait;
 use usize_conversions::usize_from;
 

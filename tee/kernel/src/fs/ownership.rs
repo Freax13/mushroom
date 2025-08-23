@@ -1,3 +1,4 @@
+use super::node::FileAccessContext;
 use crate::{
     error::{Result, ensure},
     user::process::{
@@ -5,8 +6,6 @@ use crate::{
         thread::{Gid, Uid},
     },
 };
-
-use super::node::FileAccessContext;
 
 #[derive(Clone)]
 pub struct Ownership {

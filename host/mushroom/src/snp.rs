@@ -19,11 +19,13 @@ use constants::{
 use loader::Input;
 use mushroom_verify::snp::{LaunchDigest, create_signature, id_block};
 use nix::sys::pthread::pthread_kill;
+pub use snp_types::guest_policy::GuestPolicy;
 use snp_types::{
     PageType,
     id_block::{EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey},
 };
 use tracing::{debug, info};
+pub use vcek_kds::Vcek;
 use x86_64::{
     PhysAddr,
     structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB},
@@ -40,9 +42,6 @@ use crate::{
     raise_file_no_limit,
     slot::Slot,
 };
-
-pub use snp_types::guest_policy::GuestPolicy;
-pub use vcek_kds::Vcek;
 
 #[allow(clippy::too_many_arguments)]
 pub fn main(
