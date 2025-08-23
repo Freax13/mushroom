@@ -804,7 +804,7 @@ impl ProcessGroup {
 
 pub struct Session {
     sid: u32,
-    pub process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
+    process_groups: Mutex<Vec<Weak<ProcessGroup>>>,
     controlling_terminal: Once<Arc<PtyData>>,
 }
 
