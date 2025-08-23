@@ -177,11 +177,11 @@ impl Process {
 
     #[doc(alias = "pgrp")]
     pub fn pgid(&self) -> u32 {
-        self.process_group.lock().pgid()
+        self.process_group().pgid()
     }
 
     pub fn sid(&self) -> u32 {
-        self.process_group.lock().session.lock().sid
+        self.process_group().session().sid()
     }
 
     pub fn process_group(&self) -> Arc<ProcessGroup> {
@@ -639,12 +639,9 @@ impl Process {
 
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
-        let process_group_guard = self.process_group.lock();
-        let session_guard = process_group_guard.session.lock();
-        let pgid = process_group_guard.pgid();
-        let sid = session_guard.sid;
-        drop(session_guard);
-        drop(process_group_guard);
+        let process_group = self.process_group();
+        let pgid = process_group.pgid();
+        let sid = process_group.session().sid();
         writeln!(
             write,
             "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?} exe={:?}",
