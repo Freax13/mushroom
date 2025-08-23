@@ -84,7 +84,7 @@ pub struct Process {
     cwd: Mutex<Link>,
     pub process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
-    umask: Mutex<FileMode>,
+    umask: AtomicCell<FileMode>,
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
@@ -140,7 +140,7 @@ impl Process {
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
             limits: RwLock::new(limits),
-            umask: Mutex::new(umask),
+            umask: AtomicCell::new(umask),
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
             real_itimer: Timer::new(
@@ -241,11 +241,11 @@ impl Process {
     }
 
     pub fn umask(&self) -> FileMode {
-        *self.umask.lock()
+        self.umask.load()
     }
 
     pub fn set_umask(&self, umask: FileMode) -> FileMode {
-        core::mem::replace(&mut *self.umask.lock(), umask)
+        self.umask.swap(umask)
     }
 
     pub fn cwd(&self) -> Link {
