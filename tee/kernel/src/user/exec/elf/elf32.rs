@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::user::{
-    process::exec::elf::{ElfHeader, ElfIdent, ElfLoaderParams, ProgramHeaderEntry},
+    exec::elf::{ElfHeader, ElfIdent, ElfLoaderParams, ProgramHeaderEntry},
     syscall::traits::Abi,
 };
 

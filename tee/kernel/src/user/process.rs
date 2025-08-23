@@ -20,7 +20,6 @@ use futures::{FutureExt, select_biased};
 use x86_64::VirtAddr;
 
 use self::{
-    exec::ExecResult,
     limits::{CurrentStackLimit, Limits},
     timer::Timer,
 };
@@ -42,6 +41,7 @@ use crate::{
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
     user::{
+        exec::ExecResult,
         memory::VirtualMemory,
         syscall::args::{
             ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval,
@@ -54,7 +54,6 @@ use crate::{
     },
 };
 
-mod exec;
 pub mod limits;
 mod timer;
 pub mod usage;
