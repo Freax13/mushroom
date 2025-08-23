@@ -4,7 +4,7 @@ use core::{
     cell::SyncUnsafeCell,
     cmp::{self, Ordering},
     fmt::{self, Display, Write},
-    iter::{Step, repeat_with},
+    iter::repeat_with,
     mem::{MaybeUninit, needs_drop},
     num::{NonZeroU32, NonZeroUsize},
     ops::{Bound, Range, RangeBounds},
@@ -280,21 +280,52 @@ impl VirtualMemory {
     }
 
     /// Read a string from userspace.
-    pub fn read_cstring(&self, pointer: Pointer<CString>, max_length: usize) -> Result<CString> {
-        let mut addr = pointer.get();
-        let mut ret = Vec::new();
+    pub fn read_cstring(&self, pointer: Pointer<CString>, max_len: usize) -> Result<CString> {
+        let mut buf = Vec::new();
+
         loop {
-            let mut buf = 0;
-            self.read_bytes(addr, core::array::from_mut(&mut buf))?;
-            if buf == 0 {
-                break;
+            // Make sure that the string doesn't exceed the maximum length.
+            ensure!(buf.len() < max_len, NameTooLong);
+
+            // Allocate some more memory.
+            buf.reserve(1);
+            let (init, uninit) = buf.split_at_spare_mut();
+
+            // Determine how many bytes to read. Reads are limited by the following:
+            // - the remaining capacity
+            // - the maximum (remaining) string length
+            // - the end of the page
+            let current_len = init.len();
+            let addr = pointer.get() + u64::from_usize(current_len);
+            let page_offset = u16::from(addr.page_offset());
+            let remaining_len_in_page =
+                usize::from((page_offset + 1).next_multiple_of(0x1000) - page_offset);
+            let read_len = cmp::min(uninit.len(), max_len - current_len);
+            let read_len = cmp::min(read_len, remaining_len_in_page);
+            debug_assert_ne!(read_len, 0);
+
+            // Read more string bytes.
+            let bytes = self.read_uninit_bytes(addr, &mut uninit[..read_len])?;
+
+            // Look for a null-byte in the newly read bytes.
+            let idx = bytes.iter().position(|&b| b == 0);
+
+            // Update the buffer length.
+            let new_len = current_len + read_len;
+            unsafe {
+                buf.set_len(new_len);
             }
-            ensure!(ret.len() < max_length, NameTooLong);
-            addr = Step::forward(addr, 1);
-            ret.push(buf);
+
+            // If there was a null-byte, then we're done.
+            if let Some(idx) = idx {
+                // Truncate the string just after the null-byte.
+                let cstring_len = current_len + idx + 1;
+                buf.truncate(cstring_len);
+
+                let cstr = unsafe { CString::from_vec_with_nul_unchecked(buf) };
+                return Ok(cstr);
+            }
         }
-        let ret = CString::new(ret).unwrap();
-        Ok(ret)
     }
 
     pub fn set_bytes(&self, addr: VirtAddr, count: usize, byte: u8) -> Result<()> {
