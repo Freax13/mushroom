@@ -24,7 +24,10 @@ use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, flags
 use x86_64::{
     PhysAddr, VirtAddr,
     instructions::tlb::Pcid,
-    registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
+    registers::{
+        control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
+        rflags::{self, RFlags},
+    },
     structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
 };
 
@@ -37,7 +40,6 @@ use crate::{
     },
     per_cpu::{PerCpu, PerCpuSync},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
-    user::memory::without_smap,
 };
 
 pub mod flush;
@@ -713,6 +715,29 @@ impl Pagetables {
 
         without_smap(|| unsafe { try_set_bytes_fast(dest, count, val) })
     }
+}
+
+fn without_smap<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let rflags = rflags::read();
+    let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
+    if changed {
+        unsafe {
+            asm!("stac");
+        }
+    }
+
+    let result = f();
+
+    if changed {
+        unsafe {
+            asm!("clac");
+        }
+    }
+
+    result
 }
 
 struct ActivePageTableGuard {

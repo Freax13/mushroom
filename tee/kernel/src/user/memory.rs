@@ -5,7 +5,6 @@ use alloc::{
     vec::Vec,
 };
 use core::{
-    arch::asm,
     borrow::Borrow,
     cell::SyncUnsafeCell,
     cmp::{self, Ordering},
@@ -23,7 +22,6 @@ use log::debug;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{
     VirtAddr, align_up,
-    registers::rflags::{self, RFlags},
     structures::{
         idt::PageFaultErrorCode,
         paging::{Page, PageOffset, PageSize, Size4KiB},
@@ -1198,29 +1196,6 @@ impl Display for MemoryPermissions {
             '-'
         })
     }
-}
-
-pub fn without_smap<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    let rflags = rflags::read();
-    let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
-    if changed {
-        unsafe {
-            asm!("stac");
-        }
-    }
-
-    let result = f();
-
-    if changed {
-        unsafe {
-            asm!("clac");
-        }
-    }
-
-    result
 }
 
 #[derive(Debug, Clone, Copy)]
