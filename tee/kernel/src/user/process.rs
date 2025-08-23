@@ -63,7 +63,7 @@ pub mod usage;
 pub const TASK_COMM_CAPACITY: usize = 15;
 
 pub struct Process {
-    pub pid: u32,
+    pid: u32,
     start_time: Timespec,
     exit_status: OnceCell<WStatus>,
     pub parent: Weak<Self>,

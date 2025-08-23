@@ -1295,7 +1295,7 @@ fn setitimer(
 
 #[syscall(i386 = 20, amd64 = 39)]
 fn getpid(thread: &Thread) -> SyscallResult {
-    let pid = thread.process().pid;
+    let pid = thread.process().pid();
     Ok(u64::from(pid))
 }
 
@@ -2143,7 +2143,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         -1 => {
-            let mut processes = Process::all().filter(|p| p.pid != 1).peekable();
+            let mut processes = Process::all().filter(|p| p.pid() != 1).peekable();
             processes.peek().ok_or(err!(Srch))?;
             if let Some(sig_info) = sig_info {
                 let mut processes = processes

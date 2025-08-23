@@ -250,7 +250,7 @@ impl Thread {
     }
 
     pub fn is_thread_group_leader(&self) -> bool {
-        self.process.pid == self.tid
+        self.process.pid() == self.tid
     }
 
     pub async fn run(self: Arc<Self>) {
