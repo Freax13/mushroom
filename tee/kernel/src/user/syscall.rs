@@ -3078,33 +3078,8 @@ fn setpgid(thread: &Thread, pid: u32, pgid: u32) -> SyscallResult {
     let pgid = if pid == 0 { pgid } else { pid };
 
     let self_process = thread.process();
-
     let process = self_process.find_by_pid_in(pid).ok_or(err!(Srch))?;
-
-    // TODO: Make sure that the children haven't execve'd.
-
-    let mut group_guard = process.process_group.lock();
-
-    if pgid == pid {
-        // Create a new process group.
-        let session = group_guard.session.lock().clone();
-        *group_guard = ProcessGroup::new(pgid, session);
-    } else {
-        // Join an existing process group.
-
-        // Find the other process group in the same session.
-        let session_guard = group_guard.session.lock();
-        let process_groups = session_guard.process_groups.lock();
-        let existing_process_group = process_groups
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|pg| pg.pgid() == pgid)
-            .ok_or(err!(Perm))?;
-        drop(process_groups);
-        drop(session_guard);
-
-        *group_guard = existing_process_group.clone();
-    }
+    process.set_pgid(pgid)?;
 
     Ok(0)
 }

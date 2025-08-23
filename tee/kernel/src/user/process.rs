@@ -188,6 +188,33 @@ impl Process {
         self.process_group.lock().clone()
     }
 
+    pub fn set_pgid(&self, pgid: u32) -> Result<()> {
+        // TODO: Make sure that the children haven't execve'd.
+
+        let mut group_guard = self.process_group.lock();
+        if pgid == self.pid {
+            // Create a new process group.
+            let session = group_guard.session.lock().clone();
+            *group_guard = ProcessGroup::new(self.pid, session);
+        } else {
+            // Join an existing process group.
+
+            // Find the other process group in the same session.
+            let session_guard = group_guard.session.lock();
+            let process_groups = session_guard.process_groups.lock();
+            let existing_process_group = process_groups
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|pg| pg.pgid() == pgid)
+                .ok_or(err!(Perm))?;
+            drop(process_groups);
+            drop(session_guard);
+
+            *group_guard = existing_process_group.clone();
+        }
+        Ok(())
+    }
+
     pub fn set_sid(&self) -> u32 {
         let mut process_group_guard = self.process_group.lock();
 
@@ -737,7 +764,7 @@ impl WaitResult {
 
 pub struct ProcessGroup {
     pgid: u32,
-    pub session: Mutex<Arc<Session>>,
+    session: Mutex<Arc<Session>>,
     pub processes: Mutex<Vec<Weak<Process>>>,
 }
 
