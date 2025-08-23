@@ -323,6 +323,21 @@ impl SyscallArg for i64 {
     }
 }
 
+impl SyscallArg for u32 {
+    fn parse(value: u64, _abi: Abi) -> Result<Self> {
+        Ok(value as u32)
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        write!(f, "{}", Self::parse(value, abi).unwrap())
+    }
+}
+
 impl SyscallArg for i32 {
     fn parse(value: u64, _abi: Abi) -> Result<Self> {
         Ok(value as u32 as i32)
