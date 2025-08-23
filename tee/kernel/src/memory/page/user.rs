@@ -6,7 +6,7 @@ use crate::{
         page::KernelPage,
         pagetable::{PageTableFlags, PresentPageTableEntry},
     },
-    user::process::memory::MemoryPermissions,
+    user::memory::MemoryPermissions,
 };
 
 /// A `KernelPage` that can be mapped into userspace.

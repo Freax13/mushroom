@@ -18,7 +18,7 @@ use crate::{
     spin::mutex::Mutex,
     user::{
         futex::Futexes,
-        process::memory::MappingCtrl,
+        memory::MappingCtrl,
         syscall::args::{FallocateMode, FileMode, InotifyMask, OpenFlags, Stat, Timespec, Whence},
         thread::{Gid, Uid},
     },

@@ -35,7 +35,8 @@ use crate::{
         once::Once,
     },
     user::{
-        process::{limits::CurrentNoFileLimit, memory::VirtualMemory},
+        memory::VirtualMemory,
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,

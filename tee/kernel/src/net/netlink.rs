@@ -20,7 +20,8 @@ use crate::{
     rt::{self, mpmc, mpsc},
     spin::once::Once,
     user::{
-        process::{limits::CurrentNoFileLimit, memory::VirtualMemory},
+        memory::VirtualMemory,
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 FileMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr, SocketAddrNetlink,

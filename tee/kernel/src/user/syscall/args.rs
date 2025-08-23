@@ -23,7 +23,7 @@ use crate::{
         path::Path,
     },
     user::{
-        process::memory::VirtualMemory,
+        memory::VirtualMemory,
         syscall::traits::Abi,
         thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
     },

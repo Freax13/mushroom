@@ -38,10 +38,10 @@ use crate::{
     spin::mutex::{Mutex, MutexGuard},
     time,
     user::{
+        memory::{PageFaultError, VirtualMemory, WriteToVec},
         process::{
             Process, ProcessGroup, Session, TASK_COMM_CAPACITY, WaitFilter, WaitResult,
             limits::{CurrentStackLimit, Limits},
-            memory::{PageFaultError, VirtualMemory, WriteToVec},
             usage::{self, ThreadUsage},
         },
         syscall::{

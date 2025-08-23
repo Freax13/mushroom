@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub mod futex;
+pub mod memory;
 pub mod process;
 pub mod syscall;
 pub mod thread;

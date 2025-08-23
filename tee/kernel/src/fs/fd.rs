@@ -45,10 +45,8 @@ use crate::{
     },
     user::{
         futex::Futexes,
-        process::{
-            limits::CurrentNoFileLimit,
-            memory::{MappingCtrl, VirtualMemory},
-        },
+        memory::{MappingCtrl, VirtualMemory},
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,

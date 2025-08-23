@@ -25,7 +25,7 @@ use crate::{
         path::{PATH_MAX, Path},
     },
     user::{
-        process::memory::VirtualMemory,
+        memory::VirtualMemory,
         syscall::{
             args::{
                 CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec,

@@ -22,7 +22,6 @@ use x86_64::VirtAddr;
 use self::{
     exec::ExecResult,
     limits::{CurrentStackLimit, Limits},
-    memory::VirtualMemory,
     timer::Timer,
 };
 use crate::{
@@ -43,6 +42,7 @@ use crate::{
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
     user::{
+        memory::VirtualMemory,
         syscall::args::{
             ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval,
             OpenFlags, Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
@@ -56,7 +56,6 @@ use crate::{
 
 mod exec;
 pub mod limits;
-pub mod memory;
 mod timer;
 pub mod usage;
 

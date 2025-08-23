@@ -37,7 +37,7 @@ use crate::{
     },
     per_cpu::{PerCpu, PerCpuSync},
     spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
-    user::process::memory::without_smap,
+    user::memory::without_smap,
 };
 
 pub mod flush;

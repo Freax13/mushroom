@@ -13,7 +13,7 @@ use crate::{
         path::Path,
     },
     user::{
-        process::memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
+        memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
         syscall::traits::Abi,
     },
 };

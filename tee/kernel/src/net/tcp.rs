@@ -43,10 +43,8 @@ use crate::{
     },
     time::{now, sleep_until},
     user::{
-        process::{
-            limits::CurrentNoFileLimit,
-            memory::{VirtualMemory, WriteToVec},
-        },
+        memory::{VirtualMemory, WriteToVec},
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,

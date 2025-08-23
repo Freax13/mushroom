@@ -56,10 +56,10 @@ use crate::{
     time::{self, Tick, now, sleep_until},
     user::{
         futex::FutexScope,
+        memory::{Bias, MemoryPermissions, VirtualMemory},
         process::{
             Process, WaitFilter, WaitResult,
             limits::{CurrentNoFileLimit, CurrentStackLimit},
-            memory::{Bias, MemoryPermissions, VirtualMemory},
         },
         thread::{
             Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset,

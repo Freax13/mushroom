@@ -29,7 +29,7 @@ use crate::{
     per_cpu::PerCpu,
     spin::lazy::Lazy,
     user::{
-        process::memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
+        memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
         syscall::{
             args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
             traits::{Abi, SyscallArgs, SyscallResult},

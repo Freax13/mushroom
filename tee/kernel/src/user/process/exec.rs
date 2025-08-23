@@ -19,10 +19,8 @@ use crate::{
     },
     spin::lazy::Lazy,
     user::{
-        process::{
-            limits::CurrentStackLimit,
-            memory::{Bias, MemoryPermissions, VirtualMemory},
-        },
+        memory::{Bias, MemoryPermissions, VirtualMemory},
+        process::limits::CurrentStackLimit,
         syscall::{
             args::{FileMode, OpenFlags},
             cpu_state::CpuState,

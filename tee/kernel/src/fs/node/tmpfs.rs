@@ -40,7 +40,7 @@ use crate::{
     time::now,
     user::{
         futex::Futexes,
-        process::memory::{MappingCtrl, MappingsCtrl},
+        memory::{MappingCtrl, MappingsCtrl},
         syscall::args::{
             ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, InotifyMask, OpenFlags,
             SocketAddrUnix, Stat, Timespec,
