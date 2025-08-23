@@ -1,3 +1,4 @@
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     cmp::{self, Reverse},
     ffi::c_void,
@@ -7,13 +8,13 @@ use core::{
     ops::Add,
 };
 
-use alloc::{sync::Arc, vec::Vec};
 use bit_field::BitField;
 use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
 use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
 
+use self::pointee::{Pointee, PrimitivePointee, Timespec32};
 use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
@@ -21,15 +22,12 @@ use crate::{
         node::FileAccessContext,
         path::Path,
     },
-    user::process::{
+    user::{
         memory::VirtualMemory,
+        syscall::traits::Abi,
         thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
     },
 };
-
-use self::pointee::{Pointee, PrimitivePointee, Timespec32};
-
-use super::traits::Abi;
 
 pub mod pointee;
 
@@ -313,6 +311,21 @@ impl SyscallArg for i64 {
             Abi::I386 => Ok(value as u32 as i32 as i64),
             Abi::Amd64 => Ok(value as i64),
         }
+    }
+
+    fn display(
+        f: &mut dyn fmt::Write,
+        value: u64,
+        abi: Abi,
+        _thread: &ThreadGuard<'_>,
+    ) -> fmt::Result {
+        write!(f, "{}", Self::parse(value, abi).unwrap())
+    }
+}
+
+impl SyscallArg for u32 {
+    fn parse(value: u64, _abi: Abi) -> Result<Self> {
+        Ok(value as u32)
     }
 
     fn display(

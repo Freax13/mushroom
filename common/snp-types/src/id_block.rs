@@ -4,9 +4,8 @@ use bytemuck::{AnyBitPattern, CheckedBitPattern, NoUninit};
 #[cfg(feature = "p384")]
 use p384::ecdsa::VerifyingKey;
 
-use crate::guest_policy::GuestPolicy;
-
 pub use crate::attestation::EcdsaP384Sha384Signature;
+use crate::guest_policy::GuestPolicy;
 
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C)]

@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, sync::Arc, task::Wake};
 use core::{
     cell::Cell,
     fmt::{self, Debug},
@@ -6,13 +7,13 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::{
-    exception::TimerInterruptGuard, per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu,
-};
-use alloc::{boxed::Box, sync::Arc, task::Wake};
 use crossbeam_utils::atomic::AtomicCell;
 use intrusive_collections::{XorLinkedList, XorLinkedListAtomicLink, intrusive_adapter};
 use log::warn;
+
+use crate::{
+    exception::TimerInterruptGuard, per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu,
+};
 
 pub mod futures_unordered;
 pub mod mpmc;

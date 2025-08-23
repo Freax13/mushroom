@@ -1,12 +1,12 @@
-use dense::{DenseBuffer, NotDenseError};
-use sparse::SparseBuffer;
-
+use self::{
+    dense::{DenseBuffer, NotDenseError},
+    sparse::SparseBuffer,
+};
 use crate::{
     error::Result,
     fs::fd::{ReadBuf, WriteBuf},
+    memory::page::KernelPage,
 };
-
-use super::KernelPage;
 
 mod dense;
 mod sparse;

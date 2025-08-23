@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+use alloc::{
+    collections::VecDeque,
+    sync::{Arc, Weak},
+};
 use core::{
     cmp,
     iter::from_fn,
@@ -8,10 +12,6 @@ use core::{
 };
 
 use crate::spin::mutex::Mutex;
-use alloc::{
-    collections::VecDeque,
-    sync::{Arc, Weak},
-};
 
 pub fn new<T>() -> (Sender<T>, Receiver<T>) {
     let receiver = Receiver::new();

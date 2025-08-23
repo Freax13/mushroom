@@ -1,5 +1,6 @@
 //! This module contains various traits for userspace pointers.
 
+use alloc::{borrow::ToOwned, ffi::CString};
 use core::{
     cmp,
     ffi::{CStr, c_void},
@@ -9,7 +10,6 @@ use core::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
 };
 
-use alloc::{borrow::ToOwned, ffi::CString};
 use bytemuck::{
     CheckedBitPattern, NoUninit, Pod, Zeroable, bytes_of, bytes_of_mut, cast,
     checked::try_pod_read_unaligned,
@@ -24,22 +24,24 @@ use crate::{
         node::{OffsetDirEntry, OldDirEntry},
         path::{PATH_MAX, Path},
     },
-    user::process::{
+    user::{
         memory::VirtualMemory,
-        syscall::traits::Abi,
+        syscall::{
+            args::{
+                CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec,
+                ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr,
+                MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent,
+                SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo,
+                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserRegs32, UserRegs64,
+                WStatus, WinSize,
+            },
+            traits::Abi,
+        },
         thread::{
             Gid, SigContext, SigFields, SigInfo, Sigaction, SigactionFlags, Sigset, Stack,
             StackFlags, ThreadGuard, UContext, Uid,
         },
     },
-};
-
-use super::{
-    CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec, ITimerval,
-    InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset,
-    OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent, SigEventData, SocketAddr,
-    SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval,
-    Timezone, Ucred, UserRegs32, UserRegs64, WStatus, WinSize,
 };
 
 /// This trait is implemented by types for which userspace pointers can exist.

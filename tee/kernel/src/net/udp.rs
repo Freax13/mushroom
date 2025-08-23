@@ -1,9 +1,3 @@
-use core::{
-    cmp,
-    ffi::c_void,
-    net::{self, IpAddr, Ipv4Addr, Ipv6Addr},
-};
-
 use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
@@ -11,6 +5,12 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::{
+    cmp,
+    ffi::c_void,
+    net::{self, IpAddr, Ipv4Addr, Ipv6Addr},
+};
+
 use async_trait::async_trait;
 use usize_conversions::usize_from;
 
@@ -26,12 +26,15 @@ use crate::{
         node::FileAccessContext,
         path::Path,
     },
-    net::IpVersion,
+    net::{
+        IpVersion,
+        netlink::{lo_interface_flags, lo_mtu},
+    },
     rt::notify::Notify,
     spin::mutex::Mutex,
-    user::process::{
-        limits::CurrentNoFileLimit,
+    user::{
         memory::VirtualMemory,
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 FileMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags,
@@ -42,8 +45,6 @@ use crate::{
         thread::{Gid, ThreadGuard, Uid},
     },
 };
-
-use super::netlink::{lo_interface_flags, lo_mtu};
 
 const MAX_BUFFER_SIZE: usize = 65507;
 

@@ -1,3 +1,4 @@
+use alloc::{vec, vec::Vec};
 use core::{
     arch::{
         global_asm,
@@ -7,7 +8,6 @@ use core::{
     mem::{offset_of, size_of},
 };
 
-use alloc::{vec, vec::Vec};
 use bit_field::BitField;
 use bytemuck::{Pod, Zeroable, bytes_of, bytes_of_mut, from_bytes, from_bytes_mut};
 use constants::TIMER_VECTOR;
@@ -28,18 +28,16 @@ use crate::{
     error::{Result, ensure, err},
     per_cpu::PerCpu,
     spin::lazy::Lazy,
-    user::process::{
+    user::{
         memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
-        syscall::args::UserDescFlags,
+        syscall::{
+            args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
+            traits::{Abi, SyscallArgs, SyscallResult},
+        },
         thread::{
             SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
         },
     },
-};
-
-use super::{
-    args::{Pointer, UserDesc, pointee::SizedPointee},
-    traits::{Abi, SyscallArgs, SyscallResult},
 };
 
 const FP_XSTATE_MAGIC1: u32 = 0x46505853;

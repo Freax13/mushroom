@@ -1,27 +1,27 @@
+use alloc::{boxed::Box, format, sync::Arc};
+
+use async_trait::async_trait;
+
 use crate::{
+    error::Result,
     fs::{
         FileSystem, StatFs,
-        fd::{NonEmptyEvents, ReadBuf, WriteBuf},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            pipe::{CAPACITY, PIPE_BUF},
+            stream_buffer,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
     },
     spin::{lazy::Lazy, mutex::Mutex},
-    user::process::{
-        syscall::args::{OpenFlags, Pipe2Flags},
+    user::{
+        syscall::args::{
+            FileMode, FileType, FileTypeAndMode, OpenFlags, Pipe2Flags, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
-};
-use alloc::{boxed::Box, format, sync::Arc};
-use async_trait::async_trait;
-
-use super::{
-    super::{BsdFileLock, Events, OpenFileDescription, stream_buffer},
-    CAPACITY, PIPE_BUF,
-};
-use crate::{
-    error::Result,
-    user::process::syscall::args::{FileMode, FileType, FileTypeAndMode, Stat, Timespec},
 };
 
 pub static PIPE_FS: Lazy<Arc<PipeFs>> = Lazy::new(|| Arc::new(PipeFs));

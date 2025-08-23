@@ -1,27 +1,34 @@
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::future::pending;
 
-use crate::fs::FileSystem;
-use crate::fs::fd::WeakFileDescriptor;
-use crate::fs::node::{FileAccessContext, new_ino};
-use crate::fs::ownership::Ownership;
-use crate::fs::path::Path;
-use crate::rt::futures_unordered::FuturesUnorderedBuilder;
-use crate::rt::notify::Notify;
-use crate::spin::mutex::Mutex;
-use crate::user::process::thread::{Gid, Uid};
-use alloc::boxed::Box;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use async_trait::async_trait;
-use futures::future::{Either, select};
-use futures::{FutureExt, select_biased};
-
-use crate::error::{Result, bail, ensure, err};
-use crate::user::process::syscall::args::{
-    EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+use futures::{
+    FutureExt,
+    future::{Either, select},
+    select_biased,
 };
 
-use super::{BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription};
+use crate::{
+    error::{Result, bail, ensure, err},
+    fs::{
+        FileSystem,
+        fd::{
+            BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription,
+            WeakFileDescriptor,
+        },
+        node::{FileAccessContext, new_ino},
+        ownership::Ownership,
+        path::Path,
+    },
+    rt::{futures_unordered::FuturesUnorderedBuilder, notify::Notify},
+    spin::mutex::Mutex,
+    user::{
+        syscall::args::{
+            EpollEvent, EpollEvents, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+        },
+        thread::{Gid, Uid},
+    },
+};
 
 pub struct Epoll {
     ino: u64,

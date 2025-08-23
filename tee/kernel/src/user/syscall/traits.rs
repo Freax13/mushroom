@@ -9,17 +9,18 @@ use core::{
     pin::{Pin, pin},
     ptr::Pointee,
 };
-use usize_conversions::usize_from;
 
 use log::{trace, warn};
+use usize_conversions::usize_from;
 
 use crate::{
     error::{Result, err},
     per_cpu::PerCpu,
-    user::process::thread::{Thread, ThreadGuard},
+    user::{
+        syscall::SYSCALL_HANDLERS,
+        thread::{Thread, ThreadGuard},
+    },
 };
-
-use super::{SYSCALL_HANDLERS, args::SyscallArg};
 
 const VERBOSE: bool = false;
 
@@ -38,25 +39,6 @@ pub enum Abi {
 }
 
 pub type SyscallResult = Result<u64>;
-
-impl SyscallArg for u32 {
-    fn parse(value: u64, _abi: Abi) -> Result<Self> {
-        Ok(u32::try_from(value)?)
-    }
-
-    fn display(
-        f: &mut dyn fmt::Write,
-        value: u64,
-        _abi: Abi,
-        _thread: &ThreadGuard<'_>,
-    ) -> fmt::Result {
-        if let Ok(value) = u32::try_from(value) {
-            write!(f, "{value}")
-        } else {
-            write!(f, "{value} (out of bounds)")
-        }
-    }
-}
 
 pub trait Syscall {
     const NO_I386: Option<usize>;

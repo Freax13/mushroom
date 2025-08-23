@@ -1,6 +1,6 @@
 use core::ops::Deref;
 
-use super::once::Once;
+use crate::spin::once::Once;
 
 /// A value that's lazily initialized.
 pub struct Lazy<T> {

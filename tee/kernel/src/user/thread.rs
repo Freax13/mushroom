@@ -1,3 +1,9 @@
+use alloc::{
+    collections::VecDeque,
+    string::String,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 #[cfg(not(feature = "harden"))]
 use core::fmt;
 use core::{
@@ -9,30 +15,6 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::{
-    error::{bail, ensure},
-    exception::eoi,
-    fs::{
-        fd::{FileDescriptor, FileDescriptorTable},
-        node::{FileAccessContext, Link, LinkLocation, procfs::ThreadInos},
-        path::{FileName, Path},
-    },
-    rt::{PreemptionState, notify::Notify},
-    spin::mutex::{Mutex, MutexGuard},
-    time,
-    user::process::{
-        WaitFilter, WaitResult,
-        memory::PageFaultError,
-        syscall::args::{PtraceEvent, TimerId, Timespec},
-        thread::running_state::{ExitAction, ThreadRunningState},
-    },
-};
-use alloc::{
-    collections::VecDeque,
-    string::String,
-    sync::{Arc, Weak},
-    vec::Vec,
-};
 use arrayvec::ArrayVec;
 use bit_field::BitField;
 use bitflags::bitflags;
@@ -43,21 +25,33 @@ use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
 use x86_64::VirtAddr;
 
+use self::running_state::{ExitAction, ThreadRunningState};
 use crate::{
-    error::Result,
-    fs::node::ROOT_NODE,
-    rt::{oneshot, spawn},
-};
-
-use super::{
-    Process, ProcessGroup, Session, TASK_COMM_CAPACITY,
-    limits::{CurrentStackLimit, Limits},
-    memory::{VirtualMemory, WriteToVec},
-    syscall::{
-        args::{FileMode, Nice, Pointer, Rusage, Signal, UserDesc, WStatus},
-        cpu_state::{CpuState, Exit, PageFaultExit},
+    error::{Result, bail, ensure},
+    exception::eoi,
+    fs::{
+        fd::{FileDescriptor, FileDescriptorTable},
+        node::{FileAccessContext, Link, LinkLocation, ROOT_NODE, procfs::ThreadInos},
+        path::{FileName, Path},
     },
-    usage::{self, ThreadUsage},
+    rt::{PreemptionState, notify::Notify, oneshot, spawn},
+    spin::mutex::{Mutex, MutexGuard},
+    time,
+    user::{
+        memory::{PageFaultError, VirtualMemory, WriteToVec},
+        process::{
+            Process, ProcessGroup, Session, TASK_COMM_CAPACITY, WaitFilter, WaitResult,
+            limits::{CurrentStackLimit, Limits},
+            usage::{self, ThreadUsage},
+        },
+        syscall::{
+            args::{
+                FileMode, Nice, Pointer, PtraceEvent, Rusage, Signal, TimerId, Timespec, UserDesc,
+                WStatus,
+            },
+            cpu_state::{CpuState, Exit, PageFaultExit},
+        },
+    },
 };
 
 pub mod running_state;
@@ -256,7 +250,7 @@ impl Thread {
     }
 
     pub fn is_thread_group_leader(&self) -> bool {
-        self.process.pid == self.tid
+        self.process.pid() == self.tid
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -551,7 +545,7 @@ impl Thread {
 
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, mut write: impl fmt::Write) -> fmt::Result {
-        use super::syscall::traits::dump_syscall_exit;
+        use crate::user::syscall::traits::dump_syscall_exit;
 
         writeln!(write, "{:indent$}thread tid={}", "", self.tid)?;
         let indent = indent + 2;
@@ -919,13 +913,13 @@ impl ThreadGuard<'_> {
 
         write!(buffer, " {}", self.process().ppid()).unwrap();
 
-        write!(buffer, " {}", self.process().pgrp()).unwrap();
+        write!(buffer, " {}", self.process().pgid()).unwrap();
 
         write!(buffer, " {}", self.process().sid()).unwrap();
 
         buffer.extend_from_slice(b" 1"); // TODO: tty_nr
 
-        write!(buffer, " {}", self.process().pgrp()).unwrap(); // TODO: tpgid
+        write!(buffer, " {}", self.process().pgid()).unwrap(); // TODO: tpgid
 
         buffer.extend_from_slice(b" 0"); // TODO: flags
 
@@ -1017,7 +1011,7 @@ impl ThreadGuard<'_> {
         buffer.extend_from_slice(&self.task_comm());
         writeln!(buffer).unwrap();
 
-        writeln!(buffer, "Umask:\t{0:4o}", *self.process().umask.lock()).unwrap();
+        writeln!(buffer, "Umask:\t{0:4o}", self.process().umask()).unwrap();
 
         writeln!(buffer, "Tgid:\t{}", self.process().pid()).unwrap();
 

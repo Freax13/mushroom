@@ -1,16 +1,16 @@
 #![allow(dead_code)]
 
+use alloc::{
+    collections::VecDeque,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use core::{
     pin::Pin,
     task::{Context, Poll, Waker},
 };
 
 use crate::spin::mutex::Mutex;
-use alloc::{
-    collections::VecDeque,
-    sync::{Arc, Weak},
-    vec::Vec,
-};
 
 pub fn new<T>() -> (Sender<T>, Receiver<T>) {
     let receiver = Receiver::new();

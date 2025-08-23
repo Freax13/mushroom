@@ -1,22 +1,21 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::future::pending;
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 
 use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription},
         node::{FileAccessContext, Link},
         path::Path,
     },
-    user::process::{
+    user::{
         syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
-
-use super::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription};
 
 pub struct PathFd {
     link: Link,

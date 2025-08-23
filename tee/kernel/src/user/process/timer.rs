@@ -1,4 +1,5 @@
 use alloc::sync::{Arc, Weak};
+
 use futures::{FutureExt, future::Fuse, select_biased};
 
 use crate::{
@@ -8,8 +9,8 @@ use crate::{
     },
     spin::mutex::Mutex,
     time::{now, sleep_until},
-    user::process::{
-        Process,
+    user::{
+        process::Process,
         syscall::args::{ClockId, ITimerspec, SigEvent, SigEventData, Signal, TimerId, Timespec},
         thread::{SigFields, SigInfo, SigInfoCode, SigTimer},
     },

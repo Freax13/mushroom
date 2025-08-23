@@ -1,5 +1,10 @@
+use alloc::{
+    collections::{BTreeMap, btree_map::Entry},
+    ffi::CString,
+    sync::Arc,
+    vec::Vec,
+};
 use core::{
-    arch::asm,
     borrow::Borrow,
     cell::SyncUnsafeCell,
     cmp::{self, Ordering},
@@ -11,37 +16,12 @@ use core::{
     ptr::{NonNull, drop_in_place},
 };
 
-use crate::{
-    error::{bail, ensure, err},
-    fs::{fd::FileDescriptor, path::Path},
-    memory::{
-        page::{KernelPage, UserPage},
-        pagetable::{Pagetables, check_user_address},
-    },
-    rt::mpsc,
-    spin::{
-        lazy::Lazy,
-        mutex::Mutex,
-        rwlock::{RwLock, WriteRwLockGuard},
-    },
-    user::process::{
-        futex::Futexes,
-        syscall::args::{OpenFlags, Stat},
-    },
-};
-use alloc::{
-    collections::{BTreeMap, btree_map::Entry},
-    ffi::CString,
-    sync::Arc,
-    vec::Vec,
-};
 use bitflags::bitflags;
 use either::Either;
 use log::debug;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{
     VirtAddr, align_up,
-    registers::rflags::{self, RFlags},
     structures::{
         idt::PageFaultErrorCode,
         paging::{Page, PageOffset, PageSize, Size4KiB},
@@ -49,20 +29,29 @@ use x86_64::{
 };
 
 use crate::{
-    error::{Error, Result},
-    memory::pagetable::PageTableFlags,
-};
-
-use super::{
-    futex::FutexScope,
-    syscall::{
-        args::{
-            Pointer, ProtFlags,
-            pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
-        },
-        traits::Abi,
+    error::{Error, Result, bail, ensure, err},
+    fs::{fd::FileDescriptor, path::Path},
+    memory::{
+        page::{KernelPage, UserPage},
+        pagetable::{PageTableFlags, Pagetables, check_user_address},
     },
-    usage::MemoryUsage,
+    rt::mpsc,
+    spin::{
+        lazy::Lazy,
+        mutex::Mutex,
+        rwlock::{RwLock, WriteRwLockGuard},
+    },
+    user::{
+        futex::{FutexScope, Futexes},
+        process::usage::MemoryUsage,
+        syscall::{
+            args::{
+                OpenFlags, Pointer, ProtFlags, Stat,
+                pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
+            },
+            traits::Abi,
+        },
+    },
 };
 
 const SIGRETURN_TRAMPOLINE_PAGE: u64 = 0x7fff_f000;
@@ -1207,29 +1196,6 @@ impl Display for MemoryPermissions {
             '-'
         })
     }
-}
-
-pub fn without_smap<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    let rflags = rflags::read();
-    let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
-    if changed {
-        unsafe {
-            asm!("stac");
-        }
-    }
-
-    let result = f();
-
-    if changed {
-        unsafe {
-            asm!("clac");
-        }
-    }
-
-    result
 }
 
 #[derive(Debug, Clone, Copy)]

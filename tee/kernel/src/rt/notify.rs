@@ -2,6 +2,7 @@
 //! A concurrency primitive that can be used to send and subscribe to
 //! notifications.
 
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     ops::Deref,
     pin::Pin,
@@ -9,7 +10,6 @@ use core::{
 };
 
 use crate::spin::mutex::Mutex;
-use alloc::{sync::Arc, vec::Vec};
 
 pub struct Notify {
     state: Mutex<State>,

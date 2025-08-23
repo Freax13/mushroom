@@ -1,3 +1,10 @@
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, btree_map::Entry},
+    format,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 #[cfg(not(feature = "harden"))]
 use core::fmt;
 use core::{
@@ -11,12 +18,24 @@ use core::{
     sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
+use async_trait::async_trait;
+use bitflags::bitflags;
+use futures::{
+    FutureExt,
+    future::{Either, select},
+};
+
+use self::{file::File, inotify::Watchers};
 use crate::{
     char_dev::char::PtyData,
-    error::{bail, ensure, err},
+    error::{ErrorKind, Result, bail, ensure, err},
     fs::{
-        node::{DirEntryName, DynINode, FileAccessContext, OffsetDirEntry, new_ino},
-        path::FileName,
+        FileSystem,
+        node::{
+            DirEntry, DirEntryName, DynINode, FileAccessContext, Link, OffsetDirEntry, new_ino,
+            procfs::{FdINode, ProcFs},
+        },
+        path::{FileName, Path},
     },
     memory::page::KernelPage,
     rt::notify::Notify,
@@ -24,10 +43,10 @@ use crate::{
         lazy::Lazy,
         mutex::{Mutex, MutexGuard},
     },
-    user::process::{
+    user::{
         futex::Futexes,
-        limits::CurrentNoFileLimit,
         memory::{MappingCtrl, VirtualMemory},
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
@@ -38,35 +57,6 @@ use crate::{
         },
         thread::{Gid, ThreadGuard, Uid},
     },
-};
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, btree_map::Entry},
-    format,
-    sync::{Arc, Weak},
-    vec::Vec,
-};
-use async_trait::async_trait;
-use bitflags::bitflags;
-use file::File;
-use futures::{
-    FutureExt,
-    future::{Either, select},
-};
-use inotify::Watchers;
-
-use crate::{
-    error::{ErrorKind, Result},
-    fs::node::DirEntry,
-};
-
-use super::{
-    FileSystem,
-    node::{
-        Link,
-        procfs::{FdINode, ProcFs},
-    },
-    path::Path,
 };
 
 mod buf;
@@ -83,7 +73,7 @@ pub mod stream_buffer;
 pub mod timer;
 pub mod unix_socket;
 
-pub use buf::{
+pub use self::buf::{
     KernelReadBuf, KernelWriteBuf, OffsetBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf,
 };
 

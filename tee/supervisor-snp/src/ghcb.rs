@@ -114,7 +114,7 @@ fn register_ghcb(request_address: PhysFrame) {
 
 fn vmgexit() {
     // LLVM doesn't support the `vmgexit` instruction
-    unsafe { asm!("rep vmmcall", options(nostack, preserves_flags)) }
+    unsafe { asm!("rep vmmcall", options(nomem, nostack, preserves_flags)) }
 }
 
 fn interruptable_vmgexit() {
@@ -130,7 +130,8 @@ fn interruptable_vmgexit() {
             ".quad 66b",
             ".quad 67b",
             ".popsection",
-            INTERRUPTED_OFFSET = const offset_of!(PerCpu, interrupted)
+            INTERRUPTED_OFFSET = const offset_of!(PerCpu, interrupted),
+            options(readonly, nostack, preserves_flags),
         );
     }
 }

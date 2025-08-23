@@ -16,11 +16,10 @@ use x86_64::{
 
 use crate::{
     exception::{Interrupt, start_interrupt_handler},
+    memory::pagetable::ActivePageTableGuard,
     per_cpu::{PerCpu, PerCpuSync},
     spin::lazy::Lazy,
 };
-
-use super::ActivePageTableGuard;
 
 static INVLPGB: Lazy<Option<Invlpgb>> = Lazy::new(Invlpgb::new);
 

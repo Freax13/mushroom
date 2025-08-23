@@ -10,8 +10,7 @@ use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use loader::{HashType, Input};
 use mushroom::{KvmHandle, MushroomResult, Tee, profiler::ProfileFolder};
-use mushroom_verify::{Configuration, HashedInput};
-use mushroom_verify::{InputHash, OutputHash};
+use mushroom_verify::{Configuration, HashedInput, InputHash, OutputHash};
 #[cfg(feature = "snp")]
 use snp_types::{attestation::TcbVersion, guest_policy::GuestPolicy};
 #[cfg(feature = "tdx")]

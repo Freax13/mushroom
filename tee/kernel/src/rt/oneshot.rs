@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::{
     pin::Pin,
     task::{Context, Poll, Waker},
@@ -7,7 +8,6 @@ use crate::{
     exception::{InterruptGuard, NoInterruptGuard},
     spin::mutex::Mutex,
 };
-use alloc::sync::Arc;
 
 pub fn new<T, I>() -> (Sender<T, I>, Receiver<T, I>)
 where

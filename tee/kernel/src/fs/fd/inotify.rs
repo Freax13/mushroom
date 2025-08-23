@@ -1,8 +1,3 @@
-use core::{
-    num::{NonZeroU32, Wrapping},
-    sync::atomic::{AtomicU32, Ordering},
-};
-
 use alloc::{
     boxed::Box,
     collections::{
@@ -12,6 +7,11 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use core::{
+    num::{NonZeroU32, Wrapping},
+    sync::atomic::{AtomicU32, Ordering},
+};
+
 use async_trait::async_trait;
 use bytemuck::{NoUninit, bytes_of};
 use usize_conversions::usize_from;
@@ -20,23 +20,22 @@ use crate::{
     error::{Result, ensure, err},
     fs::{
         FileSystem,
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, StrongFileDescriptor,
+        },
         node::{DynINode, FileAccessContext, INode, new_ino},
         ownership::Ownership,
         path::{FileName, Path},
     },
     rt::notify::Notify,
     spin::{lazy::Lazy, mutex::Mutex},
-    user::process::{
+    user::{
         syscall::args::{
             FileMode, FileType, FileTypeAndMode, InotifyMask, OpenFlags, Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
-};
-
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData, ReadBuf,
-    StrongFileDescriptor,
 };
 
 pub struct Inotify {

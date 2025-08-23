@@ -1,5 +1,3 @@
-use core::cmp;
-
 use alloc::{
     borrow::ToOwned,
     boxed::Box,
@@ -11,20 +9,21 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use core::cmp;
+
 use async_trait::async_trait;
 use bytemuck::bytes_of;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{align_down, align_up};
 
-use super::super::{BsdFileLock, Events, OpenFileDescription};
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescriptionData, PipeBlocked,
-            ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
-            stream_buffer::{self},
+            BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
+            WriteBuf, stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,
@@ -35,9 +34,9 @@ use crate::{
         mutex::{Mutex, MutexGuard},
         once::Once,
     },
-    user::process::{
-        limits::CurrentNoFileLimit,
+    user::{
         memory::VirtualMemory,
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,

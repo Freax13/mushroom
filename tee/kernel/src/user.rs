@@ -1,5 +1,4 @@
 use constants::{ApBitmap, ApIndex};
-use process::syscall;
 use x86_64::instructions::interrupts::without_interrupts;
 
 use crate::{
@@ -12,7 +11,12 @@ use crate::{
     time::advance_time,
 };
 
+mod exec;
+pub mod futex;
+pub mod memory;
 pub mod process;
+pub mod syscall;
+pub mod thread;
 
 pub fn run() -> ! {
     syscall::init();

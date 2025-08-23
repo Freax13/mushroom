@@ -3,14 +3,16 @@
 #![feature(abi_x86_interrupt, core_intrinsics, sync_unsafe_cell)]
 #![allow(internal_features)]
 
-use exception::setup_idt;
 use log::{LevelFilter, debug};
-use per_cpu::PerCpu;
 use spin::Once;
-use vcpu::{init_vcpu, run_vcpu, wait_for_vcpu_start};
 use x86_64::registers::model_specific::Msr;
 
-use crate::logging::SerialLogger;
+use self::{
+    exception::setup_idt,
+    logging::SerialLogger,
+    per_cpu::PerCpu,
+    vcpu::{init_vcpu, run_vcpu, wait_for_vcpu_start},
+};
 
 mod dynamic;
 mod exception;

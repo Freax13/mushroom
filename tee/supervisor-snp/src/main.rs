@@ -10,10 +10,8 @@
 #![allow(internal_features)]
 
 use log::{LevelFilter, debug};
-use per_cpu::PerCpu;
-use scheduler::wait_for_vcpu_start;
 
-use crate::{ap::run_vcpu, logging::SerialLogger};
+use self::{ap::run_vcpu, logging::SerialLogger, per_cpu::PerCpu, scheduler::wait_for_vcpu_start};
 
 mod ap;
 mod dynamic;

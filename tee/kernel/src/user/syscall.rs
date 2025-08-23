@@ -1,11 +1,11 @@
-use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
-
 use alloc::{
     ffi::CString,
     sync::{Arc, Weak},
     vec,
     vec::Vec,
 };
+use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
+
 use arrayvec::ArrayVec;
 use bit_field::{BitArray, BitField};
 use bytemuck::{Zeroable, bytes_of, bytes_of_mut, checked};
@@ -20,6 +20,10 @@ use log::warn;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{VirtAddr, align_up};
 
+use self::{
+    args::*,
+    traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult},
+};
 use crate::{
     char_dev::mem::random_bytes,
     error::{ErrorKind, Result, bail, ensure, err},
@@ -50,24 +54,17 @@ use crate::{
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
     time::{self, Tick, now, sleep_until},
-    user::process::{
-        ProcessGroup, WaitResult,
-        memory::MemoryPermissions,
-        syscall::args::*,
-        thread::{PtraceState, SigKill},
-    },
-};
-
-use self::traits::{Abi, Syscall, SyscallArgs, SyscallHandlers, SyscallResult};
-
-use super::{
-    Process, WaitFilter,
-    futex::FutexScope,
-    limits::{CurrentNoFileLimit, CurrentStackLimit},
-    memory::{Bias, VirtualMemory},
-    thread::{
-        Gid, NewTls, SigFields, SigInfo, SigInfoCode, Sigaction, Sigset, Stack, StackFlags, Thread,
-        ThreadGuard, Uid, new_tid,
+    user::{
+        futex::FutexScope,
+        memory::{Bias, MemoryPermissions, VirtualMemory},
+        process::{
+            Process, WaitFilter, WaitResult,
+            limits::{CurrentNoFileLimit, CurrentStackLimit},
+        },
+        thread::{
+            Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset,
+            Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
+        },
     },
 };
 
@@ -1300,7 +1297,7 @@ fn setitimer(
 
 #[syscall(i386 = 20, amd64 = 39)]
 fn getpid(thread: &Thread) -> SyscallResult {
-    let pid = thread.process().pid;
+    let pid = thread.process().pid();
     Ok(u64::from(pid))
 }
 
@@ -1840,12 +1837,12 @@ async fn clone(
             new_tid,
             Arc::downgrade(process),
             termination_signal,
-            process.exe.read().clone(),
+            process.exe(),
             process.credentials.lock().clone(),
             process.cwd(),
-            process.process_group.lock().clone(),
+            process.process_group(),
             *process.limits.read(),
-            *process.umask.lock(),
+            process.umask(),
             process.mm_arg_start(),
             process.mm_arg_end(),
         ))
@@ -2070,7 +2067,7 @@ async fn wait4(
     let filter = match pid {
         ..=-2 => WaitFilter::ExactPgid(-pid as u32),
         -1 => WaitFilter::Any,
-        0 => WaitFilter::ExactPgid(thread.process().process_group.lock().pgid),
+        0 => WaitFilter::ExactPgid(thread.process().pgid()),
         1.. => WaitFilter::ExactPid(pid as u32),
     };
 
@@ -2132,11 +2129,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         0 => {
-            let process_group = process.process_group.lock();
-            let guard = process_group.processes.lock();
-            let processes = guard.iter().filter_map(Weak::upgrade).collect::<Vec<_>>();
-            drop(guard);
-            drop(process_group);
+            let processes = process.process_group().processes();
 
             ensure!(!processes.is_empty(), Srch);
 
@@ -2152,7 +2145,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         -1 => {
-            let mut processes = Process::all().filter(|p| p.pid != 1).peekable();
+            let mut processes = Process::all().filter(|p| p.pid() != 1).peekable();
             processes.peek().ok_or(err!(Srch))?;
             if let Some(sig_info) = sig_info {
                 let mut processes = processes
@@ -2165,15 +2158,10 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         ..-1 => {
-            let process_group = process.process_group.lock();
-            let target = process_group
-                .processes
-                .lock()
-                .iter()
-                .filter_map(Weak::upgrade)
-                .find(|p| p.pid == -pid as u32)
+            let target = process
+                .process_group()
+                .find_process(-pid as u32)
                 .ok_or(err!(Srch))?;
-            drop(process_group);
             if let Some(sig_info) = sig_info {
                 ensure!(process.can_send_signal(&target, sig_info.signal), Perm);
                 target.queue_signal(sig_info);
@@ -2750,7 +2738,7 @@ fn lchown(
 #[syscall(i386 = 60, amd64 = 95)]
 fn umask(thread: &Thread, mask: u64) -> SyscallResult {
     let umask = FileMode::from_bits_truncate(mask);
-    let old = core::mem::replace(&mut *thread.process().umask.lock(), umask);
+    let old = thread.process().set_umask(umask);
     SyscallResult::Ok(old.bits())
 }
 
@@ -2864,8 +2852,7 @@ fn ptrace(
         PtraceOp::TraceMe => {
             let parent = thread
                 .process()
-                .parent
-                .upgrade()
+                .parent()
                 .expect("TODO")
                 .thread_group_leader();
             thread.set_tracer(parent, false)?;
@@ -3083,33 +3070,8 @@ fn setpgid(thread: &Thread, pid: u32, pgid: u32) -> SyscallResult {
     let pgid = if pid == 0 { pgid } else { pid };
 
     let self_process = thread.process();
-
     let process = self_process.find_by_pid_in(pid).ok_or(err!(Srch))?;
-
-    // TODO: Make sure that the children haven't execve'd.
-
-    let mut group_guard = process.process_group.lock();
-
-    if pgid == pid {
-        // Create a new process group.
-        let session = group_guard.session.lock().clone();
-        *group_guard = ProcessGroup::new(pgid, session);
-    } else {
-        // Join an existing process group.
-
-        // Find the other process group in the same session.
-        let session_guard = group_guard.session.lock();
-        let process_groups = session_guard.process_groups.lock();
-        let existing_process_group = process_groups
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|pg| pg.pgid == pgid)
-            .ok_or(err!(Perm))?;
-        drop(process_groups);
-        drop(session_guard);
-
-        *group_guard = existing_process_group.clone();
-    }
+    process.set_pgid(pgid)?;
 
     Ok(0)
 }
@@ -3122,7 +3084,7 @@ fn getppid(thread: &Thread) -> SyscallResult {
 
 #[syscall(i386 = 65, amd64 = 111)]
 fn getpgrp(thread: &Thread) -> SyscallResult {
-    let pgrp = thread.process().pgrp();
+    let pgrp = thread.process().pgid();
     Ok(u64::from(pgrp))
 }
 
@@ -3344,9 +3306,9 @@ fn getresgid(
 #[syscall(i386 = 132, amd64 = 121)]
 fn getpgid(thread: &Thread, pid: u32) -> SyscallResult {
     let pgid = if pid == 0 {
-        thread.process().pgrp()
+        thread.process().pgid()
     } else {
-        Process::find_by_pid(pid).ok_or(err!(Srch))?.pgrp()
+        Process::find_by_pid(pid).ok_or(err!(Srch))?.pgid()
     };
     Ok(u64::from(pgid))
 }
@@ -3532,11 +3494,11 @@ fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<
         }
         Which::ProcessGroup => {
             let pgid = if who == 0 {
-                thread.process().process_group.lock().pgid
+                thread.process().pgid()
             } else {
                 who
             };
-            find_targets(&mut Process::all().filter(|p| p.process_group.lock().pgid == pgid))
+            find_targets(&mut Process::all().filter(|p| p.pgid() == pgid))
         }
         Which::User => {
             let uid = if who == 0 { caller_ruid } else { Uid::new(who) };
@@ -4313,7 +4275,7 @@ async fn openat(
         let link = if flags.contains(OpenFlags::CREAT) {
             ensure!(!flags.contains(OpenFlags::TMPFILE), Inval);
             let mut mode = FileMode::from_bits_truncate(mode);
-            mode &= !*thread.process().umask.lock();
+            mode &= !thread.process().umask();
             create_file(start_dir, filename, mode, flags, &mut ctx)?
         } else {
             if flags.contains(OpenFlags::TMPFILE) {
@@ -4346,7 +4308,7 @@ async fn openat(
             if flags.contains(OpenFlags::TMPFILE) {
                 flags.remove(OpenFlags::DIRECTORY);
                 let mut mode = FileMode::from_bits_truncate(mode);
-                mode &= !*thread.process().umask.lock();
+                mode &= !thread.process().umask();
                 link.node.create_tmp_file(mode, &ctx)?
             } else {
                 link
@@ -4362,13 +4324,13 @@ async fn openat(
         if !flags.contains(OpenFlags::NOCTTY) {
             let session = thread.process().process_group().session();
             // Check if the session still needs a controlling terminal.
-            if session.controlling_terminal.get().is_none() {
+            if session.controlling_terminal().is_none() {
                 // Check if the process is the group leader.
-                if thread.process().pid() == session.sid {
+                if thread.process().pid() == session.sid() {
                     // Try to open the fd as a terminal.
                     if let Some(tty) = fd.as_tty() {
                         // Set the controlling terminal.
-                        session.controlling_terminal.call_once(|| tty);
+                        session.set_controlling_terminal(&tty);
                     }
                 }
             }
@@ -4405,7 +4367,7 @@ fn mkdirat(
     let start_dir = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
 
     let mut mode = FileMode::from_bits_truncate(mode);
-    mode &= !*thread.process().umask.lock();
+    mode &= !thread.process().umask();
     create_directory(start_dir, &pathname, mode, &mut ctx)?;
     Ok(0)
 }
@@ -4427,7 +4389,7 @@ fn mknodat(
     let start_dir = start_dir_for_path(thread, &fdtable, dirfd, &pathname, &mut ctx)?;
 
     let mut mode = FileMode::from_bits_truncate(mode);
-    mode &= !*thread.process().umask.lock();
+    mode &= !thread.process().umask();
 
     match ty {
         FileType::Unknown | FileType::File => {

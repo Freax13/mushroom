@@ -1,15 +1,6 @@
+use alloc::{borrow::ToOwned, ffi::CString, vec};
 use core::{cmp, ffi::CStr, iter::from_fn};
 
-use crate::{
-    error::{bail, ensure, err},
-    fs::{
-        fd::{FileDescriptor, KernelReadBuf, OpenFileDescription},
-        node::{FileAccessContext, Link, lookup_and_resolve_link},
-    },
-    spin::lazy::Lazy,
-    user::process::memory::MemoryPermissions,
-};
-use alloc::{borrow::ToOwned, ffi::CString, vec};
 use bytemuck::{Zeroable, bytes_of_mut};
 use usize_conversions::FromUsize;
 use x86_64::{
@@ -19,17 +10,24 @@ use x86_64::{
 };
 
 use self::elf::{ElfIdent, ElfLoaderParams};
-
-use super::{
-    limits::CurrentStackLimit,
-    memory::{Bias, VirtualMemory},
-    syscall::{
-        args::{FileMode, OpenFlags},
-        cpu_state::CpuState,
-        traits::Abi,
+use crate::{
+    error::{Result, bail, ensure, err},
+    fs::{
+        fd::{FileDescriptor, KernelReadBuf, OpenFileDescription},
+        node::{FileAccessContext, Link, lookup_and_resolve_link},
+        path::Path,
+    },
+    spin::lazy::Lazy,
+    user::{
+        memory::{Bias, MemoryPermissions, VirtualMemory},
+        process::limits::CurrentStackLimit,
+        syscall::{
+            args::{FileMode, OpenFlags},
+            cpu_state::CpuState,
+            traits::Abi,
+        },
     },
 };
-use crate::{error::Result, fs::path::Path};
 
 mod elf;
 

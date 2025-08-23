@@ -1,9 +1,3 @@
-use core::{
-    cmp,
-    ffi::c_void,
-    sync::atomic::{AtomicU32, Ordering},
-};
-
 use alloc::{
     boxed::Box,
     collections::btree_map::{BTreeMap, Entry},
@@ -13,11 +7,18 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::{
+    cmp,
+    ffi::c_void,
+    sync::atomic::{AtomicU32, Ordering},
+};
+
 use arrayvec::ArrayVec;
 use async_trait::async_trait;
 use kernel_macros::register;
 
 use crate::{
+    char_dev::CharDev,
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
@@ -38,8 +39,8 @@ use crate::{
     memory::page::KernelPage,
     rt::notify::Notify,
     spin::mutex::Mutex,
-    user::process::{
-        limits::CurrentNoFileLimit,
+    user::{
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 ExtractableThreadState, FileMode, FileType, FileTypeAndMode, InputMode, LocalMode,
@@ -50,8 +51,6 @@ use crate::{
         thread::{Gid, ThreadGuard, Uid},
     },
 };
-
-use super::CharDev;
 
 static PTYS: Mutex<BTreeMap<u32, Weak<PtyData>>> = Mutex::new(BTreeMap::new());
 

@@ -1,4 +1,11 @@
 #[cfg(not(feature = "harden"))]
+use alloc::string::String;
+use alloc::{
+    collections::{VecDeque, btree_map::BTreeMap},
+    sync::{Arc, Weak},
+    vec::Vec,
+};
+#[cfg(not(feature = "harden"))]
 use core::fmt::{self, Write};
 use core::{
     ffi::CStr,
@@ -7,21 +14,15 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-#[cfg(not(feature = "harden"))]
-use alloc::string::String;
-use alloc::{
-    collections::{VecDeque, btree_map::BTreeMap},
-    sync::{Arc, Weak},
-    vec::Vec,
-};
 use arrayvec::ArrayVec;
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
-use limits::{CurrentStackLimit, Limits};
-use syscall::args::{ClockId, Rusage, Timespec};
-use thread::{Credentials, Gid, Uid};
 use x86_64::VirtAddr;
 
+use self::{
+    limits::{CurrentStackLimit, Limits},
+    timer::Timer,
+};
 use crate::{
     char_dev::char::PtyData,
     error::{Result, bail, err},
@@ -39,31 +40,21 @@ use crate::{
     spin::{lazy::Lazy, mutex::Mutex, once::Once, rwlock::RwLock},
     supervisor,
     time::{CpuTimeBackend, Time, now, sleep_until},
-    user::process::{
+    user::{
         exec::ExecResult,
+        memory::VirtualMemory,
         syscall::args::{
-            ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval, OpenFlags,
-            SigEvent, TimerId,
+            ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval,
+            OpenFlags, Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
         },
-        timer::Timer,
+        thread::{
+            Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset,
+            Thread, Uid, WeakThread, new_tid, running_state::ExecveValues,
+        },
     },
 };
 
-use self::{
-    memory::VirtualMemory,
-    syscall::args::{Signal, WStatus},
-    thread::{
-        PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset, Thread, WeakThread,
-        new_tid, running_state::ExecveValues,
-    },
-};
-
-mod exec;
-pub mod futex;
 pub mod limits;
-pub mod memory;
-pub mod syscall;
-pub mod thread;
 mod timer;
 pub mod usage;
 
@@ -71,27 +62,27 @@ pub const TASK_COMM_CAPACITY: usize = 15;
 
 pub struct Process {
     pid: u32,
-    start_time: Timespec,
+    pub start_time: Timespec,
     exit_status: OnceCell<WStatus>,
     parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
-    child_death_notify: Notify,
-    termination_signal: Option<Signal>,
+    pub child_death_notify: Notify,
+    pub termination_signal: Option<Signal>,
     pending_signals: Mutex<PendingSignals>,
-    signals_notify: Notify,
-    threads: Mutex<Vec<WeakThread>>,
+    pub signals_notify: Notify,
+    pub threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
     pub inos: ProcessInos,
-    exe: RwLock<Link>,
+    pub exe: RwLock<Link>,
     task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
-    stop_state: StopState,
+    pub stop_state: StopState,
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<Link>,
     process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: RwLock<Limits>,
-    pub umask: Mutex<FileMode>,
+    umask: AtomicCell<FileMode>,
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
     pub children_usage: Mutex<Rusage>,
@@ -105,7 +96,7 @@ pub struct Process {
 
 impl Process {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         first_tid: u32,
         parent: Weak<Self>,
         termination_signal: Option<Signal>,
@@ -147,7 +138,7 @@ impl Process {
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
             limits: RwLock::new(limits),
-            umask: Mutex::new(umask),
+            umask: AtomicCell::new(umask),
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
             real_itimer: Timer::new(
@@ -182,23 +173,55 @@ impl Process {
             .map_or_else(|| if self.pid == 1 { 0 } else { 1 }, |parent| parent.pid())
     }
 
-    pub fn pgrp(&self) -> u32 {
-        self.process_group.lock().pgid
+    #[doc(alias = "pgrp")]
+    pub fn pgid(&self) -> u32 {
+        self.process_group().pgid()
     }
 
     pub fn sid(&self) -> u32 {
-        self.process_group.lock().session.lock().sid
+        self.process_group().session().sid()
+    }
+
+    pub fn parent(&self) -> Option<Arc<Self>> {
+        self.parent.upgrade()
     }
 
     pub fn process_group(&self) -> Arc<ProcessGroup> {
         self.process_group.lock().clone()
     }
 
+    pub fn set_pgid(&self, pgid: u32) -> Result<()> {
+        // TODO: Make sure that the children haven't execve'd.
+
+        let mut group_guard = self.process_group.lock();
+        if pgid == self.pid {
+            // Create a new process group.
+            let session = group_guard.session.lock().clone();
+            *group_guard = ProcessGroup::new(self.pid, session);
+        } else {
+            // Join an existing process group.
+
+            // Find the other process group in the same session.
+            let session_guard = group_guard.session.lock();
+            let process_groups = session_guard.process_groups.lock();
+            let existing_process_group = process_groups
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|pg| pg.pgid() == pgid)
+                .ok_or(err!(Perm))?;
+            drop(process_groups);
+            drop(session_guard);
+
+            *group_guard = existing_process_group.clone();
+        }
+        Ok(())
+    }
+
     pub fn set_sid(&self) -> u32 {
         let mut process_group_guard = self.process_group.lock();
 
         // Don't do anything if the process is already the process group leader.
-        if process_group_guard.pgid == self.pid {
+        if process_group_guard.pgid() == self.pid {
             return process_group_guard.session().sid;
         }
 
@@ -213,6 +236,14 @@ impl Process {
 
     pub fn task_comm(&self) -> ArrayVec<u8, TASK_COMM_CAPACITY> {
         self.task_comm.lock().clone()
+    }
+
+    pub fn umask(&self) -> FileMode {
+        self.umask.load()
+    }
+
+    pub fn set_umask(&self, umask: FileMode) -> FileMode {
+        self.umask.swap(umask)
     }
 
     pub fn cwd(&self) -> Link {
@@ -344,7 +375,7 @@ impl Process {
             .filter(|(_, child)| match filter {
                 WaitFilter::Any => true,
                 WaitFilter::ExactPid(pid) => child.pid() == pid,
-                WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid == pgid,
+                WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid() == pgid,
             })
             .peekable();
 
@@ -389,7 +420,7 @@ impl Process {
         added
     }
 
-    fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
+    pub fn pop_signal(&self, mask: Sigset) -> Option<SigInfo> {
         self.pending_signals.lock().pop(mask)
     }
 
@@ -407,7 +438,7 @@ impl Process {
                 self.process_group.lock_two(&target.process_group);
 
             // If the processes are part of the same process group, they're also part of the same session.
-            if self_process_group.pgid == target_process_group.pgid {
+            if self_process_group.pgid() == target_process_group.pgid() {
                 return true;
             }
 
@@ -618,12 +649,9 @@ impl Process {
 
     #[cfg(not(feature = "harden"))]
     pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
-        let process_group_guard = self.process_group.lock();
-        let session_guard = process_group_guard.session.lock();
-        let pgid = process_group_guard.pgid;
-        let sid = session_guard.sid;
-        drop(session_guard);
-        drop(process_group_guard);
+        let process_group = self.process_group();
+        let pgid = process_group.pgid();
+        let sid = process_group.session().sid();
         writeln!(
             write,
             "{:indent$}process pid={} pgid={pgid} sid={sid} exit_status={:?} exe={:?}",
@@ -696,7 +724,7 @@ impl AlarmState {
 }
 
 #[derive(Default)]
-struct StopState {
+pub struct StopState {
     stopped: AtomicBool,
     notify: Notify,
 }
@@ -708,11 +736,11 @@ impl StopState {
             .await;
     }
 
-    fn stop(&self) {
+    pub fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
 
-    fn cont(&self) {
+    pub fn cont(&self) {
         self.stopped.store(false, Ordering::Relaxed);
         self.notify.notify();
     }
@@ -759,8 +787,28 @@ impl ProcessGroup {
         arc
     }
 
+    pub fn pgid(&self) -> u32 {
+        self.pgid
+    }
+
     pub fn session(&self) -> Arc<Session> {
         self.session.lock().clone()
+    }
+
+    pub fn processes(&self) -> Vec<Arc<Process>> {
+        self.processes
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>()
+    }
+
+    pub fn find_process(&self, pid: u32) -> Option<Arc<Process>> {
+        self.processes
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|p| p.pid == pid)
     }
 }
 

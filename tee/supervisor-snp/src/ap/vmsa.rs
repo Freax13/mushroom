@@ -20,9 +20,7 @@ use x86_64::{
     structures::paging::{Page, PhysFrame, Size4KiB},
 };
 
-use crate::{ghcb::vmsa_tweak_bitmap, per_cpu::PerCpu, rmp::rmpadjust};
-
-use super::SEV_FEATURES;
+use crate::{ap::SEV_FEATURES, ghcb::vmsa_tweak_bitmap, per_cpu::PerCpu, rmp::rmpadjust};
 
 #[unsafe(link_section = ".vmsas")]
 static SLOTS: [SyncUnsafeCell<Vmsa>; MAX_APS_COUNT as usize] = {

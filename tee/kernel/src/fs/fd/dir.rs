@@ -1,27 +1,25 @@
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::future::pending;
 
-use crate::{
-    error::{bail, ensure, err},
-    fs::{
-        FileSystem,
-        node::{FileAccessContext, Link, OffsetDirEntry, directory::Directory},
-        path::Path,
-    },
-    spin::mutex::Mutex,
-    user::process::{
-        syscall::args::{FileMode, OpenFlags, Timespec, Whence},
-        thread::{Gid, Uid},
-    },
-};
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use async_trait::async_trait;
 use usize_conversions::FromUsize;
 
-use crate::{error::Result, fs::node::DirEntry, user::process::syscall::args::Stat};
-
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, StrongFileDescriptor,
-    WriteBuf,
+use crate::{
+    error::{Result, bail, ensure, err},
+    fs::{
+        FileSystem,
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            StrongFileDescriptor, WriteBuf,
+        },
+        node::{DirEntry, FileAccessContext, Link, OffsetDirEntry, directory::Directory},
+        path::Path,
+    },
+    spin::mutex::Mutex,
+    user::{
+        syscall::args::{FileMode, OpenFlags, Stat, Timespec, Whence},
+        thread::{Gid, Uid},
+    },
 };
 
 pub fn open_dir(dir: Arc<dyn Directory>, flags: OpenFlags) -> Result<StrongFileDescriptor> {

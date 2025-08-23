@@ -1,3 +1,4 @@
+use alloc::{collections::BTreeMap, sync::Arc};
 use core::{
     future::poll_fn,
     num::NonZeroU32,
@@ -5,14 +6,16 @@ use core::{
     task::{Context, Poll},
 };
 
-use crate::{error::ensure, memory::page::KernelPage, spin::mutex::Mutex};
-use alloc::{collections::BTreeMap, sync::Arc};
 use bytemuck::bytes_of_mut;
 use crossbeam_utils::atomic::AtomicCell;
 use futures::task::AtomicWaker;
 use intrusive_collections::{LinkedList, LinkedListAtomicLink, intrusive_adapter};
 
-use crate::error::Result;
+use crate::{
+    error::{Result, ensure},
+    memory::page::KernelPage,
+    spin::mutex::Mutex,
+};
 
 intrusive_adapter!(ListAdapter = Arc<FutexWaiter>: FutexWaiter { link: LinkedListAtomicLink });
 

@@ -1,5 +1,3 @@
-use core::{cmp, mem::MaybeUninit};
-
 use alloc::{
     boxed::Box,
     string::ToString,
@@ -7,6 +5,8 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::{cmp, mem::MaybeUninit};
+
 use async_trait::async_trait;
 use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
 use usize_conversions::{FromUsize, usize_from};
@@ -24,27 +24,25 @@ use crate::{
             inotify::Watchers,
             unix_socket::StreamUnixSocket,
         },
-        node::DirEntryName,
+        node::{
+            DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
+            directory::{Directory, dir_impls},
+            new_dev, new_ino,
+        },
         path::{FileName, Path},
     },
     memory::page::KernelPage,
     net::{IpVersion, tcp::NetTcpFile},
     time::now,
-    user::process::{
-        Process,
+    user::{
         memory::WriteToVec,
+        process::Process,
         syscall::args::{
             ClockId, FallocateMode, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat,
             Timespec,
         },
         thread::{Gid, Thread, Uid},
     },
-};
-
-use super::{
-    DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation,
-    directory::{Directory, dir_impls},
-    new_dev, new_ino,
 };
 
 pub struct ProcFs {

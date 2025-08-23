@@ -7,16 +7,20 @@ use crate::{
         mem::{Full, Null, Random, URandom, Zero},
         mushroom::Output,
     },
-    fs::{StaticFile, node::FileAccessContext, path::Path},
-    user::process::thread::{Gid, Uid},
-};
-
-use crate::{error::Result, fs::path::FileName, user::process::syscall::args::FileMode};
-
-use super::{
-    LinkLocation,
-    directory::Directory,
-    tmpfs::{TmpFs, TmpFsDir},
+    error::Result,
+    fs::{
+        StaticFile,
+        node::{
+            FileAccessContext, LinkLocation,
+            directory::Directory,
+            tmpfs::{TmpFs, TmpFsDir},
+        },
+        path::{FileName, Path},
+    },
+    user::{
+        syscall::args::FileMode,
+        thread::{Gid, Uid},
+    },
 };
 
 pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {

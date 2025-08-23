@@ -1,24 +1,26 @@
+use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
 use core::cmp;
 
-use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
 use async_trait::async_trait;
 use futures::future;
 
-use super::super::{BsdFileLock, Events, OpenFileDescription};
 use crate::{
     error::{Result, bail, ensure},
     fs::{
         FileSystem,
-        fd::{FileDescriptorTable, NonEmptyEvents, ReadBuf, VectoredUserBuf, WriteBuf},
+        fd::{
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
+            VectoredUserBuf, WriteBuf,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
     },
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
-    user::process::{
-        limits::CurrentNoFileLimit,
+    user::{
         memory::VirtualMemory,
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,

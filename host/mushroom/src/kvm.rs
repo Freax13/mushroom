@@ -30,7 +30,8 @@ use snp_types::{
 use tracing::debug;
 use volatile::VolatilePtr;
 
-use crate::{kvm::hidden::KvmCpuid2, slot::Slot};
+use self::hidden::KvmCpuid2;
+use crate::slot::Slot;
 
 const KVMIO: u8 = 0xAE;
 pub const KVM_HC_MAP_GPA_RANGE: u64 = 12;
@@ -1419,7 +1420,7 @@ pub struct KvmTdxExit {
 }
 
 mod hidden {
-    use super::KvmCpuidEntry2;
+    use crate::kvm::KvmCpuidEntry2;
 
     #[repr(C)]
     pub struct KvmCpuid2<const N: usize> {

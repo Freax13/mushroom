@@ -1,14 +1,15 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{
     future::pending,
     iter::{from_fn, repeat_n},
 };
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 use kernel_macros::register;
 use x86_64::instructions::random::RdRand;
 
 use crate::{
+    char_dev::CharDev,
     error::{Result, bail},
     fs::{
         FileSystem,
@@ -21,14 +22,12 @@ use crate::{
     },
     memory::page::KernelPage,
     spin::lazy::Lazy,
-    user::process::{
+    user::{
         futex::Futexes,
         syscall::args::{FileMode, OpenFlags, Stat, Whence},
         thread::{Gid, Uid},
     },
 };
-
-use super::CharDev;
 
 const MAJOR: u16 = 1;
 

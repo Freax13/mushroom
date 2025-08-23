@@ -1,5 +1,7 @@
-use core::arch::{asm, global_asm};
-use core::mem::{offset_of, size_of};
+use core::{
+    arch::{asm, global_asm},
+    mem::{offset_of, size_of},
+};
 
 use constants::{AtomicApBitmap, MAX_APS_COUNT};
 use profiler_types::{
@@ -52,6 +54,7 @@ pub unsafe fn init() {
             guest_tsc_freq = in(reg) guest_tsc_freq,
             PROFILER_CONTROL = sym PROFILER_CONTROL,
             tsc_mhz_offset = const offset_of!(ProfilerControl, tsc_mhz),
+            options(nostack, preserves_flags),
         );
     }
 }

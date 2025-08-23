@@ -2,6 +2,7 @@ use alloc::{
     boxed::Box,
     sync::{Arc, Weak},
 };
+
 use async_trait::async_trait;
 use futures::future;
 
@@ -11,20 +12,20 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            StrongFileDescriptor, WriteBuf, stream_buffer,
+            StrongFileDescriptor, WriteBuf,
+            pipe::{CAPACITY, PIPE_BUF},
+            stream_buffer,
         },
         node::{FileAccessContext, Link},
         path::Path,
     },
     rt::notify::Notify,
     spin::mutex::Mutex,
-    user::process::{
+    user::{
         syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
-
-use super::{CAPACITY, PIPE_BUF};
 
 pub struct NamedPipe {
     internal: Mutex<NamedPipeInternal>,

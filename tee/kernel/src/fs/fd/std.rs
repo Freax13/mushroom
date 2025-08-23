@@ -1,23 +1,23 @@
+use alloc::{boxed::Box, format, sync::Arc, vec};
 use core::future::pending;
 
-use alloc::{boxed::Box, format, sync::Arc, vec};
 use async_trait::async_trait;
 use log::debug;
 
-use super::{
-    BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
-    pipe::anon::PIPE_FS,
-};
 use crate::{
     error::{Result, ensure},
     fs::{
         FileSystem,
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            pipe::anon::PIPE_FS,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
     },
     spin::mutex::Mutex,
-    user::process::{
+    user::{
         syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
         thread::{Gid, Uid},
     },

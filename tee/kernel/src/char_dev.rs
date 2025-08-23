@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+
 use linkme::distributed_slice;
 
 use crate::{
@@ -8,7 +9,7 @@ use crate::{
         fd::StrongFileDescriptor,
         node::{FileAccessContext, LinkLocation},
     },
-    user::process::syscall::args::{OpenFlags, Stat},
+    user::syscall::args::{OpenFlags, Stat},
 };
 
 pub mod char;

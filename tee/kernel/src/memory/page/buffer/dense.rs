@@ -1,13 +1,11 @@
-use core::{cmp, iter::repeat};
-
 use alloc::vec::Vec;
+use core::{cmp, iter::repeat};
 
 use crate::{
     error::{Result, ensure},
     fs::fd::{ReadBuf, WriteBuf},
+    memory::page::{KernelPage, buffer::sparse::SparseBuffer},
 };
-
-use super::{KernelPage, sparse::SparseBuffer};
 
 pub struct DenseBuffer {
     /// The length of the buffer in bytes.

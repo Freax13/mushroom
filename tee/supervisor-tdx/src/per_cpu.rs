@@ -1,9 +1,8 @@
-use core::arch::asm;
+use core::{arch::asm, mem::offset_of};
 
 use constants::ApIndex;
 use x86_64::instructions::interrupts;
 
-#[repr(C)]
 pub struct PerCpu {
     this: *mut Self,
     pub vcpu_index: ApIndex,
@@ -18,7 +17,12 @@ impl PerCpu {
         interrupts::without_interrupts(|| {
             let this = unsafe {
                 let this: *mut Self;
-                asm!("mov {}, fs:[0]", out(reg) this, options(pure, nomem, nostack, preserves_flags));
+                asm!(
+                    "mov {}, fs:[{THIS_OFFSET}]",
+                    out(reg) this,
+                    THIS_OFFSET = const offset_of!(Self, this),
+                    options(pure, nomem, nostack, preserves_flags),
+                );
                 &*this
             };
             f(this)

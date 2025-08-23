@@ -1,6 +1,6 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{future::pending, num::NonZeroU64};
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 use futures::{FutureExt, select_biased};
 
@@ -16,10 +16,10 @@ use crate::{
     rt::notify::Notify,
     spin::mutex::Mutex,
     time::{now, sleep_until},
-    user::process::{
+    user::{
         syscall::args::{
-            ClockId, FileMode, FileTypeAndMode, ITimerspec, OpenFlags, SetTimeFlags, Stat,
-            TimerfdCreateFlags, Timespec,
+            ClockId, FileMode, FileType, FileTypeAndMode, ITimerspec, OpenFlags, SetTimeFlags,
+            Stat, TimerfdCreateFlags, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -87,10 +87,7 @@ impl OpenFileDescription for Timer {
             dev: 0,
             ino: self.ino,
             nlink: 1,
-            mode: FileTypeAndMode::new(
-                crate::user::process::syscall::args::FileType::Unknown,
-                FileMode::ALL_READ_WRITE,
-            ),
+            mode: FileTypeAndMode::new(FileType::Unknown, FileMode::ALL_READ_WRITE),
             uid: Uid::SUPER_USER,
             gid: Gid::SUPER_USER,
             rdev: 0,

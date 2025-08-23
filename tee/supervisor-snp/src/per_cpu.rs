@@ -1,8 +1,7 @@
-use core::{arch::asm, cell::Cell, sync::atomic::AtomicBool};
+use core::{arch::asm, cell::Cell, mem::offset_of, sync::atomic::AtomicBool};
 
 use constants::ApIndex;
 
-#[repr(C)]
 pub struct PerCpu {
     this: *mut Self,
     pub vcpu_index: ApIndex,
@@ -25,7 +24,12 @@ impl PerCpu {
     pub fn get() -> &'static Self {
         unsafe {
             let this: *const Self;
-            asm!("mov {}, fs:[0]", out(reg) this, options(pure, nomem, nostack, preserves_flags));
+            asm!(
+                "mov {}, fs:[{THIS_OFFSET}]",
+                out(reg) this,
+                THIS_OFFSET = const offset_of!(Self, this),
+                options(pure, nomem, nostack, preserves_flags),
+            );
             &*this
         }
     }

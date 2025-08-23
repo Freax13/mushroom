@@ -1,3 +1,4 @@
+use alloc::alloc::{alloc, alloc_zeroed, dealloc};
 use core::{
     alloc::Layout,
     ops::{Bound, RangeBounds},
@@ -5,7 +6,6 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::alloc::{alloc, alloc_zeroed, dealloc};
 use constants::physical_address::DYNAMIC;
 use x86_64::structures::paging::PhysFrame;
 

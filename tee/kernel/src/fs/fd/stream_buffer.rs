@@ -1,14 +1,12 @@
-use core::{cmp, num::NonZeroUsize, ops::Not};
-
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
+use core::{cmp, num::NonZeroUsize, ops::Not};
 
 use crate::{
     error::{Result, bail, ensure},
+    fs::fd::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err},
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
 };
-
-use super::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err};
 
 pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
     let buffer = Arc::new(PipeData {

@@ -1,10 +1,11 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{cmp, future::pending};
 
-use alloc::{boxed::Box, sync::Arc};
 use async_trait::async_trait;
 use kernel_macros::register;
 
 use crate::{
+    char_dev::CharDev,
     error::{Result, bail},
     fs::{
         FileSystem,
@@ -16,13 +17,11 @@ use crate::{
         path::Path,
     },
     supervisor,
-    user::process::{
+    user::{
         syscall::args::{FileMode, OpenFlags, Stat},
         thread::{Gid, Uid},
     },
 };
-
-use super::CharDev;
 
 const MAJOR: u16 = 0xf00;
 

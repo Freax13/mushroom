@@ -1,38 +1,32 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::{
     any::Any,
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use async_trait::async_trait;
+
+use self::{
+    directory::Directory,
+    tmpfs::{TmpFs, TmpFsDir},
+};
 use crate::{
-    error::{bail, ensure, err},
-    fs::ownership::Ownership,
+    error::{Result, bail, ensure, err},
+    fs::{
+        FileSystem,
+        fd::{
+            BsdFileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
+            unix_socket::StreamUnixSocket,
+        },
+        ownership::Ownership,
+        path::{FileName, Path, PathSegment},
+    },
     spin::{lazy::Lazy, rwlock::RwLock},
-    user::process::{
-        Process,
-        syscall::args::{ExtractableThreadState, OpenFlags, Timespec},
+    user::{
+        process::Process,
+        syscall::args::{ExtractableThreadState, FileMode, FileType, OpenFlags, Stat, Timespec},
         thread::{Gid, ThreadGuard, Uid},
     },
-};
-use alloc::boxed::Box;
-use alloc::sync::Arc;
-use async_trait::async_trait;
-use directory::Directory;
-use tmpfs::TmpFs;
-
-use crate::{
-    error::Result,
-    user::process::syscall::args::{FileMode, FileType, Stat},
-};
-
-use self::tmpfs::TmpFsDir;
-
-use super::{
-    FileSystem,
-    fd::{
-        BsdFileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
-        unix_socket::StreamUnixSocket,
-    },
-    path::{FileName, Path, PathSegment},
 };
 
 pub mod directory;

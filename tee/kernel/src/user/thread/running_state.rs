@@ -1,20 +1,18 @@
+use alloc::{boxed::Box, sync::Arc};
 use core::ops::Not;
 
-use alloc::{boxed::Box, sync::Arc};
 use futures::{FutureExt, select_biased};
 
 use crate::{
     fs::fd::FileDescriptorTable,
     rt::{notify::Notify, spawn},
     spin::mutex::Mutex,
-    user::process::{
+    user::{
         memory::VirtualMemory,
         syscall::{args::WStatus, cpu_state::CpuState},
-        thread::PtraceState,
+        thread::{PtraceState, Thread, ThreadGuard},
     },
 };
-
-use super::{Thread, ThreadGuard};
 
 enum State {
     /// The thread is still active.

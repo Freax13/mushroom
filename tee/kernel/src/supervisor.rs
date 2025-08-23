@@ -5,14 +5,15 @@
 
 use core::arch::{asm, naked_asm, x86_64::__cpuid};
 
-use crate::{
-    exception::TimerInterruptGuard,
-    spin::{lazy::Lazy, mutex::Mutex},
-};
 use arrayvec::ArrayVec;
 use constants::{ApIndex, INSECURE_SUPERVISOR_CALL_PORT, physical_address::DYNAMIC_2MIB};
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
+
+use crate::{
+    exception::TimerInterruptGuard,
+    spin::{lazy::Lazy, mutex::Mutex},
+};
 
 // Note that we don't actually use the C abi.
 type SupervisorCallFn = unsafe extern "C" fn();

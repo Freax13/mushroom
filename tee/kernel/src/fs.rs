@@ -1,13 +1,11 @@
+use alloc::sync::Arc;
 use core::cmp;
 
-use alloc::sync::Arc;
-use fd::KernelWriteBuf;
-use node::tmpfs::TmpFsFile;
-
-use crate::error::Result;
-use crate::fs::fd::file::File;
-use crate::fs::node::INode;
-use crate::spin::lazy::Lazy;
+use self::{
+    fd::{KernelWriteBuf, file::File},
+    node::{INode, tmpfs::TmpFsFile},
+};
+use crate::{error::Result, spin::lazy::Lazy};
 
 pub mod fd;
 pub mod node;
@@ -56,6 +54,7 @@ impl StaticFile {
                         inout("rsi") src => _,
                         inout("rdi") dst => _,
                         inout("rcx") size_of::<T>() * len => _,
+                        options(nostack, preserves_flags),
                     );
                 }
             }

@@ -1,12 +1,6 @@
 //! Concurrent page tables.
 
-use crate::{
-    error::{Result, ensure, err},
-    per_cpu::{PerCpu, PerCpuSync},
-    spin::{mutex::Mutex, rwlock::RwLock},
-    user::process::memory::without_smap,
-};
-
+use alloc::sync::Arc;
 use core::{
     arch::asm,
     cell::RefMut,
@@ -19,27 +13,33 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::spin::lazy::Lazy;
-use alloc::sync::Arc;
 use bit_field::BitField;
 use bitflags::bitflags;
 use constants::{
     ApBitmap,
     physical_address::{kernel::*, *},
 };
-use flush::{FlushGuard, GlobalFlushGuard};
 use log::trace;
 use static_page_tables::{StaticPageTable, StaticPd, StaticPdp, StaticPml4, flags};
 use x86_64::{
     PhysAddr, VirtAddr,
     instructions::tlb::Pcid,
-    registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
+    registers::{
+        control::{Cr3, Cr3Flags, Cr4, Cr4Flags},
+        rflags::{self, RFlags},
+    },
     structures::paging::{Page, PageTableIndex, PhysFrame, Size4KiB},
 };
 
-use super::{
-    frame::{allocate_frame, deallocate_frame},
-    temporary::{copy_into_frame, zero_frame},
+use self::flush::{FlushGuard, GlobalFlushGuard};
+use crate::{
+    error::{Result, ensure, err},
+    memory::{
+        frame::{allocate_frame, deallocate_frame},
+        temporary::{copy_into_frame, zero_frame},
+    },
+    per_cpu::{PerCpu, PerCpuSync},
+    spin::{lazy::Lazy, mutex::Mutex, rwlock::RwLock},
 };
 
 pub mod flush;
@@ -258,6 +258,7 @@ fn try_read_fast(src: VirtAddr, dest: NonNull<[u8]>) -> Result<(), ()> {
             inout("rdi") dest.as_mut_ptr() => _,
             inout("rcx") dest.len() => _,
             inout("rdx") 0u64 => failed,
+            options(nostack, preserves_flags),
         );
     }
 
@@ -291,6 +292,7 @@ unsafe fn try_write_fast(src: NonNull<[u8]>, dest: VirtAddr) -> Result<(), ()> {
             inout("rdi") dest.as_u64() => _,
             inout("rcx") src.len() => _,
             inout("rdx") 0u64 => failed,
+            options(readonly, nostack, preserves_flags),
         );
     }
     if failed == 0 { Ok(()) } else { Err(()) }
@@ -320,6 +322,7 @@ unsafe fn try_set_bytes_fast(dest: VirtAddr, count: usize, val: u8) -> Result<()
             inout("rdi") dest.as_u64() => _,
             inout("rcx") count => _,
             inout("rdx") 0u64 => failed,
+            options(readonly, nostack, preserves_flags),
         );
     }
     if failed == 0 { Ok(()) } else { Err(()) }
@@ -715,6 +718,29 @@ impl Pagetables {
 
         without_smap(|| unsafe { try_set_bytes_fast(dest, count, val) })
     }
+}
+
+fn without_smap<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let rflags = rflags::read();
+    let changed = !rflags.contains(RFlags::ALIGNMENT_CHECK);
+    if changed {
+        unsafe {
+            asm!("stac", options(nostack, preserves_flags));
+        }
+    }
+
+    let result = f();
+
+    if changed {
+        unsafe {
+            asm!("clac", options(nostack, preserves_flags));
+        }
+    }
+
+    result
 }
 
 struct ActivePageTableGuard {

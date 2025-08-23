@@ -1,12 +1,11 @@
 use crate::{
     error::{Result, ensure},
-    user::process::{
+    fs::node::FileAccessContext,
+    user::{
         syscall::args::FileMode,
         thread::{Gid, Uid},
     },
 };
-
-use super::node::FileAccessContext;
 
 #[derive(Clone)]
 pub struct Ownership {
