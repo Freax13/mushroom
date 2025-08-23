@@ -765,7 +765,7 @@ impl WaitResult {
 pub struct ProcessGroup {
     pgid: u32,
     session: Mutex<Arc<Session>>,
-    pub processes: Mutex<Vec<Weak<Process>>>,
+    processes: Mutex<Vec<Weak<Process>>>,
 }
 
 impl ProcessGroup {
@@ -786,6 +786,22 @@ impl ProcessGroup {
 
     pub fn session(&self) -> Arc<Session> {
         self.session.lock().clone()
+    }
+
+    pub fn processes(&self) -> Vec<Arc<Process>> {
+        self.processes
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>()
+    }
+
+    pub fn find_process(&self, pid: u32) -> Option<Arc<Process>> {
+        self.processes
+            .lock()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|p| p.pid == pid)
     }
 }
 

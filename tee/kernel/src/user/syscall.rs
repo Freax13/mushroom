@@ -55,7 +55,7 @@ use crate::{
     rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
     time::{self, Tick, now, sleep_until},
     user::process::{
-        Process, ProcessGroup, WaitFilter, WaitResult,
+        Process, WaitFilter, WaitResult,
         futex::FutexScope,
         limits::{CurrentNoFileLimit, CurrentStackLimit},
         memory::{Bias, MemoryPermissions, VirtualMemory},
@@ -2127,11 +2127,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         0 => {
-            let process_group = process.process_group.lock();
-            let guard = process_group.processes.lock();
-            let processes = guard.iter().filter_map(Weak::upgrade).collect::<Vec<_>>();
-            drop(guard);
-            drop(process_group);
+            let processes = process.process_group().processes();
 
             ensure!(!processes.is_empty(), Srch);
 
@@ -2160,15 +2156,10 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         ..-1 => {
-            let process_group = process.process_group.lock();
-            let target = process_group
-                .processes
-                .lock()
-                .iter()
-                .filter_map(Weak::upgrade)
-                .find(|p| p.pid == -pid as u32)
+            let target = process
+                .process_group()
+                .find_process(-pid as u32)
                 .ok_or(err!(Srch))?;
-            drop(process_group);
             if let Some(sig_info) = sig_info {
                 ensure!(process.can_send_signal(&target, sig_info.signal), Perm);
                 target.queue_signal(sig_info);
