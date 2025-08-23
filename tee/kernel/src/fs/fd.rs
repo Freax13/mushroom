@@ -74,7 +74,8 @@ pub mod timer;
 pub mod unix_socket;
 
 pub use self::buf::{
-    KernelReadBuf, KernelWriteBuf, OffsetBuf, ReadBuf, UserBuf, VectoredUserBuf, WriteBuf,
+    KernelPageWriteBuf, KernelReadBuf, KernelWriteBuf, OffsetBuf, ReadBuf, UserBuf,
+    VectoredUserBuf, WriteBuf,
 };
 
 pub struct OpenFileDescriptionData<T: ?Sized> {

@@ -30,7 +30,7 @@ use crate::{
     fs::{
         StatFs,
         fd::{
-            Events, FdFlags, FileDescriptorTable, KernelWriteBuf, OffsetBuf, ReadBuf,
+            Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf, ReadBuf,
             StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
             WriteBuf, do_io, do_write_io,
             epoll::Epoll,
@@ -1327,23 +1327,16 @@ async fn sendfile(
     let stat = r#in.stat()?;
     let count = cmp::min(count, (stat.size as usize).saturating_sub(offset_value));
 
-    let mut buffer = [0; 0x1000];
     let mut total_len = 0;
     while total_len < count {
         let page_offset = offset_value / 0x1000;
         let offset_in_page = offset_value % 0x1000;
         let chunk_len = cmp::min(0x1000 - offset_in_page, count - total_len);
 
-        let buffer = &mut buffer[offset_in_page..];
-        let buffer = &mut buffer[..chunk_len];
-
         let page = r#in.get_page(page_offset, false)?;
-        page.read(offset_in_page, buffer);
+        let buf = KernelPageWriteBuf::new(&page, offset_in_page, chunk_len);
 
-        let res = do_write_io(&**r#in, buffer.len(), || {
-            out.write(&KernelWriteBuf::new(buffer))
-        })
-        .await;
+        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf)).await;
         match res {
             Ok(0) => break,
             Ok(n) => {
