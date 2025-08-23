@@ -913,13 +913,13 @@ impl ThreadGuard<'_> {
 
         write!(buffer, " {}", self.process().ppid()).unwrap();
 
-        write!(buffer, " {}", self.process().pgrp()).unwrap();
+        write!(buffer, " {}", self.process().pgid()).unwrap();
 
         write!(buffer, " {}", self.process().sid()).unwrap();
 
         buffer.extend_from_slice(b" 1"); // TODO: tty_nr
 
-        write!(buffer, " {}", self.process().pgrp()).unwrap(); // TODO: tpgid
+        write!(buffer, " {}", self.process().pgid()).unwrap(); // TODO: tpgid
 
         buffer.extend_from_slice(b" 0"); // TODO: flags
 

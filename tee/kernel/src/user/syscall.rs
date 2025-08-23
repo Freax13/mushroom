@@ -2065,7 +2065,7 @@ async fn wait4(
     let filter = match pid {
         ..=-2 => WaitFilter::ExactPgid(-pid as u32),
         -1 => WaitFilter::Any,
-        0 => WaitFilter::ExactPgid(thread.process().pgrp()),
+        0 => WaitFilter::ExactPgid(thread.process().pgid()),
         1.. => WaitFilter::ExactPid(pid as u32),
     };
 
@@ -3098,7 +3098,7 @@ fn setpgid(thread: &Thread, pid: u32, pgid: u32) -> SyscallResult {
         let existing_process_group = process_groups
             .iter()
             .filter_map(Weak::upgrade)
-            .find(|pg| pg.pgid == pgid)
+            .find(|pg| pg.pgid() == pgid)
             .ok_or(err!(Perm))?;
         drop(process_groups);
         drop(session_guard);
@@ -3117,7 +3117,7 @@ fn getppid(thread: &Thread) -> SyscallResult {
 
 #[syscall(i386 = 65, amd64 = 111)]
 fn getpgrp(thread: &Thread) -> SyscallResult {
-    let pgrp = thread.process().pgrp();
+    let pgrp = thread.process().pgid();
     Ok(u64::from(pgrp))
 }
 
@@ -3339,9 +3339,9 @@ fn getresgid(
 #[syscall(i386 = 132, amd64 = 121)]
 fn getpgid(thread: &Thread, pid: u32) -> SyscallResult {
     let pgid = if pid == 0 {
-        thread.process().pgrp()
+        thread.process().pgid()
     } else {
-        Process::find_by_pid(pid).ok_or(err!(Srch))?.pgrp()
+        Process::find_by_pid(pid).ok_or(err!(Srch))?.pgid()
     };
     Ok(u64::from(pgid))
 }
@@ -3527,11 +3527,11 @@ fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<
         }
         Which::ProcessGroup => {
             let pgid = if who == 0 {
-                thread.process().pgrp()
+                thread.process().pgid()
             } else {
                 who
             };
-            find_targets(&mut Process::all().filter(|p| p.pgrp() == pgid))
+            find_targets(&mut Process::all().filter(|p| p.pgid() == pgid))
         }
         Which::User => {
             let uid = if who == 0 { caller_ruid } else { Uid::new(who) };

@@ -175,9 +175,9 @@ impl Process {
             .map_or_else(|| if self.pid == 1 { 0 } else { 1 }, |parent| parent.pid())
     }
 
-    #[doc(alias = "pgid")]
-    pub fn pgrp(&self) -> u32 {
-        self.process_group.lock().pgid
+    #[doc(alias = "pgrp")]
+    pub fn pgid(&self) -> u32 {
+        self.process_group.lock().pgid()
     }
 
     pub fn sid(&self) -> u32 {
@@ -192,7 +192,7 @@ impl Process {
         let mut process_group_guard = self.process_group.lock();
 
         // Don't do anything if the process is already the process group leader.
-        if process_group_guard.pgid == self.pid {
+        if process_group_guard.pgid() == self.pid {
             return process_group_guard.session().sid;
         }
 
@@ -338,7 +338,7 @@ impl Process {
             .filter(|(_, child)| match filter {
                 WaitFilter::Any => true,
                 WaitFilter::ExactPid(pid) => child.pid() == pid,
-                WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid == pgid,
+                WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid() == pgid,
             })
             .peekable();
 
@@ -401,7 +401,7 @@ impl Process {
                 self.process_group.lock_two(&target.process_group);
 
             // If the processes are part of the same process group, they're also part of the same session.
-            if self_process_group.pgid == target_process_group.pgid {
+            if self_process_group.pgid() == target_process_group.pgid() {
                 return true;
             }
 
@@ -614,7 +614,7 @@ impl Process {
     pub fn dump(&self, indent: usize, write: &mut impl Write) -> fmt::Result {
         let process_group_guard = self.process_group.lock();
         let session_guard = process_group_guard.session.lock();
-        let pgid = process_group_guard.pgid;
+        let pgid = process_group_guard.pgid();
         let sid = session_guard.sid;
         drop(session_guard);
         drop(process_group_guard);
@@ -736,7 +736,7 @@ impl WaitResult {
 }
 
 pub struct ProcessGroup {
-    pub pgid: u32,
+    pgid: u32,
     pub session: Mutex<Arc<Session>>,
     pub processes: Mutex<Vec<Weak<Process>>>,
 }
@@ -751,6 +751,10 @@ impl ProcessGroup {
         let arc = Arc::new(this);
         session.process_groups.lock().push(Arc::downgrade(&arc));
         arc
+    }
+
+    pub fn pgid(&self) -> u32 {
+        self.pgid
     }
 
     pub fn session(&self) -> Arc<Session> {
