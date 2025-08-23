@@ -6,6 +6,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     error::Result,
+    memory::page::KernelPage,
     user::{
         memory::VirtualMemory,
         syscall::{
@@ -370,5 +371,35 @@ where
 
     unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()> {
         unsafe { self.buffer.read_volatile(offset + self.offset, bytes) }
+    }
+}
+
+pub struct KernelPageWriteBuf<'a> {
+    page: &'a KernelPage,
+    offset: usize,
+    len: usize,
+}
+
+impl<'a> KernelPageWriteBuf<'a> {
+    pub fn new(page: &'a KernelPage, offset: usize, len: usize) -> Self {
+        Self { page, offset, len }
+    }
+}
+
+impl WriteBuf for KernelPageWriteBuf<'_> {
+    fn buffer_len(&self) -> usize {
+        self.len
+    }
+
+    fn read(&self, offset: usize, bytes: &mut [u8]) -> Result<()> {
+        self.page.read(self.offset + offset, bytes);
+        Ok(())
+    }
+
+    unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()> {
+        unsafe {
+            self.page.read_volatile(self.offset + offset, bytes);
+        }
+        Ok(())
     }
 }

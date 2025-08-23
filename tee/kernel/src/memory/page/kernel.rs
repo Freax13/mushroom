@@ -169,13 +169,23 @@ impl KernelPage {
     }
 
     pub fn read(&self, index: usize, buf: &mut [u8]) {
-        let ptr = self.index(index..index + buf.len());
-        unsafe {
-            core::intrinsics::volatile_copy_nonoverlapping_memory(
-                buf.as_mut_ptr(),
-                ptr.as_ptr().cast(),
-                buf.len(),
-            );
+        unsafe { self.read_volatile(index, NonNull::from_mut(buf)) }
+    }
+
+    pub unsafe fn read_volatile(&self, index: usize, buf: NonNull<[u8]>) {
+        if self.is_zero_page() {
+            unsafe {
+                core::intrinsics::volatile_set_memory(buf.as_mut_ptr(), 0, buf.len());
+            }
+        } else {
+            let ptr = self.index(index..index + buf.len());
+            unsafe {
+                core::intrinsics::volatile_copy_nonoverlapping_memory(
+                    buf.as_mut_ptr(),
+                    ptr.as_ptr().cast(),
+                    buf.len(),
+                );
+            }
         }
     }
 

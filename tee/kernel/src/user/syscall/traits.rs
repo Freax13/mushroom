@@ -133,6 +133,11 @@ impl SyscallHandlers {
             self.future_size = return_size;
         }
 
+        // Make sure that the future is not too big. There's no technical
+        // reason why large futures can't work, but we should avoid them if
+        // possible.
+        assert!(return_size < 2048, "future is very big");
+
         /// Returns the alignment of the return type of `T::execute`.
         const fn return_align<'a, T>(
             _: fn(thread: &'a Arc<Thread>, syscall_args: SyscallArgs) -> T,
