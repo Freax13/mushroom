@@ -66,7 +66,7 @@ pub struct Process {
     pid: u32,
     start_time: Timespec,
     exit_status: OnceCell<WStatus>,
-    pub parent: Weak<Self>,
+    parent: Weak<Self>,
     children: Mutex<Vec<Arc<Self>>>,
     pub child_death_notify: Notify,
     termination_signal: Option<Signal>,
@@ -182,6 +182,10 @@ impl Process {
 
     pub fn sid(&self) -> u32 {
         self.process_group().session().sid()
+    }
+
+    pub fn parent(&self) -> Option<Arc<Self>> {
+        self.parent.upgrade()
     }
 
     pub fn process_group(&self) -> Arc<ProcessGroup> {

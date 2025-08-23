@@ -2850,8 +2850,7 @@ fn ptrace(
         PtraceOp::TraceMe => {
             let parent = thread
                 .process()
-                .parent
-                .upgrade()
+                .parent()
                 .expect("TODO")
                 .thread_group_leader();
             thread.set_tracer(parent, false)?;
