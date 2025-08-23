@@ -573,6 +573,7 @@ impl Pagetables {
             return;
         }
 
+        let mut needs_flush = false;
         let _guard = self.update_lock.read();
         let pml4 = self.activate();
         for p4_index in start.p4_index()..=end.p4_index() {
@@ -652,15 +653,15 @@ impl Pagetables {
 
                     for p1_index in start.p1_index()..=end.p1_index() {
                         let pte = &pt[p1_index];
-                        unsafe {
-                            pte.try_unmap();
-                        }
+                        needs_flush |= unsafe { pte.try_unmap() };
                     }
                 }
             }
         }
 
-        pml4.flush_pages(start..=end);
+        if needs_flush {
+            pml4.flush_pages(start..=end);
+        }
     }
 
     /// Try to copy user memory from `src` into `dest`.
@@ -1266,12 +1267,18 @@ impl ActivePageTableEntry<Level1> {
     }
 
     /// Unmap a page if it's mapped or do nothing if it isn't.
-    pub unsafe fn try_unmap(&self) {
+    ///
+    /// Returns true if there previously was an entry and that entry had been
+    /// accessed.
+    pub unsafe fn try_unmap(&self) -> bool {
         let old_entry = atomic_swap(&self.entry, 0);
-        if PresentPageTableEntry::try_from(old_entry).is_ok() {
+        if let Ok(entry) = PresentPageTableEntry::try_from(old_entry) {
             unsafe {
                 self.parent_table_entry().release_reference_count_fast();
             }
+            entry.accessed()
+        } else {
+            false
         }
     }
 
@@ -1415,6 +1422,7 @@ impl Clear for ActivePageTableEntry<Level1> {
 const PRESENT_BIT: usize = 0;
 const WRITE_BIT: usize = 1;
 const USER_BIT: usize = 2;
+const ACCESSED_BIT: usize = 5;
 const DIRTY_BIT: usize = 6;
 const GLOBAL_BIT: usize = 8;
 const DISABLE_EXECUTE_BIT: usize = 63;
@@ -1442,7 +1450,8 @@ bitflags! {
         const USER = 1 << 2;
         const GLOBAL = 1 << 3;
         const COW = 1 << 4;
-        const DIRTY = 1 << 5;
+        const ACCESSED = 1 << 5;
+        const DIRTY = 1 << 6;
     }
 }
 
@@ -1466,6 +1475,8 @@ impl PresentPageTableEntry {
         );
         let cow = flags.contains(PageTableFlags::COW);
         entry.set_bit(COW_BIT, cow);
+        let accessed = flags.contains(PageTableFlags::ACCESSED);
+        entry.set_bit(ACCESSED_BIT, accessed);
         let dirty = flags.contains(PageTableFlags::DIRTY);
         entry.set_bit(DIRTY_BIT, dirty);
 
@@ -1487,6 +1498,7 @@ impl PresentPageTableEntry {
         flags.set(PageTableFlags::GLOBAL, self.global());
         flags.set(PageTableFlags::EXECUTABLE, self.executable());
         flags.set(PageTableFlags::COW, self.cow());
+        flags.set(PageTableFlags::ACCESSED, self.accessed());
         flags.set(PageTableFlags::DIRTY, self.dirty());
         flags
     }
@@ -1509,6 +1521,10 @@ impl PresentPageTableEntry {
 
     pub fn cow(&self) -> bool {
         self.0.get().get_bit(COW_BIT)
+    }
+
+    pub fn accessed(&self) -> bool {
+        self.0.get().get_bit(ACCESSED_BIT)
     }
 
     pub fn dirty(&self) -> bool {
