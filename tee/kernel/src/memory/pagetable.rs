@@ -1415,6 +1415,7 @@ impl Clear for ActivePageTableEntry<Level1> {
 const PRESENT_BIT: usize = 0;
 const WRITE_BIT: usize = 1;
 const USER_BIT: usize = 2;
+const ACCESSED_BIT: usize = 5;
 const DIRTY_BIT: usize = 6;
 const GLOBAL_BIT: usize = 8;
 const DISABLE_EXECUTE_BIT: usize = 63;
@@ -1442,7 +1443,8 @@ bitflags! {
         const USER = 1 << 2;
         const GLOBAL = 1 << 3;
         const COW = 1 << 4;
-        const DIRTY = 1 << 5;
+        const ACCESSED = 1 << 5;
+        const DIRTY = 1 << 6;
     }
 }
 
@@ -1466,6 +1468,8 @@ impl PresentPageTableEntry {
         );
         let cow = flags.contains(PageTableFlags::COW);
         entry.set_bit(COW_BIT, cow);
+        let accessed = flags.contains(PageTableFlags::ACCESSED);
+        entry.set_bit(ACCESSED_BIT, accessed);
         let dirty = flags.contains(PageTableFlags::DIRTY);
         entry.set_bit(DIRTY_BIT, dirty);
 
@@ -1487,6 +1491,7 @@ impl PresentPageTableEntry {
         flags.set(PageTableFlags::GLOBAL, self.global());
         flags.set(PageTableFlags::EXECUTABLE, self.executable());
         flags.set(PageTableFlags::COW, self.cow());
+        flags.set(PageTableFlags::ACCESSED, self.accessed());
         flags.set(PageTableFlags::DIRTY, self.dirty());
         flags
     }
@@ -1509,6 +1514,10 @@ impl PresentPageTableEntry {
 
     pub fn cow(&self) -> bool {
         self.0.get().get_bit(COW_BIT)
+    }
+
+    pub fn accessed(&self) -> bool {
+        self.0.get().get_bit(ACCESSED_BIT)
     }
 
     pub fn dirty(&self) -> bool {
