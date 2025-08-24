@@ -36,6 +36,8 @@ pub fn load(
             let execute = ph.p_flags.get_bit(0);
             let write = ph.p_flags.get_bit(1);
             let read = ph.p_flags.get_bit(2);
+            let _no_verify_guest_paging = ph.p_flags.get_bit(25);
+            let paging_write_access = ph.p_flags.get_bit(26);
             let vmsa_page = ph.p_flags.get_bit(27);
             let cpuid_page = ph.p_flags.get_bit(28);
             let secrets_page = ph.p_flags.get_bit(29);
@@ -43,10 +45,14 @@ pub fn load(
 
             let mut vmpl1_perms = VmplPermissions::empty();
             if execute {
-                vmpl1_perms |= VmplPermissions::EXECUTE_USER;
                 vmpl1_perms |= VmplPermissions::EXECUTE_SUPERVISOR;
             }
             if write {
+                vmpl1_perms |= VmplPermissions::WRITE;
+            }
+            // AMD CPUs don't support PWA, so we also need to set the WRITE
+            // bit for these pages.
+            if paging_write_access {
                 vmpl1_perms |= VmplPermissions::WRITE;
             }
             if read {

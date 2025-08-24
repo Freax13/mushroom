@@ -57,7 +57,7 @@ static PML4: StaticPml4 = {
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PDP_256: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_256_0, flags!(WRITE));
@@ -65,7 +65,7 @@ static PDP_256: StaticPdp = {
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PD_256_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, RESET_VECTOR, flags!(GLOBAL));
@@ -82,7 +82,7 @@ static PD_256_0: StaticPd = {
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PDP_352: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_table(0, &PD_352_0, flags!(WRITE | EXECUTE_DISABLE));
@@ -91,7 +91,7 @@ static PDP_352: StaticPdp = {
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PD_352_0: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, TEXT_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
@@ -102,21 +102,21 @@ static PD_352_0: StaticPd = {
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PD_352_72: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, INIT_FILE_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PD_352_80: StaticPd = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page(0, INPUT_FILE_SHADOW, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static PDP_257: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page_range(0, DYNAMIC, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
@@ -131,16 +131,26 @@ static PDP_257: StaticPdp = {
 #[used]
 #[unsafe(link_section = ".pagetables.tdx.pml4")]
 static TDX_PML4: StaticPml4 = {
-    let mut page_table = unsafe { PML4.clone() };
-    page_table.clear_entry(256);
-    page_table.set_table(256, &TDX_PDP_256, flags!(WRITE));
-    // Fix the recursive entry.
-    page_table.clear_entry(510);
+    // Most kernel mappings are set up through the HLAT PML4, so we can start
+    // with an empty PML4.
+    let mut page_table = StaticPageTable::new();
     page_table.set_recursive_table(510, &TDX_PML4, flags!(WRITE));
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[used]
+#[unsafe(link_section = ".ropagetables.tdx.pml4")]
+static TDX_HLAT_PML4: StaticPml4 = {
+    let mut page_table = unsafe { PML4.clone() };
+    page_table.clear_entry(256);
+    page_table.set_table(256, &TDX_PDP_256, flags!(WRITE));
+    // Clear the recursive entry. It should get translated through the regular page tables.
+    page_table.clear_entry(510);
+    page_table.fill_hlat_restart();
+    page_table
+};
+
+#[unsafe(link_section = ".ropagetables")]
 static TDX_PDP_256: StaticPdp = {
     let mut page_table = unsafe { PDP_256.clone() };
     page_table.clear_entry(0);
@@ -148,7 +158,7 @@ static TDX_PDP_256: StaticPdp = {
     page_table
 };
 
-#[unsafe(link_section = ".pagetables")]
+#[unsafe(link_section = ".ropagetables")]
 static TDX_PD_256_0: StaticPd = {
     let mut page_table = unsafe { PD_256_0.clone() };
     page_table.clear_entry(56);

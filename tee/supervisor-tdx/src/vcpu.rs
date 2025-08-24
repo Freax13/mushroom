@@ -92,6 +92,21 @@ pub fn init_vcpu() {
         );
     }
 
+    // Enable HLAT, EPT paging-write, and guest-paging verification.
+    unsafe {
+        Tdcall::vp_wr(
+            MdFieldId::VMX_VM_EXECUTION_CONTROL_TERTIARY_PROC_BASED,
+            (1 << 1) | (1 << 2) | (1 << 3),
+            (1 << 1) | (1 << 2) | (1 << 3),
+        );
+    }
+
+    // Configure HLAT.
+    unsafe {
+        Tdcall::vp_wr(MdFieldId::VMX_HLAT_PREFIX_SIZE, 1, u64::from(u16::MAX));
+        Tdcall::vp_wr(MdFieldId::VMX_HLATP, 0x100_0001_0000, !0);
+    }
+
     // Adjust CS segment.
     unsafe {
         Tdcall::vp_wr(MdFieldId::VMX_GUEST_CS_ARBYTE, 0xa09b, !0);
