@@ -92,12 +92,12 @@ pub fn init_vcpu() {
         );
     }
 
-    // Enable HLAT.
+    // Enable HLAT and EPT paging-write.
     unsafe {
         Tdcall::vp_wr(
             MdFieldId::VMX_VM_EXECUTION_CONTROL_TERTIARY_PROC_BASED,
-            1 << 1,
-            1 << 1,
+            (1 << 1) | (1 << 2),
+            (1 << 1) | (1 << 2),
         );
     }
 
