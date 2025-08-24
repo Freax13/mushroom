@@ -43,6 +43,9 @@ impl MdFieldId {
     pub const VMX_GUEST_IA32_EFER: Self = Self::vmcs1(0x2806);
     pub const VMX_VM_ENTRY_CONTROL: Self = Self::vmcs1(0x4012);
     pub const VMX_VM_EXECUTION_CONTROL_SECONDARY_PROC_BASED: Self = Self::vmcs1(0x401E);
+    pub const VMX_VM_EXECUTION_CONTROL_TERTIARY_PROC_BASED: Self = Self::vmcs1(0x2034);
+    pub const VMX_HLATP: Self = Self::vmcs1(0x2040);
+    pub const VMX_HLAT_PREFIX_SIZE: Self = Self::vmcs1(0x0006);
     pub const VMX_GUEST_CS_ARBYTE: Self = Self::vmcs1(0x4816);
     pub const VMX_CR0_READ_SHADOW: Self = Self::vmcs1(0x6004);
     pub const VMX_CR4_READ_SHADOW: Self = Self::vmcs1(0x6006);

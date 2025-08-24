@@ -115,6 +115,22 @@ where
         }
     }
 
+    /// Configure all empty entries to restart HLAT translations using the
+    /// regular translations.
+    pub const fn fill_hlat_restart(&mut self) {
+        let flags = flags!(RESTART | PRESENT);
+        let restart_entry = null::<()>().wrapping_byte_add(flags.0);
+
+        let mut i = 0;
+        while i < 512 {
+            let entry = self.entries[i].get_mut();
+            if entry.is_null() {
+                *entry = restart_entry;
+            }
+            i += 1;
+        }
+    }
+
     /// Clear an entry.
     pub const fn clear_entry(&mut self, index: usize) {
         self.entries[index] = UnsafeCell::new(null_mut());
@@ -228,6 +244,7 @@ impl Flags {
     pub const DIRTY: Self = Self(1 << 6);
     pub const HUGE: Self = Self(1 << 7);
     pub const GLOBAL: Self = Self(1 << 8);
+    pub const RESTART: Self = Self(1 << 11);
     pub const C: Self = Self(1 << 51);
     pub const S: Self = Self(1 << 51);
     pub const EXECUTE_DISABLE: Self = Self(1 << 63);

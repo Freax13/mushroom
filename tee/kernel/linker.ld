@@ -3,7 +3,8 @@ ENTRY(reset_vector)
 PHDRS
 {
     headers             PT_LOAD FILEHDR PHDRS AT(0x08000000000) FLAGS(0);
-    pagetables          PT_LOAD AT(0x10000000000);
+    pagetables          PT_LOAD AT(0x10000000000) FLAGS((1 << 1) | (1 << 2));
+    ropagetables        PT_LOAD AT(0x10000010000) FLAGS((1 << 1) | (1 << 2));
     reset_vector        PT_LOAD AT(0x10040000000);
     text                PT_LOAD AT(0x10040200000);
     rodata              PT_LOAD AT(0x10080000000);
@@ -19,11 +20,19 @@ PHDRS
 SECTIONS {
     .pagetables (0x10000000000) : 
     {
+        . = 0x10000000000;
         KEEP(*(.pagetables.pml4 .pagetables.pml4.*))
         . = 0x10000001000;
         KEEP(*(.pagetables.tdx.pml4 .pagetables.tdx.pml4.*))
         KEEP(*(.pagetables .pagetables.*))
     } :pagetables
+
+    .ropagetables (0x10000010000) : 
+    {
+        . = 0x10000010000;
+        KEEP(*(.ropagetables.tdx.pml4 .ropagetables.tdx.pml4.*))
+        KEEP(*(.ropagetables .ropagetables.*))
+    } :ropagetables
 
     .reset_vector (0xffff800000000000) : 
     {
