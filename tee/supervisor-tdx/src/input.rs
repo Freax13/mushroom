@@ -173,6 +173,7 @@ fn load_kernel() {
         attrs.set(GpaAttr::READ, ph.flags.get_bit(2));
         attrs.set(GpaAttr::WRITE, ph.flags.get_bit(1));
         attrs.set(GpaAttr::EXECUTE_SUPERVISOR, ph.flags.get_bit(0));
+        attrs.set(GpaAttr::VERIFY_GUEST_PAGING, !ph.flags.get_bit(25));
         attrs.set(GpaAttr::PAGE_WRITE_ACCESS, ph.flags.get_bit(26));
 
         let start = PhysAddr::new(ph.paddr);

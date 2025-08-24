@@ -3,7 +3,7 @@ ENTRY(reset_vector)
 PHDRS
 {
     headers             PT_LOAD FILEHDR PHDRS AT(0x08000000000) FLAGS(0);
-    pagetables          PT_LOAD AT(0x10000000000) FLAGS((1 << 1) | (1 << 2));
+    pagetables          PT_LOAD AT(0x10000000000) FLAGS((1 << 1) | (1 << 2) | (1 << 25));
     ropagetables        PT_LOAD AT(0x10000010000) FLAGS((1 << 2) | (1 << 26));
     reset_vector        PT_LOAD AT(0x10040000000);
     text                PT_LOAD AT(0x10040200000);
