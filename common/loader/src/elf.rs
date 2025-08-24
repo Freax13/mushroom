@@ -45,7 +45,6 @@ pub fn load(
 
             let mut vmpl1_perms = VmplPermissions::empty();
             if execute {
-                vmpl1_perms |= VmplPermissions::EXECUTE_USER;
                 vmpl1_perms |= VmplPermissions::EXECUTE_SUPERVISOR;
             }
             if write {
