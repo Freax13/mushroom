@@ -2,6 +2,7 @@ use alloc::{
     boxed::Box,
     sync::{Arc, Weak},
 };
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use futures::future;
@@ -29,6 +30,8 @@ use crate::{
 
 pub struct NamedPipe {
     internal: Mutex<NamedPipeInternal>,
+    read_open_counter: AtomicU64,
+    write_open_counter: AtomicU64,
     notify: Notify,
 }
 
@@ -44,6 +47,8 @@ impl NamedPipe {
                 read_half: Weak::new(),
                 write_half: Weak::new(),
             }),
+            read_open_counter: AtomicU64::new(0),
+            write_open_counter: AtomicU64::new(0),
             notify: Notify::new(),
         }
     }
@@ -77,15 +82,19 @@ impl NamedPipe {
                 write_half
             };
 
+            self.write_open_counter.fetch_add(1, Ordering::SeqCst);
             self.notify.notify();
 
             if flags.contains(OpenFlags::NONBLOCK) {
                 ensure!(guard.read_half.strong_count() > 1, XDev);
             } else {
                 // Wait until at least one reader exists.
+                let counter_value = self.read_open_counter.load(Ordering::SeqCst);
                 loop {
                     let wait = self.notify.wait();
-                    if guard.read_half.strong_count() > 0 {
+                    if guard.read_half.strong_count() > 0
+                        || counter_value != self.read_open_counter.load(Ordering::SeqCst)
+                    {
                         break;
                     }
 
@@ -135,6 +144,10 @@ impl NamedPipe {
                     }
                 };
 
+            self.read_open_counter.fetch_add(1, Ordering::Relaxed);
+            self.write_open_counter.fetch_add(1, Ordering::Relaxed);
+            self.notify.notify();
+
             let bsd_file_lock = BsdFileLock::new(link.node.bsd_file_lock_record().clone());
             StrongFileDescriptor::from(FullReadWrite {
                 link,
@@ -146,8 +159,10 @@ impl NamedPipe {
         } else {
             let read_half = if let Some(read_half) = guard.read_half.upgrade() {
                 read_half
-            } else if let Some(read_half) =
-                guard.write_half.upgrade().map(|read| read.make_read_half())
+            } else if let Some(read_half) = guard
+                .write_half
+                .upgrade()
+                .map(|write| write.make_read_half())
             {
                 let read_half = Arc::new(read_half);
                 guard.read_half = Arc::downgrade(&read_half);
@@ -169,13 +184,17 @@ impl NamedPipe {
                 read_half
             };
 
+            self.read_open_counter.fetch_add(1, Ordering::Relaxed);
             self.notify.notify();
 
             if !flags.contains(OpenFlags::NONBLOCK) {
                 // Wait until at least one writer exists.
+                let counter_value = self.write_open_counter.load(Ordering::SeqCst);
                 loop {
                     let wait = self.notify.wait();
-                    if guard.write_half.strong_count() > 0 {
+                    if guard.write_half.strong_count() > 0
+                        || counter_value != self.write_open_counter.load(Ordering::SeqCst)
+                    {
                         break;
                     }
 
