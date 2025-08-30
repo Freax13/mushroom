@@ -364,7 +364,7 @@ extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
     naked_asm!(
         "cld",
         // Check whether the exception happened in userspace.
-        "test word ptr [rsp+16], 3",
+        "test word ptr [rsp+8], 3",
         "je {kernel_invalid_opcode_handler}",
 
         // Userspace code path:
