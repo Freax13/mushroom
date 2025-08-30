@@ -216,6 +216,8 @@ impl VmContext {
                     next_load_segment.physical_address > gpa
                         && next_load_segment.physical_address - gpa == i
                         && next_load_segment.payload.page_type().is_some() == is_private_mem
+                        && next_load_segment.shared == first_load_command.shared
+                        && next_load_segment.private == first_load_command.private
                 });
                 let Some(following_load_command) = following_load_command else {
                     break;
@@ -225,8 +227,14 @@ impl VmContext {
                 });
             }
 
-            let slot = Slot::for_launch_update(&vm, gpa, &pages, true, true)
-                .context("failed to create slot for launch update")?;
+            let slot = Slot::for_launch_update(
+                &vm,
+                gpa,
+                &pages,
+                first_load_command.shared,
+                first_load_command.private,
+            )
+            .context("failed to create slot for launch update")?;
 
             unsafe {
                 vm.map_encrypted_memory(slot_id, &slot)?;

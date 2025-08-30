@@ -63,6 +63,8 @@ pub fn load_input(
                 vcpu_id: 0,
                 vmpl1_perms: VmplPermissions::empty(),
                 payload,
+                shared: true,
+                private: true,
             }),
         header.hash(),
     )

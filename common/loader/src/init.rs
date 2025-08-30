@@ -41,5 +41,7 @@ pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
             vcpu_id: 0,
             vmpl1_perms,
             payload,
+            shared: false,
+            private: true,
         })
 }

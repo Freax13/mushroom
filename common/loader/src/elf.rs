@@ -118,6 +118,8 @@ pub fn load(
                         vcpu_id,
                         vmpl1_perms,
                         payload,
+                        shared: shared_page,
+                        private: !shared_page,
                     }
                 })
         })
@@ -190,6 +192,8 @@ pub fn load_shadow_mapping(
                     vcpu_id: 0,
                     vmpl1_perms,
                     payload: LoadCommandPayload::Normal(payload),
+                    shared: false,
+                    private: true,
                 })
             })
         })
