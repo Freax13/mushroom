@@ -25,7 +25,7 @@ use x86_64::{
     },
     structures::{
         gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector},
-        idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
+        idt::{ExceptionVector, InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
         paging::Page,
         tss::TaskStateSegment,
     },
@@ -178,12 +178,13 @@ extern "x86-interrupt" fn divide_error_handler(frame: InterruptStackFrame) {
         // Userspace code path:
         "swapgs",
         // Store the error code.
-        "mov byte ptr gs:[{VECTOR_OFFSET}], 0x0",
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {VECTOR}",
         // Jump to the userspace exit point.
         "jmp {exception_entry}",
 
         kernel_divide_error_handler = sym kernel_divide_error_handler,
         VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        VECTOR = const ExceptionVector::Division as u8,
         exception_entry = sym exception_entry,
     );
 }
@@ -206,7 +207,7 @@ extern "x86-interrupt" fn page_fault_handler(
         // Userspace code path:
         "swapgs",
         // Store the error code.
-        "mov byte ptr gs:[{VECTOR_OFFSET}], 0xe",
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {VECTOR}",
         "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
         // Jump to the userspace exit point.
         "jmp {exception_entry}",
@@ -257,6 +258,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
         kernel_page_fault_handler = sym kernel_page_fault_handler,
         VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        VECTOR = const ExceptionVector::Page as u8,
         ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
         exception_entry = sym exception_entry,
     );
@@ -309,13 +311,14 @@ extern "x86-interrupt" fn general_protection_fault_handler(
         // Userspace code path:
         "swapgs",
         // Store the error code.
-        "mov byte ptr gs:[{VECTOR_OFFSET}], 0xd",
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {VECTOR}",
         "pop qword ptr gs:[{ERROR_CODE_OFFSET}]",
         // Jump to the userspace exit point.
         "jmp {exception_entry}",
 
         kernel_general_protection_fault_handler = sym kernel_general_protection_fault_handler,
         VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        VECTOR = const ExceptionVector::GeneralProtection as u8,
         ERROR_CODE_OFFSET = const offset_of!(PerCpu, error_code),
         exception_entry = sym exception_entry,
     );
@@ -339,12 +342,13 @@ extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
         // Userspace code path:
         "swapgs",
         // Store the error code.
-        "mov byte ptr gs:[{VECTOR_OFFSET}], 0x6",
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {VECTOR}",
         // Jump to the userspace exit point.
         "jmp {exception_entry}",
 
         kernel_invalid_opcode_handler = sym kernel_invalid_opcode_handler,
         VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        VECTOR = const ExceptionVector::InvalidOpcode as u8,
         exception_entry = sym exception_entry,
     );
 }
@@ -422,13 +426,13 @@ extern "x86-interrupt" fn timer_handler(frame: InterruptStackFrame) {
         // Userspace code path:
         "swapgs",
         // Store the error code.
-        "mov byte ptr gs:[{VECTOR_OFFSET}], {TIMER_VECTOR}",
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {VECTOR}",
         // Jump to the userspace exit point.
         "jmp {interrupt_entry}",
 
         kernel_timer_handler = sym kernel_timer_handler,
         VECTOR_OFFSET = const offset_of!(PerCpu, vector),
-        TIMER_VECTOR = const TIMER_VECTOR,
+        VECTOR = const TIMER_VECTOR,
         interrupt_entry = sym interrupt_entry,
     );
 }
