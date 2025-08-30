@@ -16,7 +16,7 @@ use nix::{
 use volatile::VolatilePtr;
 use x86_64::{
     PhysAddr,
-    structures::paging::{PhysFrame, Size2MiB},
+    structures::paging::{PageSize, PhysFrame},
 };
 
 use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
@@ -36,35 +36,28 @@ impl Slot {
         shared: bool,
         private: bool,
     ) -> Result<Self> {
-        let shared_mapping = shared
-            .then(|| AnonymousPrivateMapping::for_private_mapping(pages).map(Arc::new))
-            .transpose()?;
+        let this = Self::new(vm, gpa, pages.len() * 0x1000, shared, private)?;
 
-        let len = pages.len() * 0x1000;
-        let len_u64 = u64::try_from(len)?;
-        let restricted_fd = private
-            .then(|| {
-                vm.create_guest_memfd(len_u64, KvmGuestMemFdFlags::empty())
-                    .context("failed to create guest memfd")
-            })
-            .transpose()?;
+        if let Some(shared_mapping) = this.shared_mapping.as_ref() {
+            unsafe {
+                copy_nonoverlapping(
+                    pages.as_ptr(),
+                    shared_mapping.ptr.as_ptr().cast(),
+                    pages.len(),
+                );
+            }
+        }
 
-        Ok(Self {
-            gpa,
-            len,
-            shared_mapping,
-            restricted_fd,
-        })
+        Ok(this)
     }
 
     pub fn new(
         vm: &VmHandle,
-        gpa: PhysFrame<Size2MiB>,
+        gpa: PhysFrame<impl PageSize>,
+        len: usize,
         shared: bool,
         private: bool,
     ) -> Result<Self> {
-        let len = 512 * 0x1000;
-
         let shared_mapping = shared
             .then(|| AnonymousPrivateMapping::new(len).map(Arc::new))
             .transpose()?;
@@ -155,16 +148,6 @@ pub struct AnonymousPrivateMapping {
 }
 
 impl AnonymousPrivateMapping {
-    pub fn for_private_mapping(pages: &[Page]) -> Result<Self> {
-        let this = Self::new(pages.len() * 0x1000)?;
-
-        unsafe {
-            copy_nonoverlapping(pages.as_ptr(), this.ptr.as_ptr().cast(), pages.len());
-        }
-
-        Ok(this)
-    }
-
     pub fn new(len: usize) -> Result<Self> {
         let len = NonZeroUsize::new(len).context("cannot create empty mmap")?;
 

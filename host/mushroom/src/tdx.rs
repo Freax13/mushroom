@@ -367,8 +367,14 @@ impl VmContext {
                                     );
 
                                     let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
-                                    let slot = Slot::new(&self.vm, gfn, false, true)
-                                        .context("failed to create dynamic slot")?;
+                                    let slot = Slot::new(
+                                        &self.vm,
+                                        gfn,
+                                        Size2MiB::SIZE as usize,
+                                        false,
+                                        true,
+                                    )
+                                    .context("failed to create dynamic slot")?;
 
                                     unsafe {
                                         self.vm.map_encrypted_memory(kvm_slot_id, &slot)?;

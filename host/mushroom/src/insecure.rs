@@ -34,10 +34,13 @@ use snp_types::PageType;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
 use volatile::map_field;
-use x86_64::registers::{
-    control::{Cr0Flags, Cr4Flags},
-    model_specific::EferFlags,
-    xcontrol::XCr0Flags,
+use x86_64::{
+    registers::{
+        control::{Cr0Flags, Cr4Flags},
+        model_specific::EferFlags,
+        xcontrol::XCr0Flags,
+    },
+    structures::paging::{PageSize, Size2MiB},
 };
 
 use crate::{
@@ -554,7 +557,13 @@ impl DynamicMemory {
         for slot_id in 0..SLOTS as u16 {
             if let Entry::Vacant(entry) = self.slots.entry(slot_id) {
                 let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
-                let slot = entry.insert(Slot::new(&self.vm, gpa, true, false)?);
+                let slot = entry.insert(Slot::new(
+                    &self.vm,
+                    gpa,
+                    Size2MiB::SIZE as usize,
+                    true,
+                    false,
+                )?);
 
                 let base = 1 << 6;
                 let kvm_slot_id = base + slot_id;
