@@ -1,6 +1,6 @@
 use std::{
     array,
-    collections::{HashMap, hash_map::Entry},
+    collections::HashMap,
     os::unix::thread::JoinHandleExt,
     sync::{
         Arc, Mutex,
@@ -262,6 +262,16 @@ impl VmContext {
 
         vm.tdx_finalize_vm()?;
 
+        let len =
+            DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
+        let len = usize::try_from(len)?;
+        let slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, false, true)?;
+        let slot_id = 1 << 6;
+        unsafe {
+            vm.map_encrypted_memory(slot_id, &slot)?;
+        }
+        memory_slots.insert(slot_id, slot);
+
         info!(num_launch_pages, "launched");
         let start = Instant::now();
 
@@ -344,51 +354,14 @@ impl VmContext {
                             let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
                             debug!(slot_id, enabled, gpa = %format_args!("{gpa:?}"), "updating slot status");
 
-                            let base = 1 << 6;
-                            let kvm_slot_id = base + slot_id;
-                            let mut guard = self.memory_slots.lock().unwrap();
-                            let entry = guard.entry(kvm_slot_id);
-                            match entry {
-                                Entry::Occupied(entry) => {
-                                    assert!(
-                                        !enabled,
-                                        "tried to enable slot that's already enabled"
-                                    );
-
-                                    let slot = entry.remove();
-                                    unsafe {
-                                        self.vm.unmap_encrypted_memory(kvm_slot_id, &slot)?;
-                                    }
-                                }
-                                Entry::Vacant(entry) => {
-                                    assert!(
-                                        enabled,
-                                        "tried to disable slot that's already disabled"
-                                    );
-
-                                    let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
-                                    let slot = Slot::new(
-                                        &self.vm,
-                                        gfn,
-                                        Size2MiB::SIZE as usize,
-                                        false,
-                                        true,
-                                    )
-                                    .context("failed to create dynamic slot")?;
-
-                                    unsafe {
-                                        self.vm.map_encrypted_memory(kvm_slot_id, &slot)?;
-                                    }
-
-                                    self.vm.set_memory_attributes(
-                                        gfn.start_address().as_u64(),
-                                        Size2MiB::SIZE,
-                                        KvmMemoryAttributes::PRIVATE,
-                                    )?;
-
-                                    entry.insert(slot);
-                                }
-                            }
+                            let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
+                            let mut attributes = KvmMemoryAttributes::empty();
+                            attributes.set(KvmMemoryAttributes::PRIVATE, enabled);
+                            self.vm.set_memory_attributes(
+                                gfn.start_address().as_u64(),
+                                Size2MiB::SIZE,
+                                attributes,
+                            )?;
                         }
                         other => unimplemented!("unimplemented io port: {other}"),
                     }
