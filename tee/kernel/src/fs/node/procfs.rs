@@ -1200,6 +1200,7 @@ pub struct ProcessInos {
     exe_link: u64,
     maps_file: u64,
     mem_file: u64,
+    mountinfo_file: u64,
     root_symlink: u64,
     stat_file: u64,
     status_file: u64,
@@ -1217,6 +1218,7 @@ impl ProcessInos {
             exe_link: new_ino(),
             maps_file: new_ino(),
             mem_file: new_ino(),
+            mountinfo_file: new_ino(),
             root_symlink: new_ino(),
             stat_file: new_ino(),
             status_file: new_ino(),
@@ -1247,6 +1249,9 @@ struct ProcessDir {
     mem_bsd_file_lock_record: LazyBsdFileLockRecord,
     mem_unix_file_lock_record: LazyUnixFileLockRecord,
     mem_file_watchers: Arc<Watchers>,
+    mountinfo_bsd_file_lock_record: LazyBsdFileLockRecord,
+    mountinfo_unix_file_lock_record: LazyUnixFileLockRecord,
+    mountinfo_file_watchers: Arc<Watchers>,
     root_bsd_file_lock_record: LazyBsdFileLockRecord,
     root_file_watchers: Arc<Watchers>,
     stat_bsd_file_lock_record: LazyBsdFileLockRecord,
@@ -1283,6 +1288,9 @@ impl ProcessDir {
             mem_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             mem_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             mem_file_watchers: Arc::new(Watchers::new()),
+            mountinfo_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            mountinfo_unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            mountinfo_file_watchers: Arc::new(Watchers::new()),
             root_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             root_file_watchers: Arc::new(Watchers::new()),
             stat_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
@@ -1400,6 +1408,13 @@ impl Directory for ProcessDir {
                 self.mem_bsd_file_lock_record.get().clone(),
                 self.mem_unix_file_lock_record.get().clone(),
                 self.mem_file_watchers.clone(),
+            ),
+            b"mountinfo" => MountInfoFile::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.mountinfo_bsd_file_lock_record.get().clone(),
+                self.mountinfo_unix_file_lock_record.get().clone(),
+                self.mountinfo_file_watchers.clone(),
             ),
             b"root" => RootLink::new(
                 self.fs.clone(),
@@ -1549,6 +1564,11 @@ impl Directory for ProcessDir {
             ino: process.inos.mem_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"mem").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.mountinfo_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"mountinfo").unwrap()),
         });
         entries.push(DirEntry {
             ino: process.inos.root_symlink,
@@ -2937,6 +2957,138 @@ impl File for MemFile {
             virtual_memory.write_bytes(addr, buffer)?;
         }
         Ok(len)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
+}
+
+struct MountInfoFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl MountInfoFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            process,
+            bsd_file_lock_record,
+            unix_file_lock_record,
+            watchers,
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut content = Vec::new();
+        writeln!(
+            content,
+            "3 2 0:1 / /dev rw,relatime shared:1 - devtmpfs devtmpfs rw,size=1609224k,nr_inodes=4019697,mode=755"
+        ).unwrap();
+        writeln!(
+            content,
+            "2 1 0:2 / / rw,relatime shared:1 - tmpfs tmpfs rw,size=1609224k,nr_inodes=4019697,mode=755"
+        ).unwrap();
+        content
+    }
+}
+
+impl INode for MountInfoFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.mountinfo_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for MountInfoFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let maps = self.content();
+        let offset = cmp::min(offset, maps.len());
+        let maps = &maps[offset..];
+        let len = cmp::min(maps.len(), buf.buffer_len());
+        buf.write(0, &maps[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
     }
 
     fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
