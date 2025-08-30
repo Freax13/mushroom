@@ -20,6 +20,10 @@ pub struct LoadCommand {
     pub vcpu_id: u32,
     pub vmpl1_perms: VmplPermissions,
     pub payload: LoadCommandPayload,
+    /// This memory requires a shared mapping.
+    pub shared: bool,
+    /// This memory requires a private mapping.
+    pub private: bool,
 }
 
 #[allow(clippy::large_enum_variant)]
