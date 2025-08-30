@@ -6,7 +6,7 @@ use core::{
     iter::{Iterator, repeat_with},
 };
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::HashMap,
     os::unix::thread::JoinHandleExt,
     sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
@@ -34,18 +34,15 @@ use snp_types::PageType;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
 use volatile::map_field;
-use x86_64::{
-    registers::{
-        control::{Cr0Flags, Cr4Flags},
-        model_specific::EferFlags,
-        xcontrol::XCr0Flags,
-    },
-    structures::paging::{PageSize, Size2MiB},
+use x86_64::registers::{
+    control::{Cr0Flags, Cr4Flags},
+    model_specific::EferFlags,
+    xcontrol::XCr0Flags,
 };
 
 use crate::{
     MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, install_signal_handler, is_efault,
-    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VcpuHandle, VmHandle},
+    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VcpuHandle},
     logging::start_log_collection,
     slot::Slot,
 };
@@ -191,6 +188,16 @@ pub fn main(
         slot_id += 1;
     }
 
+    let len =
+        DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
+    let len = usize::try_from(len)?;
+    let slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, true, false)?;
+    let slot_id = 1 << 6;
+    unsafe {
+        vm.map_encrypted_memory(slot_id, &slot)?;
+    }
+    memory_slots.insert(slot_id, slot);
+
     info!(
         num_launch_pages,
         num_data_pages,
@@ -201,7 +208,7 @@ pub fn main(
     install_signal_handler();
 
     // Create a bunch of APs.
-    let dynamic_memory = Arc::new(Mutex::new(DynamicMemory::new(vm.clone())));
+    let dynamic_memory = Arc::new(Mutex::new(DynamicMemory::new()));
     let (sender, receiver) = mpsc::channel();
     let run_states = repeat_with(RunState::default)
         .take(usize::from(MAX_APS_COUNT))
@@ -394,17 +401,14 @@ fn run_kernel_vcpu(
                         let slot_idx = dynamic_memory
                             .lock()
                             .unwrap()
-                            .allocate_slot_id()?
+                            .allocate_slot_id()
                             .context("OOM")?;
                         regs.rax = u64::from(slot_idx.get());
                         ap.set_regs(regs)?;
                     }
                     nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
                         let slot_idx = SlotIndex::new(u16::try_from(regs.rdi)?);
-                        dynamic_memory
-                            .lock()
-                            .unwrap()
-                            .deallocate_slot_id(slot_idx)?;
+                        dynamic_memory.lock().unwrap().deallocate_slot_id(slot_idx);
                     }
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = regs.rdi as usize;
@@ -541,50 +545,27 @@ enum NextRunStateValue {
 const SLOTS: usize = 1 << 15;
 
 struct DynamicMemory {
-    vm: Arc<VmHandle>,
-    slots: HashMap<u16, Slot>,
+    in_use: [bool; SLOTS],
 }
 
 impl DynamicMemory {
-    pub fn new(vm: Arc<VmHandle>) -> Self {
+    pub fn new() -> Self {
         Self {
-            vm,
-            slots: HashMap::new(),
+            in_use: [false; SLOTS],
         }
     }
 
-    pub fn allocate_slot_id(&mut self) -> Result<Option<SlotIndex>> {
-        for slot_id in 0..SLOTS as u16 {
-            if let Entry::Vacant(entry) = self.slots.entry(slot_id) {
-                let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
-                let slot = entry.insert(Slot::new(
-                    &self.vm,
-                    gpa,
-                    Size2MiB::SIZE as usize,
-                    true,
-                    false,
-                )?);
-
-                let base = 1 << 6;
-                let kvm_slot_id = base + slot_id;
-                unsafe {
-                    self.vm.map_encrypted_memory(kvm_slot_id, slot)?;
-                }
-
-                return Ok(Some(SlotIndex::new(slot_id)));
-            }
-        }
-
-        Ok(None)
+    pub fn allocate_slot_id(&mut self) -> Option<SlotIndex> {
+        // Find a slot that's not in use.
+        let slot_id = self.in_use.iter().position(|&in_use| !in_use)?;
+        // Mark the slot as in-use.
+        self.in_use[slot_id] = true;
+        // Return the slot index.
+        let slot_id = u16::try_from(slot_id).unwrap();
+        Some(SlotIndex::new(slot_id))
     }
 
-    pub fn deallocate_slot_id(&mut self, id: SlotIndex) -> Result<()> {
-        let slot = self
-            .slots
-            .remove(&id.get())
-            .context("can't deallocate slot that's not present")?;
-        let base = 1 << 6;
-        let kvm_slot_id = base + id.get();
-        unsafe { self.vm.unmap_encrypted_memory(kvm_slot_id, &slot) }
+    pub fn deallocate_slot_id(&mut self, id: SlotIndex) {
+        self.in_use[usize::from(id.get())] = false;
     }
 }
