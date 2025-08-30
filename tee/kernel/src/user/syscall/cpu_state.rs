@@ -18,6 +18,7 @@ use x86_64::{
     registers::{
         control::Cr2,
         model_specific::{LStar, SFMask},
+        mxcsr::MxCsr,
         rflags::RFlags,
         xcontrol::{XCr0, XCr0Flags},
     },
@@ -156,6 +157,37 @@ impl CpuState {
                         addr: Cr2::read_raw(),
                         code,
                     })
+                }
+                0x13 => {
+                    let mxcsr = self.xsave_area.mxcsr();
+                    let error = if mxcsr.contains(MxCsr::INVALID_OPERATION)
+                        && !mxcsr.contains(MxCsr::INVALID_OPERATION_MASK)
+                    {
+                        SimdFloatingPointError::InvalidOperation
+                    } else if mxcsr.contains(MxCsr::DENORMAL)
+                        && !mxcsr.contains(MxCsr::DENORMAL_MASK)
+                    {
+                        SimdFloatingPointError::Denormal
+                    } else if mxcsr.contains(MxCsr::DIVIDE_BY_ZERO)
+                        && !mxcsr.contains(MxCsr::DIVIDE_BY_ZERO_MASK)
+                    {
+                        SimdFloatingPointError::DivideByZero
+                    } else if mxcsr.contains(MxCsr::OVERFLOW)
+                        && !mxcsr.contains(MxCsr::OVERFLOW_MASK)
+                    {
+                        SimdFloatingPointError::Overflow
+                    } else if mxcsr.contains(MxCsr::UNDERFLOW)
+                        && !mxcsr.contains(MxCsr::UNDERFLOW_MASK)
+                    {
+                        SimdFloatingPointError::Underflow
+                    } else if mxcsr.contains(MxCsr::PRECISION)
+                        && !mxcsr.contains(MxCsr::PRECISION_MASK)
+                    {
+                        SimdFloatingPointError::Precision
+                    } else {
+                        unreachable!()
+                    };
+                    Exit::SimdFloatingPoint(error)
                 }
                 TIMER_VECTOR => Exit::Timer,
                 0x80 => {
@@ -649,6 +681,7 @@ pub enum Exit {
     InvalidOpcode,
     GeneralProtectionFault,
     PageFault(PageFaultExit),
+    SimdFloatingPoint(SimdFloatingPointError),
     Timer,
 }
 
@@ -656,6 +689,16 @@ pub enum Exit {
 pub struct PageFaultExit {
     pub addr: u64,
     pub code: PageFaultErrorCode,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SimdFloatingPointError {
+    InvalidOperation,
+    Denormal,
+    DivideByZero,
+    Overflow,
+    Underflow,
+    Precision,
 }
 
 #[derive(Clone)]
@@ -700,6 +743,11 @@ impl XSaveArea {
         unsafe {
             _xrstor64(self.data.as_ptr(), rs_mask.bits());
         }
+    }
+
+    fn mxcsr(&self) -> MxCsr {
+        let fxsave = from_bytes::<FXSave>(&self.data[..512]);
+        MxCsr::from_bits_retain(fxsave.mxcsr)
     }
 }
 

@@ -49,7 +49,7 @@ use crate::{
                 FileMode, Nice, Pointer, PtraceEvent, Rusage, Signal, TimerId, Timespec, UserDesc,
                 WStatus,
             },
-            cpu_state::{CpuState, Exit, PageFaultExit},
+            cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
     },
 };
@@ -297,6 +297,26 @@ impl Thread {
                                 self.queue_signal_or_die(sig_info);
                             }
                             Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
+                            Exit::SimdFloatingPoint(error) => {
+                                let code = match error {
+                                    SimdFloatingPointError::InvalidOperation => {
+                                        SigInfoCode::FPE_FLTINV
+                                    }
+                                    SimdFloatingPointError::Denormal => SigInfoCode::FPE_FLTUND,
+                                    SimdFloatingPointError::DivideByZero => SigInfoCode::FPE_FLTDIV,
+                                    SimdFloatingPointError::Overflow => SigInfoCode::FPE_FLTOVF,
+                                    SimdFloatingPointError::Underflow => SigInfoCode::FPE_FLTUND,
+                                    SimdFloatingPointError::Precision => SigInfoCode::FPE_FLTRES,
+                                };
+                                let sig_info = SigInfo {
+                                    signal: Signal::FPE,
+                                    code,
+                                    fields: SigFields::SigFault(SigFault {
+                                        addr: self.cpu_state.lock().faulting_instruction(),
+                                    }),
+                                };
+                                self.queue_signal_or_die(sig_info);
+                            }
                             Exit::Timer => {
                                 // Handle the timer interrupt.
                                 time::expire_timers();
@@ -567,6 +587,7 @@ impl Thread {
                     | Exit::InvalidOpcode
                     | Exit::GeneralProtectionFault
                     | Exit::PageFault(_)
+                    | Exit::SimdFloatingPoint(_)
                     | Exit::Timer => writeln!(write, "{:indent$}{exit:?}", "")?,
                 }
             } else {
@@ -1305,6 +1326,11 @@ impl SigInfoCode {
     pub const SEGV_ACCERR: Self = Self(2);
     pub const ILL_ILLOPN: Self = Self(2);
     pub const BUS_ADRERR: Self = Self(2);
+    pub const FPE_FLTDIV: Self = Self(3);
+    pub const FPE_FLTOVF: Self = Self(4);
+    pub const FPE_FLTUND: Self = Self(5);
+    pub const FPE_FLTRES: Self = Self(6);
+    pub const FPE_FLTINV: Self = Self(7);
     pub const KERNEL: Self = Self(0x80);
     pub const TIMER: Self = Self(-2);
     pub const TKILL: Self = Self(-6);
