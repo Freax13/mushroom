@@ -2070,6 +2070,11 @@ impl INode for FdINode {
         ctx: &mut FileAccessContext,
     ) -> Result<Option<Link>> {
         ctx.follow_symlink()?;
+        let location = if let Some(link) = self.fd.path_fd_link() {
+            link.location.clone()
+        } else {
+            location
+        };
         Ok(Some(Link {
             location,
             node: Arc::new(FollowedFdINode {
