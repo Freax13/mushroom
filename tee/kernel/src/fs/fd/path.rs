@@ -4,7 +4,7 @@ use core::future::pending;
 use async_trait::async_trait;
 
 use crate::{
-    error::{Result, bail},
+    error::{Result, bail, err},
     fs::{
         FileSystem,
         fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription},
@@ -55,6 +55,10 @@ impl OpenFileDescription for PathFd {
 
     fn as_dir(&self, _ctx: &mut FileAccessContext) -> Result<Link> {
         Ok(self.link.clone())
+    }
+
+    fn read_link(&self, ctx: &FileAccessContext) -> Result<Path> {
+        self.link.node.read_link(ctx).map_err(|_| err!(NoEnt))
     }
 
     fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {

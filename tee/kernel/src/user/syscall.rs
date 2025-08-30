@@ -2629,7 +2629,7 @@ fn readlink(
         fdtable,
         ctx,
         FdNum::CWD,
-        pathname,
+        pathname.cast(),
         buf,
         bufsiz,
     )
@@ -4628,16 +4628,21 @@ fn readlinkat(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
     dfd: FdNum,
-    pathname: Pointer<Path>,
+    pathname: Pointer<Option<Path>>,
     buf: Pointer<[u8]>,
     bufsiz: u64,
 ) -> SyscallResult {
     let bufsiz = usize_from(bufsiz);
 
     let pathname = virtual_memory.read(pathname)?;
-    let dfd = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
-
-    let target = read_soft_link(dfd, &pathname, &mut ctx)?;
+    let target = if let Some(pathname) = pathname {
+        let dfd = start_dir_for_path(thread, &fdtable, dfd, &pathname, &mut ctx)?;
+        read_soft_link(dfd, &pathname, &mut ctx)?
+    } else {
+        ensure!(dfd != FdNum::CWD, NoEnt);
+        let fd = fdtable.get(dfd)?;
+        fd.read_link(&ctx)?
+    };
 
     let bytes = target.as_bytes();
     // Truncate to `bufsiz`.
