@@ -2030,9 +2030,13 @@ impl SocketAddr {
 
                 let len = match socket_addr {
                     SocketAddrUnix::Pathname(path) => {
-                        let trunc_len = cmp::min(path.as_bytes().len(), addrlen.saturating_sub(2));
+                        let len = path.as_bytes().len();
+                        let trunc_len = cmp::min(len, addrlen.saturating_sub(2));
                         vm.write_bytes(addr + 2, &path.as_bytes()[..trunc_len])?;
-                        path.as_bytes().len()
+                        if addrlen > 2 + len {
+                            vm.write_bytes(addr + 2 + u64::from_usize(len), &[0])?;
+                        }
+                        len + 1
                     }
                     SocketAddrUnix::Unnamed => 0,
                     SocketAddrUnix::Abstract(name) => {
