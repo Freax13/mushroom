@@ -237,7 +237,7 @@ impl VmContext {
                 });
             }
 
-            let slot = Slot::for_launch_update(&vm, gpa, &pages, true)
+            let slot = Slot::for_launch_update(&vm, gpa, &pages, true, true)
                 .context("failed to create slot for launch update")?;
 
             unsafe {
@@ -255,7 +255,7 @@ impl VmContext {
 
                 vm.sev_snp_launch_update(
                     gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
+                    pages.as_ptr() as u64,
                     u64::try_from(slot.len())?,
                     first_page_type,
                     first_load_command.vcpu_id,
@@ -392,7 +392,7 @@ impl VmContext {
                                     );
 
                                     let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
-                                    let slot = Slot::new(&self.vm, gfn, true)
+                                    let slot = Slot::new(&self.vm, gfn, false, true)
                                         .context("failed to create dynamic slot")?;
 
                                     unsafe {

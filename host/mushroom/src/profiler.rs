@@ -32,8 +32,14 @@ pub fn start_profile_collection(
         .find(|s| s.gpa().start_address().as_u64() == 0x800_4000_0000)
         .context("dculdn't find profiler buffers region")?;
 
-    let profiler_control = profiler_control.shared_mapping().clone();
-    let profiler_buffers = profiler_buffers.shared_mapping().clone();
+    let profiler_control = profiler_control
+        .shared_mapping()
+        .cloned()
+        .expect("profiler slot must have shared mapping");
+    let profiler_buffers = profiler_buffers
+        .shared_mapping()
+        .cloned()
+        .expect("profiler slot must have shared mapping");
 
     ensure!(
         profiler_control.len().get() >= size_of::<ProfilerControl>(),

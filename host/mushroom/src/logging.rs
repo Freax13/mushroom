@@ -17,7 +17,10 @@ pub fn start_log_collection(
         return Ok(());
     };
 
-    let log_buffer = log_buffer.shared_mapping().clone();
+    let log_buffer = log_buffer
+        .shared_mapping()
+        .cloned()
+        .expect("log slot must have shared mapping");
 
     ensure!(
         log_buffer.len().get() >= size_of::<LogBuffer>(),
