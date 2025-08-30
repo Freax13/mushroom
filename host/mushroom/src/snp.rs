@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     os::unix::thread::JoinHandleExt,
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{self, AtomicBool, Ordering},
         mpsc::{self, Sender},
     },
@@ -127,7 +127,7 @@ pub fn main(
 
 struct VmContext {
     vm: Arc<VmHandle>,
-    memory_slots: RwLock<HashMap<u16, Slot>>,
+    memory_slots: HashMap<u16, Slot>,
     start: Instant,
 }
 
@@ -330,7 +330,7 @@ impl VmContext {
         Ok((
             Self {
                 vm,
-                memory_slots: RwLock::new(memory_slots),
+                memory_slots,
                 start,
             },
             vcpus,
@@ -409,8 +409,7 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = ((msr.data & 0xfff) + 1) as usize;
 
-                        let mut guard = self.memory_slots.write().unwrap();
-                        let slot = find_slot(gfn, &mut guard)?;
+                        let slot = find_slot(gfn, &self.memory_slots)?;
                         let output_buffer = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
                         let output_slice = &output_buffer[..len];
@@ -425,8 +424,7 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = (msr.data & 0xfff) as usize;
 
-                        let mut guard = self.memory_slots.write().unwrap();
-                        let slot = find_slot(gfn, &mut guard)?;
+                        let slot = find_slot(gfn, &self.memory_slots)?;
                         let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
                         let attestation_report = attestation_report[..len].to_vec();

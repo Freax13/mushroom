@@ -63,9 +63,9 @@ pub struct MushroomResult {
     pub attestation_report: Vec<u8>,
 }
 
-fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot> {
+fn find_slot(gpa: PhysFrame, slots: &HashMap<u16, Slot>) -> Result<&Slot> {
     slots
-        .values_mut()
+        .values()
         .find(|slot| {
             let num_frames = u64::try_from(slot.len() / 0x1000).unwrap();
             (slot.gpa()..slot.gpa() + num_frames).contains(&gpa)
