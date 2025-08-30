@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Once};
+use std::{num::NonZeroU32, sync::Once};
 
 use anyhow::{Context, Result};
 use bit_field::BitField;
@@ -63,9 +63,9 @@ pub struct MushroomResult {
     pub attestation_report: Vec<u8>,
 }
 
-fn find_slot(gpa: PhysFrame, slots: &HashMap<u16, Slot>) -> Result<&Slot> {
+fn find_slot(gpa: PhysFrame, slots: &[Slot]) -> Result<&Slot> {
     slots
-        .values()
+        .iter()
         .find(|slot| {
             let num_frames = u64::try_from(slot.len() / 0x1000).unwrap();
             (slot.gpa()..slot.gpa() + num_frames).contains(&gpa)

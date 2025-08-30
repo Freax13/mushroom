@@ -1,17 +1,12 @@
-use std::collections::HashMap;
-
 use anyhow::{Result, ensure};
 use log_types::{LogBuffer, LogReader};
 use x86_64::structures::paging::{PhysFrame, Size2MiB};
 
 use crate::slot::Slot;
 
-pub fn start_log_collection(
-    memory_slots: &HashMap<u16, Slot>,
-    pa: PhysFrame<Size2MiB>,
-) -> Result<()> {
+pub fn start_log_collection(memory_slots: &[Slot], pa: PhysFrame<Size2MiB>) -> Result<()> {
     let Some(log_buffer) = memory_slots
-        .values()
+        .iter()
         .find(|s| s.gpa().start_address() == pa.start_address())
     else {
         return Ok(());

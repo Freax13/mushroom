@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::{File, create_dir_all},
     io::{BufRead, BufReader, BufWriter, Write},
     mem::size_of,
@@ -19,16 +18,13 @@ use tracing::warn;
 
 use crate::slot::{AnonymousPrivateMapping, Slot};
 
-pub fn start_profile_collection(
-    folder: ProfileFolder,
-    memory_slots: &HashMap<u16, Slot>,
-) -> Result<()> {
+pub fn start_profile_collection(folder: ProfileFolder, memory_slots: &[Slot]) -> Result<()> {
     let profiler_control = memory_slots
-        .values()
+        .iter()
         .find(|s| s.gpa().start_address().as_u64() == 0x800_0000_0000)
         .context("couldn't find profiler control region")?;
     let profiler_buffers = memory_slots
-        .values()
+        .iter()
         .find(|s| s.gpa().start_address().as_u64() == 0x800_4000_0000)
         .context("dculdn't find profiler buffers region")?;
 

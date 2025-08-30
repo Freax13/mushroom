@@ -6,7 +6,6 @@ use core::{
     iter::{Iterator, repeat_with},
 };
 use std::{
-    collections::HashMap,
     os::unix::thread::JoinHandleExt,
     sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
@@ -136,10 +135,9 @@ pub fn main(
     let mut num_data_pages = 0;
     let mut total_launch_duration = Duration::ZERO;
 
-    let mut memory_slots = HashMap::new();
+    let mut memory_slots = Vec::new();
     let mut pages = Vec::with_capacity(0xfffff);
 
-    let mut slot_id = 0;
     while let Some(first_load_command) = load_commands.next() {
         let gpa = first_load_command.physical_address;
         let first_page_type = first_load_command.payload.page_type();
@@ -168,6 +166,7 @@ pub fn main(
         let slot = Slot::with_content(&vm, gpa, &pages, true, false)
             .context("failed to create slot for launch update")?;
 
+        let slot_id = u16::try_from(memory_slots.len())?;
         unsafe {
             vm.map_encrypted_memory(slot_id, &slot)?;
         }
@@ -182,21 +181,20 @@ pub fn main(
             }
         }
 
-        memory_slots.insert(slot_id, slot);
+        memory_slots.push(slot);
 
         pages.clear();
-        slot_id += 1;
     }
 
     let len =
         DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
     let len = usize::try_from(len)?;
     let slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, true, false)?;
-    let slot_id = 1 << 6;
+    let slot_id = u16::try_from(memory_slots.len())?;
     unsafe {
         vm.map_encrypted_memory(slot_id, &slot)?;
     }
-    memory_slots.insert(slot_id, slot);
+    memory_slots.push(slot);
 
     info!(
         num_launch_pages,
