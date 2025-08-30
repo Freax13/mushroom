@@ -283,7 +283,7 @@ impl VmHandle {
             self.map_private_memory(
                 id,
                 slot.gpa().start_address().as_u64(),
-                u64::try_from(shared_mapping.len().get())?,
+                u64::try_from(slot.len())?,
                 u64::try_from(shared_mapping.as_ptr().as_ptr() as usize)?,
                 restricted_fd,
                 0,

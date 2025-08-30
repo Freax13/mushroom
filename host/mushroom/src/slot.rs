@@ -23,6 +23,7 @@ use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
 
 pub struct Slot {
     gpa: PhysFrame,
+    len: usize,
     shared_mapping: Arc<AnonymousPrivateMapping>,
     restricted_fd: Option<OwnedFd>,
 }
@@ -37,16 +38,18 @@ impl Slot {
         let shared_mapping = AnonymousPrivateMapping::for_private_mapping(pages)?;
         let shared_mapping = Arc::new(shared_mapping);
 
-        let len = u64::try_from(pages.len() * 0x1000)?;
+        let len = pages.len() * 0x1000;
+        let len_u64 = u64::try_from(len)?;
         let restricted_fd = private
             .then(|| {
-                vm.create_guest_memfd(len, KvmGuestMemFdFlags::empty())
+                vm.create_guest_memfd(len_u64, KvmGuestMemFdFlags::empty())
                     .context("failed to create guest memfd")
             })
             .transpose()?;
 
         Ok(Self {
             gpa,
+            len,
             shared_mapping,
             restricted_fd,
         })
@@ -57,13 +60,13 @@ impl Slot {
         let shared_mapping = AnonymousPrivateMapping::new(len)?;
         let shared_mapping = Arc::new(shared_mapping);
 
-        let len = u64::try_from(len)?;
+        let len_u64 = u64::try_from(len)?;
         let restricted_fd = private
             .then(|| {
                 let fd = vm
-                    .create_guest_memfd(len, KvmGuestMemFdFlags::empty())
+                    .create_guest_memfd(len_u64, KvmGuestMemFdFlags::empty())
                     .context("failed to create guest memfd")?;
-                fallocate(&fd, FallocateFlags::FALLOC_FL_KEEP_SIZE, 0, len as i64)
+                fallocate(&fd, FallocateFlags::FALLOC_FL_KEEP_SIZE, 0, len_u64 as i64)
                     .context("failed to reserve memory")?;
                 Result::<_>::Ok(fd)
             })
@@ -71,6 +74,7 @@ impl Slot {
 
         Ok(Self {
             gpa: PhysFrame::from_start_address(gpa.start_address()).unwrap(),
+            len,
             shared_mapping,
             restricted_fd,
         })
@@ -78,6 +82,10 @@ impl Slot {
 
     pub fn gpa(&self) -> PhysFrame {
         self.gpa
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
 
     pub fn shared_mapping(&self) -> &Arc<AnonymousPrivateMapping> {

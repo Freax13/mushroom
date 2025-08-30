@@ -249,14 +249,14 @@ impl VmContext {
 
                 vm.set_memory_attributes(
                     gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().len().get())?,
+                    u64::try_from(slot.len())?,
                     KvmMemoryAttributes::PRIVATE,
                 )?;
 
                 vm.sev_snp_launch_update(
                     gpa.start_address().as_u64(),
                     u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
-                    slot.shared_mapping().len().get() as u64,
+                    u64::try_from(slot.len())?,
                     first_page_type,
                     first_load_command.vcpu_id,
                     first_vmpl1_perms,
