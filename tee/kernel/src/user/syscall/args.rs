@@ -1622,6 +1622,7 @@ enum_arg! {
         CapbsetRead = 23,
         SetNoNewPrivs = 38,
         GetNoNewPrivs = 39,
+        CapAmbient = 47,
     }
 }
 

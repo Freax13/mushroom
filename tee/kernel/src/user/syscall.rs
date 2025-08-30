@@ -3607,6 +3607,27 @@ fn prctl(
             Ok(0)
         }
         PrctlOp::GetNoNewPrivs => Ok(u64::from(thread.no_new_privs())),
+        PrctlOp::CapAmbient => match arg2 {
+            1 => {
+                //  PR_CAP_AMBIENT_IS_SET
+                let cap = Capability::new(u8::try_from(arg2)?).ok_or(err!(Inval))?;
+                let value = thread.capabilities.ambient_is_set(cap);
+                Ok(u64::from(value))
+            }
+            2 => {
+                //  PR_CAP_AMBIENT_RAISE
+                todo!()
+            }
+            3 => {
+                //  PR_CAP_AMBIENT_LOWER
+                todo!()
+            }
+            4 => {
+                //  PR_CAP_AMBIENT_CLEAR_ALL
+                todo!()
+            }
+            _ => bail!(Inval),
+        },
     }
 }
 

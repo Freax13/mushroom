@@ -1488,17 +1488,23 @@ impl Gid {
 #[derive(Debug, Clone, Copy)]
 pub struct Capabilities {
     bounding: CapabilitySet,
+    ambient: CapabilitySet,
 }
 
 impl Capabilities {
     pub fn new() -> Self {
         Self {
             bounding: CapabilitySet::all(),
+            ambient: CapabilitySet::empty(),
         }
     }
 
     pub fn bounding_set_read(&self, cap: Capability) -> bool {
         self.bounding.get(cap)
+    }
+
+    pub fn ambient_is_set(&self, cap: Capability) -> bool {
+        self.ambient.get(cap)
     }
 }
 
