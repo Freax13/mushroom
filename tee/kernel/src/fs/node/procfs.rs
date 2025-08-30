@@ -39,7 +39,7 @@ use crate::{
         process::Process,
         syscall::args::{
             ClockId, FallocateMode, FdNum, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat,
-            Timespec,
+            Timespec, Whence,
         },
         thread::{Gid, Thread, Uid},
     },
@@ -1196,6 +1196,7 @@ pub struct ProcessInos {
     root_dir: u64,
     cmdline_file: u64,
     fd_dir: u64,
+    fdinfo_dir: u64,
     exe_link: u64,
     maps_file: u64,
     mem_file: u64,
@@ -1212,6 +1213,7 @@ impl ProcessInos {
             root_dir: new_ino(),
             cmdline_file: new_ino(),
             fd_dir: new_ino(),
+            fdinfo_dir: new_ino(),
             exe_link: new_ino(),
             maps_file: new_ino(),
             mem_file: new_ino(),
@@ -1233,8 +1235,10 @@ struct ProcessDir {
     cmdline_bsd_file_lock_record: LazyBsdFileLockRecord,
     cmdline_unix_file_lock_record: LazyUnixFileLockRecord,
     cmdline_file_watchers: Arc<Watchers>,
-    fd_bsd_file_lock_record: LazyBsdFileLockRecord,
-    fd_file_watchers: Arc<Watchers>,
+    fd_dir_bsd_file_lock_record: LazyBsdFileLockRecord,
+    fd_dir_file_watchers: Arc<Watchers>,
+    fdinfo_dir_bsd_file_lock_record: LazyBsdFileLockRecord,
+    fdinfo_dir_file_watchers: Arc<Watchers>,
     exe_link_lock_record: LazyBsdFileLockRecord,
     exe_link_watchers: Arc<Watchers>,
     maps_bsd_file_lock_record: LazyBsdFileLockRecord,
@@ -1267,8 +1271,10 @@ impl ProcessDir {
             cmdline_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             cmdline_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             cmdline_file_watchers: Arc::new(Watchers::new()),
-            fd_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
-            fd_file_watchers: Arc::new(Watchers::new()),
+            fd_dir_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            fd_dir_file_watchers: Arc::new(Watchers::new()),
+            fdinfo_dir_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            fdinfo_dir_file_watchers: Arc::new(Watchers::new()),
             exe_link_lock_record: LazyBsdFileLockRecord::new(),
             exe_link_watchers: Arc::new(Watchers::new()),
             maps_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
@@ -1365,8 +1371,15 @@ impl Directory for ProcessDir {
                 location.clone(),
                 self.fs.clone(),
                 self.process.clone(),
-                self.fd_bsd_file_lock_record.get().clone(),
-                self.fd_file_watchers.clone(),
+                self.fd_dir_bsd_file_lock_record.get().clone(),
+                self.fd_dir_file_watchers.clone(),
+            ),
+            b"fdinfo" => FdInfoDir::new(
+                location.clone(),
+                self.fs.clone(),
+                self.process.clone(),
+                self.fdinfo_dir_bsd_file_lock_record.get().clone(),
+                self.fdinfo_dir_file_watchers.clone(),
             ),
             b"exe" => ExeLink::new(
                 self.fs.clone(),
@@ -1516,6 +1529,11 @@ impl Directory for ProcessDir {
             ino: process.inos.fd_dir,
             ty: FileType::Dir,
             name: DirEntryName::FileName(FileName::new(b"fd").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.fdinfo_dir,
+            ty: FileType::Dir,
+            name: DirEntryName::FileName(FileName::new(b"fdinfo").unwrap()),
         });
         entries.push(DirEntry {
             ino: process.inos.exe_link,
@@ -2203,6 +2221,380 @@ impl INode for FollowedFdINode {
 
     fn watchers(&self) -> &Watchers {
         &self.watchers
+    }
+}
+
+struct FdInfoDir {
+    this: Weak<Self>,
+    location: LinkLocation,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl FdInfoDir {
+    pub fn new(
+        location: LinkLocation,
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            location,
+            fs,
+            process,
+            bsd_file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for FdInfoDir {
+    dir_impls!();
+
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.fdinfo_dir,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        _: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_dir(self.this.upgrade().unwrap(), flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl Directory for FdInfoDir {
+    fn location(&self) -> &LinkLocation {
+        &self.location
+    }
+
+    fn get_node(&self, name: &FileName, _ctx: &FileAccessContext) -> Result<Link> {
+        let file_name = name.as_bytes();
+        let file_name = core::str::from_utf8(file_name).map_err(|_| err!(NoEnt))?;
+        let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
+        let fd_num = FdNum::new(fd_num);
+
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let guard = process.credentials.lock();
+        let uid = guard.real_user_id;
+        let gid = guard.real_group_id;
+        drop(guard);
+
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let fdtable = thread.fdtable.lock();
+        let node = fdtable.get_info_node(self.fs.clone(), fd_num, uid, gid)?;
+        Ok(Link {
+            location: LinkLocation::new(self.this.upgrade().unwrap(), name.clone().into_owned()),
+            node,
+        })
+    }
+
+    fn create_file(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<Result<Link, Link>> {
+        bail!(NoEnt)
+    }
+
+    fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
+        bail!(NoEnt)
+    }
+
+    fn create_dir(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: &FileAccessContext,
+    ) -> Result<DynINode> {
+        bail!(NoEnt)
+    }
+
+    fn create_link(
+        &self,
+        _file_name: FileName<'static>,
+        _target: Path,
+        _uid: Uid,
+        _gid: Gid,
+        _create_new: bool,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_char_dev(
+        &self,
+        _file_name: FileName<'static>,
+        _major: u16,
+        _minor: u8,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn create_fifo(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+
+    fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let fdtable = thread.fdtable.lock();
+        Ok(fdtable.list_fdinfo_entries())
+    }
+
+    fn delete_non_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn delete_dir(&self, _file_name: FileName<'static>, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn rename(
+        &self,
+        _oldname: FileName<'static>,
+        _check_is_dir: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+        _no_replace: bool,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn exchange(
+        &self,
+        _oldname: FileName<'static>,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn hard_link(
+        &self,
+        _oldname: FileName<'static>,
+        _follow_symlink: bool,
+        _new_dir: DynINode,
+        _newname: FileName<'static>,
+        _: &FileAccessContext,
+    ) -> Result<Option<Path>> {
+        bail!(Perm)
+    }
+}
+
+#[derive(Clone)]
+pub struct FdInfoFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    uid: Uid,
+    gid: Gid,
+    fd: FileDescriptor,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl FdInfoFile {
+    #[expect(clippy::too_many_arguments)]
+    pub fn new(
+        fs: Arc<ProcFs>,
+        ino: u64,
+        uid: Uid,
+        gid: Gid,
+        fd: FileDescriptor,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino,
+            uid,
+            gid,
+            fd,
+            bsd_file_lock_record,
+            unix_file_lock_record,
+            watchers,
+        })
+    }
+
+    fn content(&self) -> Result<Vec<u8>> {
+        let pos = self
+            .fd
+            .seek(0, Whence::Cur, &mut FileAccessContext::root())
+            .unwrap_or(0);
+        let flags = self.fd.flags();
+        let mnt_id = 1; // TODO
+        let ino = self.fd.stat()?.ino;
+
+        let mut content = Vec::new();
+        writeln!(content, "pos:\t{pos}").unwrap();
+        writeln!(content, "flags:\t{flags:07o}").unwrap();
+        writeln!(content, "mnt_id:\t{mnt_id}").unwrap();
+        writeln!(content, "ino:\t{ino}").unwrap();
+        Ok(content)
+    }
+}
+
+impl INode for FdInfoFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_truncate(0o444)),
+            uid: self.uid,
+            gid: self.gid,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn truncate(&self, _length: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for FdInfoFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let maps = self.content()?;
+        let offset = cmp::min(offset, maps.len());
+        let maps = &maps[offset..];
+        let len = cmp::min(maps.len(), buf.buffer_len());
+        buf.write(0, &maps[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
     }
 }
 

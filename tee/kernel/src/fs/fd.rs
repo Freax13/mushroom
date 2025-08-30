@@ -33,7 +33,7 @@ use crate::{
         FileSystem,
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, Link, OffsetDirEntry, new_ino,
-            procfs::{FdINode, ProcFs},
+            procfs::{FdINode, FdInfoFile, ProcFs},
         },
         path::{FileName, Path},
     },
@@ -393,8 +393,22 @@ impl FileDescriptorTable {
         self.internal.lock().list_entries()
     }
 
+    pub fn list_fdinfo_entries(&self) -> Vec<DirEntry> {
+        self.internal.lock().list_fdinfo_entries()
+    }
+
     pub fn get_node(&self, fs: Arc<ProcFs>, fd_num: FdNum, uid: Uid, gid: Gid) -> Result<DynINode> {
         self.internal.lock().get_node(fs, fd_num, uid, gid)
+    }
+
+    pub fn get_info_node(
+        &self,
+        fs: Arc<ProcFs>,
+        fd_num: FdNum,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<DynINode> {
+        self.internal.lock().get_info_node(fs, fd_num, uid, gid)
     }
 
     #[cfg(not(feature = "harden"))]
@@ -521,8 +535,23 @@ impl InternalFileDescriptorTable {
         self.table
             .iter()
             .map(|(num, entry)| DirEntry {
-                ino: entry.ino,
+                ino: entry.symlink_ino,
                 ty: FileType::Link,
+                name: DirEntryName::FileName(
+                    FileName::new(format!("{num}").as_bytes())
+                        .unwrap()
+                        .into_owned(),
+                ),
+            })
+            .collect()
+    }
+
+    pub fn list_fdinfo_entries(&self) -> Vec<DirEntry> {
+        self.table
+            .iter()
+            .map(|(num, entry)| DirEntry {
+                ino: entry.fdinfo_ino,
+                ty: FileType::File,
                 name: DirEntryName::FileName(
                     FileName::new(format!("{num}").as_bytes())
                         .unwrap()
@@ -536,13 +565,33 @@ impl InternalFileDescriptorTable {
         let entry = self.table.get(&fd_num.get()).ok_or(err!(NoEnt))?;
         Ok(Arc::new(FdINode::new(
             fs,
-            entry.ino,
+            entry.symlink_ino,
             uid,
             gid,
             StrongFileDescriptor::downgrade(&entry.fd),
-            entry.bsd_file_lock_record.get().clone(),
-            entry.watchers.clone(),
+            entry.symlink_bsd_file_lock_record.get().clone(),
+            entry.symlink_watchers.clone(),
         )))
+    }
+
+    pub fn get_info_node(
+        &self,
+        fs: Arc<ProcFs>,
+        fd_num: FdNum,
+        uid: Uid,
+        gid: Gid,
+    ) -> Result<DynINode> {
+        let entry = self.table.get(&fd_num.get()).ok_or(err!(NoEnt))?;
+        Ok(FdInfoFile::new(
+            fs,
+            entry.symlink_ino,
+            uid,
+            gid,
+            StrongFileDescriptor::downgrade(&entry.fd),
+            entry.fdinfo_file_bsd_file_lock_record.get().clone(),
+            entry.fdinfo_file_unix_file_lock_record.get().clone(),
+            entry.fdinfo_file_watchers.clone(),
+        ))
     }
 
     #[cfg(not(feature = "harden"))]
@@ -587,21 +636,29 @@ impl Drop for InternalFileDescriptorTable {
 }
 
 struct FileDescriptorTableEntry {
-    ino: u64,
+    symlink_ino: u64,
+    fdinfo_ino: u64,
     fd: StrongFileDescriptor,
     flags: FdFlags,
-    bsd_file_lock_record: LazyBsdFileLockRecord,
-    watchers: Arc<Watchers>,
+    symlink_bsd_file_lock_record: LazyBsdFileLockRecord,
+    symlink_watchers: Arc<Watchers>,
+    fdinfo_file_bsd_file_lock_record: LazyBsdFileLockRecord,
+    fdinfo_file_unix_file_lock_record: LazyUnixFileLockRecord,
+    fdinfo_file_watchers: Arc<Watchers>,
 }
 
 impl FileDescriptorTableEntry {
     fn new(fd: StrongFileDescriptor, flags: FdFlags) -> Self {
         Self {
-            ino: new_ino(),
+            symlink_ino: new_ino(),
+            fdinfo_ino: new_ino(),
             fd,
             flags,
-            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
-            watchers: Arc::new(Watchers::new()),
+            symlink_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            symlink_watchers: Arc::new(Watchers::new()),
+            fdinfo_file_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            fdinfo_file_unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            fdinfo_file_watchers: Arc::new(Watchers::new()),
         }
     }
 }
