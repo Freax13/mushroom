@@ -315,6 +315,13 @@ impl OpenFileDescription for Pty {
                 Ok(len)
             } else {
                 let len = cmp::min(buffer_len, guard.input_buffer.len());
+                if len == 0 {
+                    if guard.master_closed {
+                        return Ok(0);
+                    } else {
+                        bail!(Again);
+                    }
+                }
                 buf.write(0, &guard.input_buffer[..len])?;
                 drop(guard.input_buffer.drain(..len));
                 drop(guard);
