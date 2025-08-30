@@ -2428,3 +2428,22 @@ pub enum FlockWhence {
     Cur = 1,
     End = 2,
 }
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UserCapHeader {
+    pub version: u32,
+    pub pid: u32,
+}
+
+impl UserCapHeader {
+    pub const V3: u32 = 0x20080522;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UserCapData {
+    pub effective: u32,
+    pub permitted: u32,
+    pub inheritable: u32,
+}

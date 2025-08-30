@@ -228,6 +228,8 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSetfsuid);
     handlers.register(SysSetfsgid);
     handlers.register(SysGetsid);
+    handlers.register(SysCapget);
+    handlers.register(SysCapset);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -3344,6 +3346,84 @@ fn getsid(thread: &Thread, pid: u32) -> SyscallResult {
         Process::find_by_pid(pid).ok_or(err!(Srch))?.sid()
     };
     Ok(u64::from(sid))
+}
+
+#[syscall(i386 = 184, amd64 = 125)]
+fn capget(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    hdrp: Pointer<UserCapHeader>,
+    datap: Pointer<UserCapData>,
+) -> SyscallResult {
+    let hdr = virtual_memory.read(hdrp)?;
+    match hdr.version {
+        UserCapHeader::V3 => {
+            let _thread = if hdr.pid == 0 {
+                thread.clone()
+            } else {
+                Thread::find_by_tid(hdr.pid).ok_or(err!(Srch))?
+            };
+
+            let data = [
+                UserCapData {
+                    effective: 0,
+                    permitted: 0,
+                    inheritable: 0,
+                },
+                UserCapData {
+                    effective: 0,
+                    permitted: 0,
+                    inheritable: 0,
+                },
+            ];
+            virtual_memory.write(datap.cast::<[UserCapData; 2]>(), data)?;
+            Ok(0)
+        }
+        version => {
+            let hdr = UserCapHeader {
+                version: UserCapHeader::V3,
+                ..hdr
+            };
+            virtual_memory.write(hdrp, hdr)?;
+            ensure!(version == 0, Inval);
+            Ok(0)
+        }
+    }
+}
+
+#[syscall(i386 = 185, amd64 = 126)]
+fn capset(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    hdrp: Pointer<UserCapHeader>,
+    datap: Pointer<UserCapData>,
+) -> SyscallResult {
+    let hdr = virtual_memory.read(hdrp)?;
+    match hdr.version {
+        UserCapHeader::V3 => {
+            let _thread = if hdr.pid == 0 {
+                thread.clone()
+            } else {
+                Thread::find_by_tid(hdr.pid).ok_or(err!(Srch))?
+            };
+            let data = virtual_memory.read(datap.cast::<[UserCapData; 2]>())?;
+            ensure!(data[0].effective == 0, Perm);
+            ensure!(data[0].permitted == 0, Perm);
+            ensure!(data[0].inheritable == 0, Perm);
+            ensure!(data[1].effective == 0, Perm);
+            ensure!(data[1].permitted == 0, Perm);
+            ensure!(data[1].inheritable == 0, Perm);
+            Ok(0)
+        }
+        _ => {
+            let hdr = UserCapHeader {
+                version: UserCapHeader::V3,
+                ..hdr
+            };
+            virtual_memory.write(hdrp, hdr)?;
+            bail!(Inval)
+        }
+    }
 }
 
 #[syscall(i386 = 179, amd64 = 130)]
