@@ -1486,11 +1486,19 @@ impl Gid {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Capabilities {}
+pub struct Capabilities {
+    bounding: CapabilitySet,
+}
 
 impl Capabilities {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            bounding: CapabilitySet::all(),
+        }
+    }
+
+    pub fn bounding_set_read(&self, cap: Capability) -> bool {
+        self.bounding.get(cap)
     }
 }
 

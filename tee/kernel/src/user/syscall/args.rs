@@ -1619,6 +1619,7 @@ enum_arg! {
         GetName = 16,
         GetSeccomp = 21,
         SetSeccomp = 22,
+        CapbsetRead = 23,
         SetNoNewPrivs = 38,
         GetNoNewPrivs = 39,
     }

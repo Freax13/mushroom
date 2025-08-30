@@ -62,8 +62,8 @@ use crate::{
             limits::{CurrentNoFileLimit, CurrentStackLimit},
         },
         thread::{
-            Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset,
-            Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
+            Capability, Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill,
+            Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
         },
     },
 };
@@ -3595,6 +3595,11 @@ fn prctl(
             }
             _ => bail!(Inval),
         },
+        PrctlOp::CapbsetRead => {
+            let cap = Capability::new(u8::try_from(arg2)?).ok_or(err!(Inval))?;
+            let value = thread.capabilities.bounding_set_read(cap);
+            Ok(u64::from(value))
+        }
         PrctlOp::SetNoNewPrivs => {
             if arg2 != 0 {
                 thread.set_no_new_privs();
