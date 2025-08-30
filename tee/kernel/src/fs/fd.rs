@@ -926,6 +926,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotDir)
     }
 
+    fn read_link(&self, ctx: &FileAccessContext) -> Result<Path> {
+        let _ = ctx;
+        bail!(NoEnt)
+    }
+
     fn getdents64(
         &self,
         capacity: usize,

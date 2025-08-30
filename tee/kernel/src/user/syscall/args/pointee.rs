@@ -360,6 +360,26 @@ impl WritablePointee for Path {
     }
 }
 
+impl Pointee for Option<Path> {
+    fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
+        <CStr as Pointee>::display(f, addr, thread)
+    }
+}
+
+impl AbiAgnosticPointee for Option<Path> {}
+
+impl ReadablePointee for Option<Path> {
+    fn read(addr: VirtAddr, vm: &VirtualMemory, _abi: Abi) -> Result<(usize, Self)> {
+        let pathname = vm.read_cstring(Pointer::from(addr), PATH_MAX)?;
+        if pathname.is_empty() {
+            return Ok((1, None));
+        }
+        let len = pathname.to_bytes_with_nul().len();
+        let value = Path::new(pathname.into_bytes())?;
+        Ok((len, Some(value)))
+    }
+}
+
 impl<T> Pointee for Pointer<T> where T: ?Sized {}
 
 impl<T> AbiDependentPointee for Pointer<T>
