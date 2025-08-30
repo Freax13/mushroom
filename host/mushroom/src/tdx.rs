@@ -235,7 +235,7 @@ impl VmContext {
             if is_private_mem {
                 vm.set_memory_attributes(
                     gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().len().get())?,
+                    u64::try_from(slot.len())?,
                     KvmMemoryAttributes::PRIVATE,
                 )?;
 

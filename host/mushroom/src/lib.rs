@@ -67,7 +67,7 @@ fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot
     slots
         .values_mut()
         .find(|slot| {
-            let num_frames = u64::try_from(slot.shared_mapping().len().get() / 0x1000).unwrap();
+            let num_frames = u64::try_from(slot.len() / 0x1000).unwrap();
             (slot.gpa()..slot.gpa() + num_frames).contains(&gpa)
         })
         .context("failed to find slot which contains ghcb")
