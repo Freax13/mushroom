@@ -4,10 +4,9 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
-#[cfg(not(feature = "harden"))]
-use core::fmt;
 use core::{
     ffi::{CStr, c_void},
+    fmt,
     fmt::Debug,
     ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
     pin::{Pin, pin},
@@ -106,6 +105,8 @@ pub struct ThreadState {
     pub ptrace_state: PtraceState,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
+
+    pub capabilities: Capabilities,
 }
 
 impl Thread {
@@ -121,6 +122,7 @@ impl Thread {
         cpu_state: CpuState,
         affinity: ApBitmap,
         nice: Nice,
+        capabilities: Capabilities,
     ) -> Arc<Self> {
         let thread = Self {
             tid,
@@ -142,6 +144,7 @@ impl Thread {
                 tracer: Weak::new(),
                 ptrace_state: PtraceState::default(),
                 tracees: Vec::new(),
+                capabilities,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -223,6 +226,7 @@ impl Thread {
             CpuState::new(0, 0, 0),
             ApBitmap::all(),
             Nice::DEFAULT,
+            Capabilities::new(),
         )
     }
 
@@ -726,6 +730,7 @@ impl ThreadGuard<'_> {
             cpu_state,
             self.thread.affinity.get_all(),
             self.thread.nice.load(),
+            self.capabilities,
         );
 
         let mut guard = thread.lock();
@@ -1503,6 +1508,175 @@ impl Gid {
 
     pub fn get(self) -> u32 {
         self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Capabilities {
+    bounding: CapabilitySet,
+    ambient: CapabilitySet,
+}
+
+impl Capabilities {
+    pub fn new() -> Self {
+        Self {
+            bounding: CapabilitySet::all(),
+            ambient: CapabilitySet::empty(),
+        }
+    }
+
+    pub fn bounding_set_read(&self, cap: Capability) -> bool {
+        self.bounding.get(cap)
+    }
+
+    pub fn ambient_is_set(&self, cap: Capability) -> bool {
+        self.ambient.get(cap)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Capability {
+    Chown = 0,
+    DacOverride = 1,
+    DacReadSearch = 2,
+    Fowner = 3,
+    Fsetid = 4,
+    Kill = 5,
+    Setgid = 6,
+    Setuid = 7,
+    Setpcap = 8,
+    LinuxImmutable = 9,
+    NetBindService = 10,
+    NetBroadcast = 11,
+    NetAdmin = 12,
+    NetRaw = 13,
+    IpcLock = 14,
+    IpcOwner = 15,
+    SysModule = 16,
+    SysRawio = 17,
+    SysChroot = 18,
+    SysPtrace = 19,
+    SysPacct = 20,
+    SysAdmin = 21,
+    SysBoot = 22,
+    SysNice = 23,
+    SysResource = 24,
+    SysTime = 25,
+    SysTtyConfig = 26,
+    Mknod = 27,
+    Lease = 28,
+    AuditWrite = 29,
+    AuditControl = 30,
+    Setfcap = 31,
+    MacOverride = 32,
+    MacAdmin = 33,
+    Syslog = 34,
+    WakeAlarm = 35,
+    BlockSuspend = 36,
+    AuditRead = 37,
+    Perfmon = 38,
+    Bpf = 39,
+    CheckpointRestore = 40,
+}
+
+impl Capability {
+    const ALL: [Self; 41] = [
+        Self::Chown,
+        Self::DacOverride,
+        Self::DacReadSearch,
+        Self::Fowner,
+        Self::Fsetid,
+        Self::Kill,
+        Self::Setgid,
+        Self::Setuid,
+        Self::Setpcap,
+        Self::LinuxImmutable,
+        Self::NetBindService,
+        Self::NetBroadcast,
+        Self::NetAdmin,
+        Self::NetRaw,
+        Self::IpcLock,
+        Self::IpcOwner,
+        Self::SysModule,
+        Self::SysRawio,
+        Self::SysChroot,
+        Self::SysPtrace,
+        Self::SysPacct,
+        Self::SysAdmin,
+        Self::SysBoot,
+        Self::SysNice,
+        Self::SysResource,
+        Self::SysTime,
+        Self::SysTtyConfig,
+        Self::Mknod,
+        Self::Lease,
+        Self::AuditWrite,
+        Self::AuditControl,
+        Self::Setfcap,
+        Self::MacOverride,
+        Self::MacAdmin,
+        Self::Syslog,
+        Self::WakeAlarm,
+        Self::BlockSuspend,
+        Self::AuditRead,
+        Self::Perfmon,
+        Self::Bpf,
+        Self::CheckpointRestore,
+    ];
+
+    pub const fn new(value: u8) -> Option<Self> {
+        let mut i = 0;
+        while i < Capability::ALL.len() {
+            let cap = Capability::ALL[i];
+            if cap as u8 == value {
+                return Some(cap);
+            }
+            i += 1;
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct CapabilitySet {
+    bits: u64,
+}
+
+impl Debug for CapabilitySet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set()
+            .entries(Capability::ALL.into_iter().filter(|&cap| self.get(cap)))
+            .finish()
+    }
+}
+
+impl CapabilitySet {
+    pub const fn empty() -> Self {
+        Self { bits: 0 }
+    }
+
+    pub const fn all() -> Self {
+        let mut this = Self::empty();
+        let mut i = 0;
+        while i < Capability::ALL.len() {
+            let cap = Capability::ALL[i];
+            this.set(cap, true);
+            i += 1;
+        }
+        this
+    }
+
+    pub const fn set(&mut self, cap: Capability, set: bool) {
+        let mask = 1 << cap as usize;
+        if set {
+            self.bits |= mask;
+        } else {
+            self.bits &= !mask;
+        }
+    }
+
+    pub const fn get(&self, cap: Capability) -> bool {
+        self.bits & (1 << cap as usize) != 0
     }
 }
 

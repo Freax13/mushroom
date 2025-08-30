@@ -32,8 +32,8 @@ use crate::{
                 ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr,
                 MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent,
                 SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo,
-                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserRegs32, UserRegs64,
-                WStatus, WinSize,
+                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserCapData,
+                UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -2937,3 +2937,9 @@ impl TryFrom<i16> for FlockWhence {
         })
     }
 }
+
+impl Pointee for UserCapHeader {}
+impl PrimitivePointee for UserCapHeader {}
+
+impl Pointee for UserCapData {}
+impl PrimitivePointee for UserCapData {}

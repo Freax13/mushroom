@@ -1619,8 +1619,10 @@ enum_arg! {
         GetName = 16,
         GetSeccomp = 21,
         SetSeccomp = 22,
+        CapbsetRead = 23,
         SetNoNewPrivs = 38,
         GetNoNewPrivs = 39,
+        CapAmbient = 47,
     }
 }
 
@@ -2425,4 +2427,23 @@ pub enum FlockWhence {
     Set = 0,
     Cur = 1,
     End = 2,
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UserCapHeader {
+    pub version: u32,
+    pub pid: u32,
+}
+
+impl UserCapHeader {
+    pub const V3: u32 = 0x20080522;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UserCapData {
+    pub effective: u32,
+    pub permitted: u32,
+    pub inheritable: u32,
 }
