@@ -29,28 +29,6 @@ pub struct Slot {
 }
 
 impl Slot {
-    pub fn for_launch_update(
-        vm: &VmHandle,
-        gpa: PhysFrame,
-        pages: &[Page],
-        shared: bool,
-        private: bool,
-    ) -> Result<Self> {
-        let this = Self::new(vm, gpa, pages.len() * 0x1000, shared, private)?;
-
-        if let Some(shared_mapping) = this.shared_mapping.as_ref() {
-            unsafe {
-                copy_nonoverlapping(
-                    pages.as_ptr(),
-                    shared_mapping.ptr.as_ptr().cast(),
-                    pages.len(),
-                );
-            }
-        }
-
-        Ok(this)
-    }
-
     pub fn new(
         vm: &VmHandle,
         gpa: PhysFrame<impl PageSize>,
@@ -80,6 +58,28 @@ impl Slot {
             shared_mapping,
             restricted_fd,
         })
+    }
+
+    pub fn with_content(
+        vm: &VmHandle,
+        gpa: PhysFrame,
+        pages: &[Page],
+        shared: bool,
+        private: bool,
+    ) -> Result<Self> {
+        let this = Self::new(vm, gpa, pages.len() * 0x1000, shared, private)?;
+
+        if let Some(shared_mapping) = this.shared_mapping.as_ref() {
+            unsafe {
+                copy_nonoverlapping(
+                    pages.as_ptr(),
+                    shared_mapping.ptr.as_ptr().cast(),
+                    pages.len(),
+                );
+            }
+        }
+
+        Ok(this)
     }
 
     pub fn gpa(&self) -> PhysFrame {

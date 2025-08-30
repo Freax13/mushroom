@@ -227,7 +227,7 @@ impl VmContext {
                 });
             }
 
-            let slot = Slot::for_launch_update(
+            let slot = Slot::with_content(
                 &vm,
                 gpa,
                 &pages,

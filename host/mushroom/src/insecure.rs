@@ -168,7 +168,7 @@ pub fn main(
             });
         }
 
-        let slot = Slot::for_launch_update(&vm, gpa, &pages, true, false)
+        let slot = Slot::with_content(&vm, gpa, &pages, true, false)
             .context("failed to create slot for launch update")?;
 
         unsafe {
