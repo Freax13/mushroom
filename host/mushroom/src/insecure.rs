@@ -165,7 +165,7 @@ pub fn main(
             });
         }
 
-        let slot = Slot::for_launch_update(&vm, gpa, &pages, false)
+        let slot = Slot::for_launch_update(&vm, gpa, &pages, true, false)
             .context("failed to create slot for launch update")?;
 
         unsafe {
@@ -554,7 +554,7 @@ impl DynamicMemory {
         for slot_id in 0..SLOTS as u16 {
             if let Entry::Vacant(entry) = self.slots.entry(slot_id) {
                 let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
-                let slot = entry.insert(Slot::new(&self.vm, gpa, false)?);
+                let slot = entry.insert(Slot::new(&self.vm, gpa, true, false)?);
 
                 let base = 1 << 6;
                 let kvm_slot_id = base + slot_id;

@@ -279,12 +279,14 @@ impl VmHandle {
         let shared_mapping = slot.shared_mapping();
         let restricted_fd = slot.restricted_fd();
 
+        let uaddr =
+            shared_mapping.map_or(0, |shared_mapping| shared_mapping.as_ptr().as_ptr() as u64);
         unsafe {
             self.map_private_memory(
                 id,
                 slot.gpa().start_address().as_u64(),
                 u64::try_from(slot.len())?,
-                u64::try_from(shared_mapping.as_ptr().as_ptr() as usize)?,
+                uaddr,
                 restricted_fd,
                 0,
             )?;

@@ -24,7 +24,7 @@ use crate::kvm::{KvmGuestMemFdFlags, Page, VmHandle};
 pub struct Slot {
     gpa: PhysFrame,
     len: usize,
-    shared_mapping: Arc<AnonymousPrivateMapping>,
+    shared_mapping: Option<Arc<AnonymousPrivateMapping>>,
     restricted_fd: Option<OwnedFd>,
 }
 
@@ -33,10 +33,12 @@ impl Slot {
         vm: &VmHandle,
         gpa: PhysFrame,
         pages: &[Page],
+        shared: bool,
         private: bool,
     ) -> Result<Self> {
-        let shared_mapping = AnonymousPrivateMapping::for_private_mapping(pages)?;
-        let shared_mapping = Arc::new(shared_mapping);
+        let shared_mapping = shared
+            .then(|| AnonymousPrivateMapping::for_private_mapping(pages).map(Arc::new))
+            .transpose()?;
 
         let len = pages.len() * 0x1000;
         let len_u64 = u64::try_from(len)?;
@@ -55,10 +57,17 @@ impl Slot {
         })
     }
 
-    pub fn new(vm: &VmHandle, gpa: PhysFrame<Size2MiB>, private: bool) -> Result<Self> {
+    pub fn new(
+        vm: &VmHandle,
+        gpa: PhysFrame<Size2MiB>,
+        shared: bool,
+        private: bool,
+    ) -> Result<Self> {
         let len = 512 * 0x1000;
-        let shared_mapping = AnonymousPrivateMapping::new(len)?;
-        let shared_mapping = Arc::new(shared_mapping);
+
+        let shared_mapping = shared
+            .then(|| AnonymousPrivateMapping::new(len).map(Arc::new))
+            .transpose()?;
 
         let len_u64 = u64::try_from(len)?;
         let restricted_fd = private
@@ -88,8 +97,8 @@ impl Slot {
         self.len
     }
 
-    pub fn shared_mapping(&self) -> &Arc<AnonymousPrivateMapping> {
-        &self.shared_mapping
+    pub fn shared_mapping(&self) -> Option<&Arc<AnonymousPrivateMapping>> {
+        self.shared_mapping.as_ref()
     }
 
     pub fn restricted_fd(&self) -> Option<BorrowedFd<'_>> {
@@ -105,14 +114,13 @@ impl Slot {
         let end = offset
             .checked_add(size_of::<T>())
             .context("offset too big")?;
-        ensure!(end <= self.shared_mapping.len.get(), "offset too big");
+        let shared_mapping = self
+            .shared_mapping
+            .as_ref()
+            .context("can't read from slot without shared mapping")?;
+        ensure!(end <= shared_mapping.len.get(), "offset too big");
         let bits = unsafe {
-            let ptr = self
-                .shared_mapping
-                .ptr
-                .as_ptr()
-                .byte_add(offset)
-                .cast::<u8>();
+            let ptr = shared_mapping.ptr.as_ptr().byte_add(offset).cast::<u8>();
             &*core::ptr::slice_from_raw_parts(ptr, size_of::<T>())
         };
         let value = bytemuck::checked::try_pod_read_unaligned(bits)?;
@@ -128,9 +136,13 @@ impl Slot {
         let end = offset
             .checked_add(size_of::<T>())
             .context("offset too big")?;
-        ensure!(end <= self.shared_mapping.len.get(), "offset too big");
+        let shared_mapping = self
+            .shared_mapping
+            .as_ref()
+            .context("can't create pointer into slot without shared mapping")?;
+        ensure!(end <= shared_mapping.len.get(), "offset too big");
         unsafe {
-            let ptr = self.shared_mapping.ptr.as_ptr().byte_add(offset).cast();
+            let ptr = shared_mapping.ptr.as_ptr().byte_add(offset).cast();
             let ptr = NonNull::new_unchecked(ptr);
             Ok(VolatilePtr::new(ptr))
         }
