@@ -9,10 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use bytemuck::{CheckedBitPattern, Pod};
-use nix::{
-    fcntl::{FallocateFlags, fallocate},
-    sys::mman::{MapFlags, ProtFlags, mmap_anonymous, munmap},
-};
+use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous, munmap};
 use volatile::VolatilePtr;
 use x86_64::{
     PhysAddr,
@@ -43,12 +40,8 @@ impl Slot {
         let len_u64 = u64::try_from(len)?;
         let restricted_fd = private
             .then(|| {
-                let fd = vm
-                    .create_guest_memfd(len_u64, KvmGuestMemFdFlags::empty())
-                    .context("failed to create guest memfd")?;
-                fallocate(&fd, FallocateFlags::FALLOC_FL_KEEP_SIZE, 0, len_u64 as i64)
-                    .context("failed to reserve memory")?;
-                Result::<_>::Ok(fd)
+                vm.create_guest_memfd(len_u64, KvmGuestMemFdFlags::empty())
+                    .context("failed to create guest memfd")
             })
             .transpose()?;
 
