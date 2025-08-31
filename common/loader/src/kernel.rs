@@ -8,7 +8,7 @@ use crate::{
 pub fn load_kernel(
     kernel: &[u8],
     load_kasan_shadow_mappings: bool,
-) -> impl Iterator<Item = LoadCommand> + '_ {
+) -> impl Iterator<Item = LoadCommand> + Clone + '_ {
     load(
         kernel,
         VmplPermissions::READ | VmplPermissions::WRITE | VmplPermissions::EXECUTE_SUPERVISOR,

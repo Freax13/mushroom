@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use bytemuck::cast;
+use bytemuck::cast_ref;
 use snp_types::{PageType, VmplPermissions, cpuid::CpuidPage};
 use x86_64::structures::paging::PhysFrame;
 
@@ -20,6 +20,10 @@ pub struct LoadCommand {
     pub vcpu_id: u32,
     pub vmpl1_perms: VmplPermissions,
     pub payload: LoadCommandPayload,
+    /// This memory requires a shared mapping.
+    pub shared: bool,
+    /// This memory requires a private mapping.
+    pub private: bool,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -45,14 +49,14 @@ impl LoadCommandPayload {
         }
     }
 
-    pub fn bytes(&self) -> [u8; 0x1000] {
+    pub fn bytes(&self) -> &[u8; 0x1000] {
         match self {
-            LoadCommandPayload::Normal(bytes) => *bytes,
-            LoadCommandPayload::Vmsa(bytes) => *bytes,
-            LoadCommandPayload::Zero => [0; 0x1000],
-            LoadCommandPayload::Secrets => [0; 0x1000],
-            LoadCommandPayload::Cpuid(cpuid) => cast(*cpuid),
-            LoadCommandPayload::Shared(bytes) => *bytes,
+            LoadCommandPayload::Normal(bytes) => bytes,
+            LoadCommandPayload::Vmsa(bytes) => bytes,
+            LoadCommandPayload::Zero => &[0; 0x1000],
+            LoadCommandPayload::Secrets => &[0; 0x1000],
+            LoadCommandPayload::Cpuid(cpuid) => cast_ref(cpuid),
+            LoadCommandPayload::Shared(bytes) => bytes,
         }
     }
 }
@@ -62,7 +66,7 @@ pub fn generate_base_load_commands<'a>(
     kernel: &'a [u8],
     init: &'a [u8],
     load_kasan_shadow_mappings: bool,
-) -> impl Iterator<Item = LoadCommand> + 'a {
+) -> impl Iterator<Item = LoadCommand> + Clone + 'a {
     let load_supervisor = supervisor
         .map(supervisor::load_supervisor)
         .into_iter()
@@ -78,7 +82,7 @@ pub fn generate_load_commands<'a>(
     init: &'a [u8],
     load_kasan_shadow_mappings: bool,
     inputs: &'a [Input<impl AsRef<[u8]>>],
-) -> (impl Iterator<Item = LoadCommand> + 'a, [u8; 32]) {
+) -> (impl Iterator<Item = LoadCommand> + Clone + 'a, [u8; 32]) {
     let base_load_commands =
         generate_base_load_commands(supervisor, kernel, init, load_kasan_shadow_mappings);
     let (load_input, host_data) = input::load_input(inputs);

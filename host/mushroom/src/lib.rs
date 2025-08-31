@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroU32, sync::Once};
+use std::{num::NonZeroU32, sync::Once};
 
 use anyhow::{Context, Result};
 use bit_field::BitField;
@@ -63,11 +63,11 @@ pub struct MushroomResult {
     pub attestation_report: Vec<u8>,
 }
 
-fn find_slot(gpa: PhysFrame, slots: &mut HashMap<u16, Slot>) -> Result<&mut Slot> {
+fn find_slot(gpa: PhysFrame, slots: &[Slot]) -> Result<&Slot> {
     slots
-        .values_mut()
+        .iter()
         .find(|slot| {
-            let num_frames = u64::try_from(slot.shared_mapping().len().get() / 0x1000).unwrap();
+            let num_frames = u64::try_from(slot.len() / 0x1000).unwrap();
             (slot.gpa()..slot.gpa() + num_frames).contains(&gpa)
         })
         .context("failed to find slot which contains ghcb")

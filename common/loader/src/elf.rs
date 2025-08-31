@@ -21,7 +21,7 @@ use crate::{LoadCommand, LoadCommandPayload};
 pub fn load(
     elf_bytes: &[u8],
     vmpl1_perms_mask: VmplPermissions,
-) -> impl Iterator<Item = LoadCommand> + '_ {
+) -> impl Iterator<Item = LoadCommand> + Clone + '_ {
     let elf = Elf::parse(elf_bytes).unwrap();
     assert!(elf.is_64);
 
@@ -118,6 +118,8 @@ pub fn load(
                         vcpu_id,
                         vmpl1_perms,
                         payload,
+                        shared: shared_page,
+                        private: !shared_page,
                     }
                 })
         })
@@ -126,7 +128,7 @@ pub fn load(
 pub fn load_shadow_mapping(
     elf_bytes: &[u8],
     vmpl1_perms_mask: VmplPermissions,
-) -> impl Iterator<Item = LoadCommand> + '_ {
+) -> impl Iterator<Item = LoadCommand> + Clone + '_ {
     let elf = Elf::parse(elf_bytes).unwrap();
     assert!(elf.is_64);
 
@@ -190,6 +192,8 @@ pub fn load_shadow_mapping(
                     vcpu_id: 0,
                     vmpl1_perms,
                     payload: LoadCommandPayload::Normal(payload),
+                    shared: false,
+                    private: true,
                 })
             })
         })

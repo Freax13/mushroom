@@ -8,7 +8,7 @@ use x86_64::structures::paging::PhysFrame;
 
 use crate::{LoadCommand, LoadCommandPayload};
 
-pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
+pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + Clone + '_ {
     let start_frame = PhysFrame::from_start_address(INIT_FILE.start.start_address()).unwrap();
     let end_frame = PhysFrame::from_start_address(INIT_FILE.end.start_address()).unwrap();
     let frames = PhysFrame::range(start_frame, end_frame);
@@ -41,5 +41,7 @@ pub fn load_init(init: &[u8]) -> impl Iterator<Item = LoadCommand> + '_ {
             vcpu_id: 0,
             vmpl1_perms,
             payload,
+            shared: false,
+            private: true,
         })
 }

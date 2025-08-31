@@ -1,8 +1,8 @@
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    iter::once,
     os::unix::thread::JoinHandleExt,
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{self, AtomicBool, Ordering},
         mpsc::{self, Sender},
     },
@@ -18,11 +18,13 @@ use constants::{
 };
 use loader::Input;
 use mushroom_verify::snp::{LaunchDigest, create_signature, id_block};
-use nix::sys::pthread::pthread_kill;
+use nix::{
+    fcntl::{FallocateFlags, fallocate},
+    sys::{mman::madvise, pthread::pthread_kill},
+};
 pub use snp_types::guest_policy::GuestPolicy;
-use snp_types::{
-    PageType,
-    id_block::{EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey},
+use snp_types::id_block::{
+    EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey,
 };
 use tracing::{debug, info};
 pub use vcek_kds::Vcek;
@@ -127,7 +129,8 @@ pub fn main(
 
 struct VmContext {
     vm: Arc<VmHandle>,
-    memory_slots: RwLock<HashMap<u16, Slot>>,
+    memory_slots: Vec<Slot>,
+    dynamic_slot: Slot,
     start: Instant,
 }
 
@@ -192,7 +195,7 @@ impl VmContext {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let (load_commands, host_data) = loader::generate_load_commands(
+        let (mut load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
             kernel,
             init,
@@ -200,80 +203,71 @@ impl VmContext {
             inputs,
         );
         let mut launch_digest = LaunchDigest::new();
-        let load_commands = load_commands.inspect(|cmd| launch_digest.add(cmd));
-        let mut load_commands = load_commands.peekable();
-
-        let mut num_launch_pages = 0;
-        let mut num_data_pages = 0;
-        let mut total_launch_duration = Duration::ZERO;
-
-        let mut memory_slots = HashMap::new();
-        let mut pages = Vec::with_capacity(0xfffff);
-
-        let mut slot_id = 0;
+        let mut memory_slots = Vec::new();
         while let Some(first_load_command) = load_commands.next() {
             let gpa = first_load_command.physical_address;
-            let first_page_type = first_load_command.payload.page_type();
-            let first_vmpl1_perms = first_load_command.vmpl1_perms;
 
-            pages.push(Page {
-                bytes: first_load_command.payload.bytes(),
-            });
+            // Figure out how big the next slot can be by counting pages with
+            // contiguous GPAs and identical shared and private mapping
+            // requirements.
+            let num_pages = 1 + load_commands
+                .clone()
+                .zip(1..)
+                .take_while(|(next, i)| {
+                    next.physical_address == gpa + *i
+                        && next.shared == first_load_command.shared
+                        && next.private == first_load_command.private
+                })
+                .count();
 
-            // Coalesce multiple contigous load commands with the same page type.
-            for i in 1.. {
-                let following_load_command = load_commands.next_if(|next_load_segment| {
-                    next_load_segment.physical_address > gpa
-                        && next_load_segment.physical_address - gpa == i
-                        && first_page_type != Some(PageType::Vmsa)
-                        && next_load_segment.payload.page_type() == first_page_type
-                        && next_load_segment.vmpl1_perms == first_vmpl1_perms
-                });
-                let Some(following_load_command) = following_load_command else {
-                    break;
-                };
-                pages.push(Page {
-                    bytes: following_load_command.payload.bytes(),
-                });
-            }
-
-            let slot = Slot::for_launch_update(&vm, gpa, &pages, true)
-                .context("failed to create slot for launch update")?;
-
+            // Create and map the slot.
+            let slot = Slot::new(
+                &vm,
+                gpa,
+                num_pages * 0x1000,
+                first_load_command.shared,
+                first_load_command.private,
+            )
+            .context("failed to create slot")?;
+            let slot_id = u16::try_from(memory_slots.len())?;
             unsafe {
                 vm.map_encrypted_memory(slot_id, &slot)?;
             }
 
-            if let Some(first_page_type) = first_page_type {
-                let update_start = Instant::now();
+            // Populate the slot's content.
+            let pages = once(first_load_command)
+                .chain(load_commands.by_ref())
+                .take(num_pages);
+            for command in pages {
+                let bytes = command.payload.bytes();
+                if let Some(page_type) = command.payload.page_type() {
+                    // Private memory is added with LAUNCH_UPDATE.
 
-                vm.set_memory_attributes(
-                    gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().len().get())?,
-                    KvmMemoryAttributes::PRIVATE,
-                )?;
+                    vm.set_memory_attributes(
+                        command.physical_address.start_address().as_u64(),
+                        0x1000,
+                        KvmMemoryAttributes::PRIVATE,
+                    )?;
 
-                vm.sev_snp_launch_update(
-                    gpa.start_address().as_u64(),
-                    u64::try_from(slot.shared_mapping().as_ptr().as_ptr() as usize)?,
-                    slot.shared_mapping().len().get() as u64,
-                    first_page_type,
-                    first_load_command.vcpu_id,
-                    first_vmpl1_perms,
-                    sev_handle,
-                )?;
+                    vm.sev_snp_launch_update(
+                        command.physical_address.start_address().as_u64(),
+                        bytes.as_ptr() as u64,
+                        0x1000,
+                        page_type,
+                        command.vcpu_id,
+                        command.vmpl1_perms,
+                        sev_handle,
+                    )?;
 
-                num_launch_pages += pages.len();
-                total_launch_duration += update_start.elapsed();
-                if first_page_type == PageType::Normal {
-                    num_data_pages += pages.len();
+                    launch_digest.add(&command);
+                } else {
+                    // Shared memory is added by coping directly into the shared mapping.
+                    let ptr = slot.shared_ptr(command.physical_address.start_address())?;
+                    ptr.write(*bytes);
                 }
             }
 
-            memory_slots.insert(slot_id, slot);
-
-            pages.clear();
-            slot_id += 1;
+            memory_slots.push(slot);
         }
 
         let launch_digest = launch_digest.finish();
@@ -292,12 +286,16 @@ impl VmContext {
 
         vm.sev_snp_launch_finish(sev_handle, host_data, Some((&id_block, &id_auth_info)))?;
 
-        info!(
-            num_launch_pages,
-            num_data_pages,
-            ?total_launch_duration,
-            "launched"
-        );
+        let len =
+            DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
+        let len = usize::try_from(len)?;
+        let dynamic_slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, false, true)?;
+        let slot_id = u16::try_from(memory_slots.len())?;
+        unsafe {
+            vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
+        }
+
+        info!("launched");
         let start = Instant::now();
 
         start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
@@ -312,7 +310,8 @@ impl VmContext {
         Ok((
             Self {
                 vm,
-                memory_slots: RwLock::new(memory_slots),
+                memory_slots,
+                dynamic_slot,
                 start,
             },
             vcpus,
@@ -343,9 +342,30 @@ impl VmContext {
                     },
                 ) => {
                     let mut attributes = KvmMemoryAttributes::empty();
-                    attributes.set(KvmMemoryAttributes::PRIVATE, attrs.get_bit(4));
+                    let private = attrs.get_bit(4);
+                    attributes.set(KvmMemoryAttributes::PRIVATE, private);
                     self.vm
                         .set_memory_attributes(address, num_pages * 0x1000, attributes)?;
+
+                    if private {
+                        // Invalidate shared mapping.
+                        for i in 0..num_pages {
+                            let gpa = PhysAddr::new(address + i * Size4KiB::SIZE);
+                            let slot =
+                                find_slot(PhysFrame::containing_address(gpa), &self.memory_slots)?;
+                            let ptr = slot.shared_ptr::<Page>(gpa)?;
+                            let ptr = ptr.as_raw_ptr();
+                            unsafe {
+                                madvise(
+                                    ptr.cast(),
+                                    Size4KiB::SIZE as usize,
+                                    nix::sys::mman::MmapAdvise::MADV_DONTNEED,
+                                )?;
+                            }
+                        }
+                    } else {
+                        unimplemented!()
+                    }
 
                     kvm_run.update(|mut run| {
                         hypercall.ret = 0;
@@ -369,44 +389,25 @@ impl VmContext {
                             let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
                             debug!(slot_id, enabled, gpa = %format_args!("{gpa:?}"), "updating slot status");
 
-                            let base = 1 << 6;
-                            let kvm_slot_id = base + slot_id;
-                            let mut guard = self.memory_slots.write().unwrap();
-                            let entry = guard.entry(kvm_slot_id);
-                            match entry {
-                                Entry::Occupied(entry) => {
-                                    assert!(
-                                        !enabled,
-                                        "tried to enable slot that's already enabled"
-                                    );
+                            let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
+                            let mut attributes = KvmMemoryAttributes::empty();
+                            attributes.set(KvmMemoryAttributes::PRIVATE, enabled);
+                            self.vm.set_memory_attributes(
+                                gfn.start_address().as_u64(),
+                                Size2MiB::SIZE,
+                                attributes,
+                            )?;
 
-                                    let slot = entry.remove();
-                                    unsafe {
-                                        self.vm.unmap_encrypted_memory(kvm_slot_id, &slot)?;
-                                    }
-                                }
-                                Entry::Vacant(entry) => {
-                                    assert!(
-                                        enabled,
-                                        "tried to disable slot that's already disabled"
-                                    );
-
-                                    let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
-                                    let slot = Slot::new(&self.vm, gfn, true)
-                                        .context("failed to create dynamic slot")?;
-
-                                    unsafe {
-                                        self.vm.map_encrypted_memory(kvm_slot_id, &slot)?;
-                                    }
-
-                                    self.vm.set_memory_attributes(
-                                        gfn.start_address().as_u64(),
-                                        Size2MiB::SIZE,
-                                        KvmMemoryAttributes::PRIVATE,
-                                    )?;
-
-                                    entry.insert(slot);
-                                }
+                            // Remove the backing memory when memory is disabled.
+                            if !enabled {
+                                let restricted_fd = self.dynamic_slot.restricted_fd().unwrap();
+                                fallocate(
+                                    restricted_fd,
+                                    FallocateFlags::FALLOC_FL_KEEP_SIZE
+                                        | FallocateFlags::FALLOC_FL_PUNCH_HOLE,
+                                    i64::from(slot_id) * Size2MiB::SIZE as i64,
+                                    Size2MiB::SIZE as i64,
+                                )?;
                             }
                         }
                         other => unimplemented!("unimplemented io port: {other}"),
@@ -422,8 +423,7 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = ((msr.data & 0xfff) + 1) as usize;
 
-                        let mut guard = self.memory_slots.write().unwrap();
-                        let slot = find_slot(gfn, &mut guard)?;
+                        let slot = find_slot(gfn, &self.memory_slots)?;
                         let output_buffer = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
                         let output_slice = &output_buffer[..len];
@@ -438,8 +438,7 @@ impl VmContext {
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
                         let len = (msr.data & 0xfff) as usize;
 
-                        let mut guard = self.memory_slots.write().unwrap();
-                        let slot = find_slot(gfn, &mut guard)?;
+                        let slot = find_slot(gfn, &self.memory_slots)?;
                         let attestation_report = slot.read::<[u8; 4096]>(gfn.start_address())?;
 
                         let attestation_report = attestation_report[..len].to_vec();

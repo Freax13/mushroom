@@ -6,7 +6,7 @@ use core::{
     iter::{Iterator, repeat_with},
 };
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    iter::once,
     os::unix::thread::JoinHandleExt,
     sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
@@ -22,6 +22,7 @@ use loader::Input;
 use mushroom_verify::{HashedInput, InputHash, OutputHash, forge_insecure_attestation_report};
 use nix::{
     sys::{
+        mman::{MmapAdvise, madvise},
         pthread::pthread_kill,
         signal::SigEvent,
         time::TimeSpec,
@@ -30,19 +31,21 @@ use nix::{
     time::ClockId,
     unistd::gettid,
 };
-use snp_types::PageType;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
 use volatile::map_field;
-use x86_64::registers::{
-    control::{Cr0Flags, Cr4Flags},
-    model_specific::EferFlags,
-    xcontrol::XCr0Flags,
+use x86_64::{
+    registers::{
+        control::{Cr0Flags, Cr4Flags},
+        model_specific::EferFlags,
+        xcontrol::XCr0Flags,
+    },
+    structures::paging::{PageSize, Size2MiB},
 };
 
 use crate::{
     MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, install_signal_handler, is_efault,
-    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VcpuHandle, VmHandle},
+    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, VcpuHandle},
     logging::start_log_collection,
     slot::Slot,
 };
@@ -127,78 +130,56 @@ pub fn main(
             .get() as usize;
         let _ = KVM_XSAVE_SIZE.set(xsave_size);
     }
-
-    let (load_commands, _host_data) =
+    let (mut load_commands, _host_data) =
         loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, inputs);
-    let mut load_commands = load_commands.peekable();
-
-    let mut num_launch_pages = 0;
-    let mut num_data_pages = 0;
-    let mut total_launch_duration = Duration::ZERO;
-
-    let mut memory_slots = HashMap::new();
-    let mut pages = Vec::with_capacity(0xfffff);
-
-    let mut slot_id = 0;
+    let mut memory_slots = Vec::new();
     while let Some(first_load_command) = load_commands.next() {
         let gpa = first_load_command.physical_address;
-        let first_page_type = first_load_command.payload.page_type();
-        let first_vmpl1_perms = first_load_command.vmpl1_perms;
 
-        pages.push(Page {
-            bytes: first_load_command.payload.bytes(),
-        });
+        // Figure out how big the next slot can be by counting pages with
+        // contiguous GPAs.
+        let num_pages = 1 + load_commands
+            .clone()
+            .zip(1..)
+            .take_while(|(next, i)| next.physical_address == gpa + *i)
+            .count();
 
-        // Coalesce multiple contigous load commands with the same page type.
-        for i in 1..0xfffff {
-            let following_load_command = load_commands.next_if(|next_load_segment| {
-                next_load_segment.physical_address > gpa
-                    && next_load_segment.physical_address - gpa == i
-                    && next_load_segment.payload.page_type() == first_page_type
-                    && next_load_segment.vmpl1_perms == first_vmpl1_perms
-            });
-            let Some(following_load_command) = following_load_command else {
-                break;
-            };
-            pages.push(Page {
-                bytes: following_load_command.payload.bytes(),
-            });
-        }
-
-        let slot = Slot::for_launch_update(&vm, gpa, &pages, false)
-            .context("failed to create slot for launch update")?;
-
+        // Create and map the slot.
+        let slot = Slot::new(&vm, gpa, num_pages * 0x1000, true, false)
+            .context("failed to create slot")?;
+        let slot_id = u16::try_from(memory_slots.len())?;
         unsafe {
             vm.map_encrypted_memory(slot_id, &slot)?;
         }
 
-        if let Some(first_page_type) = first_page_type {
-            let update_start = Instant::now();
-
-            num_launch_pages += pages.len();
-            total_launch_duration += update_start.elapsed();
-            if first_page_type == PageType::Normal {
-                num_data_pages += pages.len();
-            }
+        // Populate the slot's content.
+        let pages = once(first_load_command)
+            .chain(load_commands.by_ref())
+            .take(num_pages);
+        for command in pages {
+            let ptr = slot.shared_ptr(command.physical_address.start_address())?;
+            ptr.write(*command.payload.bytes());
         }
 
-        memory_slots.insert(slot_id, slot);
-
-        pages.clear();
-        slot_id += 1;
+        memory_slots.push(slot);
     }
 
-    info!(
-        num_launch_pages,
-        num_data_pages,
-        ?total_launch_duration,
-        "launched"
-    );
+    let len =
+        DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
+    let len = usize::try_from(len)?;
+    let dynamic_slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, true, false)?;
+    let slot_id = u16::try_from(memory_slots.len())?;
+    unsafe {
+        vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
+    }
+    let dynamic_slot = Arc::new(dynamic_slot);
+
+    info!("launched");
 
     install_signal_handler();
 
     // Create a bunch of APs.
-    let dynamic_memory = Arc::new(Mutex::new(DynamicMemory::new(vm.clone())));
+    let dynamic_memory = Arc::new(Mutex::new(DynamicMemory::new()));
     let (sender, receiver) = mpsc::channel();
     let run_states = repeat_with(RunState::default)
         .take(usize::from(MAX_APS_COUNT))
@@ -214,10 +195,12 @@ pub fn main(
         .zip(aps)
         .map(|(i, ap)| {
             let sender = sender.clone();
+            let dynamic_slot = dynamic_slot.clone();
             let dynamic_memory = dynamic_memory.clone();
             let run_states = run_states.clone();
             std::thread::spawn(move || {
-                let res = run_kernel_vcpu(i, ap, &sender, &dynamic_memory, &run_states);
+                let res =
+                    run_kernel_vcpu(i, ap, &sender, &dynamic_slot, &dynamic_memory, &run_states);
                 if let Err(err) = res {
                     let _ = sender.send(OutputEvent::Fail(err));
                 }
@@ -268,6 +251,7 @@ fn run_kernel_vcpu(
     id: u8,
     ap: VcpuHandle,
     sender: &mpsc::Sender<OutputEvent<()>>,
+    dynamic_slot: &Slot,
     dynamic_memory: &Mutex<DynamicMemory>,
     run_states: &[RunState],
 ) -> Result<()> {
@@ -391,17 +375,22 @@ fn run_kernel_vcpu(
                         let slot_idx = dynamic_memory
                             .lock()
                             .unwrap()
-                            .allocate_slot_id()?
+                            .allocate_slot_id()
                             .context("OOM")?;
                         regs.rax = u64::from(slot_idx.get());
                         ap.set_regs(regs)?;
                     }
                     nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
                         let slot_idx = SlotIndex::new(u16::try_from(regs.rdi)?);
-                        dynamic_memory
-                            .lock()
-                            .unwrap()
-                            .deallocate_slot_id(slot_idx)?;
+                        dynamic_memory.lock().unwrap().deallocate_slot_id(slot_idx);
+
+                        // Remove the backing memory.
+                        let shared_mapping = dynamic_slot.shared_mapping().unwrap();
+                        let offset = usize::from(slot_idx.get()) * Size2MiB::SIZE as usize;
+                        unsafe {
+                            let addr = shared_mapping.as_ptr().byte_add(offset);
+                            madvise(addr, Size2MiB::SIZE as usize, MmapAdvise::MADV_DONTNEED)?;
+                        }
                     }
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = regs.rdi as usize;
@@ -538,44 +527,27 @@ enum NextRunStateValue {
 const SLOTS: usize = 1 << 15;
 
 struct DynamicMemory {
-    vm: Arc<VmHandle>,
-    slots: HashMap<u16, Slot>,
+    in_use: [bool; SLOTS],
 }
 
 impl DynamicMemory {
-    pub fn new(vm: Arc<VmHandle>) -> Self {
+    pub fn new() -> Self {
         Self {
-            vm,
-            slots: HashMap::new(),
+            in_use: [false; SLOTS],
         }
     }
 
-    pub fn allocate_slot_id(&mut self) -> Result<Option<SlotIndex>> {
-        for slot_id in 0..SLOTS as u16 {
-            if let Entry::Vacant(entry) = self.slots.entry(slot_id) {
-                let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
-                let slot = entry.insert(Slot::new(&self.vm, gpa, false)?);
-
-                let base = 1 << 6;
-                let kvm_slot_id = base + slot_id;
-                unsafe {
-                    self.vm.map_encrypted_memory(kvm_slot_id, slot)?;
-                }
-
-                return Ok(Some(SlotIndex::new(slot_id)));
-            }
-        }
-
-        Ok(None)
+    pub fn allocate_slot_id(&mut self) -> Option<SlotIndex> {
+        // Find a slot that's not in use.
+        let slot_id = self.in_use.iter().position(|&in_use| !in_use)?;
+        // Mark the slot as in-use.
+        self.in_use[slot_id] = true;
+        // Return the slot index.
+        let slot_id = u16::try_from(slot_id).unwrap();
+        Some(SlotIndex::new(slot_id))
     }
 
-    pub fn deallocate_slot_id(&mut self, id: SlotIndex) -> Result<()> {
-        let slot = self
-            .slots
-            .remove(&id.get())
-            .context("can't deallocate slot that's not present")?;
-        let base = 1 << 6;
-        let kvm_slot_id = base + id.get();
-        unsafe { self.vm.unmap_encrypted_memory(kvm_slot_id, &slot) }
+    pub fn deallocate_slot_id(&mut self, id: SlotIndex) {
+        self.in_use[usize::from(id.get())] = false;
     }
 }

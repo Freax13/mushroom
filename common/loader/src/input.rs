@@ -16,7 +16,7 @@ pub struct Input<T> {
 
 pub fn load_input(
     inputs: &[Input<impl AsRef<[u8]>>],
-) -> (impl Iterator<Item = LoadCommand> + '_, [u8; 32]) {
+) -> (impl Iterator<Item = LoadCommand> + Clone + '_, [u8; 32]) {
     let mut header = Header::end();
     let mut headers = inputs
         .iter()
@@ -63,6 +63,8 @@ pub fn load_input(
                 vcpu_id: 0,
                 vmpl1_perms: VmplPermissions::empty(),
                 payload,
+                shared: true,
+                private: true,
             }),
         header.hash(),
     )
