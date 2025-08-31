@@ -20,44 +20,18 @@ impl Configuration {
     pub fn new(supervisor: &[u8], kernel: &[u8], init: &[u8], tee_tcb_svn: TeeTcbSvn) -> Self {
         let mut hasher = Sha384::new();
 
-        let mut commands =
-            generate_base_load_commands(Some(supervisor), kernel, init, false).peekable();
-
-        let mut pages = Vec::new();
-
-        while let Some(first_load_command) = commands
-            .by_ref()
+        let commands = generate_base_load_commands(Some(supervisor), kernel, init, false);
+        for command in commands
             // Only consider private memory.
-            .find(|command| command.payload.page_type().is_some())
+            .filter(|command| command.payload.page_type().is_some())
         {
-            let gpa = first_load_command.physical_address;
+            let gpa = command.physical_address;
 
-            pages.push(first_load_command.payload.bytes());
+            mem_page_add(&mut hasher, gpa);
 
-            // Coalesce multiple contigous load commands with the same page type.
-            for i in 1.. {
-                let following_load_command = commands.next_if(|next_load_segment| {
-                    next_load_segment.physical_address > gpa
-                        && next_load_segment.physical_address - gpa == i
-                        && next_load_segment.payload.page_type().is_some()
-                });
-                let Some(following_load_command) = following_load_command else {
-                    break;
-                };
-                pages.push(following_load_command.payload.bytes());
-            }
-
-            for i in 0..pages.len() {
-                let gpa = gpa + i as u64;
-                mem_page_add(&mut hasher, gpa);
-            }
-
-            for (i, page) in pages.drain(..).enumerate() {
-                let gpa = gpa + i as u64;
-                for (j, chunk) in page.chunks(256).enumerate() {
-                    let gpa = gpa.start_address() + (j * chunk.len()) as u64;
-                    mr_extend(&mut hasher, gpa, chunk.try_into().unwrap());
-                }
+            for (i, chunk) in command.payload.bytes().chunks(256).enumerate() {
+                let gpa = gpa.start_address() + (i * chunk.len()) as u64;
+                mr_extend(&mut hasher, gpa, chunk.try_into().unwrap());
             }
         }
 

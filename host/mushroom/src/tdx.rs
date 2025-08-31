@@ -1,5 +1,6 @@
 use std::{
     array,
+    iter::once,
     os::unix::thread::JoinHandleExt,
     sync::{
         Arc,
@@ -178,14 +179,13 @@ impl VmContext {
 
         vm.set_tsc_khz(TSC_MHZ * 1000)?;
 
-        let (load_commands, host_data) = loader::generate_load_commands(
+        let (mut load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
             kernel,
             init,
             load_kasan_shadow_mappings,
             inputs,
         );
-        let mut load_commands = load_commands.peekable();
 
         let mrconfigid = array::from_fn(|i| host_data.get(i).copied().unwrap_or_default());
         vm.tdx_init_vm(&cpuid_entries, mrconfigid)?;
@@ -199,67 +199,61 @@ impl VmContext {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut num_launch_pages = 0;
-
         let mut memory_slots = Vec::new();
-        let mut pages = Vec::with_capacity(0xfffff);
-
         while let Some(first_load_command) = load_commands.next() {
             let gpa = first_load_command.physical_address;
-            let is_private_mem = first_load_command.payload.page_type().is_some();
 
-            pages.push(Page {
-                bytes: first_load_command.payload.bytes(),
-            });
+            // Figure out how big the next slot can be by counting pages with
+            // contiguous GPAs and identical shared and private mapping
+            // requirements.
+            let num_pages = 1 + load_commands
+                .clone()
+                .zip(1..)
+                .take_while(|(next, i)| {
+                    next.physical_address == gpa + *i
+                        && next.shared == first_load_command.shared
+                        && next.private == first_load_command.private
+                })
+                .count();
 
-            // Coalesce multiple contigous load commands with the same page type.
-            for i in 1.. {
-                let following_load_command = load_commands.next_if(|next_load_segment| {
-                    next_load_segment.physical_address > gpa
-                        && next_load_segment.physical_address - gpa == i
-                        && next_load_segment.payload.page_type().is_some() == is_private_mem
-                        && next_load_segment.shared == first_load_command.shared
-                        && next_load_segment.private == first_load_command.private
-                });
-                let Some(following_load_command) = following_load_command else {
-                    break;
-                };
-                pages.push(Page {
-                    bytes: following_load_command.payload.bytes(),
-                });
-            }
-
-            let slot = Slot::with_content(
+            // Create and map the slot.
+            let slot = Slot::new(
                 &vm,
                 gpa,
-                &pages,
+                num_pages * 0x1000,
                 first_load_command.shared,
                 first_load_command.private,
             )
-            .context("failed to create slot for launch update")?;
-
+            .context("failed to create slot")?;
             let slot_id = u16::try_from(memory_slots.len())?;
             unsafe {
                 vm.map_encrypted_memory(slot_id, &slot)?;
             }
 
-            if is_private_mem {
-                vm.set_memory_attributes(
-                    gpa.start_address().as_u64(),
-                    u64::try_from(slot.len())?,
-                    KvmMemoryAttributes::PRIVATE,
-                )?;
+            // Populate the slot's content.
+            let pages = once(first_load_command)
+                .chain(load_commands.by_ref())
+                .take(num_pages);
+            for command in pages {
+                let bytes = command.payload.bytes();
+                if command.payload.page_type().is_some() {
+                    // Private memory is added with MEM.PAGE.ADD and MR.EXTEND.
 
-                vcpus[0].memory_mapping(gpa.start_address().as_u64(), &pages)?;
+                    let gpa = command.physical_address.start_address().as_u64();
 
-                vm.tdx_extend_memory(gpa.start_address().as_u64(), u64::try_from(pages.len())?)?;
+                    vm.set_memory_attributes(gpa, 0x1000, KvmMemoryAttributes::PRIVATE)?;
 
-                num_launch_pages += pages.len();
+                    vcpus[0].memory_mapping(gpa, &[Page { bytes }])?;
+
+                    vm.tdx_extend_memory(gpa, 1)?;
+                } else {
+                    // Shared memory is added by coping directly into the shared mapping.
+                    let ptr = slot.shared_ptr(command.physical_address.start_address())?;
+                    ptr.write(bytes);
+                }
             }
 
             memory_slots.push(slot);
-
-            pages.clear();
         }
 
         vm.tdx_finalize_vm()?;
@@ -273,7 +267,7 @@ impl VmContext {
             vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
         }
 
-        info!(num_launch_pages, "launched");
+        info!("launched");
         let start = Instant::now();
 
         start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
