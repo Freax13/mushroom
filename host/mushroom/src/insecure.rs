@@ -21,6 +21,7 @@ use loader::Input;
 use mushroom_verify::{HashedInput, InputHash, OutputHash, forge_insecure_attestation_report};
 use nix::{
     sys::{
+        mman::{MmapAdvise, madvise},
         pthread::pthread_kill,
         signal::SigEvent,
         time::TimeSpec,
@@ -33,10 +34,13 @@ use snp_types::PageType;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
 use volatile::map_field;
-use x86_64::registers::{
-    control::{Cr0Flags, Cr4Flags},
-    model_specific::EferFlags,
-    xcontrol::XCr0Flags,
+use x86_64::{
+    registers::{
+        control::{Cr0Flags, Cr4Flags},
+        model_specific::EferFlags,
+        xcontrol::XCr0Flags,
+    },
+    structures::paging::{PageSize, Size2MiB},
 };
 
 use crate::{
@@ -189,12 +193,12 @@ pub fn main(
     let len =
         DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
     let len = usize::try_from(len)?;
-    let slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, true, false)?;
+    let dynamic_slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, true, false)?;
     let slot_id = u16::try_from(memory_slots.len())?;
     unsafe {
-        vm.map_encrypted_memory(slot_id, &slot)?;
+        vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
     }
-    memory_slots.push(slot);
+    let dynamic_slot = Arc::new(dynamic_slot);
 
     info!(
         num_launch_pages,
@@ -222,10 +226,12 @@ pub fn main(
         .zip(aps)
         .map(|(i, ap)| {
             let sender = sender.clone();
+            let dynamic_slot = dynamic_slot.clone();
             let dynamic_memory = dynamic_memory.clone();
             let run_states = run_states.clone();
             std::thread::spawn(move || {
-                let res = run_kernel_vcpu(i, ap, &sender, &dynamic_memory, &run_states);
+                let res =
+                    run_kernel_vcpu(i, ap, &sender, &dynamic_slot, &dynamic_memory, &run_states);
                 if let Err(err) = res {
                     let _ = sender.send(OutputEvent::Fail(err));
                 }
@@ -276,6 +282,7 @@ fn run_kernel_vcpu(
     id: u8,
     ap: VcpuHandle,
     sender: &mpsc::Sender<OutputEvent<()>>,
+    dynamic_slot: &Slot,
     dynamic_memory: &Mutex<DynamicMemory>,
     run_states: &[RunState],
 ) -> Result<()> {
@@ -407,6 +414,14 @@ fn run_kernel_vcpu(
                     nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
                         let slot_idx = SlotIndex::new(u16::try_from(regs.rdi)?);
                         dynamic_memory.lock().unwrap().deallocate_slot_id(slot_idx);
+
+                        // Remove the backing memory.
+                        let shared_mapping = dynamic_slot.shared_mapping().unwrap();
+                        let offset = usize::from(slot_idx.get()) * Size2MiB::SIZE as usize;
+                        unsafe {
+                            let addr = shared_mapping.as_ptr().byte_add(offset);
+                            madvise(addr, Size2MiB::SIZE as usize, MmapAdvise::MADV_DONTNEED)?;
+                        }
                     }
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = regs.rdi as usize;

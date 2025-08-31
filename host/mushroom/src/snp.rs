@@ -17,7 +17,10 @@ use constants::{
 };
 use loader::Input;
 use mushroom_verify::snp::{LaunchDigest, create_signature, id_block};
-use nix::sys::pthread::pthread_kill;
+use nix::{
+    fcntl::{FallocateFlags, fallocate},
+    sys::pthread::pthread_kill,
+};
 pub use snp_types::guest_policy::GuestPolicy;
 use snp_types::{
     PageType,
@@ -127,6 +130,7 @@ pub fn main(
 struct VmContext {
     vm: Arc<VmHandle>,
     memory_slots: Vec<Slot>,
+    dynamic_slot: Slot,
     start: Instant,
 }
 
@@ -301,12 +305,11 @@ impl VmContext {
         let len =
             DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
         let len = usize::try_from(len)?;
-        let slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, false, true)?;
+        let dynamic_slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, false, true)?;
         let slot_id = u16::try_from(memory_slots.len())?;
         unsafe {
-            vm.map_encrypted_memory(slot_id, &slot)?;
+            vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
         }
-        memory_slots.push(slot);
 
         info!(
             num_launch_pages,
@@ -329,6 +332,7 @@ impl VmContext {
             Self {
                 vm,
                 memory_slots,
+                dynamic_slot,
                 start,
             },
             vcpus,
@@ -393,6 +397,18 @@ impl VmContext {
                                 Size2MiB::SIZE,
                                 attributes,
                             )?;
+
+                            // Remove the backing memory when memory is disabled.
+                            if !enabled {
+                                let restricted_fd = self.dynamic_slot.restricted_fd().unwrap();
+                                fallocate(
+                                    restricted_fd,
+                                    FallocateFlags::FALLOC_FL_KEEP_SIZE
+                                        | FallocateFlags::FALLOC_FL_PUNCH_HOLE,
+                                    i64::from(slot_id) * Size2MiB::SIZE as i64,
+                                    Size2MiB::SIZE as i64,
+                                )?;
+                            }
                         }
                         other => unimplemented!("unimplemented io port: {other}"),
                     }
