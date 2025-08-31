@@ -20,7 +20,7 @@ use loader::Input;
 use mushroom_verify::snp::{LaunchDigest, create_signature, id_block};
 use nix::{
     fcntl::{FallocateFlags, fallocate},
-    sys::pthread::pthread_kill,
+    sys::{mman::madvise, pthread::pthread_kill},
 };
 pub use snp_types::guest_policy::GuestPolicy;
 use snp_types::id_block::{
@@ -37,7 +37,7 @@ use crate::{
     MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, find_slot, install_signal_handler,
     kvm::{
         KVM_HC_MAP_GPA_RANGE, KvmCap, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
-        KvmMemoryAttributes, MpState, SevHandle, VcpuHandle, VmHandle,
+        KvmMemoryAttributes, MpState, Page, SevHandle, VcpuHandle, VmHandle,
     },
     logging::start_log_collection,
     profiler::{ProfileFolder, start_profile_collection},
@@ -342,9 +342,30 @@ impl VmContext {
                     },
                 ) => {
                     let mut attributes = KvmMemoryAttributes::empty();
-                    attributes.set(KvmMemoryAttributes::PRIVATE, attrs.get_bit(4));
+                    let private = attrs.get_bit(4);
+                    attributes.set(KvmMemoryAttributes::PRIVATE, private);
                     self.vm
                         .set_memory_attributes(address, num_pages * 0x1000, attributes)?;
+
+                    if private {
+                        // Invalidate shared mapping.
+                        for i in 0..num_pages {
+                            let gpa = PhysAddr::new(address + i * Size4KiB::SIZE);
+                            let slot =
+                                find_slot(PhysFrame::containing_address(gpa), &self.memory_slots)?;
+                            let ptr = slot.shared_ptr::<Page>(gpa)?;
+                            let ptr = ptr.as_raw_ptr();
+                            unsafe {
+                                madvise(
+                                    ptr.cast(),
+                                    Size4KiB::SIZE as usize,
+                                    nix::sys::mman::MmapAdvise::MADV_DONTNEED,
+                                )?;
+                            }
+                        }
+                    } else {
+                        unimplemented!()
+                    }
 
                     kvm_run.update(|mut run| {
                         hypercall.ret = 0;

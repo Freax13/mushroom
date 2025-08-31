@@ -20,7 +20,7 @@ use constants::{
 use loader::Input;
 use nix::{
     fcntl::{FallocateFlags, fallocate},
-    sys::pthread::pthread_kill,
+    sys::{mman::madvise, pthread::pthread_kill},
 };
 use tdx_types::ghci::{MAP_GPA, VMCALL_SUCCESS};
 use tracing::{debug, info};
@@ -323,6 +323,28 @@ impl VmContext {
                                 num_pages * 0x1000,
                                 attributes,
                             )?;
+
+                            if private {
+                                // Invalidate shared mapping.
+                                for i in 0..num_pages {
+                                    let gpa = PhysAddr::new(address + i * Size4KiB::SIZE);
+                                    let slot = find_slot(
+                                        PhysFrame::containing_address(gpa),
+                                        &self.memory_slots,
+                                    )?;
+                                    let ptr = slot.shared_ptr::<Page>(gpa)?;
+                                    let ptr = ptr.as_raw_ptr();
+                                    unsafe {
+                                        madvise(
+                                            ptr.cast(),
+                                            Size4KiB::SIZE as usize,
+                                            nix::sys::mman::MmapAdvise::MADV_DONTNEED,
+                                        )?;
+                                    }
+                                }
+                            } else {
+                                unimplemented!()
+                            }
 
                             tdx_exit.out_r10 = VMCALL_SUCCESS;
                         }
