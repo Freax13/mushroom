@@ -158,7 +158,7 @@ pub fn main(
             .take(num_pages);
         for command in pages {
             let ptr = slot.shared_ptr(command.physical_address.start_address())?;
-            ptr.write(command.payload.bytes());
+            ptr.write(*command.payload.bytes());
         }
 
         memory_slots.push(slot);

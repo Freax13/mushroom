@@ -243,13 +243,13 @@ impl VmContext {
 
                     vm.set_memory_attributes(gpa, 0x1000, KvmMemoryAttributes::PRIVATE)?;
 
-                    vcpus[0].memory_mapping(gpa, &[Page { bytes }])?;
+                    vcpus[0].memory_mapping(gpa, &[Page { bytes: *bytes }])?;
 
                     vm.tdx_extend_memory(gpa, 1)?;
                 } else {
                     // Shared memory is added by coping directly into the shared mapping.
                     let ptr = slot.shared_ptr(command.physical_address.start_address())?;
-                    ptr.write(bytes);
+                    ptr.write(*bytes);
                 }
             }
 

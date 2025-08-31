@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use bytemuck::cast;
+use bytemuck::cast_ref;
 use snp_types::{PageType, VmplPermissions, cpuid::CpuidPage};
 use x86_64::structures::paging::PhysFrame;
 
@@ -49,14 +49,14 @@ impl LoadCommandPayload {
         }
     }
 
-    pub fn bytes(&self) -> [u8; 0x1000] {
+    pub fn bytes(&self) -> &[u8; 0x1000] {
         match self {
-            LoadCommandPayload::Normal(bytes) => *bytes,
-            LoadCommandPayload::Vmsa(bytes) => *bytes,
-            LoadCommandPayload::Zero => [0; 0x1000],
-            LoadCommandPayload::Secrets => [0; 0x1000],
-            LoadCommandPayload::Cpuid(cpuid) => cast(*cpuid),
-            LoadCommandPayload::Shared(bytes) => *bytes,
+            LoadCommandPayload::Normal(bytes) => bytes,
+            LoadCommandPayload::Vmsa(bytes) => bytes,
+            LoadCommandPayload::Zero => &[0; 0x1000],
+            LoadCommandPayload::Secrets => &[0; 0x1000],
+            LoadCommandPayload::Cpuid(cpuid) => cast_ref(cpuid),
+            LoadCommandPayload::Shared(bytes) => bytes,
         }
     }
 }

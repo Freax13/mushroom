@@ -263,7 +263,7 @@ impl VmContext {
                 } else {
                     // Shared memory is added by coping directly into the shared mapping.
                     let ptr = slot.shared_ptr(command.physical_address.start_address())?;
-                    ptr.write(bytes);
+                    ptr.write(*bytes);
                 }
             }
 
