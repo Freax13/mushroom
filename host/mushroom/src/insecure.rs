@@ -6,6 +6,7 @@ use core::{
     iter::{Iterator, repeat_with},
 };
 use std::{
+    iter::once,
     os::unix::thread::JoinHandleExt,
     sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
@@ -30,7 +31,6 @@ use nix::{
     time::ClockId,
     unistd::gettid,
 };
-use snp_types::PageType;
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
 use volatile::map_field;
@@ -45,7 +45,7 @@ use x86_64::{
 
 use crate::{
     MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, install_signal_handler, is_efault,
-    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, Page, VcpuHandle},
+    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, VcpuHandle},
     logging::start_log_collection,
     slot::Slot,
 };
@@ -130,64 +130,38 @@ pub fn main(
             .get() as usize;
         let _ = KVM_XSAVE_SIZE.set(xsave_size);
     }
-
-    let (load_commands, _host_data) =
+    let (mut load_commands, _host_data) =
         loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, inputs);
-    let mut load_commands = load_commands.peekable();
-
-    let mut num_launch_pages = 0;
-    let mut num_data_pages = 0;
-    let mut total_launch_duration = Duration::ZERO;
-
     let mut memory_slots = Vec::new();
-    let mut pages = Vec::with_capacity(0xfffff);
-
     while let Some(first_load_command) = load_commands.next() {
         let gpa = first_load_command.physical_address;
-        let first_page_type = first_load_command.payload.page_type();
-        let first_vmpl1_perms = first_load_command.vmpl1_perms;
 
-        pages.push(Page {
-            bytes: first_load_command.payload.bytes(),
-        });
+        // Figure out how big the next slot can be by counting pages with
+        // contiguous GPAs.
+        let num_pages = 1 + load_commands
+            .clone()
+            .zip(1..)
+            .take_while(|(next, i)| next.physical_address == gpa + *i)
+            .count();
 
-        // Coalesce multiple contigous load commands with the same page type.
-        for i in 1..0xfffff {
-            let following_load_command = load_commands.next_if(|next_load_segment| {
-                next_load_segment.physical_address > gpa
-                    && next_load_segment.physical_address - gpa == i
-                    && next_load_segment.payload.page_type() == first_page_type
-                    && next_load_segment.vmpl1_perms == first_vmpl1_perms
-            });
-            let Some(following_load_command) = following_load_command else {
-                break;
-            };
-            pages.push(Page {
-                bytes: following_load_command.payload.bytes(),
-            });
-        }
-
-        let slot = Slot::with_content(&vm, gpa, &pages, true, false)
-            .context("failed to create slot for launch update")?;
-
+        // Create and map the slot.
+        let slot = Slot::new(&vm, gpa, num_pages * 0x1000, true, false)
+            .context("failed to create slot")?;
         let slot_id = u16::try_from(memory_slots.len())?;
         unsafe {
             vm.map_encrypted_memory(slot_id, &slot)?;
         }
 
-        if let Some(first_page_type) = first_page_type {
-            let update_start = Instant::now();
-
-            num_launch_pages += pages.len();
-            total_launch_duration += update_start.elapsed();
-            if first_page_type == PageType::Normal {
-                num_data_pages += pages.len();
-            }
+        // Populate the slot's content.
+        let pages = once(first_load_command)
+            .chain(load_commands.by_ref())
+            .take(num_pages);
+        for command in pages {
+            let ptr = slot.shared_ptr(command.physical_address.start_address())?;
+            ptr.write(command.payload.bytes());
         }
 
         memory_slots.push(slot);
-
-        pages.clear();
     }
 
     let len =
@@ -200,12 +174,7 @@ pub fn main(
     }
     let dynamic_slot = Arc::new(dynamic_slot);
 
-    info!(
-        num_launch_pages,
-        num_data_pages,
-        ?total_launch_duration,
-        "launched"
-    );
+    info!("launched");
 
     install_signal_handler();
 
