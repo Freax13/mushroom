@@ -1,4 +1,5 @@
 use std::{
+    iter::once,
     os::unix::thread::JoinHandleExt,
     sync::{
         Arc,
@@ -22,9 +23,8 @@ use nix::{
     sys::pthread::pthread_kill,
 };
 pub use snp_types::guest_policy::GuestPolicy;
-use snp_types::{
-    PageType,
-    id_block::{EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey},
+use snp_types::id_block::{
+    EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey,
 };
 use tracing::{debug, info};
 pub use vcek_kds::Vcek;
@@ -37,7 +37,7 @@ use crate::{
     MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, find_slot, install_signal_handler,
     kvm::{
         KVM_HC_MAP_GPA_RANGE, KvmCap, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
-        KvmMemoryAttributes, MpState, Page, SevHandle, VcpuHandle, VmHandle,
+        KvmMemoryAttributes, MpState, SevHandle, VcpuHandle, VmHandle,
     },
     logging::start_log_collection,
     profiler::{ProfileFolder, start_profile_collection},
@@ -195,7 +195,7 @@ impl VmContext {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let (load_commands, host_data) = loader::generate_load_commands(
+        let (mut load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
             kernel,
             init,
@@ -203,87 +203,71 @@ impl VmContext {
             inputs,
         );
         let mut launch_digest = LaunchDigest::new();
-        let load_commands = load_commands.inspect(|cmd| launch_digest.add(cmd));
-        let mut load_commands = load_commands.peekable();
-
-        let mut num_launch_pages = 0;
-        let mut num_data_pages = 0;
-        let mut total_launch_duration = Duration::ZERO;
-
         let mut memory_slots = Vec::new();
-        let mut pages = Vec::with_capacity(0xfffff);
-
         while let Some(first_load_command) = load_commands.next() {
             let gpa = first_load_command.physical_address;
-            let first_page_type = first_load_command.payload.page_type();
-            let first_vmpl1_perms = first_load_command.vmpl1_perms;
 
-            pages.push(Page {
-                bytes: first_load_command.payload.bytes(),
-            });
+            // Figure out how big the next slot can be by counting pages with
+            // contiguous GPAs and identical shared and private mapping
+            // requirements.
+            let num_pages = 1 + load_commands
+                .clone()
+                .zip(1..)
+                .take_while(|(next, i)| {
+                    next.physical_address == gpa + *i
+                        && next.shared == first_load_command.shared
+                        && next.private == first_load_command.private
+                })
+                .count();
 
-            // Coalesce multiple contigous load commands with the same page type.
-            for i in 1.. {
-                let following_load_command = load_commands.next_if(|next_load_segment| {
-                    next_load_segment.physical_address > gpa
-                        && next_load_segment.physical_address - gpa == i
-                        && first_page_type != Some(PageType::Vmsa)
-                        && next_load_segment.payload.page_type() == first_page_type
-                        && next_load_segment.vmpl1_perms == first_vmpl1_perms
-                        && next_load_segment.shared == first_load_command.shared
-                        && next_load_segment.private == first_load_command.private
-                });
-                let Some(following_load_command) = following_load_command else {
-                    break;
-                };
-                pages.push(Page {
-                    bytes: following_load_command.payload.bytes(),
-                });
-            }
-
-            let slot = Slot::with_content(
+            // Create and map the slot.
+            let slot = Slot::new(
                 &vm,
                 gpa,
-                &pages,
+                num_pages * 0x1000,
                 first_load_command.shared,
                 first_load_command.private,
             )
-            .context("failed to create slot for launch update")?;
-
+            .context("failed to create slot")?;
             let slot_id = u16::try_from(memory_slots.len())?;
             unsafe {
                 vm.map_encrypted_memory(slot_id, &slot)?;
             }
 
-            if let Some(first_page_type) = first_page_type {
-                let update_start = Instant::now();
+            // Populate the slot's content.
+            let pages = once(first_load_command)
+                .chain(load_commands.by_ref())
+                .take(num_pages);
+            for command in pages {
+                let bytes = command.payload.bytes();
+                if let Some(page_type) = command.payload.page_type() {
+                    // Private memory is added with LAUNCH_UPDATE.
 
-                vm.set_memory_attributes(
-                    gpa.start_address().as_u64(),
-                    u64::try_from(slot.len())?,
-                    KvmMemoryAttributes::PRIVATE,
-                )?;
+                    vm.set_memory_attributes(
+                        command.physical_address.start_address().as_u64(),
+                        0x1000,
+                        KvmMemoryAttributes::PRIVATE,
+                    )?;
 
-                vm.sev_snp_launch_update(
-                    gpa.start_address().as_u64(),
-                    pages.as_ptr() as u64,
-                    u64::try_from(slot.len())?,
-                    first_page_type,
-                    first_load_command.vcpu_id,
-                    first_vmpl1_perms,
-                    sev_handle,
-                )?;
+                    vm.sev_snp_launch_update(
+                        command.physical_address.start_address().as_u64(),
+                        bytes.as_ptr() as u64,
+                        0x1000,
+                        page_type,
+                        command.vcpu_id,
+                        command.vmpl1_perms,
+                        sev_handle,
+                    )?;
 
-                num_launch_pages += pages.len();
-                total_launch_duration += update_start.elapsed();
-                if first_page_type == PageType::Normal {
-                    num_data_pages += pages.len();
+                    launch_digest.add(&command);
+                } else {
+                    // Shared memory is added by coping directly into the shared mapping.
+                    let ptr = slot.shared_ptr(command.physical_address.start_address())?;
+                    ptr.write(bytes);
                 }
             }
 
             memory_slots.push(slot);
-
-            pages.clear();
         }
 
         let launch_digest = launch_digest.finish();
@@ -311,12 +295,7 @@ impl VmContext {
             vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
         }
 
-        info!(
-            num_launch_pages,
-            num_data_pages,
-            ?total_launch_duration,
-            "launched"
-        );
+        info!("launched");
         let start = Instant::now();
 
         start_log_collection(&memory_slots, kernel::LOG_BUFFER)?;
