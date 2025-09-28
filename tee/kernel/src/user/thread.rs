@@ -451,7 +451,14 @@ impl Thread {
                 }
 
                 let virtual_memory = state.virtual_memory.clone();
-                let sigaction = state.signal_handler_table.get(sig_info.signal);
+
+                let mut guard = state.signal_handler_table.sigactions.lock();
+                let entry = &mut guard[sig_info.signal.get() - 1];
+                let sigaction = *entry;
+                if entry.sa_flags.contains(SigactionFlags::RESETHAND) {
+                    entry.sa_handler_or_sigaction = Sigaction::SIG_DFL;
+                }
+                drop(guard);
 
                 match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
                     (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => {
@@ -1236,6 +1243,7 @@ bitflags! {
         const ONSTACK = 0x08000000;
         const RESTART = 0x10000000;
         const NODEFER = 0x40000000;
+        const RESETHAND = 0x80000000;
     }
 }
 
