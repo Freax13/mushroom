@@ -86,12 +86,6 @@ impl PortData {
         let ip_version = IpVersion::from(ip);
         let local_ip = ip.is_unspecified().not().then_some(ip);
 
-        if let Some(local_ip) = local_ip {
-            // We only support binding to localhost -> make sure that the
-            // address is a loopback address.
-            ensure!(local_ip.is_loopback(), AddrNotAvail);
-        }
-
         // When binding an ephemeral port, ignore reuse options and pretend
         // they're not set.
         let effective_reuse_addr = !ephemeral && reuse_addr;
@@ -286,8 +280,23 @@ impl TcpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, mut socket_addr: net::SocketAddr) -> Result<bool> {
+    fn try_bind(&self, mut socket_addr: net::SocketAddr, ctx: &FileAccessContext) -> Result<bool> {
         ensure!(IpVersion::from(socket_addr.ip()) == self.ip_version, Inval);
+
+        // We only support binding to localhost -> make sure that the
+        // address is a loopback address.
+        ensure!(
+            socket_addr.ip().is_unspecified() || socket_addr.ip().is_loopback(),
+            AddrNotAvail
+        );
+
+        // Make sure that the user has permission to bind the port.
+        ensure!(
+            socket_addr.port() == 0
+                || socket_addr.port() >= 1024
+                || ctx.filesystem_user_id == Uid::SUPER_USER,
+            Acces
+        );
 
         let guard = self.internal.lock();
         let reuse_addr = guard.reuse_addr;
@@ -352,8 +361,8 @@ impl TcpSocket {
         Ok(true)
     }
 
-    fn get_or_bind_ephemeral(&self) -> Result<&BoundSocket> {
-        self.try_bind(self.ip_version.unspecified_addr())?;
+    fn get_or_bind_ephemeral(&self, ctx: &FileAccessContext) -> Result<&BoundSocket> {
+        self.try_bind(self.ip_version.unspecified_addr(), ctx)?;
         Ok(self.bound_socket.get().unwrap())
     }
 }
@@ -375,9 +384,9 @@ impl OpenFileDescription for TcpSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    fn bind(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let addr = net::SocketAddr::try_from(addr)?;
-        ensure!(self.try_bind(addr)?, Inval);
+        ensure!(self.try_bind(addr, ctx)?, Inval);
         Ok(())
     }
 
@@ -408,11 +417,11 @@ impl OpenFileDescription for TcpSocket {
         Ok(SocketAddr::from(active.remote_addr))
     }
 
-    fn listen(&self, backlog: usize, _: &FileAccessContext) -> Result<()> {
+    fn listen(&self, backlog: usize, ctx: &FileAccessContext) -> Result<()> {
         // Make sure that the backlog is never empty.
         let backlog = cmp::max(backlog, 1);
 
-        let bound = self.get_or_bind_ephemeral()?;
+        let bound = self.get_or_bind_ephemeral(ctx)?;
 
         let guard = PORTS.lock();
         // Check if the socket is allowed to listen on the given port.
@@ -494,10 +503,10 @@ impl OpenFileDescription for TcpSocket {
         Ok((fd, socket_addr))
     }
 
-    async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let v6only = self.internal.lock().v6only;
 
-        let bound = self.get_or_bind_ephemeral()?;
+        let bound = self.get_or_bind_ephemeral(ctx)?;
 
         let remote_addr = net::SocketAddr::try_from(addr)?;
 
