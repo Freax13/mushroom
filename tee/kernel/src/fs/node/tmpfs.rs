@@ -518,7 +518,7 @@ impl Directory for TmpFsDir {
         node.watchers()
             .send_event(InotifyMask::DELETE_SELF, None, None);
         self.watchers()
-            .send_event(InotifyMask::DELETE_SELF, None, Some(file_name));
+            .send_event(InotifyMask::DELETE, None, Some(file_name));
 
         Ok(())
     }
@@ -539,7 +539,7 @@ impl Directory for TmpFsDir {
         node.watchers()
             .send_event(InotifyMask::DELETE_SELF, None, None);
         self.watchers()
-            .send_event(InotifyMask::DELETE_SELF, None, Some(file_name));
+            .send_event(InotifyMask::DELETE, None, Some(file_name));
 
         Ok(())
     }
