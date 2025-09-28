@@ -4313,6 +4313,10 @@ fn inotify_add_watch(
     } else {
         lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?
     };
+    if mask.contains(InotifyMask::ONLYDIR) {
+        let stat = link.node.stat()?;
+        ensure!(stat.mode.ty() == FileType::Dir, IsDir);
+    }
     let wd = fd.add_watch(link.node, mask)?;
     Ok(u64::from(wd))
 }
