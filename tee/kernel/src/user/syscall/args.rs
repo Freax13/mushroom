@@ -1891,6 +1891,7 @@ bitflags! {
         const DELETE = 1 << 9;
         const DELETE_SELF = 1 << 10;
         const MOVE_SELF = 1 << 11;
+        const DONT_FOLLOW = 1 << 25;
     }
 }
 

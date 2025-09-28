@@ -4308,7 +4308,11 @@ fn inotify_add_watch(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let path = virtual_memory.read(pathname)?;
-    let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
+    let link = if mask.contains(InotifyMask::DONT_FOLLOW) {
+        lookup_link(thread.process().cwd(), &path, &mut ctx)?
+    } else {
+        lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?
+    };
     let wd = fd.add_watch(link.node, mask)?;
     Ok(u64::from(wd))
 }
