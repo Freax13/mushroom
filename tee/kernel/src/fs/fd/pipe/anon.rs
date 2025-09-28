@@ -83,7 +83,7 @@ impl OpenFileDescription for ReadHalf {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        self.stream_buffer.read(buf)
+        self.stream_buffer.read(buf, false)
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {

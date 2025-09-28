@@ -1,5 +1,5 @@
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
-use core::{cmp, num::NonZeroUsize, ops::Not};
+use core::{cmp, num::NonZeroUsize};
 
 use crate::{
     error::{Result, bail, ensure},
@@ -139,15 +139,21 @@ impl OobMarkState {
     }
 
     /// Returns the index of the OOB mark iff it hasn't already been read.
-    pub fn take_oob_index(&mut self) -> Option<usize> {
+    pub fn take_oob_index(&mut self, peek: bool) -> Option<usize> {
         match self {
             OobMarkState::None => None,
             OobMarkState::Pending {
                 remaining_length,
                 read,
-            } => core::mem::replace(read, true)
-                .not()
-                .then_some(*remaining_length),
+            } => {
+                if *read {
+                    return None;
+                }
+                if !peek {
+                    *read = true;
+                }
+                Some(*remaining_length)
+            }
         }
     }
 }
@@ -158,7 +164,7 @@ pub struct ReadHalf {
 }
 
 impl ReadHalf {
-    pub fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    pub fn read(&self, buf: &mut dyn ReadBuf, peek: bool) -> Result<usize> {
         if buf.buffer_len() == 0 {
             return Ok(0);
         }
@@ -203,14 +209,16 @@ impl ReadHalf {
             buf.write(len1, slice2)?;
         }
 
-        // Remove the bytes from the VecDeque.
-        guard.bytes.drain(..len);
+        if !peek {
+            // Remove the bytes from the VecDeque.
+            guard.bytes.drain(..len);
 
-        // Update the OOB mark.
-        guard.oob_mark_state.update(len);
+            // Update the OOB mark.
+            guard.oob_mark_state.update(len);
 
-        if was_full {
-            self.notify.notify();
+            if was_full {
+                self.notify.notify();
+            }
         }
 
         Ok(len)
@@ -316,9 +324,12 @@ impl ReadHalf {
         self.notify();
     }
 
-    pub fn read_oob(&self) -> Result<u8> {
+    pub fn read_oob(&self, peek: bool) -> Result<u8> {
         let mut guard = self.data.buffer.lock();
-        let index = guard.oob_mark_state.take_oob_index().ok_or(err!(Again))?;
+        let index = guard
+            .oob_mark_state
+            .take_oob_index(peek)
+            .ok_or(err!(Again))?;
         Ok(guard.bytes[index])
     }
 

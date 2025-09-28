@@ -562,6 +562,29 @@ fn test_oob() -> Result<()> {
     assert_eq!(buffer[0..1], *b"8");
     assert!(sockatmark(&sock2)?);
 
+    // Peeking OOB data doesn't remove it.
+
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(
+        socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB | MsgFlags::MSG_PEEK)?,
+        1
+    );
+    assert_eq!(buffer[0..1], *b"4");
+
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty()), Ok(3));
+    assert_eq!(buffer[0..3], *b"123");
+
+    // The OOB mark is reset.
+    assert!(sockatmark(&sock2)?);
+
+    // Read the OOB data.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"4");
+    assert!(sockatmark(&sock2)?);
+
     Ok(())
 }
 

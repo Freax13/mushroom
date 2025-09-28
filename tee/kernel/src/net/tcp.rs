@@ -807,7 +807,7 @@ impl OpenFileDescription for TcpSocket {
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        active.read_half.read(buf)
+        active.read_half.read(buf, false)
     }
 
     fn recv_from(
@@ -815,9 +815,7 @@ impl OpenFileDescription for TcpSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) {
-            todo!()
-        }
+        let peek = flags.contains(RecvFromFlags::PEEK);
 
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
@@ -825,7 +823,7 @@ impl OpenFileDescription for TcpSocket {
             bail!(NotConn);
         };
         let len = if flags.contains(RecvFromFlags::OOB) {
-            let oob_data = active.read_half.read_oob()?;
+            let oob_data = active.read_half.read_oob(peek)?;
             if buf.buffer_len() != 0 {
                 buf.write(0, &[oob_data])?;
                 1
@@ -833,7 +831,7 @@ impl OpenFileDescription for TcpSocket {
                 0
             }
         } else {
-            active.read_half.read(buf)?
+            active.read_half.read(buf, peek)?
         };
         Ok((len, None))
     }
