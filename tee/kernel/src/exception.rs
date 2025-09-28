@@ -381,8 +381,8 @@ extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
     );
 }
 
-extern "x86-interrupt" fn kernel_invalid_opcode_handler(frame: InterruptStackFrame, code: u64) {
-    panic!("invalid opcdode {frame:x?} {code:x?}");
+extern "x86-interrupt" fn kernel_invalid_opcode_handler(frame: InterruptStackFrame) {
+    panic!("invalid opcdode {frame:x?}");
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, code: u64) -> ! {
