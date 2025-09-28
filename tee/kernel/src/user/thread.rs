@@ -6,9 +6,8 @@ use alloc::{
 };
 use core::{
     ffi::{CStr, c_void},
-    fmt,
-    fmt::Debug,
-    ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
+    fmt::{self, Debug},
+    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Deref, DerefMut, Not},
     pin::{Pin, pin},
     sync::atomic::{AtomicU32, Ordering},
     task::{Context, Poll, Waker},
@@ -396,6 +395,11 @@ impl Thread {
             };
             self.queue_signal_or_die(sig_info);
         }
+    }
+
+    pub fn pending_signals(&self) -> Sigset {
+        let pending_signals = self.lock().pending_signals.pending_signals();
+        pending_signals | self.process().pending_signals()
     }
 
     /// Returns true if the signal was not already queued.
@@ -1194,9 +1198,17 @@ impl Sigset {
     }
 }
 
+impl BitOr for Sigset {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
 impl BitOrAssign for Sigset {
     fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
+        *self = *self | rhs;
     }
 }
 
@@ -1219,6 +1231,16 @@ impl Not for Sigset {
 
     fn not(self) -> Self::Output {
         Self(!self.0)
+    }
+}
+
+impl FromIterator<Signal> for Sigset {
+    fn from_iter<T: IntoIterator<Item = Signal>>(iter: T) -> Self {
+        let mut sigset = Self::empty();
+        for signal in iter {
+            sigset.add(signal);
+        }
+        sigset
     }
 }
 
@@ -1288,6 +1310,13 @@ impl PendingSignals {
         Self {
             pending_signals: VecDeque::new(),
         }
+    }
+
+    pub fn pending_signals(&self) -> Sigset {
+        self.pending_signals
+            .iter()
+            .map(|sig_info| sig_info.signal)
+            .collect()
     }
 
     /// Add the signal to the set of pending signals.

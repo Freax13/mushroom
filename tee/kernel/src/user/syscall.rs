@@ -226,6 +226,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetsid);
     handlers.register(SysCapget);
     handlers.register(SysCapset);
+    handlers.register(SysRtSigpending);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -3435,6 +3436,19 @@ fn capset(
             bail!(Inval)
         }
     }
+}
+
+#[syscall(i386 = 176, amd64 = 127)]
+fn rt_sigpending(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    uset: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let pending_signals = thread.pending_signals();
+    virtual_memory.write_with_abi(uset, pending_signals, abi)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 179, amd64 = 130)]

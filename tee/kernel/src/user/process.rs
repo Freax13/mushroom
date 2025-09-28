@@ -406,6 +406,10 @@ impl Process {
         }
     }
 
+    pub fn pending_signals(&self) -> Sigset {
+        self.pending_signals.lock().pending_signals()
+    }
+
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
         match sig_info.signal {
             Signal::CONT | Signal::KILL => self.stop_state.cont(),
