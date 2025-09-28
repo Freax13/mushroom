@@ -269,6 +269,7 @@ impl Thread {
                         let exit = self.run_userspace().unwrap();
 
                         match exit {
+                            Exit::Syscall(args) => self.execute_syscall(args).await,
                             Exit::DivideError => {
                                 let sig_info = SigInfo {
                                     signal: Signal::FPE,
@@ -279,7 +280,14 @@ impl Thread {
                                 };
                                 self.queue_signal_or_die(sig_info);
                             }
-                            Exit::Syscall(args) => self.execute_syscall(args).await,
+                            Exit::Breakpoint => {
+                                let sig_info = SigInfo {
+                                    signal: Signal::TRAP,
+                                    code: SigInfoCode::KERNEL,
+                                    fields: SigFields::SigFault(SigFault { addr: 0 }),
+                                };
+                                self.queue_signal_or_die(sig_info);
+                            }
                             Exit::InvalidOpcode => {
                                 let sig_info = SigInfo {
                                     signal: Signal::ILL,
@@ -455,6 +463,7 @@ impl Thread {
                         signal @ (Signal::HUP
                         | Signal::INT
                         | Signal::ILL
+                        | Signal::TRAP
                         | Signal::ABRT
                         | Signal::USR1
                         | Signal::SEGV
@@ -588,6 +597,7 @@ impl Thread {
                         }
                     }
                     Exit::DivideError
+                    | Exit::Breakpoint
                     | Exit::InvalidOpcode
                     | Exit::GeneralProtectionFault
                     | Exit::PageFault(_)
@@ -881,6 +891,7 @@ impl ThreadGuard<'_> {
                     Signal::HUP
                     | Signal::INT
                     | Signal::ILL
+                    | Signal::TRAP
                     | Signal::ABRT
                     | Signal::USR1
                     | Signal::SEGV

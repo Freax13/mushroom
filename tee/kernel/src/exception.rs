@@ -156,6 +156,9 @@ pub fn load_idt() {
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt.simd_floating_point
             .set_handler_fn(simd_floating_point_handler);
+        idt.breakpoint
+            .set_handler_fn(breakpoint_handler)
+            .set_privilege_level(PrivilegeLevel::Ring3);
         idt[TLB_VECTOR].set_handler_fn(tlb_shootdown_handler);
         idt[TIMER_VECTOR].set_handler_fn(timer_handler);
 
@@ -357,6 +360,32 @@ extern "x86-interrupt" fn simd_floating_point_handler(frame: InterruptStackFrame
 
 extern "x86-interrupt" fn kernel_simd_floating_point_handler(frame: InterruptStackFrame) {
     panic!("simd floating point exception {frame:x?}");
+}
+
+#[unsafe(naked)]
+extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
+    naked_asm!(
+        "cld",
+        // Check whether the exception happened in userspace.
+        "test word ptr [rsp+8], 3",
+        "je {kernel_breakpoint_handler}",
+
+        // Userspace code path:
+        "swapgs",
+        // Store the error code.
+        "mov byte ptr gs:[{VECTOR_OFFSET}], {VECTOR}",
+        // Jump to the userspace exit point.
+        "jmp {exception_entry}",
+
+        kernel_breakpoint_handler = sym kernel_breakpoint_handler,
+        VECTOR_OFFSET = const offset_of!(PerCpu, vector),
+        VECTOR = const ExceptionVector::Breakpoint as u8,
+        exception_entry = sym exception_entry,
+    );
+}
+
+extern "x86-interrupt" fn kernel_breakpoint_handler(frame: InterruptStackFrame) {
+    panic!("breakpoint {frame:x?}");
 }
 
 #[unsafe(naked)]

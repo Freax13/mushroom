@@ -147,6 +147,7 @@ impl CpuState {
             }
             RawExit::Exception => match PerCpu::get().vector.get() {
                 0x0 => Exit::DivideError,
+                0x3 => Exit::Breakpoint,
                 0x6 => Exit::InvalidOpcode,
                 0xd => Exit::GeneralProtectionFault,
                 0xe => {
@@ -678,6 +679,7 @@ pub enum RawExit {
 pub enum Exit {
     Syscall(SyscallArgs),
     DivideError,
+    Breakpoint,
     InvalidOpcode,
     GeneralProtectionFault,
     PageFault(PageFaultExit),
