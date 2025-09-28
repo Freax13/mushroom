@@ -42,7 +42,7 @@ use crate::{
         rwlock::{RwLock, WriteRwLockGuard},
     },
     user::{
-        futex::{FutexScope, Futexes},
+        futex::{FutexScope, Futexes, WaitFuture},
         process::usage::MemoryUsage,
         syscall::{
             args::{
@@ -427,13 +427,13 @@ impl VirtualMemory {
             * 0x1000
     }
 
-    pub async fn futex_wait(
+    pub fn futex_wait(
         &self,
         uaddr: Pointer<u32>,
         val: u32,
         scope: FutexScope,
         bitset: Option<NonZeroU32>,
-    ) -> Result<()> {
+    ) -> Result<WaitFuture> {
         let uaddr = uaddr.get();
         ensure!(uaddr.is_aligned(4u64), Inval);
         let page = Page::containing_address(uaddr);
@@ -465,13 +465,10 @@ impl VirtualMemory {
         drop(guard);
         drop(state);
 
-        // Wait for the futex to be woken up.
-        wait.await;
-
-        Ok(())
+        Ok(wait)
     }
 
-    pub async fn futex_wake(
+    pub fn futex_wake(
         &self,
         uaddr: Pointer<u32>,
         num_waiters: u32,
@@ -502,7 +499,7 @@ impl VirtualMemory {
         drop(state);
 
         // Wake the futexes.
-        Ok(futexes.wake(abs_offset, num_waiters, scope, bitset).await)
+        Ok(futexes.wake(abs_offset, num_waiters, scope, bitset))
     }
 }
 

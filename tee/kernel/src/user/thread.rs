@@ -536,7 +536,7 @@ impl Thread {
 
     /// Returns a future that resolves when the process has a pending signal
     /// and returns whether the running syscall should be restarted.
-    async fn wait_for_signal(&self) -> bool {
+    pub async fn wait_for_signal(&self) -> bool {
         loop {
             let thread_notify_wait = self.signal_notify.wait();
             let ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
