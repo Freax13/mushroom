@@ -77,8 +77,10 @@ impl PortData {
     pub fn prepare_bind(
         &mut self,
         ip: IpAddr,
+        ephemeral: bool,
         reuse_addr: bool,
         reuse_port: bool,
+        v6only: bool,
         effective_uid: Uid,
     ) -> Result<BindGuard<'_>> {
         let ip_version = IpVersion::from(ip);
@@ -89,6 +91,11 @@ impl PortData {
             // address is a loopback address.
             ensure!(local_ip.is_loopback(), AddrNotAvail);
         }
+
+        // When binding an ephemeral port, ignore reuse options and pretend
+        // they're not set.
+        let effective_reuse_addr = !ephemeral && reuse_addr;
+        let effective_reuse_port = !ephemeral && reuse_port;
 
         let mut i = 0;
         while let Some(entry) = self.entries.get(i) {
@@ -101,8 +108,19 @@ impl PortData {
             };
 
             // Skip entries with a different address family.
-            if entry.ip_version != ip_version {
-                continue;
+            match (entry.ip_version, ip_version) {
+                (IpVersion::V4, IpVersion::V4) => {}
+                (IpVersion::V4, IpVersion::V6) => {
+                    if !v6only {
+                        continue;
+                    }
+                }
+                (IpVersion::V6, IpVersion::V4) => {
+                    if !entry.v6only {
+                        continue;
+                    }
+                }
+                (IpVersion::V6, IpVersion::V6) => {}
             }
 
             // Skip entries that don't overlap with `ip`.
@@ -115,13 +133,13 @@ impl PortData {
             }
 
             // Skip entries that are allowed to overlap according to SO_REUSEPORT.
-            if reuse_port && entry.reuse_port && entry.effective_uid == effective_uid {
+            if effective_reuse_port && entry.reuse_port && entry.effective_uid == effective_uid {
                 continue;
             }
 
             // Unless when SO_REUSE_ADDR is set, make sure that there's no
             // overlap between an specified and an unspecified address.
-            if !reuse_addr || !entry.reuse_addr {
+            if !effective_reuse_addr || !entry.reuse_addr {
                 ensure!(
                     Option::zip(entry.local_ip, local_ip)
                         .is_some_and(|(entry_ip, ip)| entry_ip != ip),
@@ -142,6 +160,7 @@ impl PortData {
             local_ip,
             reuse_addr,
             reuse_port,
+            v6only,
             effective_uid,
         })
     }
@@ -187,6 +206,7 @@ struct BindGuard<'a> {
     local_ip: Option<IpAddr>,
     reuse_addr: bool,
     reuse_port: bool,
+    v6only: bool,
     effective_uid: Uid,
 }
 
@@ -199,6 +219,7 @@ impl BindGuard<'_> {
             remote_addr: None,
             reuse_addr: self.reuse_addr,
             reuse_port: self.reuse_port,
+            v6only: self.v6only,
             effective_uid: self.effective_uid,
             mode,
         });
@@ -212,6 +233,7 @@ struct PortDataEntry {
     remote_addr: Option<net::SocketAddr>,
     reuse_addr: bool,
     reuse_port: bool,
+    v6only: bool,
     effective_uid: Uid,
     mode: Weak<Once<Mode>>,
 }
@@ -270,6 +292,7 @@ impl TcpSocket {
         let guard = self.internal.lock();
         let reuse_addr = guard.reuse_addr;
         let reuse_port = guard.reuse_port;
+        let v6only = guard.v6only;
         drop(guard);
 
         let effective_uid = Uid::SUPER_USER; // TODO
@@ -283,9 +306,14 @@ impl TcpSocket {
                 // bound to.
                 for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
                     let entry = guard.entry(port).or_default();
-                    if let Ok(bind_guard) =
-                        entry.prepare_bind(socket_addr.ip(), false, false, effective_uid)
-                    {
+                    if let Ok(bind_guard) = entry.prepare_bind(
+                        socket_addr.ip(),
+                        true,
+                        reuse_addr,
+                        reuse_port,
+                        v6only,
+                        effective_uid,
+                    ) {
                         socket_addr.set_port(port);
                         break 'port bind_guard;
                     }
@@ -296,8 +324,10 @@ impl TcpSocket {
         } else {
             guard.entry(socket_addr.port()).or_default().prepare_bind(
                 socket_addr.ip(),
+                false,
                 reuse_addr,
                 reuse_port,
+                v6only,
                 effective_uid,
             )?
         };

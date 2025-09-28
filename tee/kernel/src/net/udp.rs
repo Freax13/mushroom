@@ -61,6 +61,7 @@ impl PortData {
     pub fn bind(
         &mut self,
         ip: IpAddr,
+        ephemeral: bool,
         reuse_addr: bool,
         reuse_port: bool,
         v6only: bool,
@@ -72,25 +73,30 @@ impl PortData {
             ensure!(ip.is_loopback(), AddrNotAvail);
         }
 
+        // When binding an ephemeral port, ignore reuse options and pretend
+        // they're not set.
+        let effective_reuse_addr = !ephemeral && reuse_addr;
+        let effective_reuse_port = !ephemeral && reuse_port;
+        let effective_v6only = !ephemeral && v6only;
+
         let mut i = 0;
         while let Some(entry) = self.entries.get(i) {
             i += 1;
             // Skip (and remove) entries whose sockets are no longer live.
-            let Some(socket) = entry.socket.upgrade() else {
+            if entry.socket.strong_count() == 0 {
                 i -= 1;
                 self.entries.swap_remove(i);
                 continue;
             };
 
-            let doesnt_overlap = (entry.reuse_addr && reuse_addr)
-                || (entry.reuse_port && reuse_port && entry.local_ip == ip)
+            let doesnt_overlap = (entry.reuse_addr && effective_reuse_addr)
+                || (entry.reuse_port && effective_reuse_port && entry.local_ip == ip)
                 || (!entry.local_ip.is_unspecified()
                     && !ip.is_unspecified()
-                    && entry.local_ip != ip)
-                || ((entry.local_ip.is_ipv4() && ip.is_ipv6() && v6only)
-                    || (entry.local_ip.is_ipv6() && ip.is_ipv4() && {
-                        socket.internal.lock().v6only
-                    }))
+                    && entry.local_ip != ip
+                    && !ephemeral)
+                || ((entry.local_ip.is_ipv4() && ip.is_ipv6() && effective_v6only)
+                    || (entry.local_ip.is_ipv6() && ip.is_ipv4() && entry.v6only))
                 || ((entry.local_ip.is_ipv4()
                     && ip.is_ipv6()
                     && entry.local_ip.is_unspecified()
@@ -106,6 +112,7 @@ impl PortData {
             local_ip: ip,
             reuse_addr,
             reuse_port,
+            v6only,
             socket,
         });
 
@@ -117,6 +124,7 @@ struct PortDataEntry {
     local_ip: IpAddr,
     reuse_addr: bool,
     reuse_port: bool,
+    v6only: bool,
     socket: Weak<OpenFileDescriptionData<UdpSocket>>,
 }
 
@@ -187,10 +195,16 @@ impl UdpSocket {
                 // bound to.
                 for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
                     let entry = ports_guard.entry(port).or_default();
-                    if entry.entries.is_empty()
-                        && entry
-                            .bind(socket_addr.ip(), false, false, false, self.this.clone())
-                            .is_ok()
+                    if entry
+                        .bind(
+                            socket_addr.ip(),
+                            true,
+                            guard.reuse_addr,
+                            guard.reuse_port,
+                            guard.v6only,
+                            self.this.clone(),
+                        )
+                        .is_ok()
                     {
                         socket_addr.set_port(port);
                         break 'port;
@@ -202,6 +216,7 @@ impl UdpSocket {
         } else {
             ports_guard.entry(socket_addr.port()).or_default().bind(
                 socket_addr.ip(),
+                false,
                 guard.reuse_addr,
                 guard.reuse_port,
                 guard.v6only,
@@ -305,13 +320,11 @@ impl UdpSocket {
             };
             socket = s;
 
-            let guard = socket.internal.lock();
-
             // Make sure that the ip versions are compatible.
             match (
                 IpVersion::from(entry.local_ip),
                 self.ip_version,
-                guard.v6only,
+                entry.v6only,
                 v6only,
             ) {
                 (IpVersion::V4, IpVersion::V4, _, _)
@@ -338,11 +351,13 @@ impl UdpSocket {
                 }
             } else {
                 // ipv6
-                if canonical_peer_ip.is_ipv4() && guard.v6only {
+                if canonical_peer_ip.is_ipv4() && entry.v6only {
                     i += 1;
                     continue;
                 }
             }
+
+            let guard = socket.internal.lock();
 
             // If the socket is connected, make sure that the address matches
             // the sender.
