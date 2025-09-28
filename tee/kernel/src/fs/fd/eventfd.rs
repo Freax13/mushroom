@@ -64,7 +64,7 @@ impl OpenFileDescription for EventFd {
         Ok(8)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
 
         let mut bytes = [0; 8];

@@ -691,8 +691,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let _ = buf;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -849,10 +850,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = buf;
         let _ = flags;
         let _ = addr;
+        let _ = ctx;
         bail!(NotSock)
     }
 
@@ -863,12 +866,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         msg_hdr: &mut MsgHdr,
         flags: SendMsgFlags,
         fdtable: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = vm;
         let _ = abi;
         let _ = msg_hdr;
         let _ = flags;
         let _ = fdtable;
+        let _ = ctx;
         bail!(NotSock)
     }
 

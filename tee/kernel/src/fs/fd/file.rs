@@ -182,7 +182,7 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),

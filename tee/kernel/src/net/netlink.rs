@@ -129,6 +129,7 @@ impl OpenFileDescription for NetlinkSocket {
         buf: &dyn WriteBuf,
         _flags: SentToFlags,
         _addr: Option<SocketAddr>,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         let connection = self.connection.get().ok_or(err!(NotConn))?;
         // TODO: Should we truncate?

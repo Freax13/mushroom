@@ -848,7 +848,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -862,6 +862,7 @@ impl OpenFileDescription for TcpSocket {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         ensure!(addr.is_none(), IsConn);
 
@@ -882,6 +883,7 @@ impl OpenFileDescription for TcpSocket {
         msg_hdr: &mut MsgHdr,
         flags: SendMsgFlags,
         _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         ensure!(!flags.contains(SendMsgFlags::FASTOPEN), OpNotSupp);
 
@@ -903,7 +905,7 @@ impl OpenFileDescription for TcpSocket {
         };
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send_to(&vectored_buf, SentToFlags::empty(), addr)
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
     fn path(&self) -> Result<Path> {

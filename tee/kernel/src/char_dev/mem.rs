@@ -108,7 +108,7 @@ impl OpenFileDescription for Null {
         Ok(0)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -232,7 +232,7 @@ impl OpenFileDescription for Zero {
         Ok(buf.buffer_len())
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -362,7 +362,7 @@ impl OpenFileDescription for Full {
         Ok(buf.buffer_len())
     }
 
-    fn write(&self, _: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(NoSpc)
     }
 
@@ -493,7 +493,7 @@ impl OpenFileDescription for Random {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -613,7 +613,7 @@ impl OpenFileDescription for URandom {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 

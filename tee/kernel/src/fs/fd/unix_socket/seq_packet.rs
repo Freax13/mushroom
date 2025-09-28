@@ -139,7 +139,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok((len, None))
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         let mut bytes = vec![0; len];
         buf.read(0, &mut bytes)?;

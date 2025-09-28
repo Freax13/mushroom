@@ -286,7 +286,7 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
@@ -299,6 +299,7 @@ impl OpenFileDescription for StreamUnixSocket {
         buf: &dyn WriteBuf,
         _: SentToFlags,
         addr: Option<SocketAddr>,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -315,6 +316,7 @@ impl OpenFileDescription for StreamUnixSocket {
         msg_hdr: &mut MsgHdr,
         _: SendMsgFlags,
         fdtable: &FileDescriptorTable,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {

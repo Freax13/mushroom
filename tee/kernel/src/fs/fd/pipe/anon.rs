@@ -175,7 +175,7 @@ impl OpenFileDescription for WriteHalf {
         path(self.ino)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         self.stream_buffer.write(buf)
     }
 

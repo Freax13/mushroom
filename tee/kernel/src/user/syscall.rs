@@ -333,6 +333,7 @@ async fn write_impl(
     fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     buf: impl WriteBuf,
+    ctx: &FileAccessContext,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
@@ -342,7 +343,7 @@ async fn write_impl(
     // interrupted and restarted. Any errors that occur are report to
     // userspace.
     let res = thread
-        .interruptable(do_write_io(&**fd, count, || fd.write(&buf)), true)
+        .interruptable(do_write_io(&**fd, count, || fd.write(&buf, ctx)), true)
         .await;
     if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
         let sig_info = SigInfo {
@@ -363,7 +364,7 @@ async fn write_impl(
             .interruptable(
                 do_write_io(&**fd, count - written, || {
                     let buf = OffsetBuf::new(&buf, written);
-                    fd.write(&buf)
+                    fd.write(&buf, ctx)
                 }),
                 false,
             )
@@ -383,13 +384,14 @@ async fn write(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
 ) -> SyscallResult {
     let count = usize_from(count);
     let buf = UserBuf::new(&virtual_memory, buf, count);
-    write_impl(thread, fdtable, fd, buf).await
+    write_impl(thread, fdtable, fd, buf, &ctx).await
 }
 
 #[syscall(i386 = 5, amd64 = 2, interruptable, restartable)]
@@ -950,12 +952,13 @@ async fn writev(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u64,
 ) -> SyscallResult {
     let buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    write_impl(thread, fdtable, fd, buf).await
+    write_impl(thread, fdtable, fd, buf, &ctx).await
 }
 
 #[syscall(i386 = 33, amd64 = 21)]
@@ -1338,7 +1341,7 @@ async fn sendfile(
         let page = r#in.get_page(page_offset, false)?;
         let buf = KernelPageWriteBuf::new(&page, offset_in_page, chunk_len);
 
-        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf)).await;
+        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf, &ctx)).await;
         match res {
             Ok(0) => break,
             Ok(n) => {
@@ -1484,6 +1487,7 @@ async fn sendto(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     len: u64,
@@ -1507,7 +1511,7 @@ async fn sendto(
     let mut written = thread
         .interruptable(
             do_io(&**fd, Events::WRITE, || {
-                fd.send_to(&buf, flags, dest_addr.clone())
+                fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
             }),
             true,
         )
@@ -1522,7 +1526,7 @@ async fn sendto(
             .interruptable(
                 do_io(&**fd, Events::WRITE, || {
                     let buf = OffsetBuf::new(&buf, written);
-                    fd.send_to(&buf, flags, dest_addr.clone())
+                    fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
                 }),
                 false,
             )
@@ -1585,6 +1589,7 @@ async fn sendmsg(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     msg: Pointer<MsgHdr>,
     flags: SendMsgFlags,
@@ -1592,7 +1597,7 @@ async fn sendmsg(
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
     let len = do_io(&**fd, Events::WRITE, || {
-        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable)
+        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable, &ctx)
     })
     .await?;
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
@@ -5504,6 +5509,7 @@ async fn sendmmsg(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     msgvec: Pointer<MMsgHdr>,
     n: u32,
@@ -5522,7 +5528,14 @@ async fn sendmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = do_io(&**socket, Events::WRITE, || {
-            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, flags, &fdtable)
+            socket.send_msg(
+                &virtual_memory,
+                abi,
+                &mut msg_header.hdr,
+                flags,
+                &fdtable,
+                &ctx,
+            )
         })
         .await;
         match res {

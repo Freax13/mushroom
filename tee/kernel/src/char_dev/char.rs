@@ -333,7 +333,7 @@ impl OpenFileDescription for Pty {
         }
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let buffer_len = buf.buffer_len();
         if buffer_len == 0 {
             return Ok(0);

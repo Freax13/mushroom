@@ -166,7 +166,7 @@ impl OpenFileDescription for DgramUnixSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         let mut bytes = vec![0; len];
         buf.read(0, &mut bytes)?;
@@ -179,6 +179,7 @@ impl OpenFileDescription for DgramUnixSocket {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         ensure!(addr.is_none(), IsConn);
 
@@ -186,7 +187,7 @@ impl OpenFileDescription for DgramUnixSocket {
             todo!()
         }
 
-        self.write(buf)
+        self.write(buf, ctx)
     }
 
     fn send_msg(
@@ -196,6 +197,7 @@ impl OpenFileDescription for DgramUnixSocket {
         msg_hdr: &mut MsgHdr,
         _: SendMsgFlags,
         _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         ensure!(msg_hdr.name.is_null(), IsConn);
         ensure!(msg_hdr.namelen == 0, IsConn);
@@ -208,7 +210,7 @@ impl OpenFileDescription for DgramUnixSocket {
         }
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.write(&vectored_buf)
+        self.write(&vectored_buf, ctx)
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {

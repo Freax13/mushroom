@@ -258,7 +258,12 @@ impl UdpSocket {
         Ok((len, SocketAddr::from(packet.sender)))
     }
 
-    fn send(&self, peername: Option<SocketAddr>, buf: &(impl WriteBuf + ?Sized)) -> Result<usize> {
+    fn send(
+        &self,
+        peername: Option<SocketAddr>,
+        buf: &(impl WriteBuf + ?Sized),
+        _: &FileAccessContext,
+    ) -> Result<usize> {
         let mut peername = if let Some(peername) = peername {
             net::SocketAddr::try_from(peername)?
         } else {
@@ -625,8 +630,8 @@ impl OpenFileDescription for UdpSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
-        self.send(None, buf)
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
+        self.send(None, buf, ctx)
     }
 
     fn send_to(
@@ -634,8 +639,9 @@ impl OpenFileDescription for UdpSocket {
         buf: &dyn WriteBuf,
         _: SentToFlags,
         addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
-        self.send(addr, buf)
+        self.send(addr, buf, ctx)
     }
 
     fn send_msg(
@@ -645,6 +651,7 @@ impl OpenFileDescription for UdpSocket {
         msg_hdr: &mut MsgHdr,
         _: SendMsgFlags,
         _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         if msg_hdr.controllen != 0 {
             todo!()
@@ -661,7 +668,7 @@ impl OpenFileDescription for UdpSocket {
         };
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send(peername, &vectored_buf)
+        self.send(peername, &vectored_buf, ctx)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {

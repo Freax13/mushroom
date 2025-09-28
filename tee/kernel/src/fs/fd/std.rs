@@ -141,7 +141,7 @@ impl OpenFileDescription for Stdout {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mut raw = vec![0; buf.buffer_len()];
         buf.read(0, &mut raw)?;
         let chunk = core::str::from_utf8(&raw);
@@ -235,7 +235,7 @@ impl OpenFileDescription for Stderr {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mut raw = vec![0; buf.buffer_len()];
         buf.read(0, &mut raw)?;
         let chunk = core::str::from_utf8(&raw);

@@ -319,7 +319,7 @@ impl OpenFileDescription for WriteHalf {
         self.link.location.path()
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         self.write_half.write(buf)
     }
 
@@ -407,7 +407,7 @@ impl OpenFileDescription for FullReadWrite {
         self.read_half.read(buf)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         self.write_half.write(buf)
     }
 

@@ -90,7 +90,7 @@ impl OpenFileDescription for Output {
         }
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         for chunk_offset in (0..buf.buffer_len()).step_by(supervisor::OUTPUT_BUFFER_CAPACITY) {
             let remaining_len = len - chunk_offset;
