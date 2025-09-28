@@ -23,7 +23,7 @@ use crate::{
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             common_ioctl,
         },
-        node::FileAccessContext,
+        node::{FileAccessContext, new_ino},
         path::Path,
     },
     net::{
@@ -37,8 +37,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags,
-                SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -133,6 +134,7 @@ const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct UdpSocket {
     this: Weak<OpenFileDescriptionData<Self>>,
+    ino: u64,
     ip_version: IpVersion,
     internal: Mutex<UdpSocketInternal>,
     rx_notify: Notify,
@@ -155,6 +157,7 @@ impl UdpSocket {
     pub fn new(ip_version: IpVersion, r#type: SocketTypeWithFlags) -> StrongFileDescriptor {
         StrongFileDescriptor::new_cyclic(|this| Self {
             this: this.clone(),
+            ino: new_ino(),
             ip_version,
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,
@@ -670,7 +673,21 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn stat(&self) -> Result<Stat> {
-        todo!()
+        Ok(Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Socket, FileMode::from_bits_truncate(0o777)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
