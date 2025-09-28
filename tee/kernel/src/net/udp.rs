@@ -62,6 +62,7 @@ impl PortData {
         &mut self,
         ip: IpAddr,
         reuse_addr: bool,
+        reuse_port: bool,
         v6only: bool,
         socket: Weak<OpenFileDescriptionData<UdpSocket>>,
     ) -> Result<()> {
@@ -82,6 +83,7 @@ impl PortData {
             };
 
             let doesnt_overlap = (entry.reuse_addr && reuse_addr)
+                || (entry.reuse_port && reuse_port && entry.local_ip == ip)
                 || (!entry.local_ip.is_unspecified()
                     && !ip.is_unspecified()
                     && entry.local_ip != ip)
@@ -103,6 +105,7 @@ impl PortData {
         self.entries.push(PortDataEntry {
             local_ip: ip,
             reuse_addr,
+            reuse_port,
             socket,
         });
 
@@ -113,6 +116,7 @@ impl PortData {
 struct PortDataEntry {
     local_ip: IpAddr,
     reuse_addr: bool,
+    reuse_port: bool,
     socket: Weak<OpenFileDescriptionData<UdpSocket>>,
 }
 
@@ -129,6 +133,7 @@ pub struct UdpSocket {
 struct UdpSocketInternal {
     flags: OpenFlags,
     reuse_addr: bool,
+    reuse_port: bool,
     send_buffer_size: usize,
     receive_buffer_size: usize,
     v6only: bool,
@@ -146,6 +151,7 @@ impl UdpSocket {
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,
                 reuse_addr: false,
+                reuse_port: false,
                 send_buffer_size: 1024 * 1024,
                 receive_buffer_size: 1024 * 1024,
                 v6only: false,
@@ -183,7 +189,7 @@ impl UdpSocket {
                     let entry = ports_guard.entry(port).or_default();
                     if entry.entries.is_empty()
                         && entry
-                            .bind(socket_addr.ip(), false, false, self.this.clone())
+                            .bind(socket_addr.ip(), false, false, false, self.this.clone())
                             .is_ok()
                     {
                         socket_addr.set_port(port);
@@ -197,6 +203,7 @@ impl UdpSocket {
             ports_guard.entry(socket_addr.port()).or_default().bind(
                 socket_addr.ip(),
                 guard.reuse_addr,
+                guard.reuse_port,
                 guard.v6only,
                 self.this.clone(),
             )?;
@@ -474,7 +481,13 @@ impl OpenFileDescription for UdpSocket {
                 guard.receive_buffer_size = new_receive_buffer_size;
                 Ok(())
             }
-            (1, 15) => Ok(()),  // SO_REUSEPORT
+            (1, 15) => {
+                // SO_REUSEPORT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.reuse_port = optval;
+                Ok(())
+            }
             (41, 16) => Ok(()), // IPV6_UNICAST_HOPS
             (41, 17) => Ok(()), // IPV6_MULTICAST_IF
             (41, 18) => Ok(()), // IPV6_MULTICAST_HOPS
