@@ -2411,6 +2411,16 @@ fn truncate(
     let path = virtual_memory.read(path)?;
     let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
     link.node.truncate(length)?;
+
+    link.node
+        .watchers()
+        .send_event(InotifyMask::MODIFY, None, None);
+    let parent = link.location.parent().unwrap();
+    let file_name = link.location.file_name().unwrap();
+    parent
+        .watchers()
+        .send_event(InotifyMask::MODIFY, None, Some(file_name));
+
     Ok(0)
 }
 

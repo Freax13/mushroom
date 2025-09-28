@@ -320,7 +320,9 @@ impl OpenFileDescription for FileFileDescription {
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        self.file.truncate(length)
+        self.file.truncate(length)?;
+        self.send_event(InotifyMask::MODIFY, None);
+        Ok(())
     }
 
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
