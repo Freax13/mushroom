@@ -81,7 +81,7 @@ pub struct Process {
     pub credentials: Mutex<Credentials>,
     cwd: Mutex<Link>,
     process_group: Mutex<Arc<ProcessGroup>>,
-    pub limits: RwLock<Limits>,
+    pub limits: Limits,
     umask: AtomicCell<FileMode>,
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
@@ -137,7 +137,7 @@ impl Process {
             credentials: Mutex::new(credentials),
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
-            limits: RwLock::new(limits),
+            limits,
             umask: AtomicCell::new(umask),
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),

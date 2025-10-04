@@ -1335,7 +1335,7 @@ enum_arg! {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RLimit {
     /// Soft limit
     pub rlim_cur: u64,

@@ -1,6 +1,10 @@
 use core::{
+    arch::{asm, x86_64::cmpxchg16b},
+    cell::SyncUnsafeCell,
     marker::PhantomData,
-    ops::{Index, IndexMut},
+    mem::MaybeUninit,
+    ops::Index,
+    sync::atomic::Ordering,
 };
 
 use crate::user::{
@@ -8,39 +12,39 @@ use crate::user::{
     thread::ThreadGuard,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Limits {
-    stack: RLimit,
-    core: RLimit,
-    no_file: RLimit,
-    address_space: RLimit,
+    stack: AtomicRLimit,
+    core: AtomicRLimit,
+    no_file: AtomicRLimit,
+    address_space: AtomicRLimit,
 }
 
 impl Limits {
     pub const fn default() -> Self {
         Self {
-            stack: RLimit {
+            stack: AtomicRLimit::new(RLimit {
                 rlim_cur: 0x80_0000,
                 rlim_max: 0x80_0000,
-            },
-            core: RLimit {
+            }),
+            core: AtomicRLimit::new(RLimit {
                 rlim_cur: RLimit::INFINITY,
                 rlim_max: RLimit::INFINITY,
-            },
-            no_file: RLimit {
+            }),
+            no_file: AtomicRLimit::new(RLimit {
                 rlim_cur: 1024,
                 rlim_max: 65536,
-            },
-            address_space: RLimit {
+            }),
+            address_space: AtomicRLimit::new(RLimit {
                 rlim_cur: RLimit::INFINITY,
                 rlim_max: RLimit::INFINITY,
-            },
+            }),
         }
     }
 }
 
 impl Index<Resource> for Limits {
-    type Output = RLimit;
+    type Output = AtomicRLimit;
 
     fn index(&self, index: Resource) -> &Self::Output {
         match index {
@@ -52,14 +56,74 @@ impl Index<Resource> for Limits {
     }
 }
 
-impl IndexMut<Resource> for Limits {
-    fn index_mut(&mut self, index: Resource) -> &mut Self::Output {
-        match index {
-            Resource::Stack => &mut self.stack,
-            Resource::Core => &mut self.core,
-            Resource::NoFile => &mut self.no_file,
-            Resource::As => &mut self.address_space,
+#[repr(align(16))]
+pub struct AtomicRLimit(SyncUnsafeCell<RLimit>);
+
+impl AtomicRLimit {
+    pub const fn new(value: RLimit) -> Self {
+        Self(SyncUnsafeCell::new(value))
+    }
+
+    pub fn load(&self) -> RLimit {
+        let mut output = MaybeUninit::uninit();
+        unsafe {
+            asm!(
+                "movdqa xmm0, xmmword ptr [{}]",
+                "movdqu xmmword ptr [{}], xmm0",
+                in(reg) self.0.get(),
+                in(reg) output.as_mut_ptr(),
+                options(preserves_flags, nostack),
+            );
+            output.assume_init()
         }
+    }
+
+    pub fn store(&self, rlimit: RLimit) {
+        unsafe {
+            asm!(
+                "movdqu xmm0, xmmword ptr [{}]",
+                "movdqa xmmword ptr [{}], xmm0",
+                in(reg) &raw const rlimit,
+                in(reg) self.0.get(),
+                options(preserves_flags, nostack),
+            );
+        }
+    }
+
+    pub fn compare_exchange(&self, old: RLimit, new: RLimit) -> Result<RLimit, RLimit> {
+        let val = unsafe {
+            let old = core::mem::transmute::<RLimit, u128>(old);
+            let new = core::mem::transmute::<RLimit, u128>(new);
+            let val = cmpxchg16b(
+                self.0.get().cast(),
+                old,
+                new,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+            core::mem::transmute::<u128, RLimit>(val)
+        };
+        if val == old { Ok(val) } else { Err(val) }
+    }
+
+    pub fn load_current(&self) -> u64 {
+        let out;
+        unsafe {
+            let ptr = &raw const (*self.0.get()).rlim_cur;
+            asm!(
+                "mov {out}, qword ptr [{ptr}]",
+                ptr = in(reg) ptr,
+                out = lateout(reg) out,
+                options(readonly, preserves_flags, nostack),
+            );
+        }
+        out
+    }
+}
+
+impl Clone for AtomicRLimit {
+    fn clone(&self) -> Self {
+        Self::new(self.load())
     }
 }
 
@@ -85,13 +149,13 @@ impl<R> Copy for CurrentLimit<R> {}
 
 impl<R: ConstResource> ExtractableThreadState for CurrentLimit<R> {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        Self::new(guard.process().limits.read()[R::RESOURCE].rlim_cur)
+        Self::new(guard.process().limits[R::RESOURCE].load_current())
     }
 }
 
 impl<R: ConstResource> Default for CurrentLimit<R> {
     fn default() -> Self {
-        Self::new(Limits::default()[R::RESOURCE].rlim_cur)
+        Self::new(Limits::default()[R::RESOURCE].load_current())
     }
 }
 

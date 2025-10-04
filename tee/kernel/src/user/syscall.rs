@@ -1838,7 +1838,7 @@ async fn clone(
             process.credentials.lock().clone(),
             process.cwd(),
             process.process_group(),
-            *process.limits.read(),
+            process.limits.clone(),
             process.umask(),
             process.mm_arg_start(),
             process.mm_arg_end(),
@@ -2783,7 +2783,7 @@ fn getrlimit(
     resource: Resource,
     rlim: Pointer<RLimit>,
 ) -> SyscallResult {
-    let value = thread.process().limits.read()[resource];
+    let value = thread.process().limits[resource].load();
     virtual_memory.write_with_abi(rlim, value, abi)?;
     Ok(0)
 }
@@ -5498,28 +5498,40 @@ fn prlimit64(
         thread.process().clone()
     };
 
-    let mut guard = process.limits.write();
-
-    if !old_rlim.is_null() {
-        let value = guard[resource];
-        let value = RLimit64::from(value);
-        virtual_memory.write(old_rlim, value)?;
-    }
+    let atomic_limit = &process.limits[resource];
 
     if !new_rlim.is_null() {
         let value = virtual_memory.read(new_rlim)?;
         let value = RLimit::from(value);
-        let limit = &mut guard[resource];
-
         // Make sure that the limit is well-formed.
         ensure!(value.rlim_cur <= value.rlim_max, Inval);
 
-        // Make sure that the user can set the hard limit.
-        if thread.process().credentials.lock().effective_user_id != Uid::SUPER_USER {
-            ensure!(value.rlim_max <= limit.rlim_max, Perm);
-        }
+        if old_rlim.is_null()
+            && thread.process().credentials.lock().effective_user_id == Uid::SUPER_USER
+        {
+            atomic_limit.store(value);
+        } else {
+            let mut current_limit = atomic_limit.load();
+            let value = loop {
+                // Make sure that the user can set the hard limit.
+                if thread.process().credentials.lock().effective_user_id != Uid::SUPER_USER {
+                    ensure!(value.rlim_max <= current_limit.rlim_max, Perm);
+                }
 
-        *limit = value;
+                match atomic_limit.compare_exchange(current_limit, value) {
+                    Ok(old) => break old,
+                    Err(new) => current_limit = new,
+                }
+            };
+            if !old_rlim.is_null() {
+                let value = RLimit64::from(value);
+                virtual_memory.write(old_rlim, value)?;
+            }
+        }
+    } else if !old_rlim.is_null() {
+        let value = atomic_limit.load();
+        let value = RLimit64::from(value);
+        virtual_memory.write(old_rlim, value)?;
     }
 
     Ok(0)
