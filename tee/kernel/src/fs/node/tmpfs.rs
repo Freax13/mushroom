@@ -1817,7 +1817,12 @@ impl INode for TmpFsSocket {
         self.bsd_file_lock_record.get()
     }
 
-    fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+    fn get_socket(
+        &self,
+        ctx: &FileAccessContext,
+    ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+        let guard = self.internal.lock();
+        ctx.check_permissions(&guard.ownership, Permission::Write)?;
         self.socket.upgrade().ok_or(err!(ConnRefused))
     }
 

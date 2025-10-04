@@ -301,7 +301,11 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord>;
 
-    fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+    fn get_socket(
+        &self,
+        ctx: &FileAccessContext,
+    ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+        let _ = ctx;
         bail!(ConnRefused)
     }
 
@@ -834,7 +838,7 @@ pub fn get_socket(
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
     let link = lookup_and_resolve_link(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
-    link.node.get_socket()
+    link.node.get_socket(ctx)
 }
 
 pub fn mount(
