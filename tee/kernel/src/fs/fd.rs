@@ -785,8 +785,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn truncate(&self, length: usize) -> Result<()> {
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()> {
         let _ = length;
+        let _ = ctx;
         bail!(Inval)
     }
 

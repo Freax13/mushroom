@@ -81,6 +81,7 @@ pub trait File: INode {
         let _ = ctx;
         bail!(OpNotSupp)
     }
+    fn truncate(&self) -> Result<()>;
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
     fn link_into(
         &self,
@@ -104,7 +105,7 @@ pub fn open_file(
 ) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), NotDir);
     if flags.contains(OpenFlags::TRUNC) {
-        file.truncate(0)?;
+        File::truncate(&*file)?;
     }
     Ok(FileFileDescription::new(file, location, flags).into())
 }
@@ -322,13 +323,13 @@ impl OpenFileDescription for FileFileDescription {
         }
     }
 
-    fn truncate(&self, length: usize) -> Result<()> {
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        self.file.truncate(length)?;
+        INode::truncate(&*self.file, length, ctx)?;
         self.send_event(InotifyMask::MODIFY, None);
         Ok(())
     }

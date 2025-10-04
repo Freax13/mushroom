@@ -2430,7 +2430,9 @@ fn truncate(
     let length = usize_from(length);
     let path = virtual_memory.read(path)?;
     let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
-    link.node.truncate(length)?;
+    link.node
+        .truncate(length, &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     link.node
         .watchers()
@@ -2445,9 +2447,16 @@ fn truncate(
 }
 
 #[syscall(i386 = 93, amd64 = 77)]
-fn ftruncate(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, length: u64) -> SyscallResult {
+fn ftruncate(
+    thread: &Thread,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    length: u64,
+) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.truncate(usize_from(length))?;
+    fd.truncate(usize_from(length), &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
 }
 

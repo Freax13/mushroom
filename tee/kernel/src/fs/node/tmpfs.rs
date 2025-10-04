@@ -1118,7 +1118,9 @@ impl INode for TmpFsFile {
         }
     }
 
-    fn truncate(&self, len: usize) -> Result<()> {
+    fn truncate(&self, len: usize, ctx: &FileAccessContext) -> Result<()> {
+        ensure!(len <= ctx.max_file_size(), FBig);
+
         let mut guard = self.internal.write();
         guard.buffer.truncate(len)?;
 
@@ -1388,6 +1390,22 @@ impl File for TmpFsFile {
         Ok(copied)
     }
 
+    fn truncate(&self) -> Result<()> {
+        let mut guard = self.internal.write();
+        guard.buffer = Buffer::new();
+
+        let now = now(ClockId::Realtime);
+        guard.ctime = now;
+        guard.mtime = now;
+        drop(guard);
+
+        if let Some(mappings_ctrl) = self.mappings_ctrl.try_get() {
+            mappings_ctrl.unmap(self.ino, ..);
+        }
+
+        Ok(())
+    }
+
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
         if mode.bits() == 0 {
             let mut guard = self.internal.write();
@@ -1509,7 +1527,7 @@ impl INode for TmpFsSymlink {
         }
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -1595,7 +1613,7 @@ impl INode for TmpFsCharDev {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1693,7 +1711,7 @@ impl INode for TmpFsFifo {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1784,7 +1802,7 @@ impl INode for TmpFsSocket {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 

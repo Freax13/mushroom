@@ -560,7 +560,7 @@ impl INode for CpuinfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -592,6 +592,10 @@ impl File for CpuinfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -684,7 +688,7 @@ impl INode for MeminfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -716,6 +720,10 @@ impl File for MeminfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1052,7 +1060,7 @@ impl INode for NetDevFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1084,6 +1092,10 @@ impl File for NetDevFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1179,7 +1191,7 @@ impl INode for SelfLink {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -1708,7 +1720,7 @@ impl INode for CmdlineFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1758,6 +1770,10 @@ impl File for CmdlineFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2093,7 +2109,7 @@ impl INode for FdINode {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -2230,13 +2246,13 @@ impl INode for FollowedFdINode {
         }
     }
 
-    fn truncate(&self, length: usize) -> Result<()> {
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()> {
         if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the call to the pointed to
             // link.
-            link.node.truncate(length)
+            link.node.truncate(length, ctx)
         } else {
-            self.fd.truncate(length)
+            self.fd.truncate(length, ctx)
         }
     }
 
@@ -2573,7 +2589,7 @@ impl INode for FdInfoFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2607,6 +2623,10 @@ impl File for FdInfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2689,7 +2709,7 @@ impl INode for ExeLink {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -2788,7 +2808,7 @@ impl INode for MapsFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2824,6 +2844,10 @@ impl File for MapsFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2909,7 +2933,7 @@ impl INode for MemFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2965,6 +2989,10 @@ impl File for MemFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3063,7 +3091,7 @@ impl INode for MountInfoFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3097,6 +3125,10 @@ impl File for MountInfoFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3193,7 +3225,7 @@ impl INode for RootLink {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -3277,7 +3309,7 @@ impl INode for ProcessStatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3311,6 +3343,10 @@ impl File for ProcessStatFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3398,7 +3434,7 @@ impl INode for ProcessStatusFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3432,6 +3468,10 @@ impl File for ProcessStatusFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4018,7 +4058,7 @@ impl INode for TaskCommFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4050,6 +4090,10 @@ impl File for TaskCommFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4151,7 +4195,7 @@ impl INode for StatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4183,6 +4227,10 @@ impl File for StatFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4289,7 +4337,7 @@ impl INode for UptimeFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4321,6 +4369,10 @@ impl File for UptimeFile {
     }
 
     fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
         bail!(Acces)
     }
 

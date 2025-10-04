@@ -76,7 +76,7 @@ impl StaticFile {
 
             let chunk_offset = len;
             len += chunk_len;
-            dst.truncate(len)?;
+            INode::truncate(&**dst, len, &ctx)?;
 
             for i in (0..chunk_len).step_by(0x1000) {
                 let remaining_len = chunk_len - i;

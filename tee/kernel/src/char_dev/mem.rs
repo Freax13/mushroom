@@ -141,7 +141,7 @@ impl OpenFileDescription for Null {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -268,7 +268,7 @@ impl OpenFileDescription for Zero {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -397,7 +397,7 @@ impl OpenFileDescription for Full {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -527,7 +527,7 @@ impl OpenFileDescription for Random {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -648,7 +648,7 @@ impl OpenFileDescription for URandom {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
