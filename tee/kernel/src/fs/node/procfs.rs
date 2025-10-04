@@ -599,7 +599,13 @@ impl File for CpuinfoFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -727,7 +733,13 @@ impl File for MeminfoFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1099,7 +1111,13 @@ impl File for NetDevFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1777,7 +1795,13 @@ impl File for CmdlineFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2630,7 +2654,13 @@ impl File for FdInfoFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2851,7 +2881,13 @@ impl File for MapsFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2996,7 +3032,13 @@ impl File for MemFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3132,7 +3174,13 @@ impl File for MountInfoFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3350,7 +3398,13 @@ impl File for ProcessStatFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3475,7 +3529,13 @@ impl File for ProcessStatusFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4097,7 +4157,13 @@ impl File for TaskCommFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4234,7 +4300,13 @@ impl File for StatFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4376,7 +4448,13 @@ impl File for UptimeFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 

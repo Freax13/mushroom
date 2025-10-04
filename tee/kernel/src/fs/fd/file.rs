@@ -82,7 +82,13 @@ pub trait File: INode {
         bail!(OpNotSupp)
     }
     fn truncate(&self) -> Result<()>;
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()>;
     fn link_into(
         &self,
         new_dir: DynINode,
@@ -334,13 +340,19 @@ impl OpenFileDescription for FileFileDescription {
         Ok(())
     }
 
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        self.file.allocate(mode, offset, len)
+        self.file.allocate(mode, offset, len, ctx)
     }
 
     fn seek(&self, offset: usize, whence: Whence, _: &mut FileAccessContext) -> Result<usize> {

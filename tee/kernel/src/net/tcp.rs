@@ -1389,7 +1389,13 @@ impl File for NetTcpFile {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 

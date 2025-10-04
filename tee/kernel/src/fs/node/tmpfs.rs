@@ -1406,7 +1406,13 @@ impl File for TmpFsFile {
         Ok(())
     }
 
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
         if mode.bits() == 0 {
             let mut guard = self.internal.write();
             let now = now(ClockId::Realtime);
@@ -1414,6 +1420,7 @@ impl File for TmpFsFile {
             guard.mtime = now;
 
             let new_len = offset + len;
+            ensure!(new_len <= ctx.max_file_size(), FBig);
             if guard.buffer.len() < new_len {
                 guard.buffer.truncate(new_len)?;
             }

@@ -5261,14 +5261,17 @@ fn timerfd_create(
 
 #[syscall(i386 = 324, amd64 = 285)]
 fn fallocate(
+    thread: &Thread,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     mode: FallocateMode,
     offset: u64,
     length: u64,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.allocate(mode, usize_from(offset), usize_from(length))?;
+    fd.allocate(mode, usize_from(offset), usize_from(length), &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
 }
 

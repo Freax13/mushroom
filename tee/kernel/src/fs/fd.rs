@@ -791,10 +791,17 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
         let _ = mode;
         let _ = offset;
         let _ = len;
+        let _ = ctx;
         bail!(BadF)
     }
 
