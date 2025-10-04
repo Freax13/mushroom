@@ -93,6 +93,7 @@ pub enum ErrorKind {
     Inval = 22,
     Mfile = 24,
     NoTty = 25,
+    FBig = 27,
     NoSpc = 28,
     SPipe = 29,
     Pipe = 32,

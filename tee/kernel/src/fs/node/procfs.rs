@@ -587,11 +587,11 @@ impl File for CpuinfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -711,11 +711,11 @@ impl File for MeminfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1079,11 +1079,11 @@ impl File for NetDevFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -1753,11 +1753,11 @@ impl File for CmdlineFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -2602,11 +2602,11 @@ impl File for FdInfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -2819,11 +2819,11 @@ impl File for MapsFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -2947,7 +2947,7 @@ impl File for MemFile {
         Ok(len)
     }
 
-    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, offset: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let virtual_memory = thread.lock().virtual_memory().clone();
@@ -2964,7 +2964,7 @@ impl File for MemFile {
         Ok(len)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -3092,11 +3092,11 @@ impl File for MountInfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -3306,11 +3306,11 @@ impl File for ProcessStatFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -3427,11 +3427,11 @@ impl File for ProcessStatusFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -4045,11 +4045,11 @@ impl File for TaskCommFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -4178,11 +4178,11 @@ impl File for StatFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
@@ -4316,11 +4316,11 @@ impl File for UptimeFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 

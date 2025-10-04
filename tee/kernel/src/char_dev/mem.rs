@@ -112,7 +112,7 @@ impl OpenFileDescription for Null {
         Ok(buf.buffer_len())
     }
 
-    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -236,7 +236,7 @@ impl OpenFileDescription for Zero {
         Ok(buf.buffer_len())
     }
 
-    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -366,7 +366,7 @@ impl OpenFileDescription for Full {
         bail!(NoSpc)
     }
 
-    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(NoSpc)
     }
 

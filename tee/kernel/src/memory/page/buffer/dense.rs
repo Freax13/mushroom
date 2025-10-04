@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::{cmp, iter::repeat};
 
 use crate::{
-    error::{Result, ensure},
+    error::{Result, ensure, err},
     fs::fd::{ReadBuf, WriteBuf},
     memory::page::{KernelPage, buffer::sparse::SparseBuffer},
 };
@@ -73,6 +73,7 @@ impl DenseBuffer {
         &mut self,
         offset: usize,
         buf: &dyn WriteBuf,
+        max_size: usize,
     ) -> Result<Result<usize, NotDenseError>> {
         // Make sure that we don't need to add too many empty extra pages. If
         // that's the case, the buffer likely isn't dense.
@@ -83,7 +84,11 @@ impl DenseBuffer {
             return Ok(Err(NotDenseError));
         }
 
-        let len = buf.buffer_len();
+        let remaining_len = max_size
+            .checked_sub(offset)
+            .filter(|&remaining| remaining > 0)
+            .ok_or(err!(FBig))?;
+        let len = cmp::min(buf.buffer_len(), remaining_len);
         if len > 0 {
             // Add as many pages as required for the write.
             let end = offset + len - 1;

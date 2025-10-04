@@ -710,9 +710,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let _ = pos;
         let _ = buf;
+        let _ = ctx;
         bail!(Inval)
     }
 

@@ -5,7 +5,7 @@ use self::{
     fd::{KernelWriteBuf, file::File},
     node::{INode, tmpfs::TmpFsFile},
 };
-use crate::{error::Result, spin::lazy::Lazy};
+use crate::{error::Result, fs::node::FileAccessContext, spin::lazy::Lazy};
 
 pub mod fd;
 pub mod node;
@@ -43,6 +43,7 @@ impl StaticFile {
         let mut len = 0;
         let mut offset = 0;
         let mut buffer = [0; 0x1000];
+        let ctx = FileAccessContext::root();
         loop {
             /// Copy memory, but bypass KASAN checks.
             ///
@@ -91,7 +92,7 @@ impl StaticFile {
                 }
                 offset += 0x1000;
 
-                dst.write(chunk_offset + i, &KernelWriteBuf::new(buffer))?;
+                dst.write(chunk_offset + i, &KernelWriteBuf::new(buffer), &ctx)?;
             }
         }
 

@@ -70,10 +70,10 @@ impl Buffer {
         sparse(buffer)
     }
 
-    pub fn write(&mut self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    pub fn write(&mut self, offset: usize, buf: &dyn WriteBuf, max_size: usize) -> Result<usize> {
         self.do_buffer_op(
-            |buffer| buffer.write(offset, buf),
-            |buffer| buffer.write(offset, buf),
+            |buffer| buffer.write(offset, buf, max_size),
+            |buffer| buffer.write(offset, buf, max_size),
         )
     }
 

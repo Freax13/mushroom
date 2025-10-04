@@ -1170,21 +1170,21 @@ impl File for TmpFsFile {
         guard.buffer.read(offset, buf)
     }
 
-    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, offset: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
-        guard.buffer.write(offset, buf)
+        guard.buffer.write(offset, buf, ctx.max_file_size())
     }
 
-    fn append(&self, buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<(usize, usize)> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
-        let len = guard.buffer.write(offset, buf)?;
+        let len = guard.buffer.write(offset, buf, ctx.max_file_size())?;
         Ok((len, offset + len))
     }
 
@@ -1207,11 +1207,15 @@ impl File for TmpFsFile {
             guard.mtime = now;
             guard
                 .buffer
-                .write(offset, &KernelWriteBuf::new(slice1))
+                .write(offset, &KernelWriteBuf::new(slice1), usize::MAX)
                 .unwrap();
             guard
                 .buffer
-                .write(offset + slice1.len(), &KernelWriteBuf::new(slice2))
+                .write(
+                    offset + slice1.len(),
+                    &KernelWriteBuf::new(slice2),
+                    usize::MAX,
+                )
                 .unwrap();
 
             buffer.drain(..len);
@@ -1297,9 +1301,10 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = guard
-                    .buffer
-                    .write(offset_out, &KernelWriteBuf::new(&chunk[..n]));
+                let res =
+                    guard
+                        .buffer
+                        .write(offset_out, &KernelWriteBuf::new(&chunk[..n]), usize::MAX);
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {
@@ -1341,9 +1346,11 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = out_guard
-                    .buffer
-                    .write(offset_out, &KernelWriteBuf::new(&chunk[..n]));
+                let res = out_guard.buffer.write(
+                    offset_out,
+                    &KernelWriteBuf::new(&chunk[..n]),
+                    usize::MAX,
+                );
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {

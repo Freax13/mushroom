@@ -14,6 +14,7 @@ use crate::user::{
 
 #[derive(Clone)]
 pub struct Limits {
+    fsize: AtomicRLimit,
     stack: AtomicRLimit,
     core: AtomicRLimit,
     no_file: AtomicRLimit,
@@ -23,6 +24,10 @@ pub struct Limits {
 impl Limits {
     pub const fn default() -> Self {
         Self {
+            fsize: AtomicRLimit::new(RLimit {
+                rlim_cur: RLimit::INFINITY,
+                rlim_max: RLimit::INFINITY,
+            }),
             stack: AtomicRLimit::new(RLimit {
                 rlim_cur: 0x80_0000,
                 rlim_max: 0x80_0000,
@@ -48,6 +53,7 @@ impl Index<Resource> for Limits {
 
     fn index(&self, index: Resource) -> &Self::Output {
         match index {
+            Resource::FSize => &self.fsize,
             Resource::Stack => &self.stack,
             Resource::Core => &self.core,
             Resource::NoFile => &self.no_file,
@@ -164,6 +170,12 @@ pub type CurrentNoFileLimit = CurrentLimit<NoFile>;
 
 pub trait ConstResource {
     const RESOURCE: Resource;
+}
+
+pub struct FSize;
+
+impl ConstResource for FSize {
+    const RESOURCE: Resource = Resource::FSize;
 }
 
 pub struct Stack;

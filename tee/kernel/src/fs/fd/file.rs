@@ -37,9 +37,9 @@ pub trait File: INode {
         let _ = mapping_ctrl;
     }
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize>;
-    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize>;
+    fn write(&self, offset: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize>;
     /// Returns a tuple of `(bytes_written, file_length)`.
-    fn append(&self, buf: &dyn WriteBuf) -> Result<(usize, usize)>;
+    fn append(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<(usize, usize)>;
     fn splice_from(
         &self,
         read_half: &stream_buffer::ReadHalf,
@@ -182,18 +182,18 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
         let len = if !guard.flags.contains(OpenFlags::APPEND) {
-            let len = self.file.write(guard.cursor_idx, buf)?;
+            let len = self.file.write(guard.cursor_idx, buf, ctx)?;
             guard.cursor_idx += len;
             len
         } else {
-            let (len, cursor_idx) = self.file.append(buf)?;
+            let (len, cursor_idx) = self.file.append(buf, ctx)?;
             guard.cursor_idx = cursor_idx;
             len
         };
@@ -206,13 +206,13 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        let len = self.file.write(pos, buf)?;
+        let len = self.file.write(pos, buf, ctx)?;
         drop(guard);
 
         if len > 0 {

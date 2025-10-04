@@ -26,7 +26,7 @@ use self::{
 };
 use crate::{
     char_dev::mem::random_bytes,
-    error::{ErrorKind, Result, bail, ensure, err},
+    error::{Error, ErrorKind, Result, bail, ensure, err},
     fs::{
         StatFs,
         fd::{
@@ -325,6 +325,32 @@ async fn read(
     Ok(len)
 }
 
+fn queue_signal_for_epipe(thread: &Thread) -> impl Fn(&Error) {
+    |err| {
+        if err.kind() == ErrorKind::Pipe {
+            let sig_info = SigInfo {
+                signal: Signal::PIPE,
+                code: SigInfoCode::KERNEL,
+                fields: SigFields::None,
+            };
+            thread.queue_signal(sig_info);
+        }
+    }
+}
+
+fn queue_signal_for_efbig(thread: &Thread) -> impl Fn(&Error) {
+    |err| {
+        if err.kind() == ErrorKind::FBig {
+            let sig_info = SigInfo {
+                signal: Signal::XFSZ,
+                code: SigInfoCode::KERNEL,
+                fields: SigFields::None,
+            };
+            thread.queue_signal(sig_info);
+        }
+    }
+}
+
 async fn write_impl(
     thread: &Thread,
     fdtable: Arc<FileDescriptorTable>,
@@ -339,23 +365,16 @@ async fn write_impl(
     // Start writing to the file descriptor. This first write can be
     // interrupted and restarted. Any errors that occur are report to
     // userspace.
-    let res = thread
+    let mut written = thread
         .interruptable(do_write_io(&**fd, count, || fd.write(&buf, ctx)), true)
-        .await;
-    if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
-        let sig_info = SigInfo {
-            signal: Signal::PIPE,
-            code: SigInfoCode::KERNEL,
-            fields: SigFields::None,
-        };
-        thread.queue_signal(sig_info);
-    }
+        .await
+        .inspect_err(queue_signal_for_epipe(thread))
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     // Try to write the rest of the bytes that weren't written in the first
     // write call. This can be interrupted as well, but if that happens, it
     // won't be reported to userspace. Any errors that occur also won't be
     // reported to userspace.
-    let mut written = res?;
     while written != count {
         let res = thread
             .interruptable(
@@ -908,8 +927,10 @@ fn pread64(
 
 #[syscall(i386 = 181, amd64 = 18)]
 fn pwrite64(
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
@@ -920,7 +941,9 @@ fn pwrite64(
     let count = usize_from(count);
     let pos = usize_from(pos);
     let buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = fd.pwrite(pos, &buf)?;
+    let len = fd
+        .pwrite(pos, &buf, &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     let len = u64::from_usize(len);
     Ok(len)
@@ -5397,8 +5420,10 @@ async fn preadv(
 #[syscall(i386 = 334, amd64 = 296)]
 async fn pwritev(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u32,
@@ -5410,9 +5435,10 @@ async fn pwritev(
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
     let len = do_write_io(&**fd, WriteBuf::buffer_len(&vectored_buf), || {
-        fd.pwrite(pos, &vectored_buf)
+        fd.pwrite(pos, &vectored_buf, &ctx)
     })
-    .await?;
+    .await
+    .inspect_err(queue_signal_for_efbig(thread))?;
     let len = u64::from_usize(len);
     Ok(len)
 }

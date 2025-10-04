@@ -1328,6 +1328,7 @@ pub struct Time(pub u32);
 
 enum_arg! {
     pub enum Resource {
+        FSize = 1,
         Stack = 3,
         Core = 4,
         NoFile = 7,
@@ -1422,6 +1423,7 @@ impl Signal {
     pub const CHLD: Self = Self(17);
     pub const CONT: Self = Self(18);
     pub const STOP: Self = Self(19);
+    pub const XFSZ: Self = Self(25);
 
     pub fn new(value: u8) -> Result<Self> {
         ensure!((1..=64).contains(&value), Inval);

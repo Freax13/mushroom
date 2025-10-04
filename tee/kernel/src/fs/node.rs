@@ -5,6 +5,7 @@ use core::{
 };
 
 use async_trait::async_trait;
+use usize_conversions::usize_from;
 
 use self::{
     directory::Directory,
@@ -23,8 +24,13 @@ use crate::{
     },
     spin::{lazy::Lazy, rwlock::RwLock},
     user::{
-        process::Process,
-        syscall::args::{ExtractableThreadState, FileMode, FileType, OpenFlags, Stat, Timespec},
+        process::{
+            Process,
+            limits::{CurrentLimit, FSize},
+        },
+        syscall::args::{
+            ExtractableThreadState, FileMode, FileType, OpenFlags, RLimit, Stat, Timespec,
+        },
         thread::{Gid, ThreadGuard, Uid},
     },
 };
@@ -416,6 +422,7 @@ pub struct FileAccessContext {
     pub filesystem_user_id: Uid,
     pub filesystem_group_id: Gid,
     pub supplementary_group_ids: Arc<[Gid]>,
+    fsize: CurrentLimit<FSize>,
 }
 
 impl FileAccessContext {
@@ -488,6 +495,10 @@ impl FileAccessContext {
             || self.supplementary_group_ids.contains(&gid)
     }
 
+    pub fn max_file_size(&self) -> usize {
+        usize_from(self.fsize.get())
+    }
+
     pub fn root() -> Self {
         Self {
             process: None,
@@ -495,6 +506,7 @@ impl FileAccessContext {
             filesystem_user_id: Uid::SUPER_USER,
             filesystem_group_id: Gid::SUPER_USER,
             supplementary_group_ids: Arc::new([]),
+            fsize: CurrentLimit::new(RLimit::INFINITY),
         }
     }
 }
@@ -515,6 +527,7 @@ impl ExtractableThreadState for FileAccessContext {
             filesystem_user_id: credentials_guard.filesystem_user_id,
             filesystem_group_id: credentials_guard.filesystem_group_id,
             supplementary_group_ids: credentials_guard.supplementary_group_ids.clone(),
+            fsize: CurrentLimit::extract_from_thread(guard),
         }
     }
 }

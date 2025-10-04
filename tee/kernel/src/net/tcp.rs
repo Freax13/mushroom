@@ -1377,11 +1377,11 @@ impl File for NetTcpFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
