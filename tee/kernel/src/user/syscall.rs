@@ -1329,6 +1329,7 @@ fn getpid(thread: &Thread) -> SyscallResult {
 #[syscall(i386 = 187, amd64 = 40)]
 async fn sendfile(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -1370,6 +1371,14 @@ async fn sendfile(
             }
             Err(err) => {
                 if total_len == 0 {
+                    if err.kind() == ErrorKind::FBig {
+                        let sig_info = SigInfo {
+                            signal: Signal::XFSZ,
+                            code: SigInfoCode::KERNEL,
+                            fields: SigFields::None,
+                        };
+                        thread.queue_signal(sig_info);
+                    }
                     return Err(err);
                 } else {
                     break;
@@ -1392,6 +1401,7 @@ async fn sendfile(
 
 #[syscall(i386 = 239)]
 async fn sendfile64(
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -1402,6 +1412,7 @@ async fn sendfile64(
 ) -> SyscallResult {
     sendfile(
         Abi::Amd64,
+        thread,
         virtual_memory,
         fdtable,
         ctx,
