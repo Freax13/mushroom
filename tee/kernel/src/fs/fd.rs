@@ -754,11 +754,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         fd_out: &dyn OpenFileDescription,
         offset_out: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = offset_in;
         let _ = fd_out;
         let _ = offset_out;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -773,11 +775,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         file_in: &dyn File,
         offset_in: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = offset_out;
         let _ = file_in;
         let _ = offset_in;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
 

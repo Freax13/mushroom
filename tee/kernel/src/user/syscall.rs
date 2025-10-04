@@ -5746,8 +5746,10 @@ fn memfd_create(
 
 #[syscall(i386 = 377, amd64 = 326)]
 fn copy_file_range(
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
     fd_out: FdNum,
@@ -5774,7 +5776,9 @@ fn copy_file_range(
     let len = usize::try_from(len)?;
 
     // Do the copy operations.
-    let len = fd_in.copy_file_range(off_in_val, &**fd_out, off_out_val, len)?;
+    let len = fd_in
+        .copy_file_range(off_in_val, &**fd_out, off_out_val, len, &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     // Write the offset back.
     if let Some(off_in_val) = off_in_val {

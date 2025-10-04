@@ -72,11 +72,13 @@ pub trait File: INode {
         out: &dyn File,
         offset_out: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = offset_in;
         let _ = out;
         let _ = offset_out;
         let _ = len;
+        let _ = ctx;
         bail!(OpNotSupp)
     }
     fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
@@ -280,15 +282,16 @@ impl OpenFileDescription for FileFileDescription {
         fd_out: &dyn OpenFileDescription,
         offset_out: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
 
         if let Some(offset_in) = offset_in {
-            fd_out.copy_range_from_file(offset_out, &*self.file, offset_in, len)
+            fd_out.copy_range_from_file(offset_out, &*self.file, offset_in, len, ctx)
         } else {
             let len =
-                fd_out.copy_range_from_file(offset_out, &*self.file, guard.cursor_idx, len)?;
+                fd_out.copy_range_from_file(offset_out, &*self.file, guard.cursor_idx, len, ctx)?;
             guard.cursor_idx += len;
             Ok(len)
         }
@@ -300,6 +303,7 @@ impl OpenFileDescription for FileFileDescription {
         file_in: &dyn File,
         offset_in: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(
@@ -309,9 +313,10 @@ impl OpenFileDescription for FileFileDescription {
         ensure!(!guard.flags.contains(OpenFlags::APPEND), BadF);
 
         if let Some(offset_out) = offset_out {
-            file_in.copy_file_range(offset_in, &*self.file, offset_out, len)
+            file_in.copy_file_range(offset_in, &*self.file, offset_out, len, ctx)
         } else {
-            let len = file_in.copy_file_range(offset_in, &*self.file, guard.cursor_idx, len)?;
+            let len =
+                file_in.copy_file_range(offset_in, &*self.file, guard.cursor_idx, len, ctx)?;
             guard.cursor_idx += len;
             Ok(len)
         }

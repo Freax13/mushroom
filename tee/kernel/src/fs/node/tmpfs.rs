@@ -1274,6 +1274,7 @@ impl File for TmpFsFile {
         out: &dyn File,
         mut offset_out: usize,
         mut len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         // TODO: Update access times.
 
@@ -1281,6 +1282,7 @@ impl File for TmpFsFile {
             return Ok(0);
         }
 
+        let max_size = ctx.max_file_size();
         let mut copied = 0;
 
         if core::ptr::addr_eq(self, out) {
@@ -1316,7 +1318,7 @@ impl File for TmpFsFile {
                 let res =
                     guard
                         .buffer
-                        .write(offset_out, &KernelWriteBuf::new(&chunk[..n]), usize::MAX);
+                        .write(offset_out, &KernelWriteBuf::new(&chunk[..n]), max_size);
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {
@@ -1358,11 +1360,10 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = out_guard.buffer.write(
-                    offset_out,
-                    &KernelWriteBuf::new(&chunk[..n]),
-                    usize::MAX,
-                );
+                let res =
+                    out_guard
+                        .buffer
+                        .write(offset_out, &KernelWriteBuf::new(&chunk[..n]), max_size);
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {
