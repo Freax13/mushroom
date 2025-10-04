@@ -1438,8 +1438,8 @@ fn socket(
             SocketType::Stream => fdtable.insert(
                 StreamUnixSocket::new(
                     r#type.flags,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                 )
                 .0,
                 r#type,
@@ -1456,8 +1456,8 @@ fn socket(
                     TcpSocket::new(
                         ip_version,
                         r#type,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
                     r#type,
                     no_file_limit,
@@ -1757,8 +1757,8 @@ fn socketpair(
                 SocketType::Seqpacket => {
                     let (half1, half2) = SeqPacketUnixSocket::new_pair(
                         r#type.flags,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     );
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
@@ -1766,8 +1766,8 @@ fn socketpair(
                 SocketType::Dgram => {
                     let (half1, half2) = DgramUnixSocket::new_pair(
                         r#type.flags,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     );
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
@@ -4589,8 +4589,8 @@ fn mknodat(
             start_dir,
             &pathname,
             mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
             &mut ctx,
         )?,
         FileType::Dir | FileType::Link => bail!(Inval),
@@ -4874,8 +4874,8 @@ fn faccessat(
 
     if !flags.contains(FaccessatFlags::EACCESS) {
         let credentials = thread.process().credentials.lock();
-        ctx.filesystem_user_id = credentials.real_user_id;
-        ctx.filesystem_group_id = credentials.real_group_id;
+        ctx.set_filesystem_user_id(credentials.real_user_id);
+        ctx.set_filesystem_group_id(credentials.real_group_id);
     }
 
     let stat = link.node.stat()?;
@@ -5263,8 +5263,8 @@ fn timerfd_create(
     let timer = Timer::new(
         clockid,
         flags,
-        ctx.filesystem_user_id,
-        ctx.filesystem_group_id,
+        ctx.filesystem_user_id(),
+        ctx.filesystem_group_id(),
     );
     let fd_num = fdtable.insert(timer, flags, no_file_limit)?;
     Ok(fd_num.get() as u64)
@@ -5339,7 +5339,7 @@ fn eventfd2(
     flags: EventFdFlags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
-        EventFd::new(initval, ctx.filesystem_user_id, ctx.filesystem_group_id),
+        EventFd::new(initval, ctx.filesystem_user_id(), ctx.filesystem_group_id()),
         flags,
         no_file_limit,
     )?;
@@ -5354,7 +5354,7 @@ fn epoll_create1(
     flags: EpollCreate1Flags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
-        Epoll::new(ctx.filesystem_user_id, ctx.filesystem_group_id),
+        Epoll::new(ctx.filesystem_user_id(), ctx.filesystem_group_id()),
         flags,
         no_file_limit,
     )?;
@@ -5385,7 +5385,7 @@ fn pipe2(
     flags: Pipe2Flags,
 ) -> SyscallResult {
     let (read_half, write_half) =
-        pipe::anon::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
+        pipe::anon::new(flags, ctx.filesystem_user_id(), ctx.filesystem_group_id());
 
     // Insert the first read half.
     let read_half = fdtable.insert(read_half, flags, no_file_limit)?;
@@ -5412,8 +5412,8 @@ fn inotify_init1(
     let fd = fdtable.insert(
         Inotify::new(
             flags.into(),
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
         ),
         flags,
         no_file_limit,

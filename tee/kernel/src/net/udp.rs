@@ -187,9 +187,7 @@ impl UdpSocket {
 
         // Make sure that the user has permission to bind the port.
         ensure!(
-            socket_addr.port() == 0
-                || socket_addr.port() >= 1024
-                || ctx.filesystem_user_id == Uid::SUPER_USER,
+            socket_addr.port() == 0 || socket_addr.port() >= 1024 || ctx.is_user(Uid::SUPER_USER),
             Acces
         );
 

@@ -112,8 +112,8 @@ impl StreamUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
@@ -134,8 +134,8 @@ impl StreamUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
@@ -436,7 +436,7 @@ impl OpenFileDescription for StreamUnixSocket {
             SocketAddrUnix::Pathname(path) => {
                 let guard = self.internal.lock();
 
-                let cwd = ctx.process.as_ref().unwrap().cwd();
+                let cwd = ctx.process().unwrap().cwd();
                 bind_socket(
                     cwd,
                     &path,

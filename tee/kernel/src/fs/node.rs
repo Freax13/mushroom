@@ -421,11 +421,11 @@ fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
 
 #[derive(Clone)]
 pub struct FileAccessContext {
-    pub process: Option<Arc<Process>>,
+    process: Option<Arc<Process>>,
     symlink_recursion_limit: u16,
-    pub filesystem_user_id: Uid,
-    pub filesystem_group_id: Gid,
-    pub supplementary_group_ids: Arc<[Gid]>,
+    filesystem_user_id: Uid,
+    filesystem_group_id: Gid,
+    supplementary_group_ids: Arc<[Gid]>,
     fsize: CurrentLimit<FSize>,
 }
 
@@ -497,6 +497,26 @@ impl FileAccessContext {
         self.filesystem_user_id == Uid::SUPER_USER
             || self.filesystem_group_id == gid
             || self.supplementary_group_ids.contains(&gid)
+    }
+
+    pub fn process(&self) -> Option<&Arc<Process>> {
+        self.process.as_ref()
+    }
+
+    pub fn filesystem_user_id(&self) -> Uid {
+        self.filesystem_user_id
+    }
+
+    pub fn set_filesystem_user_id(&mut self, uid: Uid) {
+        self.filesystem_user_id = uid;
+    }
+
+    pub fn filesystem_group_id(&self) -> Gid {
+        self.filesystem_group_id
+    }
+
+    pub fn set_filesystem_group_id(&mut self, gid: Gid) {
+        self.filesystem_group_id = gid;
     }
 
     pub fn max_file_size(&self) -> usize {

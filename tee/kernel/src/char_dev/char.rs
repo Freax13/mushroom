@@ -85,8 +85,8 @@ impl CharDev for Ptmx {
                     internal: Mutex::new(PtyDataInternal {
                         ownership: Ownership::new(
                             FileMode::OWNER_READ | FileMode::OWNER_WRITE | FileMode::GROUP_WRITE,
-                            ctx.filesystem_user_id,
-                            ctx.filesystem_group_id,
+                            ctx.filesystem_user_id(),
+                            ctx.filesystem_group_id(),
                         ),
                         locked: true,
                         master_closed: false,
@@ -974,7 +974,7 @@ impl CharDev for Tty {
         _fs: Arc<dyn FileSystem>,
         ctx: &FileAccessContext,
     ) -> Result<StrongFileDescriptor> {
-        let process = ctx.process.as_ref().ok_or(err!(Srch))?;
+        let process = ctx.process().ok_or(err!(Srch))?;
         let data = process
             .process_group()
             .session()

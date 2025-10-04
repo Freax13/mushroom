@@ -38,8 +38,8 @@ impl MemFd {
             internal: Mutex::new(InternalMemFd {
                 ownership: Ownership::new(
                     FileMode::all(),
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                 ),
             }),
         }

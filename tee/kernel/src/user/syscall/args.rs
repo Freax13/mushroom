@@ -2385,9 +2385,9 @@ pub struct Ucred {
 impl From<&FileAccessContext> for Ucred {
     fn from(ctx: &FileAccessContext) -> Self {
         Self {
-            pid: ctx.process.as_ref().unwrap().pid(),
-            uid: ctx.filesystem_user_id,
-            gid: ctx.filesystem_group_id,
+            pid: ctx.process().unwrap().pid(),
+            uid: ctx.filesystem_user_id(),
+            gid: ctx.filesystem_group_id(),
         }
     }
 }
