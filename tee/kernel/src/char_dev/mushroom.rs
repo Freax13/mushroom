@@ -109,6 +109,7 @@ impl OpenFileDescription for Output {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             let (slice1, slice2) = buffer.as_slices();

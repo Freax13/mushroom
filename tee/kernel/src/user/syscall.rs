@@ -4986,6 +4986,7 @@ async fn ppoll(
 async fn splice(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
     fd_out: FdNum,
@@ -5048,7 +5049,7 @@ async fn splice(
                 // Start a wait operation on the read half.
                 let wait = read_half.wait();
 
-                let res = fd_in.splice_from(read_half, offset, len);
+                let res = fd_in.splice_from(read_half, offset, len, &ctx);
 
                 // If the operation can't be completed right now, wait and try again.
                 if res

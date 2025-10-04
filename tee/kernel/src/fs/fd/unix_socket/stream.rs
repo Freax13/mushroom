@@ -387,6 +387,7 @@ impl OpenFileDescription for StreamUnixSocket {
         read_half: &stream_buffer::ReadHalf,
         offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {

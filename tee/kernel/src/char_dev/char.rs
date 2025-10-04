@@ -376,6 +376,7 @@ impl OpenFileDescription for Pty {
         _read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         _len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         todo!();
     }

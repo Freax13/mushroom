@@ -121,6 +121,7 @@ impl OpenFileDescription for Null {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -245,6 +246,7 @@ impl OpenFileDescription for Zero {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -375,6 +377,7 @@ impl OpenFileDescription for Full {
         _read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         _len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         bail!(NoSpc)
     }
@@ -502,6 +505,7 @@ impl OpenFileDescription for Random {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -622,6 +626,7 @@ impl OpenFileDescription for URandom {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);

@@ -1193,7 +1193,19 @@ impl File for TmpFsFile {
         read_half: &stream_buffer::ReadHalf,
         offset: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
+        if len == 0 {
+            return Ok(Ok(0));
+        }
+
+        let max_size = ctx.max_file_size();
+        let remaining_len = max_size
+            .checked_sub(offset)
+            .filter(|&remaining| remaining > 0)
+            .ok_or(err!(FBig))?;
+        let len = cmp::min(len, remaining_len);
+
         read_half.splice_to(len, |buffer, len| {
             let (slice1, slice2) = buffer.as_slices();
             let len1 = cmp::min(len, slice1.len());
@@ -1207,14 +1219,14 @@ impl File for TmpFsFile {
             guard.mtime = now;
             guard
                 .buffer
-                .write(offset, &KernelWriteBuf::new(slice1), usize::MAX)
+                .write(offset, &KernelWriteBuf::new(slice1), max_size)
                 .unwrap();
             guard
                 .buffer
                 .write(
                     offset + slice1.len(),
                     &KernelWriteBuf::new(slice2),
-                    usize::MAX,
+                    max_size,
                 )
                 .unwrap();
 

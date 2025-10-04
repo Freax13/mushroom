@@ -722,10 +722,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         read_half: &stream_buffer::ReadHalf,
         offset: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let _ = read_half;
         let _ = offset;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
 

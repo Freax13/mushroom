@@ -45,10 +45,12 @@ pub trait File: INode {
         read_half: &stream_buffer::ReadHalf,
         offset: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let _ = read_half;
         let _ = offset;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
     fn splice_to(
@@ -227,6 +229,7 @@ impl OpenFileDescription for FileFileDescription {
         read_half: &stream_buffer::ReadHalf,
         offset: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let mut guard = self.internal.lock();
         ensure!(
@@ -236,10 +239,10 @@ impl OpenFileDescription for FileFileDescription {
         ensure!(!guard.flags.contains(OpenFlags::APPEND), Inval);
 
         if let Some(offset) = offset {
-            self.file.splice_from(read_half, offset, len)
+            self.file.splice_from(read_half, offset, len, ctx)
         } else {
             self.file
-                .splice_from(read_half, guard.cursor_idx, len)
+                .splice_from(read_half, guard.cursor_idx, len, ctx)
                 .inspect(|res| {
                     if let Ok(len) = res {
                         guard.cursor_idx += len;
