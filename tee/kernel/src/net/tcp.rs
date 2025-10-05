@@ -105,12 +105,12 @@ impl PortData {
             match (entry.ip_version, ip_version) {
                 (IpVersion::V4, IpVersion::V4) => {}
                 (IpVersion::V4, IpVersion::V6) => {
-                    if !v6only {
+                    if v6only {
                         continue;
                     }
                 }
                 (IpVersion::V6, IpVersion::V4) => {
-                    if !entry.v6only {
+                    if entry.v6only {
                         continue;
                     }
                 }
@@ -545,10 +545,16 @@ impl OpenFileDescription for TcpSocket {
 
                 // Skip over entries that don't have a matching domain.
                 match (entry.ip_version, self.ip_version) {
-                    (IpVersion::V4, IpVersion::V4) => {}        // matches
-                    (IpVersion::V4, IpVersion::V6) => continue, // doesn't match
-                    (IpVersion::V6, IpVersion::V4) => {
+                    (IpVersion::V4, IpVersion::V4) => {} // matches
+                    (IpVersion::V4, IpVersion::V6) => {
                         if v6only {
+                            continue; // doesn't match
+                        } else {
+                            // matches
+                        }
+                    }
+                    (IpVersion::V6, IpVersion::V4) => {
+                        if entry.v6only {
                             continue; // doesn't match
                         } else {
                             // matches
