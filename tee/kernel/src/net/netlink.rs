@@ -184,8 +184,17 @@ impl OpenFileDescription for NetlinkSocket {
         todo!()
     }
 
-    fn poll_ready(&self, _: Events) -> Option<NonEmptyEvents> {
-        todo!()
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        let connection = self.connection.get()?;
+        let mut ready_events = Events::WRITE;
+        if events.contains(Events::READ) {
+            ready_events.set(Events::READ, connection.rx.poll_readable());
+        }
+        NonEmptyEvents::new(ready_events & events)
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
+        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
