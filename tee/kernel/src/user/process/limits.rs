@@ -17,6 +17,7 @@ pub struct Limits {
     fsize: AtomicRLimit,
     stack: AtomicRLimit,
     core: AtomicRLimit,
+    nproc: AtomicRLimit,
     no_file: AtomicRLimit,
     address_space: AtomicRLimit,
 }
@@ -35,6 +36,10 @@ impl Limits {
             core: AtomicRLimit::new(RLimit {
                 rlim_cur: RLimit::INFINITY,
                 rlim_max: RLimit::INFINITY,
+            }),
+            nproc: AtomicRLimit::new(RLimit {
+                rlim_cur: 100_000,
+                rlim_max: 100_000,
             }),
             no_file: AtomicRLimit::new(RLimit {
                 rlim_cur: 1024,
@@ -56,6 +61,7 @@ impl Index<Resource> for Limits {
             Resource::FSize => &self.fsize,
             Resource::Stack => &self.stack,
             Resource::Core => &self.core,
+            Resource::NProc => &self.nproc,
             Resource::NoFile => &self.no_file,
             Resource::As => &self.address_space,
         }

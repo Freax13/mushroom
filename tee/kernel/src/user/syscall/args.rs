@@ -1331,6 +1331,7 @@ enum_arg! {
         FSize = 1,
         Stack = 3,
         Core = 4,
+        NProc = 6,
         NoFile = 7,
         As = 9,
     }
