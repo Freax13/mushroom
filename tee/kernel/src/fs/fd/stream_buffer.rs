@@ -18,6 +18,7 @@ pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
             write_shutdown: false,
             reset: false,
             closed_socket_write_counter: 16,
+            closed_socket_write_num_bytes: 0,
             oob_mark_state: OobMarkState::None,
         }),
     });
@@ -53,6 +54,14 @@ struct PipeDataBuffer {
     /// doesn't immediately know that a socket has been shut down on the peer
     /// system.
     closed_socket_write_counter: u8,
+    /// After the socket has been shut down, we allow a writing some more bytes
+    /// and then fail. This simulates the real world where the local system
+    /// also doesn't immediately know that a socket has been shut down on the
+    /// peer system, but writing more than the tx capacity will eventually
+    /// result in an error.
+    /// This tracks the number of bytes that have been "written" after the
+    /// socket was closed.
+    closed_socket_write_num_bytes: usize,
     /// This field tracks the state of the mark for OOB data.
     oob_mark_state: OobMarkState,
 }
@@ -361,7 +370,7 @@ impl WriteHalf {
                 ensure!(!guard.write_shutdown, ConnReset);
                 if Arc::strong_count(&self.data) == 1 {
                     guard.reset = true;
-                    return Ok(buf.buffer_len());
+                    return Ok(cmp::min(buf.buffer_len(), guard.total_capacity()));
                 }
             }
         }
@@ -372,11 +381,24 @@ impl WriteHalf {
         }
 
         if guard.read_shutdown {
+            // Make sure not to allow writing to many times after the other
+            // half has been closed.
             let next = guard
                 .closed_socket_write_counter
                 .checked_sub(1)
                 .ok_or(err!(Pipe))?;
             guard.closed_socket_write_counter = next;
+
+            // Make sure not to allow writing to many bytes after the other
+            // half has been closed.
+            let remaining_capacity = guard
+                .total_capacity()
+                .saturating_sub(guard.closed_socket_write_num_bytes);
+            ensure!(remaining_capacity > 0, Pipe);
+            let len = cmp::min(len, remaining_capacity);
+            guard.closed_socket_write_num_bytes =
+                guard.closed_socket_write_num_bytes.saturating_add(len);
+
             return Ok(len);
         }
 
