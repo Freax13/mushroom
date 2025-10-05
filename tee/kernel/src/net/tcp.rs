@@ -700,7 +700,7 @@ impl OpenFileDescription for TcpSocket {
                 let val = guard.receive_buffer_size as u32;
                 val.to_ne_bytes().to_vec()
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         })
     }
 
@@ -790,7 +790,7 @@ impl OpenFileDescription for TcpSocket {
                 guard.v6only = optval;
                 Ok(())
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 

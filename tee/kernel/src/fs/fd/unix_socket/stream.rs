@@ -510,7 +510,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(bytes_of(&cred).to_vec())
             }
             (1, 38) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PROTOCOL
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 
@@ -525,7 +525,7 @@ impl OpenFileDescription for StreamUnixSocket {
     ) -> Result<()> {
         match (level, optname) {
             (1, 2) => Ok(()), // SO_REUSEADDR
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 

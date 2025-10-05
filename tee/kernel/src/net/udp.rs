@@ -462,7 +462,7 @@ impl OpenFileDescription for UdpSocket {
                 let val = guard.receive_buffer_size as u32;
                 val.to_ne_bytes().to_vec()
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         })
     }
 
@@ -529,7 +529,7 @@ impl OpenFileDescription for UdpSocket {
                 guard.v6only = optval;
                 Ok(())
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 

@@ -111,7 +111,7 @@ impl OpenFileDescription for NetlinkSocket {
                 let ty = SocketType::Raw as u32;
                 ty.to_le_bytes().to_vec()
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         })
     }
 
