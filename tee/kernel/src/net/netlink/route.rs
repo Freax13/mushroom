@@ -54,6 +54,7 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
             const RTM_GETLINK: u16 = 0x12;
             const RTM_NEWADDR: u16 = 0x14;
             const RTM_GETADDR: u16 = 0x16;
+            const RTM_GETROUTE: u16 = 0x1a;
             match header.r#type {
                 RTM_GETLINK => {
                     let mut response = Vec::new();
@@ -213,6 +214,22 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
                     response.extend_from_slice(bytes_of(&new_addr_data));
 
                     response.extend_from_slice(&rta_attrs);
+
+                    let done_header = MsgHeader {
+                        len: size_of::<MsgHeader>() as u32,
+                        r#type: NLMSG_DONE,
+                        flags: MsgHeaderFlags::MULTI,
+                        seq: header.seq,
+                        pid,
+                    };
+                    response.extend_from_slice(bytes_of(&done_header));
+
+                    let _ = tx.send(response);
+                }
+                RTM_GETROUTE => {
+                    let mut response = Vec::new();
+
+                    // Respond with no routes.
 
                     let done_header = MsgHeader {
                         len: size_of::<MsgHeader>() as u32,
