@@ -544,7 +544,7 @@ pub enum Permission {
 
 impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        let credentials_guard = guard.process().credentials.lock();
+        let credentials_guard = guard.process().credentials.read();
         Self {
             process: Some(guard.process().clone()),
             symlink_recursion_limit: 16,

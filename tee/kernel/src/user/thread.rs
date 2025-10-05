@@ -822,7 +822,7 @@ impl ThreadGuard<'_> {
             .for_each(|sa| *sa = Sigaction::DEFAULT);
         self.sigaltstack = Stack::default();
 
-        let mut guard = self.thread.process.credentials.lock();
+        let mut guard = self.thread.process.credentials.write();
         guard.saved_set_user_id = guard.effective_user_id;
         guard.saved_set_group_id = guard.effective_group_id;
     }

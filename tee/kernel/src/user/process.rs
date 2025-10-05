@@ -78,7 +78,7 @@ pub struct Process {
     task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
     pub stop_state: StopState,
-    pub credentials: Mutex<Credentials>,
+    pub credentials: RwLock<Credentials>,
     cwd: Mutex<Link>,
     process_group: Mutex<Arc<ProcessGroup>>,
     pub limits: Limits,
@@ -134,7 +134,7 @@ impl Process {
             task_comm: Mutex::new(task_comm),
             alarm: Mutex::new(None),
             stop_state: StopState::default(),
-            credentials: Mutex::new(credentials),
+            credentials: RwLock::new(credentials),
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
             limits,
@@ -454,10 +454,11 @@ impl Process {
             }
         }
 
-        let (self_guard, target_guard) = self.credentials.lock_two(&target.credentials);
+        let self_guard = self.credentials.read();
         if self_guard.is_super_user() {
             return true;
         }
+        let target_guard = target.credentials.read();
         [self_guard.real_user_id, self_guard.effective_user_id]
             .into_iter()
             .any(|uid| [target_guard.real_user_id, target_guard.saved_set_user_id].contains(&uid))

@@ -1908,7 +1908,7 @@ impl Directory for FdDir {
         let fd_num = FdNum::new(fd_num);
 
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let guard = process.credentials.lock();
+        let guard = process.credentials.read();
         let uid = guard.real_user_id;
         let gid = guard.real_group_id;
         drop(guard);
@@ -2383,7 +2383,7 @@ impl Directory for FdInfoDir {
         let fd_num = FdNum::new(fd_num);
 
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let guard = process.credentials.lock();
+        let guard = process.credentials.read();
         let uid = guard.real_user_id;
         let gid = guard.real_group_id;
         drop(guard);
