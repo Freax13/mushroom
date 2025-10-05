@@ -14,7 +14,7 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
             VectoredUserBuf, WriteBuf,
         },
-        node::FileAccessContext,
+        node::{FileAccessContext, new_ino},
         path::Path,
     },
     rt::{self, mpmc, mpsc, notify::Notify},
@@ -24,8 +24,8 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr, SocketAddrNetlink,
-                SocketType, SocketTypeWithFlags, Stat,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr,
+                SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee},
             },
             traits::Abi,
@@ -39,6 +39,7 @@ mod route;
 pub use route::{lo_interface_flags, lo_mtu};
 
 pub struct NetlinkSocket {
+    ino: u64,
     flags: OpenFlags,
     family: NetlinkFamily,
     connection: Once<Connection>,
@@ -60,6 +61,7 @@ impl NetlinkSocket {
         let family = NetlinkFamily::try_from(netlink_family)?;
 
         Ok(Self {
+            ino: new_ino(),
             flags: socket_type.flags,
             family,
             connection: Once::new(),
@@ -180,7 +182,21 @@ impl OpenFileDescription for NetlinkSocket {
     }
 
     fn stat(&self) -> Result<Stat> {
-        todo!()
+        Ok(Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Socket, FileMode::from_bits_truncate(0o777)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
