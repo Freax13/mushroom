@@ -189,6 +189,7 @@ impl Directory for ProcFsRoot {
             b"net" => NetDir::new(
                 location.clone(),
                 self.fs.clone(),
+                self.net_dir_ino,
                 self.net_dir_bsd_file_lock_record.clone(),
                 self.net_dir_watchers.clone(),
                 self.net_dev_file.clone(),
@@ -765,9 +766,11 @@ struct NetDir {
 }
 
 impl NetDir {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
+        ino: u64,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
         net_dev_file: Arc<NetDevFile>,
@@ -778,7 +781,7 @@ impl NetDir {
             this: this.clone(),
             location,
             fs: fs.clone(),
-            ino: new_ino(),
+            ino,
             bsd_file_lock_record,
             watchers,
             net_dev_file,
