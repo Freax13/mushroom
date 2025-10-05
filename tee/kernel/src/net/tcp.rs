@@ -86,11 +86,6 @@ impl PortData {
         let ip_version = IpVersion::from(ip);
         let local_ip = ip.is_unspecified().not().then_some(ip);
 
-        // When binding an ephemeral port, ignore reuse options and pretend
-        // they're not set.
-        let effective_reuse_addr = !ephemeral && reuse_addr;
-        let effective_reuse_port = !ephemeral && reuse_port;
-
         let mut i = 0;
         while let Some(entry) = self.entries.get(i) {
             i += 1;
@@ -100,6 +95,8 @@ impl PortData {
                 self.entries.swap_remove(i);
                 continue;
             };
+
+            ensure!(!ephemeral, AddrInUse);
 
             // Skip entries with a different address family.
             match (entry.ip_version, ip_version) {
@@ -127,13 +124,13 @@ impl PortData {
             }
 
             // Skip entries that are allowed to overlap according to SO_REUSEPORT.
-            if effective_reuse_port && entry.reuse_port && entry.effective_uid == effective_uid {
+            if reuse_port && entry.reuse_port && entry.effective_uid == effective_uid {
                 continue;
             }
 
             // Unless when SO_REUSE_ADDR is set, make sure that there's no
             // overlap between an specified and an unspecified address.
-            if !effective_reuse_addr || !entry.reuse_addr {
+            if !reuse_addr || !entry.reuse_addr {
                 ensure!(
                     Option::zip(entry.local_ip, local_ip)
                         .is_some_and(|(entry_ip, ip)| entry_ip != ip),

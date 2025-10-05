@@ -68,12 +68,6 @@ impl PortData {
         v6only: bool,
         socket: Weak<OpenFileDescriptionData<UdpSocket>>,
     ) -> Result<()> {
-        // When binding an ephemeral port, ignore reuse options and pretend
-        // they're not set.
-        let effective_reuse_addr = !ephemeral && reuse_addr;
-        let effective_reuse_port = !ephemeral && reuse_port;
-        let effective_v6only = !ephemeral && v6only;
-
         let mut i = 0;
         while let Some(entry) = self.entries.get(i) {
             i += 1;
@@ -84,13 +78,14 @@ impl PortData {
                 continue;
             };
 
-            let doesnt_overlap = (entry.reuse_addr && effective_reuse_addr)
-                || (entry.reuse_port && effective_reuse_port && entry.local_ip == ip)
+            ensure!(!ephemeral, AddrInUse);
+
+            let doesnt_overlap = (entry.reuse_addr && reuse_addr)
+                || (entry.reuse_port && reuse_port && entry.local_ip == ip)
                 || (!entry.local_ip.is_unspecified()
                     && !ip.is_unspecified()
-                    && entry.local_ip != ip
-                    && !ephemeral)
-                || ((entry.local_ip.is_ipv4() && ip.is_ipv6() && effective_v6only)
+                    && entry.local_ip != ip)
+                || ((entry.local_ip.is_ipv4() && ip.is_ipv6() && v6only)
                     || (entry.local_ip.is_ipv6() && ip.is_ipv4() && entry.v6only))
                 || ((entry.local_ip.is_ipv4()
                     && ip.is_ipv6()
