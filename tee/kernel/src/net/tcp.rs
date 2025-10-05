@@ -138,6 +138,15 @@ impl PortData {
                 );
             }
 
+            // The check for listening sockets only applies for v4 sockets.
+            if entry.ip_version == IpVersion::V6
+                && ip_version == IpVersion::V6
+                && entry.v6only
+                && v6only
+            {
+                continue;
+            }
+
             // Fail if there's already a listening socket.
             let is_listening = mode
                 .get()
