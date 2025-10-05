@@ -717,17 +717,15 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    async fn ready_for_write(&self, count: usize) {
-        let Some(mode) = self.mode.get() else {
-            return;
-        };
+    async fn ready_for_write(&self, _count: usize) {
+        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         let Mode::Active(active) = mode else {
             return;
         };
         active
             .write_half
             .notify
-            .wait_until(|| active.write_half.lock().can_write(count).then_some(()))
+            .wait_until(|| active.write_half.lock().can_write().then_some(()))
             .await;
     }
 
@@ -943,9 +941,9 @@ impl BufferGuard<'_> {
         Ok(len)
     }
 
-    pub fn can_write(&self, count: usize) -> bool {
+    pub fn can_write(&self) -> bool {
         let buffer = &*self.guard;
-        buffer.capacity.saturating_sub(buffer.data.len()) >= count
+        buffer.data.len() < buffer.capacity
             || buffer.shutdown
             || Arc::strong_count(&self.buffer.buffer) == 1
     }
