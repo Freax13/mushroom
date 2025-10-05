@@ -28,6 +28,7 @@ use crate::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
             directory::{Directory, dir_impls},
             new_dev, new_ino,
+            procfs::sys::{SysDir, kernel::HostnameFile},
         },
         path::{FileName, Path},
     },
@@ -44,6 +45,8 @@ use crate::{
         thread::{Gid, Thread, Uid},
     },
 };
+
+mod sys;
 
 pub struct ProcFs {
     dev: u64,
@@ -98,6 +101,13 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
             watchers: Watchers::new(),
         }),
         stat_file: StatFile::new(fs.clone()),
+        sys_dir_ino: new_ino(),
+        sys_dir_bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
+        sys_dir_watchers: Arc::new(Watchers::new()),
+        sys_kernel_dir_ino: new_ino(),
+        sys_kernel_dir_bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
+        sys_kernel_dir_watchers: Arc::new(Watchers::new()),
+        sys_kernel_hostname_file: HostnameFile::new(fs.clone()),
         uptime_file: UptimeFile::new(fs),
     }))
 }
@@ -119,6 +129,13 @@ struct ProcFsRoot {
     net_tcp6_file: Arc<NetTcpFile>,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
+    sys_dir_ino: u64,
+    sys_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    sys_dir_watchers: Arc<Watchers>,
+    sys_kernel_dir_ino: u64,
+    sys_kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    sys_kernel_dir_watchers: Arc<Watchers>,
+    sys_kernel_hostname_file: Arc<HostnameFile>,
     uptime_file: Arc<UptimeFile>,
 }
 
@@ -198,6 +215,17 @@ impl Directory for ProcFsRoot {
             ),
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
+            b"sys" => SysDir::new(
+                location.clone(),
+                self.fs.clone(),
+                self.sys_dir_ino,
+                self.sys_dir_bsd_file_lock_record.clone(),
+                self.sys_dir_watchers.clone(),
+                self.sys_kernel_dir_ino,
+                self.sys_kernel_dir_bsd_file_lock_record.clone(),
+                self.sys_kernel_dir_watchers.clone(),
+                self.sys_kernel_hostname_file.clone(),
+            ),
             b"uptime" => self.uptime_file.clone(),
             _ => {
                 let bytes = file_name.as_bytes();
@@ -320,6 +348,11 @@ impl Directory for ProcFsRoot {
             ino: self.stat_file.ino,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.sys_dir_ino,
+            ty: FileType::Dir,
+            name: DirEntryName::FileName(FileName::new(b"sys").unwrap()),
         });
         entries.push(DirEntry {
             ino: self.uptime_file.ino,
