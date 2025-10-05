@@ -17,7 +17,7 @@ use crate::{
         node::FileAccessContext,
         path::Path,
     },
-    rt::{self, mpmc, mpsc},
+    rt::{self, mpmc, mpsc, notify::Notify},
     spin::once::Once,
     user::{
         memory::VirtualMemory,
@@ -42,6 +42,7 @@ pub struct NetlinkSocket {
     flags: OpenFlags,
     family: NetlinkFamily,
     connection: Once<Connection>,
+    connect_notify: Notify,
 }
 
 struct Connection {
@@ -62,6 +63,7 @@ impl NetlinkSocket {
             flags: socket_type.flags,
             family,
             connection: Once::new(),
+            connect_notify: Notify::new(),
         })
     }
 }
@@ -100,6 +102,7 @@ impl OpenFileDescription for NetlinkSocket {
             }
         });
         ensure!(initialized, Inval);
+        self.connect_notify.notify();
 
         Ok(())
     }
@@ -198,13 +201,16 @@ impl OpenFileDescription for NetlinkSocket {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
+        // Wait until a connection has been established.
+        let connection = self
+            .connect_notify
+            .wait_until(|| self.connection.get())
+            .await;
+
         let read_fut = async move {
             if !events.contains(Events::READ) {
                 return pending().await;
             }
-            let Some(connection) = self.connection.get() else {
-                return core::future::pending().await;
-            };
             connection.rx.readable().await;
             NonEmptyEvents::READ
         };
