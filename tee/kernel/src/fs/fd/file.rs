@@ -32,7 +32,6 @@ pub trait File: INode {
     fn register(&self, mapping_ctrl: &MappingCtrl) {
         let _ = mapping_ctrl;
     }
-
     fn unregister(&self, mapping_ctrl: &MappingCtrl) {
         let _ = mapping_ctrl;
     }
