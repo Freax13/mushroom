@@ -100,6 +100,10 @@ impl OpenFileDescription for Stdin {
         None
     }
 
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
+        Ok(self.poll_ready(events))
+    }
+
     async fn ready(&self, _events: Events) -> NonEmptyEvents {
         pending().await
     }
@@ -188,6 +192,10 @@ impl OpenFileDescription for Stdout {
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & Events::WRITE)
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
+        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
@@ -282,6 +290,10 @@ impl OpenFileDescription for Stderr {
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & Events::WRITE)
+    }
+
+    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
+        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
