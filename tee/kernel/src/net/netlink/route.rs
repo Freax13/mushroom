@@ -181,7 +181,6 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
                     response.extend_from_slice(bytes_of(&new_addr_data));
 
                     response.extend_from_slice(&rta_attrs);
-                    let mut response = Vec::new();
 
                     let mut rta_attrs = Vec::new();
 
