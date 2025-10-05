@@ -353,6 +353,13 @@ impl LinkLocation {
         }))))
     }
 
+    pub fn is_unlinked(&self) -> bool {
+        match &self.0 {
+            Some(loc) => loc.read().unlinked,
+            None => false,
+        }
+    }
+
     pub fn path(&self) -> Result<Path> {
         if let Some(loc) = self.0.as_ref() {
             let guard = loc.read();

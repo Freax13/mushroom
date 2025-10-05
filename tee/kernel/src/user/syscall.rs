@@ -4401,7 +4401,9 @@ fn start_dir_for_path(
         // Completly ignore `dfd` if path is absolute.
         Ok(Link::root())
     } else if dfd == FdNum::CWD {
-        Ok(thread.process().cwd())
+        let link = thread.process().cwd();
+        ensure!(!link.location.is_unlinked(), NoEnt);
+        Ok(link)
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(ctx)
