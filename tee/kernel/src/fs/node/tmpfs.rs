@@ -138,8 +138,8 @@ impl TmpFsDir {
                 let node = TmpFsFile::new(
                     self.fs.clone(),
                     mode,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                     false,
                 );
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
@@ -296,8 +296,8 @@ impl Directory for TmpFsDir {
                     self.fs.clone(),
                     location,
                     mode,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                 );
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 internal.update_times();
@@ -328,8 +328,8 @@ impl Directory for TmpFsDir {
         let node = TmpFsFile::new(
             self.fs.clone(),
             mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
             true,
         );
         let filename = FileName::new(format!("#{}", node.ino).as_bytes())

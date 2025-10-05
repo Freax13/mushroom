@@ -4874,8 +4874,8 @@ fn faccessat(
 
     if !flags.contains(FaccessatFlags::EACCESS) {
         let credentials = thread.process().credentials.read();
-        ctx.set_filesystem_user_id(credentials.real_user_id);
-        ctx.set_filesystem_group_id(credentials.real_group_id);
+        ctx.set_filesystem_user_id_override(credentials.real_user_id);
+        ctx.set_filesystem_group_id_override(credentials.real_group_id);
     }
 
     let stat = link.node.stat()?;

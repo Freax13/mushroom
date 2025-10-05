@@ -172,12 +172,6 @@ pub trait ConstResource {
     const RESOURCE: Resource;
 }
 
-pub struct FSize;
-
-impl ConstResource for FSize {
-    const RESOURCE: Resource = Resource::FSize;
-}
-
 pub struct Stack;
 
 impl ConstResource for Stack {

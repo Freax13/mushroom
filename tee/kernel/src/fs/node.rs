@@ -24,12 +24,9 @@ use crate::{
     },
     spin::{lazy::Lazy, rwlock::RwLock},
     user::{
-        process::{
-            Process,
-            limits::{CurrentLimit, FSize},
-        },
+        process::Process,
         syscall::args::{
-            ExtractableThreadState, FileMode, FileType, OpenFlags, RLimit, Stat, Timespec,
+            ExtractableThreadState, FileMode, FileType, OpenFlags, Resource, Stat, Timespec,
         },
         thread::{Gid, ThreadGuard, Uid},
     },
@@ -423,10 +420,8 @@ fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
 pub struct FileAccessContext {
     process: Option<Arc<Process>>,
     symlink_recursion_limit: u16,
-    filesystem_user_id: Uid,
-    filesystem_group_id: Gid,
-    supplementary_group_ids: Arc<[Gid]>,
-    fsize: CurrentLimit<FSize>,
+    filesystem_user_id_override: Option<Uid>,
+    filesystem_group_id_override: Option<Gid>,
 }
 
 impl FileAccessContext {
@@ -450,7 +445,7 @@ impl FileAccessContext {
         let gid = info.gid();
         let mode = info.mode();
 
-        if self.filesystem_user_id == Uid::SUPER_USER {
+        if self.filesystem_user_id() == Uid::SUPER_USER {
             // Access checks are special for the super user: Read and write
             // checks are omitted completly, but for execute at least one
             // execute flag has to be set.
@@ -490,13 +485,14 @@ impl FileAccessContext {
     }
 
     pub fn is_user(&self, uid: Uid) -> bool {
-        self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_user_id == uid
+        let filesystem_user_id = self.filesystem_user_id();
+        filesystem_user_id == Uid::SUPER_USER || filesystem_user_id == uid
     }
 
     pub fn is_in_group(&self, gid: Gid) -> bool {
-        self.filesystem_user_id == Uid::SUPER_USER
-            || self.filesystem_group_id == gid
-            || self.supplementary_group_ids.contains(&gid)
+        self.filesystem_user_id() == Uid::SUPER_USER
+            || self.filesystem_group_id() == gid
+            || self.supplementary_group_ids().contains(&gid)
     }
 
     pub fn process(&self) -> Option<&Arc<Process>> {
@@ -504,33 +500,48 @@ impl FileAccessContext {
     }
 
     pub fn filesystem_user_id(&self) -> Uid {
-        self.filesystem_user_id
+        self.filesystem_user_id_override.unwrap_or_else(|| {
+            self.process.as_ref().map_or(Uid::SUPER_USER, |process| {
+                process.credentials.read().filesystem_user_id
+            })
+        })
     }
 
-    pub fn set_filesystem_user_id(&mut self, uid: Uid) {
-        self.filesystem_user_id = uid;
+    pub fn set_filesystem_user_id_override(&mut self, uid: Uid) {
+        self.filesystem_user_id_override = Some(uid);
     }
 
     pub fn filesystem_group_id(&self) -> Gid {
-        self.filesystem_group_id
+        self.filesystem_group_id_override.unwrap_or_else(|| {
+            self.process.as_ref().map_or(Gid::SUPER_USER, |process| {
+                process.credentials.read().filesystem_group_id
+            })
+        })
     }
 
-    pub fn set_filesystem_group_id(&mut self, gid: Gid) {
-        self.filesystem_group_id = gid;
+    pub fn set_filesystem_group_id_override(&mut self, gid: Gid) {
+        self.filesystem_group_id_override = Some(gid);
+    }
+
+    fn supplementary_group_ids(&self) -> Arc<[Gid]> {
+        self.process.as_ref().map_or_else(
+            || Arc::new([]) as Arc<[_]>,
+            |process| process.credentials.read().supplementary_group_ids.clone(),
+        )
     }
 
     pub fn max_file_size(&self) -> usize {
-        usize_from(self.fsize.get())
+        self.process.as_ref().map_or(usize::MAX, |process| {
+            usize_from(process.limits[Resource::FSize].load_current())
+        })
     }
 
     pub fn root() -> Self {
         Self {
             process: None,
             symlink_recursion_limit: 16,
-            filesystem_user_id: Uid::SUPER_USER,
-            filesystem_group_id: Gid::SUPER_USER,
-            supplementary_group_ids: Arc::new([]),
-            fsize: CurrentLimit::new(RLimit::INFINITY),
+            filesystem_user_id_override: None,
+            filesystem_group_id_override: None,
         }
     }
 }
@@ -544,14 +555,11 @@ pub enum Permission {
 
 impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        let credentials_guard = guard.process().credentials.read();
         Self {
             process: Some(guard.process().clone()),
             symlink_recursion_limit: 16,
-            filesystem_user_id: credentials_guard.filesystem_user_id,
-            filesystem_group_id: credentials_guard.filesystem_group_id,
-            supplementary_group_ids: credentials_guard.supplementary_group_ids.clone(),
-            fsize: CurrentLimit::extract_from_thread(guard),
+            filesystem_user_id_override: None,
+            filesystem_group_id_override: None,
         }
     }
 }
@@ -747,8 +755,8 @@ pub fn create_link(
     parent.node.create_link(
         file_name.into_owned(),
         target,
-        ctx.filesystem_user_id,
-        ctx.filesystem_group_id,
+        ctx.filesystem_user_id(),
+        ctx.filesystem_group_id(),
         true,
     )?;
     Ok(())
@@ -773,8 +781,8 @@ pub fn create_fifo(
         PathSegment::FileName(file_name) => parent.node.create_fifo(
             file_name.into_owned(),
             mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
         ),
     }
 }
@@ -798,8 +806,8 @@ pub fn create_char_dev(
                 major,
                 minor,
                 mode,
-                ctx.filesystem_user_id,
-                ctx.filesystem_group_id,
+                ctx.filesystem_user_id(),
+                ctx.filesystem_group_id(),
             )?;
             Ok(())
         }
