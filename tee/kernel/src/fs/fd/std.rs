@@ -138,7 +138,7 @@ impl Stdout {
 #[async_trait]
 impl OpenFileDescription for Stdout {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        OpenFlags::WRONLY
     }
 
     fn path(&self) -> Result<Path> {
@@ -236,7 +236,7 @@ impl Stderr {
 #[async_trait]
 impl OpenFileDescription for Stderr {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        OpenFlags::WRONLY
     }
 
     fn path(&self) -> Result<Path> {
