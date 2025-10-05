@@ -1445,8 +1445,7 @@ fn socket(
                 r#type,
                 no_file_limit,
             )?,
-            SocketType::Dgram => bail!(NoSys),
-            SocketType::Raw => todo!(),
+            SocketType::Dgram | SocketType::Raw => bail!(NoSys),
             SocketType::Seqpacket => todo!(),
         },
         Domain::Inet | Domain::Inet6 => {
