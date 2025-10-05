@@ -4,7 +4,8 @@ use core::{cmp, future::pending};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
-use usize_conversions::usize_from;
+use log::warn;
+use usize_conversions::{FromUsize, usize_from};
 
 use crate::{
     error::{Error, Result, bail, ensure, err},
@@ -18,15 +19,16 @@ use crate::{
         path::Path,
     },
     rt::{self, mpmc, mpsc, notify::Notify},
-    spin::once::Once,
+    spin::{mutex::Mutex, once::Once},
     user::{
         memory::VirtualMemory,
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr,
-                SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat, Timespec,
-                pointee::{Pointee, PrimitivePointee},
+                CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
+                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
+                pointee::{Pointee, PrimitivePointee, SizedPointee},
             },
             traits::Abi,
         },
@@ -42,8 +44,15 @@ pub struct NetlinkSocket {
     ino: u64,
     flags: OpenFlags,
     family: NetlinkFamily,
+    internal: Mutex<NetlinkSocketInternal>,
     connection: Once<Connection>,
     connect_notify: Notify,
+}
+
+struct NetlinkSocketInternal {
+    groups: NetlinkGroups,
+    pktinfo: bool,
+    ext_ack: bool,
 }
 
 struct Connection {
@@ -64,6 +73,11 @@ impl NetlinkSocket {
             ino: new_ino(),
             flags: socket_type.flags,
             family,
+            internal: Mutex::new(NetlinkSocketInternal {
+                groups: NetlinkGroups::empty(),
+                pktinfo: false,
+                ext_ack: false,
+            }),
             connection: Once::new(),
             connect_notify: Notify::new(),
         })
@@ -110,14 +124,77 @@ impl OpenFileDescription for NetlinkSocket {
     }
 
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        let guard = self.internal.lock();
         Ok(match (level, optname) {
             (1, 3) => {
                 // SO_TYPE
                 let ty = SocketType::Raw as u32;
                 ty.to_le_bytes().to_vec()
             }
+            (270, 3) => {
+                // NETLINK_PKTINFO
+                let val = guard.pktinfo as u32;
+                val.to_ne_bytes().to_vec()
+            }
+            (270, 11) => {
+                // NETLINK_EXT_ACK
+                let val = guard.ext_ack as u32;
+                val.to_ne_bytes().to_vec()
+            }
             _ => bail!(OpNotSupp),
         })
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        _: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        match (level, optname) {
+            (270, 1) => {
+                // NETLINK_ADD_MEMBERSHIP
+                ensure!(optlen == 4, Inval);
+                let group = virtual_memory.read(optval.cast::<u32>())?;
+                let group_index = group.checked_sub(1).ok_or(err!(Inval))?;
+                let group_bit = u64::checked_shl(1, group_index).ok_or(err!(Inval))?;
+                let Some(group) = NetlinkGroups::from_bits(group_bit) else {
+                    warn!("netlink group not implemented: {group}");
+                    bail!(Inval)
+                };
+                guard.groups |= group;
+                Ok(())
+            }
+            (270, 2) => {
+                // NETLINK_DROP_MEMBERSHIP
+                ensure!(optlen == 4, Inval);
+                let group = virtual_memory.read(optval.cast::<u32>())?;
+                let group_index = group.checked_sub(1).ok_or(err!(Inval))?;
+                let group_bit = u64::checked_shl(1, group_index).ok_or(err!(Inval))?;
+                let group = NetlinkGroups::from_bits(group_bit).ok_or(err!(Inval))?;
+                guard.groups &= !group;
+                Ok(())
+            }
+            (270, 3) => {
+                // NETLINK_PKTINFO
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.pktinfo = optval;
+                Ok(())
+            }
+            (270, 11) => {
+                // NETLINK_EXT_ACK
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ext_ack = optval;
+                Ok(())
+            }
+            _ => bail!(OpNotSupp),
+        }
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {
@@ -165,6 +242,28 @@ impl OpenFileDescription for NetlinkSocket {
         let len = cmp::min(buffer.len(), ReadBuf::buffer_len(&vectored_buf));
         let buffer = &buffer[..len];
         vectored_buf.write(0, buffer)?;
+
+        let pktinfo = self.internal.lock().pktinfo;
+        if pktinfo {
+            let mut cmsg_header = CmsgHdr {
+                len: 0,
+                level: 270,
+                r#type: 3,
+            };
+            let payload = 0u32;
+            let header_len = cmsg_header.size(abi);
+            let payload_len = payload.size(abi);
+            cmsg_header.len = u64::from_usize(header_len + payload_len);
+            if msg_hdr.controllen <= cmsg_header.len {
+                let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
+                vm.write(msg_hdr.control.bytes_offset(size).cast(), payload)?;
+                msg_hdr.controllen = cmsg_header.len;
+            } else {
+                msg_hdr.controllen = 0;
+            }
+        } else {
+            msg_hdr.controllen = 0;
+        }
 
         Ok(len)
     }
@@ -314,5 +413,11 @@ bitflags! {
         const CREATE = 1 << 10;
         /// Add to the end of the object list.
         const APPEND = 1 << 11;
+    }
+}
+
+bitflags! {
+    pub struct NetlinkGroups: u64 {
+        const LINK = 1 << 0;
     }
 }
