@@ -416,14 +416,11 @@ impl Thread {
     }
 
     async fn deliver_signals(self: &Arc<Self>) -> Result<()> {
+        let mut wait_thread = self.signal_notify.wait();
+        let mut ptrace_wait = self.ptrace_tracee_notify.wait();
+        let mut wait_process = self.process.signals_notify.wait();
         loop {
-            let wait_thread = self.signal_notify.wait().fuse();
-            let ptrace_wait = self.ptrace_tracee_notify.wait().fuse();
-            let wait_process = self.process.signals_notify.wait().fuse();
             let process_not_stopped_fut = self.process.wait_until_not_stopped().fuse();
-            let mut wait_thread = pin!(wait_thread);
-            let mut ptrace_wait = pin!(ptrace_wait);
-            let mut wait_process = pin!(wait_process);
             let mut process_not_stopped_fut = pin!(process_not_stopped_fut);
 
             let mut state = self.lock();
@@ -537,10 +534,10 @@ impl Thread {
             drop(state);
 
             select_biased! {
-                _ = wait_thread => {}
-                _ = wait_process => {}
+                _ = wait_thread.next().fuse() => {}
+                _ = wait_process.next().fuse() => {}
                 _ = process_not_stopped_fut => {}
-                _ = ptrace_wait => {}
+                _ = ptrace_wait.next().fuse() => {}
             }
         }
     }
@@ -548,21 +545,19 @@ impl Thread {
     /// Returns a future that resolves when the process has a pending signal
     /// and returns whether the running syscall should be restarted.
     pub async fn wait_for_signal(&self) -> bool {
+        let mut thread_notify_wait = self.signal_notify.wait();
+        let mut ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
+        let mut process_notify_wait = self.process.signals_notify.wait();
         loop {
-            let thread_notify_wait = self.signal_notify.wait();
-            let ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
-            let process_notify_wait = self.process.signals_notify.wait();
-
             let mut guard = self.lock();
             if let Some(restartable) = guard.get_pending_signal() {
                 return restartable;
             }
             drop(guard);
-
             select_biased! {
-                () = thread_notify_wait.fuse() => {}
-                () = ptrace_tracee_wait.fuse() => {}
-                () = process_notify_wait.fuse() => {}
+                () = thread_notify_wait.next().fuse() => {}
+                () = ptrace_tracee_wait.next().fuse() => {}
+                () = process_notify_wait.next().fuse() => {}
             }
         }
     }

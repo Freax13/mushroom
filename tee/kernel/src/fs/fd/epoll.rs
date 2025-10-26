@@ -121,15 +121,14 @@ impl Epoll {
     /// Waits for an fd to become ready and also returns a non-blocking iterator to may return more ready fds.
     async fn poll(&self, consume_oneshot: bool) -> (EpollEvent, impl Iterator<Item = EpollEvent>) {
         let mut builder = FuturesUnorderedBuilder::new();
+        let mut wait = self.notify.wait();
         loop {
-            let wait = self.notify.wait();
-
             builder.extend(self.ready_futures(consume_oneshot));
             let mut futures = builder.finish();
 
             let ready = futures.next();
 
-            let Either::Left((res, wait)) = select(ready, wait).await else {
+            let Either::Left((res, _)) = select(ready, wait.next()).await else {
                 // The interested list was modified. Start over.
                 builder = futures.reset();
                 continue;
@@ -137,7 +136,7 @@ impl Epoll {
             let Some(ready_fd) = res else {
                 // There are no file descriptors at all. Wait for the
                 // interested list to change and start over.
-                wait.await;
+                wait.next().await;
                 builder = futures.reset();
                 continue;
             };

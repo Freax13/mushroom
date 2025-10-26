@@ -2102,10 +2102,9 @@ async fn wait4(
     };
 
     let process = &**thread.process();
+    let mut wait_child = process.child_death_notify.wait();
+    let mut wait_ptrace = thread.ptrace_tracer_notify.wait();
     loop {
-        let wait_child = process.child_death_notify.wait();
-        let wait_ptrace = thread.ptrace_tracer_notify.wait();
-
         let res = process
             .poll_child_death(filter)
             .or_else(|| thread.poll_wait_for_tracee(filter));
@@ -2133,8 +2132,7 @@ async fn wait4(
                 }
             }
         }
-
-        future::select(wait_child, wait_ptrace).await;
+        future::select(wait_child.next(), wait_ptrace.next()).await;
     }
 }
 
@@ -5032,11 +5030,10 @@ async fn splice(
             ensure!(off_in.is_null(), SPipe);
             ensure!(off_out.is_null(), SPipe);
 
+            // Start wait operations on both halves.
+            let mut read_half_wait = read_half.wait();
+            let mut write_half_wait = write_half.wait();
             loop {
-                // Start wait operations on both halves.
-                let read_half_wait = read_half.wait();
-                let write_half_wait = write_half.wait();
-
                 match stream_buffer::splice(read_half, write_half, len) {
                     Ok(len) => return Ok(u64::from_usize(len)),
                     Err(err) => {
@@ -5044,11 +5041,11 @@ async fn splice(
                         match err {
                             SpliceBlockedError::Read => {
                                 ensure!(!pipe_read_nonblock, Again);
-                                read_half_wait.await
+                                read_half_wait.next().await
                             }
                             SpliceBlockedError::Write => {
                                 ensure!(!pipe_write_nonblock, Again);
-                                write_half_wait.await
+                                write_half_wait.next().await
                             }
                         }
                         continue;
@@ -5066,10 +5063,9 @@ async fn splice(
                 None
             };
 
+            // Start a wait operation on the read half.
+            let mut wait = read_half.wait();
             loop {
-                // Start a wait operation on the read half.
-                let wait = read_half.wait();
-
                 let res = fd_in.splice_from(read_half, offset, len, &ctx);
 
                 // If the operation can't be completed right now, wait and try again.
@@ -5085,7 +5081,7 @@ async fn splice(
                 // If the pipe wasn't ready, wait for it to be ready and try again.
                 let Ok(len) = res? else {
                     ensure!(!pipe_read_nonblock, Again);
-                    wait.await;
+                    wait.next().await;
                     continue;
                 };
 
@@ -5107,10 +5103,9 @@ async fn splice(
                 None
             };
 
+            // Start a wait operation on the write half.
+            let mut wait = write_half.wait();
             loop {
-                // Start a wait operation on the write half.
-                let wait = write_half.wait();
-
                 let res = fd_in.splice_to(write_half, offset, len);
 
                 // If the operation can't be completed right now, wait and try again.
@@ -5126,7 +5121,7 @@ async fn splice(
                 // If the pipe wasn't ready, wait for it to be ready and try again.
                 let Ok(len) = res? else {
                     ensure!(!pipe_write_nonblock, Again);
-                    wait.await;
+                    wait.next().await;
                     continue;
                 };
 

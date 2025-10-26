@@ -4,7 +4,7 @@ use core::{cmp, num::NonZeroUsize};
 use crate::{
     error::{Result, bail, ensure},
     fs::fd::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err},
-    rt::notify::{Notify, NotifyOnDrop},
+    rt::notify::{Notify, NotifyOnDrop, NotifyWait},
     spin::mutex::Mutex,
 };
 
@@ -256,7 +256,7 @@ impl ReadHalf {
         NonEmptyEvents::new(ready_events)
     }
 
-    pub fn wait(&self) -> impl Future<Output = ()> + '_ {
+    pub fn wait(&self) -> NotifyWait<'_> {
         self.notify.wait()
     }
 
@@ -470,10 +470,8 @@ impl WriteHalf {
     }
 
     pub async fn ready_for_write(&self, count: usize) {
-        loop {
-            let wait = self.notify.wait();
-
-            {
+        self.notify
+            .wait_until(|| {
                 let guard = self.data.buffer.lock();
                 let is_atomic = count <= guard.ty.atomic_write_size();
                 let remaining_capacity = guard.capacity.saturating_sub(guard.bytes.len());
@@ -482,20 +480,16 @@ impl WriteHalf {
                 } else {
                     0 < remaining_capacity
                 };
-                if can_write
+                (can_write
                     || Arc::strong_count(&self.data) == 1
                     || guard.read_shutdown
-                    || guard.reset
-                {
-                    break;
-                }
-            }
-
-            wait.await;
-        }
+                    || guard.reset)
+                    .then_some(())
+            })
+            .await
     }
 
-    pub fn wait(&self) -> impl Future<Output = ()> + '_ {
+    pub fn wait(&self) -> NotifyWait<'_> {
         self.notify.wait()
     }
 

@@ -985,15 +985,10 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        let mode = loop {
-            let wait = self.activate_notify.wait();
-            if let Some(bound) = self.bound_socket.get()
-                && let Some(mode) = bound.mode.get()
-            {
-                break mode;
-            }
-            wait.await;
-        };
+        let mode = self
+            .activate_notify
+            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
+            .await;
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 if !events.contains(Events::READ) {
@@ -1013,24 +1008,14 @@ impl OpenFileDescription for TcpSocket {
                     .await
             }
             Mode::Active(active_tcp_socket) => {
-                let wait_read = async {
-                    loop {
-                        let wait = active_tcp_socket.read_half.wait();
-                        if let Some(events) = active_tcp_socket.read_half.poll_ready(events) {
-                            return events;
-                        }
-                        wait.await;
-                    }
-                };
-                let wait_write = async {
-                    loop {
-                        let wait = active_tcp_socket.write_half.wait();
-                        if let Some(events) = active_tcp_socket.write_half.poll_ready(events) {
-                            return events;
-                        }
-                        wait.await;
-                    }
-                };
+                let wait_read = active_tcp_socket
+                    .read_half
+                    .wait()
+                    .until(|| active_tcp_socket.read_half.poll_ready(events));
+                let wait_write = active_tcp_socket
+                    .write_half
+                    .wait()
+                    .until(|| active_tcp_socket.write_half.poll_ready(events));
                 NonEmptyEvents::select(wait_read, wait_write).await
             }
         }

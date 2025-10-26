@@ -95,16 +95,10 @@ impl OpenFileDescription for ReadHalf {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        loop {
-            let wait = self.stream_buffer.wait();
-
-            let events = self.poll_ready(events);
-            if let Some(events) = events {
-                return events;
-            }
-
-            wait.await;
-        }
+        self.stream_buffer
+            .wait()
+            .until(|| self.poll_ready(events))
+            .await
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -223,16 +217,10 @@ impl OpenFileDescription for WriteHalf {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        loop {
-            let wait = self.stream_buffer.wait();
-
-            let events = self.poll_ready(events);
-            if let Some(events) = events {
-                return events;
-            }
-
-            wait.await;
-        }
+        self.stream_buffer
+            .wait()
+            .until(|| self.poll_ready(events))
+            .await
     }
 
     async fn ready_for_write(&self, count: usize) {

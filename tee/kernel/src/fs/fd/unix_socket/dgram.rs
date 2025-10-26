@@ -231,16 +231,14 @@ impl OpenFileDescription for DgramUnixSocket {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
+        let mut read_wait = self.read_half.notify.wait();
+        let mut write_wait = self.write_half.notify.wait();
         loop {
-            let read_wait = self.read_half.notify.wait();
-            let write_wait = self.write_half.notify.wait();
-
             let events = self.poll_ready(events);
             if let Some(events) = events {
                 return events;
             }
-
-            future::select(read_wait, write_wait).await;
+            future::select(read_wait.next(), write_wait.next()).await;
         }
     }
 

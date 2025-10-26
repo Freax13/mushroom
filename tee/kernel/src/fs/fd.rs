@@ -1286,9 +1286,8 @@ impl BsdFileLock {
     }
 
     pub async fn lock_shared(&self, non_blocking: bool) -> Result<()> {
+        let mut wait = non_blocking.then(|| self.record.notify.wait());
         loop {
-            let wait = non_blocking.then(|| self.record.notify.wait());
-
             let mut guard = self.state.lock();
             self.unlock_internal(&mut guard);
             let res =
@@ -1302,15 +1301,13 @@ impl BsdFileLock {
                 return Ok(());
             }
             drop(guard);
-
-            wait.ok_or(err!(Again))?.await;
+            wait.as_mut().ok_or(err!(Again))?.next().await;
         }
     }
 
     pub async fn lock_exclusive(&self, non_blocking: bool) -> Result<()> {
+        let mut wait = non_blocking.not().then(|| self.record.notify.wait());
         loop {
-            let wait = non_blocking.not().then(|| self.record.notify.wait());
-
             let mut guard = self.state.lock();
             self.unlock_internal(&mut guard);
             let res =
@@ -1322,8 +1319,7 @@ impl BsdFileLock {
                 return Ok(());
             }
             drop(guard);
-
-            wait.ok_or(err!(Again))?.await;
+            wait.as_mut().ok_or(err!(Again))?.next().await;
         }
     }
 

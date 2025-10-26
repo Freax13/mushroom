@@ -90,8 +90,8 @@ impl NamedPipe {
             } else {
                 // Wait until at least one reader exists.
                 let counter_value = self.read_open_counter.load(Ordering::SeqCst);
+                let mut wait = self.notify.wait();
                 loop {
-                    let wait = self.notify.wait();
                     if guard.read_half.strong_count() > 0
                         || counter_value != self.read_open_counter.load(Ordering::SeqCst)
                     {
@@ -99,7 +99,7 @@ impl NamedPipe {
                     }
 
                     drop(guard);
-                    wait.await;
+                    wait.next().await;
                     guard = self.internal.lock();
                 }
             }
@@ -190,8 +190,8 @@ impl NamedPipe {
             if !flags.contains(OpenFlags::NONBLOCK) {
                 // Wait until at least one writer exists.
                 let counter_value = self.write_open_counter.load(Ordering::SeqCst);
+                let mut wait = self.notify.wait();
                 loop {
-                    let wait = self.notify.wait();
                     if guard.write_half.strong_count() > 0
                         || counter_value != self.write_open_counter.load(Ordering::SeqCst)
                     {
@@ -199,7 +199,7 @@ impl NamedPipe {
                     }
 
                     drop(guard);
-                    wait.await;
+                    wait.next().await;
                     guard = self.internal.lock();
                 }
             }
@@ -275,16 +275,10 @@ impl OpenFileDescription for ReadHalf {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        loop {
-            let wait = self.read_half.wait();
-
-            let events = self.poll_ready(events);
-            if let Some(events) = events {
-                return events;
-            }
-
-            wait.await;
-        }
+        self.read_half
+            .wait()
+            .until(|| self.poll_ready(events))
+            .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -352,16 +346,10 @@ impl OpenFileDescription for WriteHalf {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        loop {
-            let wait = self.write_half.wait();
-
-            let events = self.poll_ready(events);
-            if let Some(events) = events {
-                return events;
-            }
-
-            wait.await;
-        }
+        self.write_half
+            .wait()
+            .until(|| self.poll_ready(events))
+            .await
     }
 
     async fn ready_for_write(&self, count: usize) {
@@ -447,16 +435,14 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
+        let mut read_wait = self.read_half.wait();
+        let mut write_wait = self.write_half.wait();
         loop {
-            let read_wait = self.read_half.wait();
-            let write_wait = self.write_half.wait();
-
             let events = self.poll_ready(events);
             if let Some(events) = events {
                 return events;
             }
-
-            future::select(read_wait, write_wait).await;
+            future::select(read_wait.next(), write_wait.next()).await;
         }
     }
 
