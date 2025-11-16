@@ -329,6 +329,23 @@ impl ReadHalf {
         self.notify().notify();
     }
 
+    /// Close the read half.
+    ///
+    /// Returns `true` if there are remaining bytes in the buffer.
+    pub fn close(&self) -> bool {
+        let mut guard = self.data.buffer.lock();
+
+        // The socket will not be shut down if there are still unread bytes.
+        if !guard.bytes.is_empty() {
+            return true;
+        }
+
+        guard.read_shutdown = true;
+        self.notify().notify();
+
+        false
+    }
+
     pub fn read_oob(&self, peek: bool) -> Result<u8> {
         let mut guard = self.data.buffer.lock();
         let index = guard

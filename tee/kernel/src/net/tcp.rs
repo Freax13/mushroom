@@ -1084,8 +1084,16 @@ impl Drop for TcpSocket {
             return;
         };
 
-        active_tcp_socket.read_half.shutdown();
-        active_tcp_socket.write_half.shutdown();
+        let send_rst = active_tcp_socket.read_half.close();
+
+        // If the socket was closed with remaining bytes, immediately drop the
+        // connection.
+        if send_rst {
+            return;
+        } else {
+            // Otherwise, properly shut down the write half.
+            active_tcp_socket.write_half.shutdown();
+        }
 
         // Keep the socket alive until the deadline.
         let mode = bound.mode.clone();
