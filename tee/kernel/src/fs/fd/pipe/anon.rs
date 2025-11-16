@@ -70,12 +70,12 @@ impl OpenFileDescription for ReadHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.stream_buffer.notify();
+        self.stream_buffer.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.stream_buffer.notify();
+        self.stream_buffer.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -96,8 +96,8 @@ impl OpenFileDescription for ReadHalf {
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.stream_buffer
-            .wait()
-            .until(|| self.poll_ready(events))
+            .notify()
+            .wait_until(|| self.poll_ready(events))
             .await
     }
 
@@ -157,12 +157,12 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.stream_buffer.notify();
+        self.stream_buffer.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.stream_buffer.notify();
+        self.stream_buffer.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -218,8 +218,8 @@ impl OpenFileDescription for WriteHalf {
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.stream_buffer
-            .wait()
-            .until(|| self.poll_ready(events))
+            .notify()
+            .wait_until(|| self.poll_ready(events))
             .await
     }
 

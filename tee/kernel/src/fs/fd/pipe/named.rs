@@ -230,12 +230,12 @@ impl OpenFileDescription for ReadHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.read_half.notify();
+        self.read_half.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.read_half.notify();
+        self.read_half.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -276,8 +276,8 @@ impl OpenFileDescription for ReadHalf {
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.read_half
-            .wait()
-            .until(|| self.poll_ready(events))
+            .notify()
+            .wait_until(|| self.poll_ready(events))
             .await
     }
 
@@ -301,12 +301,12 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.write_half.notify();
+        self.write_half.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.write_half.notify();
+        self.write_half.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -347,8 +347,8 @@ impl OpenFileDescription for WriteHalf {
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.write_half
-            .wait()
-            .until(|| self.poll_ready(events))
+            .notify()
+            .wait_until(|| self.poll_ready(events))
             .await
     }
 
@@ -377,14 +377,14 @@ impl OpenFileDescription for FullReadWrite {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.read_half.notify();
-        self.write_half.notify();
+        self.read_half.notify().notify();
+        self.write_half.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.read_half.notify();
-        self.write_half.notify();
+        self.read_half.notify().notify();
+        self.write_half.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -435,8 +435,8 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        let mut read_wait = self.read_half.wait();
-        let mut write_wait = self.write_half.wait();
+        let mut read_wait = self.read_half.notify().wait();
+        let mut write_wait = self.write_half.notify().wait();
         loop {
             let events = self.poll_ready(events);
             if let Some(events) = events {

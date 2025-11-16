@@ -1010,12 +1010,12 @@ impl OpenFileDescription for TcpSocket {
             Mode::Active(active_tcp_socket) => {
                 let wait_read = active_tcp_socket
                     .read_half
-                    .wait()
-                    .until(|| active_tcp_socket.read_half.poll_ready(events));
+                    .notify()
+                    .wait_until(|| active_tcp_socket.read_half.poll_ready(events));
                 let wait_write = active_tcp_socket
                     .write_half
-                    .wait()
-                    .until(|| active_tcp_socket.write_half.poll_ready(events));
+                    .notify()
+                    .wait_until(|| active_tcp_socket.write_half.poll_ready(events));
                 NonEmptyEvents::select(wait_read, wait_write).await
             }
         }

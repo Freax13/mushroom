@@ -4,7 +4,7 @@ use core::{cmp, num::NonZeroUsize};
 use crate::{
     error::{Result, bail, ensure},
     fs::fd::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err},
-    rt::notify::{Notify, NotifyOnDrop, NotifyWait},
+    rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
 };
 
@@ -256,12 +256,8 @@ impl ReadHalf {
         NonEmptyEvents::new(ready_events)
     }
 
-    pub fn wait(&self) -> NotifyWait<'_> {
-        self.notify.wait()
-    }
-
-    pub fn notify(&self) {
-        self.notify.notify();
+    pub fn notify(&self) -> &Notify {
+        &self.notify
     }
 
     pub fn make_write_half(&self) -> WriteHalf {
@@ -315,7 +311,7 @@ impl ReadHalf {
         drop(guard);
 
         if was_full {
-            self.notify();
+            self.notify().notify();
         }
 
         Ok(Ok(len))
@@ -330,7 +326,7 @@ impl ReadHalf {
         }
 
         guard.read_shutdown = true;
-        self.notify();
+        self.notify().notify();
     }
 
     pub fn read_oob(&self, peek: bool) -> Result<u8> {
@@ -489,12 +485,8 @@ impl WriteHalf {
             .await
     }
 
-    pub fn wait(&self) -> NotifyWait<'_> {
-        self.notify.wait()
-    }
-
-    pub fn notify(&self) {
-        self.notify.notify();
+    pub fn notify(&self) -> &Notify {
+        &self.notify
     }
 
     pub fn make_read_half(&self) -> ReadHalf {
@@ -558,7 +550,7 @@ impl WriteHalf {
 
         drop(guard);
 
-        self.notify();
+        self.notify().notify();
 
         Ok(Ok(len))
     }
@@ -577,7 +569,7 @@ impl WriteHalf {
         }
 
         guard.write_shutdown = true;
-        self.notify();
+        self.notify().notify();
     }
 }
 
@@ -622,9 +614,9 @@ pub fn splice(
     drop(write_guard);
 
     if was_full {
-        read_half.notify();
+        read_half.notify().notify();
     }
-    write_half.notify();
+    write_half.notify().notify();
 
     Ok(len)
 }

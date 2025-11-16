@@ -5031,8 +5031,8 @@ async fn splice(
             ensure!(off_out.is_null(), SPipe);
 
             // Start wait operations on both halves.
-            let mut read_half_wait = read_half.wait();
-            let mut write_half_wait = write_half.wait();
+            let mut read_half_wait = read_half.notify().wait();
+            let mut write_half_wait = write_half.notify().wait();
             loop {
                 match stream_buffer::splice(read_half, write_half, len) {
                     Ok(len) => return Ok(u64::from_usize(len)),
@@ -5064,7 +5064,7 @@ async fn splice(
             };
 
             // Start a wait operation on the read half.
-            let mut wait = read_half.wait();
+            let mut wait = read_half.notify().wait();
             loop {
                 let res = fd_in.splice_from(read_half, offset, len, &ctx);
 
@@ -5104,7 +5104,7 @@ async fn splice(
             };
 
             // Start a wait operation on the write half.
-            let mut wait = write_half.wait();
+            let mut wait = write_half.notify().wait();
             loop {
                 let res = fd_in.splice_to(write_half, offset, len);
 
