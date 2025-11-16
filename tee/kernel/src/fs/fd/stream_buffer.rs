@@ -455,7 +455,6 @@ impl WriteHalf {
         let closed = guard.read_shutdown || guard.reset || Arc::strong_count(&self.data) == 1;
         ready_events.set(Events::WRITE, guard.bytes.len() < guard.capacity || closed);
         ready_events &= events;
-        ready_events.set(Events::HUP, closed);
         ready_events.set(
             Events::ERR,
             guard.reset || Arc::strong_count(&self.data) == 1,
