@@ -277,7 +277,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
                             Exit::Breakpoint => {
                                 let sig_info = SigInfo {
@@ -285,7 +285,7 @@ impl Thread {
                                     code: SigInfoCode::KERNEL,
                                     fields: SigFields::SigFault(SigFault { addr: 0 }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
                             Exit::InvalidOpcode => {
                                 let sig_info = SigInfo {
@@ -295,7 +295,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
                             Exit::GeneralProtectionFault => {
                                 let sig_info = SigInfo {
@@ -305,9 +305,9 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
-                            Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
+                            Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                             Exit::SimdFloatingPoint(error) => {
                                 let code = match error {
                                     SimdFloatingPointError::InvalidOperation => {
@@ -326,7 +326,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
                             Exit::Timer => {
                                 // Handle the timer interrupt.
@@ -377,7 +377,7 @@ impl Thread {
         Ok(exit)
     }
 
-    fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
+    async fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
         let virtual_memory = self.lock().virtual_memory().clone();
         let res = virtual_memory.handle_page_fault(page_fault.addr, page_fault.code);
         if let Err(err) = res {
@@ -393,7 +393,7 @@ impl Thread {
                     addr: page_fault.addr,
                 }),
             };
-            self.queue_signal_or_die(sig_info);
+            self.queue_signal_or_die(sig_info).await;
         }
     }
 
@@ -408,10 +408,11 @@ impl Thread {
     }
 
     /// Try to queue a signal and kill the process if the signal is already pending.
-    pub fn queue_signal_or_die(&self, sig_info: SigInfo) {
+    pub async fn queue_signal_or_die(&self, sig_info: SigInfo) {
         if !self.queue_signal(sig_info) {
             self.process()
-                .exit_group(WStatus::signaled(sig_info.signal));
+                .exit_group(WStatus::signaled(sig_info.signal))
+                .await;
         }
     }
 
@@ -482,7 +483,7 @@ impl Thread {
                     | (_, signal @ Signal::KILL) => {
                         // Terminate.
                         drop(state);
-                        self.process.exit_group(WStatus::signaled(signal));
+                        self.process.exit_group(WStatus::signaled(signal)).await;
                         return core::future::pending().await;
                     }
                     (_, Signal::STOP) => continue,

@@ -2067,7 +2067,7 @@ async fn execve(
     // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
-    thread.process().execve(virtual_memory, fdtable, res);
+    thread.process().execve(virtual_memory, fdtable, res).await;
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
@@ -2078,7 +2078,7 @@ async fn execve(
 
 #[syscall(i386 = 1, amd64 = 60)]
 async fn exit(thread: &Thread, status: u64) -> SyscallResult {
-    thread.lock().exit(WStatus::exit(status as u8));
+    thread.lock().exit(WStatus::exit(status as u8)).await;
 
     core::future::pending().await
 }
@@ -4243,7 +4243,7 @@ async fn clock_nanosleep(
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: &Thread, status: u64) -> SyscallResult {
     let process = thread.process();
-    process.exit_group(WStatus::exit(status as u8));
+    process.exit_group(WStatus::exit(status as u8)).await;
     core::future::pending().await
 }
 

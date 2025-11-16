@@ -264,18 +264,18 @@ impl Process {
         self.running.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn exit(&self, exit_status: WStatus, rusage: Rusage) {
+    pub async fn exit(&self, exit_status: WStatus, rusage: Rusage) {
         let mut guard = self.self_usage.lock();
         *guard = guard.merge(rusage);
         drop(guard);
 
         let prev = self.running.fetch_sub(1, Ordering::Relaxed);
         if prev == 1 {
-            self.exit_group(exit_status);
+            self.exit_group(exit_status).await;
         }
     }
 
-    pub fn execve(
+    pub async fn execve(
         &self,
         virtual_memory: VirtualMemory,
         fdtable: FileDescriptorTable,
@@ -297,7 +297,7 @@ impl Process {
 
         // Stop all threads except for the thread group leader.
         for thread in threads.drain(1..).filter_map(|t| t.upgrade()) {
-            thread.terminate(WStatus::exit(0));
+            thread.terminate(WStatus::exit(0)).await;
         }
     }
 
@@ -305,7 +305,7 @@ impl Process {
     ///
     /// The returned exit status may not be the same as the requested
     /// if another thread terminated the thread group at the same time.
-    pub fn exit_group(&self, exit_status: WStatus) {
+    pub async fn exit_group(&self, exit_status: WStatus) {
         if self.pid == 1 {
             // Commit or fail the output depending on the exit status of the
             // init process.
@@ -326,7 +326,7 @@ impl Process {
             .into_iter()
             .filter_map(|t| t.upgrade())
         {
-            thread.terminate(exit_status);
+            thread.terminate(exit_status).await;
         }
         drop(threads);
 
