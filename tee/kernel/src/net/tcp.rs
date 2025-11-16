@@ -980,10 +980,6 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mode = self
             .activate_notify
@@ -1019,6 +1015,10 @@ impl OpenFileDescription for TcpSocket {
                 NonEmptyEvents::select(wait_read, wait_write).await
             }
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn ioctl(

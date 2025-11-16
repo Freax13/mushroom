@@ -270,15 +270,15 @@ impl OpenFileDescription for ReadHalf {
         self.read_half.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.read_half
             .notify()
             .wait_until(|| self.poll_ready(events))
             .await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -341,10 +341,6 @@ impl OpenFileDescription for WriteHalf {
         self.write_half.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.write_half
             .notify()
@@ -354,6 +350,10 @@ impl OpenFileDescription for WriteHalf {
 
     async fn ready_for_write(&self, count: usize) {
         self.write_half.ready_for_write(count).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -430,10 +430,6 @@ impl OpenFileDescription for FullReadWrite {
         )
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mut read_wait = self.read_half.notify().wait();
         let mut write_wait = self.write_half.notify().wait();
@@ -448,6 +444,10 @@ impl OpenFileDescription for FullReadWrite {
 
     async fn ready_for_write(&self, count: usize) {
         self.write_half.ready_for_write(count).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

@@ -100,12 +100,12 @@ impl OpenFileDescription for Stdin {
         None
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, _events: Events) -> NonEmptyEvents {
         pending().await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -194,16 +194,16 @@ impl OpenFileDescription for Stdout {
         NonEmptyEvents::new(events & Events::WRITE)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         if let Some(events) = self.poll_ready(events) {
             events
         } else {
             pending().await
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -292,16 +292,16 @@ impl OpenFileDescription for Stderr {
         NonEmptyEvents::new(events & Events::WRITE)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         if let Some(events) = self.poll_ready(events) {
             events
         } else {
             pending().await
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

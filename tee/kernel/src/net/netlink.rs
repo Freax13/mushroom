@@ -311,10 +311,6 @@ impl OpenFileDescription for NetlinkSocket {
         NonEmptyEvents::new(ready_events & events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         // Wait until a connection has been established.
         let connection = self
@@ -338,6 +334,10 @@ impl OpenFileDescription for NetlinkSocket {
         };
 
         NonEmptyEvents::select(read_fut, write_fut).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

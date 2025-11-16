@@ -4,7 +4,15 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
+use core::{
+    cmp,
+    ffi::c_void,
+    fmt,
+    future::pending,
+    mem::size_of,
+    num::{NonZeroU32, NonZeroUsize},
+    pin::pin,
+};
 
 use arrayvec::ArrayVec;
 use bit_field::{BitArray, BitField};
@@ -4257,11 +4265,13 @@ async fn epoll_wait(
     timeout: i32,
 ) -> SyscallResult {
     let maxevents = usize::try_from(maxevents)?;
+    let maxevents = NonZeroUsize::new(maxevents).ok_or(err!(Inval))?;
 
     let epoll = fdtable.get(epfd)?;
     let epoll_wait_fut = async move {
         let events = epoll.epoll_wait(maxevents).await?;
-        assert!(events.len() <= maxevents);
+        debug_assert!(!events.is_empty());
+        debug_assert!(events.len() <= maxevents.get());
 
         virtual_memory.write(event, &*events)?;
 
@@ -4301,8 +4311,7 @@ fn epoll_ctl(
 
     match op {
         EpollCtlOp::Add => {
-            // Poll the fd once to check if it supports epoll.
-            let _ = fd.epoll_ready(Events::empty())?;
+            ensure!(fd.supports_epoll(), Perm);
 
             let event = virtual_memory.read(event)?;
             epoll.epoll_add(&fd, event)?

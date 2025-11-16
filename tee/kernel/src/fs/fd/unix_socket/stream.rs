@@ -685,10 +685,6 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         match mode {
@@ -728,6 +724,10 @@ impl OpenFileDescription for StreamUnixSocket {
             .notify
             .wait_until(|| active.write_half.lock().can_write().then_some(()))
             .await;
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

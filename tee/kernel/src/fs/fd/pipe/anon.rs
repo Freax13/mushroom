@@ -90,15 +90,15 @@ impl OpenFileDescription for ReadHalf {
         self.stream_buffer.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.stream_buffer
             .notify()
             .wait_until(|| self.poll_ready(events))
             .await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -212,10 +212,6 @@ impl OpenFileDescription for WriteHalf {
         self.stream_buffer.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.stream_buffer
             .notify()
@@ -225,6 +221,10 @@ impl OpenFileDescription for WriteHalf {
 
     async fn ready_for_write(&self, count: usize) {
         self.stream_buffer.ready_for_write(count).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

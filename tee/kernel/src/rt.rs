@@ -169,6 +169,11 @@ impl SchedulerData {
     }
 }
 
+/// Tell the scheduler that the task wants to yield.
+pub fn set_yield_flag() {
+    PerCpu::get().scheduler_data.yielded.set(true);
+}
+
 pub async fn r#yield() {
     struct Yield {
         polled: bool,
@@ -182,8 +187,7 @@ pub async fn r#yield() {
                 return Poll::Ready(());
             }
 
-            // Tell the scheduler that the task wants to yield.
-            PerCpu::get().scheduler_data.yielded.set(true);
+            set_yield_flag();
 
             // Wake the waker and then yield. Note that this will only work
             // if the `Pending` bubbles all the way up to the scheduler.

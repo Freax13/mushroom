@@ -254,6 +254,10 @@ impl OpenFileDescription for Pty {
             .await
     }
 
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let buffer_len = buf.buffer_len();
         if buffer_len == 0 {

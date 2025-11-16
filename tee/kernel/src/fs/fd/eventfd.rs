@@ -108,12 +108,12 @@ impl OpenFileDescription for EventFd {
         NonEmptyEvents::new(ready_events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.notify.wait_until(|| self.poll_ready(events)).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

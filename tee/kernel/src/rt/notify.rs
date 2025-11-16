@@ -10,7 +10,12 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::spin::mutex::Mutex;
+use futures::future::{Either, select};
+
+use crate::{
+    fs::fd::epoll::{EpollRequest, EpollResult},
+    spin::mutex::Mutex,
+};
 
 pub struct Notify {
     generation: AtomicU64,
@@ -47,6 +52,39 @@ impl Notify {
     /// Listen for notifications until the closure return `Some`.
     pub async fn wait_until<R>(&self, f: impl Fn() -> Option<R>) -> R {
         self.wait().until(f).await
+    }
+
+    /// Execute the poll function until the result matches the request.
+    pub async fn epoll_loop(&self, req: &EpollRequest, f: impl Fn() -> EpollResult) -> EpollResult {
+        self.wait_until(|| f().if_matches(req)).await
+    }
+
+    /// Execute the poll function until the result matches the request.
+    pub async fn zip_epoll_loop(
+        req: &EpollRequest,
+        notify1: &Self,
+        f: impl Fn() -> EpollResult,
+        notify2: &Self,
+        g: impl Fn() -> EpollResult,
+    ) -> EpollResult {
+        let mut wait1 = notify1.wait();
+        let mut wait2 = notify2.wait();
+
+        let mut res1 = f();
+        let mut res2 = g();
+
+        loop {
+            let combined = res1.merge(res2);
+            if let Some(combined) = combined.if_matches(req) {
+                return combined;
+            }
+
+            let fut = select(&mut wait1, &mut wait2).await;
+            match fut {
+                Either::Left(_) => res1 = f(),
+                Either::Right(_) => res2 = g(),
+            }
+        }
     }
 
     pub fn notify(&self) {

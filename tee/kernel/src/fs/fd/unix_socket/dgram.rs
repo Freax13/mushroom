@@ -226,10 +226,6 @@ impl OpenFileDescription for DgramUnixSocket {
         NonEmptyEvents::new(ready_events & events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mut read_wait = self.read_half.notify.wait();
         let mut write_wait = self.write_half.notify.wait();
@@ -240,6 +236,10 @@ impl OpenFileDescription for DgramUnixSocket {
             }
             future::select(read_wait.next(), write_wait.next()).await;
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {

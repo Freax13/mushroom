@@ -151,10 +151,6 @@ impl OpenFileDescription for Timer {
         NonEmptyEvents::new(ready_events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         // timerfd only supports reads.
         if !events.contains(Events::READ) {
@@ -180,6 +176,10 @@ impl OpenFileDescription for Timer {
                 _ = sleep_until(deadline, self.clock_id).fuse() => return NonEmptyEvents::READ,
             }
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
