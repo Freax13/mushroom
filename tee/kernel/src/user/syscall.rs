@@ -2213,7 +2213,7 @@ fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult 
     virtual_memory.write_bytes(VirtAddr::new(fd), &[0; SIZE * 5])?;
     for (i, bs) in [
         b"Linux\0" as &[u8],
-        b"host\0",
+        b"myhostname\0",
         b"6.1.46\0",
         b"mushroom\0",
         b"x86_64\0",
