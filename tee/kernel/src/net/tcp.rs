@@ -23,6 +23,7 @@ use crate::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
             LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, ReadBuf,
             StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf, common_ioctl,
+            epoll::{EpollRequest, EpollResult, EventCounter},
             file::{File, open_file},
             inotify::Watchers,
             stream_buffer,
@@ -439,6 +440,7 @@ impl OpenFileDescription for TcpSocket {
                 internal: Mutex::new(PassiveTcpSocketInternal {
                     backlog: 0,
                     queue: VecDeque::new(),
+                    read_counter: EventCounter::new(),
                 }),
             })
         });
@@ -1021,6 +1023,39 @@ impl OpenFileDescription for TcpSocket {
         true
     }
 
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self
+            .activate_notify
+            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
+            .await;
+        match mode {
+            Mode::Passive(passive_tcp_socket) => {
+                passive_tcp_socket
+                    .notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive_tcp_socket.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_counter);
+                        result
+                    })
+                    .await
+            }
+            Mode::Active(active_tcp_socket) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    active_tcp_socket.read_half.notify(),
+                    || active_tcp_socket.read_half.epoll_ready(),
+                    active_tcp_socket.write_half.notify(),
+                    || active_tcp_socket.write_half.epoll_ready(),
+                )
+                .await
+            }
+        }
+    }
+
     fn ioctl(
         &self,
         thread: &mut ThreadGuard,
@@ -1125,6 +1160,7 @@ struct PassiveTcpSocket {
 struct PassiveTcpSocketInternal {
     backlog: usize,
     queue: VecDeque<ActiveTcpSocket>,
+    read_counter: EventCounter,
 }
 
 impl PassiveTcpSocket {
@@ -1148,6 +1184,7 @@ impl ConnectGuard<'_> {
             self.passive_socket.notify.notify();
         }
         self.guard.queue.push_back(socket);
+        self.guard.read_counter.inc();
     }
 }
 
