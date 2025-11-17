@@ -3,7 +3,11 @@ use core::{cmp, num::NonZeroUsize};
 
 use crate::{
     error::{Result, bail, ensure},
-    fs::fd::{Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf, err},
+    fs::fd::{
+        Events, NonEmptyEvents, PipeBlocked, ReadBuf, WriteBuf,
+        epoll::{EpollResult, EventCounter},
+        err,
+    },
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
 };
@@ -14,6 +18,11 @@ pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
             ty,
             bytes: VecDeque::new(),
             capacity,
+            half_closed: false,
+            read_event_counter: EventCounter::new(),
+            hup_event_counter: EventCounter::new(),
+            write_event_counter: EventCounter::new(),
+            err_event_counter: EventCounter::new(),
             read_shutdown: false,
             write_shutdown: false,
             reset: false,
@@ -43,6 +52,11 @@ struct PipeDataBuffer {
     ty: Type,
     bytes: VecDeque<u8>,
     capacity: usize,
+    half_closed: bool,
+    read_event_counter: EventCounter,
+    hup_event_counter: EventCounter,
+    write_event_counter: EventCounter,
+    err_event_counter: EventCounter,
     /// For sockets (not used for pipes):
     /// Whether the read half of a socket has been shut down.
     read_shutdown: bool,
@@ -193,7 +207,7 @@ impl ReadHalf {
                 return Ok(0);
             }
 
-            if Arc::strong_count(&self.data) == 1 {
+            if guard.half_closed {
                 match guard.ty {
                     Type::Pipe { .. } => return Ok(0),
                     Type::Socket => bail!(ConnReset),
@@ -226,6 +240,11 @@ impl ReadHalf {
             guard.oob_mark_state.update(len);
 
             if was_full {
+                guard.write_event_counter.inc();
+                self.notify.notify();
+            }
+            if guard.bytes.is_empty() {
+                guard.read_event_counter.inc();
                 self.notify.notify();
             }
         }
@@ -238,17 +257,16 @@ impl ReadHalf {
 
         let mut ready_events = Events::empty();
 
-        let strong_count = Arc::strong_count(&self.data);
         ready_events.set(
             Events::READ,
             !guard.bytes.is_empty()
-                || strong_count == 1
+                || guard.half_closed
                 || guard.read_shutdown
                 || guard.write_shutdown,
         );
         ready_events.set(
             Events::RDHUP,
-            strong_count == 1 || guard.read_shutdown || guard.write_shutdown,
+            guard.half_closed || guard.read_shutdown || guard.write_shutdown,
         );
         ready_events.set(Events::PRI, guard.oob_mark_state.pri_event());
 
@@ -256,15 +274,44 @@ impl ReadHalf {
         NonEmptyEvents::new(ready_events)
     }
 
+    pub fn epoll_ready(&self) -> EpollResult {
+        let mut result = EpollResult::new();
+
+        let guard = self.data.buffer.lock();
+
+        if !guard.bytes.is_empty()
+            || guard.half_closed
+            || guard.read_shutdown
+            || guard.write_shutdown
+        {
+            result.set_ready(Events::READ);
+        }
+        if guard.half_closed || guard.read_shutdown || guard.write_shutdown {
+            result.set_ready(Events::HUP);
+        }
+        if guard.oob_mark_state.pri_event() {
+            result.set_ready(Events::PRI);
+        }
+
+        result.add_counter(Events::READ, &guard.read_event_counter);
+        result.add_counter(Events::HUP, &guard.hup_event_counter);
+
+        result
+    }
+
     pub fn notify(&self) -> &Notify {
         &self.notify
     }
 
     pub fn make_write_half(&self) -> WriteHalf {
-        assert_eq!(Arc::strong_count(&self.data), 1);
+        let mut guard = self.data.buffer.lock();
+        assert!(guard.half_closed);
+        guard.half_closed = false;
+        drop(guard);
+
         WriteHalf {
             data: self.data.clone(),
-            notify: NotifyOnDrop(self.notify.0.clone()),
+            notify: self.notify.clone(),
         }
     }
 
@@ -287,7 +334,7 @@ impl ReadHalf {
                 return Ok(Ok(0));
             }
 
-            if Arc::strong_count(&self.data) == 1 {
+            if guard.half_closed {
                 match guard.ty {
                     Type::Pipe { .. } => return Ok(Ok(0)),
                     Type::Socket => bail!(ConnReset),
@@ -326,6 +373,7 @@ impl ReadHalf {
         }
 
         guard.read_shutdown = true;
+        guard.write_event_counter.inc();
         self.notify().notify();
     }
 
@@ -341,6 +389,7 @@ impl ReadHalf {
         }
 
         guard.read_shutdown = true;
+        guard.write_event_counter.inc();
         self.notify().notify();
 
         false
@@ -361,6 +410,17 @@ impl ReadHalf {
     }
 }
 
+impl Drop for ReadHalf {
+    fn drop(&mut self) {
+        let mut guard = self.data.buffer.lock();
+        guard.half_closed = true;
+        guard.write_event_counter.inc();
+        guard.err_event_counter.inc();
+        drop(guard);
+        self.notify.notify();
+    }
+}
+
 pub struct WriteHalf {
     data: Arc<PipeData>,
     notify: NotifyOnDrop,
@@ -378,10 +438,10 @@ impl WriteHalf {
 
         // Check if the write half has been closed.
         match guard.ty {
-            Type::Pipe { .. } => ensure!(Arc::strong_count(&self.data) > 1, Pipe),
+            Type::Pipe { .. } => ensure!(!guard.half_closed, Pipe),
             Type::Socket => {
                 ensure!(!guard.write_shutdown, ConnReset);
-                if Arc::strong_count(&self.data) == 1 {
+                if guard.half_closed {
                     guard.reset = true;
                     return Ok(cmp::min(buf.buffer_len(), guard.total_capacity()));
                 }
@@ -456,6 +516,8 @@ impl WriteHalf {
             };
         }
 
+        guard.read_event_counter.inc();
+
         drop(guard);
 
         res?;
@@ -469,13 +531,15 @@ impl WriteHalf {
         let mut ready_events = Events::empty();
 
         let guard = self.data.buffer.lock();
-        let closed = guard.read_shutdown || guard.reset || Arc::strong_count(&self.data) == 1;
-        ready_events.set(Events::WRITE, guard.bytes.len() < guard.capacity || closed);
-        ready_events &= events;
         ready_events.set(
-            Events::ERR,
-            guard.reset || Arc::strong_count(&self.data) == 1,
+            Events::WRITE,
+            guard.bytes.len() < guard.capacity
+                || guard.read_shutdown
+                || guard.reset
+                || guard.half_closed,
         );
+        ready_events &= events;
+        ready_events.set(Events::ERR, guard.reset || guard.half_closed);
         drop(guard);
 
         NonEmptyEvents::new(ready_events)
@@ -492,13 +556,29 @@ impl WriteHalf {
                 } else {
                     0 < remaining_capacity
                 };
-                (can_write
-                    || Arc::strong_count(&self.data) == 1
-                    || guard.read_shutdown
-                    || guard.reset)
-                    .then_some(())
+                (can_write || guard.half_closed || guard.read_shutdown || guard.reset).then_some(())
             })
             .await
+    }
+
+    pub fn epoll_ready(&self) -> EpollResult {
+        let mut result = EpollResult::new();
+        let guard = self.data.buffer.lock();
+        if guard.bytes.len() < guard.capacity
+            || guard.read_shutdown
+            || guard.reset
+            || guard.half_closed
+        {
+            result.set_ready(Events::WRITE);
+        }
+        if guard.reset || guard.half_closed {
+            result.set_ready(Events::ERR);
+        }
+
+        result.add_counter(Events::WRITE, &guard.write_event_counter);
+        result.add_counter(Events::ERR, &guard.err_event_counter);
+
+        result
     }
 
     pub fn notify(&self) -> &Notify {
@@ -506,7 +586,11 @@ impl WriteHalf {
     }
 
     pub fn make_read_half(&self) -> ReadHalf {
-        assert_eq!(Arc::strong_count(&self.data), 1);
+        let mut guard = self.data.buffer.lock();
+        assert!(guard.half_closed);
+        guard.half_closed = false;
+        drop(guard);
+
         ReadHalf {
             data: self.data.clone(),
             notify: NotifyOnDrop(self.notify.0.clone()),
@@ -524,10 +608,10 @@ impl WriteHalf {
 
         // Check if the write half has been closed.
         match guard.ty {
-            Type::Pipe { .. } => ensure!(Arc::strong_count(&self.data) > 1, Pipe),
+            Type::Pipe { .. } => ensure!(!guard.half_closed, Pipe),
             Type::Socket => {
                 ensure!(!guard.write_shutdown, ConnReset);
-                if Arc::strong_count(&self.data) == 1 {
+                if guard.half_closed {
                     guard.reset = true;
                     return Ok(Ok(len));
                 }
@@ -589,6 +673,16 @@ impl WriteHalf {
     }
 }
 
+impl Drop for WriteHalf {
+    fn drop(&mut self) {
+        let mut guard = self.data.buffer.lock();
+        guard.half_closed = true;
+        guard.read_event_counter.inc();
+        guard.hup_event_counter.inc();
+        drop(guard);
+    }
+}
+
 pub fn splice(
     read_half: &ReadHalf,
     write_half: &WriteHalf,
@@ -602,7 +696,7 @@ pub fn splice(
     // Bail out early if there are no bytes to be copied.
     if read_guard.bytes.is_empty() {
         // Check if the write half has been closed.
-        if Arc::strong_count(&read_half.data) == 1 {
+        if read_guard.half_closed {
             return Ok(0);
         }
         return Err(SpliceBlockedError::Read);

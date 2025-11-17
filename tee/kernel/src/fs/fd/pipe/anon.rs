@@ -8,6 +8,7 @@ use crate::{
         FileSystem, StatFs,
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            epoll::{EpollRequest, EpollResult},
             pipe::{CAPACITY, PIPE_BUF},
             stream_buffer,
         },
@@ -99,6 +100,13 @@ impl OpenFileDescription for ReadHalf {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.stream_buffer
+            .notify()
+            .epoll_loop(req, || self.stream_buffer.epoll_ready())
+            .await
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -225,6 +233,13 @@ impl OpenFileDescription for WriteHalf {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.stream_buffer
+            .notify()
+            .epoll_loop(req, || self.stream_buffer.epoll_ready())
+            .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

@@ -14,6 +14,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
             StrongFileDescriptor, WriteBuf,
+            epoll::{EpollRequest, EpollResult},
             pipe::{CAPACITY, PIPE_BUF},
             stream_buffer,
         },
@@ -281,6 +282,13 @@ impl OpenFileDescription for ReadHalf {
         true
     }
 
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.read_half
+            .notify()
+            .epoll_loop(req, || self.read_half.epoll_ready())
+            .await
+    }
+
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
     }
@@ -354,6 +362,13 @@ impl OpenFileDescription for WriteHalf {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.write_half
+            .notify()
+            .epoll_loop(req, || self.write_half.epoll_ready())
+            .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -448,6 +463,17 @@ impl OpenFileDescription for FullReadWrite {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        Notify::zip_epoll_loop(
+            req,
+            self.read_half.notify(),
+            || self.read_half.epoll_ready(),
+            self.write_half.notify(),
+            || self.write_half.epoll_ready(),
+        )
+        .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
