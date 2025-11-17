@@ -10,6 +10,7 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            epoll::{EpollRequest, EpollResult},
             pipe::anon::PIPE_FS,
         },
         node::{FileAccessContext, new_ino},
@@ -106,6 +107,10 @@ impl OpenFileDescription for Stdin {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, _: &EpollRequest) -> EpollResult {
+        pending().await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -206,6 +211,16 @@ impl OpenFileDescription for Stdout {
         true
     }
 
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut result = EpollResult::new();
+        result.set_ready(Events::WRITE);
+        if let Some(result) = result.if_matches(req) {
+            result
+        } else {
+            pending().await
+        }
+    }
+
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
     }
@@ -302,6 +317,16 @@ impl OpenFileDescription for Stderr {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut result = EpollResult::new();
+        result.set_ready(Events::WRITE);
+        if let Some(result) = result.if_matches(req) {
+            result
+        } else {
+            pending().await
+        }
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
