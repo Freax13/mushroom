@@ -131,6 +131,7 @@ pub struct UdpSocket {
 
 struct UdpSocketInternal {
     flags: OpenFlags,
+    ip_recverr: bool,
     reuse_addr: bool,
     reuse_port: bool,
     send_buffer_size: usize,
@@ -139,6 +140,7 @@ struct UdpSocketInternal {
     socketname: Option<net::SocketAddr>,
     peername: Option<net::SocketAddr>,
     rx: VecDeque<Packet>,
+    errors: VecDeque<SockExtendedError>,
 }
 
 impl UdpSocket {
@@ -150,6 +152,7 @@ impl UdpSocket {
             ip_version,
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,
+                ip_recverr: false,
                 reuse_addr: false,
                 reuse_port: false,
                 send_buffer_size: 1024 * 1024,
@@ -158,6 +161,7 @@ impl UdpSocket {
                 socketname: None,
                 peername: None,
                 rx: VecDeque::new(),
+                errors: VecDeque::new(),
             }),
             rx_notify: Notify::new(),
         })
@@ -315,6 +319,7 @@ impl UdpSocket {
 
         let mut guard = PORTS.lock();
         let Some(data) = guard.get_mut(&peername.port()) else {
+            self.queue_error();
             return Ok(len);
         };
 
@@ -322,6 +327,7 @@ impl UdpSocket {
         let mut socket;
         let mut socket_guard = loop {
             if i >= data.entries.len() {
+                self.queue_error();
                 return Ok(len);
             }
             let idx = (i.wrapping_add(data.round_robin_counter)) % data.entries.len();
@@ -420,6 +426,16 @@ impl UdpSocket {
 
         Ok(len)
     }
+
+    fn queue_error(&self) {
+        let mut guard = self.internal.lock();
+        if !guard.ip_recverr {
+            return;
+        }
+        guard.errors.push_back(SockExtendedError {});
+        drop(guard);
+        self.rx_notify.notify();
+    }
 }
 
 #[async_trait]
@@ -480,8 +496,13 @@ impl OpenFileDescription for UdpSocket {
             (0, 2) => Ok(()),  // IP_TTL
             (0, 6) => Ok(()),  // IP_RECVOPTS
             (0, 10) => Ok(()), // IP_MTU_DISCOVER
-            (0, 11) => Ok(()), // IP_RECVERR
-            (0, 32) => Ok(()), // IP_MULTICAST_IF
+            (0, 11) => {
+                // IP_RECVERR
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ip_recverr = optval;
+                Ok(())
+            }
             (0, 33) => Ok(()), // IP_MULTICAST_TTL
             (0, 34) => Ok(()), // IP_MULTICAST_LOOP
             (1, 2) => {
@@ -585,8 +606,10 @@ impl OpenFileDescription for UdpSocket {
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
-        if events.contains(Events::READ) {
-            ready_events.set(Events::READ, !self.internal.lock().rx.is_empty());
+        if events.intersects(Events::READ | Events::ERR) {
+            let guard = self.internal.lock();
+            ready_events.set(Events::READ, !guard.rx.is_empty());
+            ready_events.set(Events::ERR, !guard.errors.is_empty());
         }
         ready_events.set(Events::WRITE, true);
         ready_events &= events;
@@ -748,3 +771,5 @@ struct Packet {
     bytes: Box<[u8]>,
     sender: net::SocketAddr,
 }
+
+struct SockExtendedError {}
