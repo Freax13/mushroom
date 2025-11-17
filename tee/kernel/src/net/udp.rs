@@ -22,6 +22,7 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             common_ioctl,
+            epoll::{EpollRequest, EpollResult, EventCounter},
         },
         node::{FileAccessContext, new_ino},
         path::Path,
@@ -141,6 +142,8 @@ struct UdpSocketInternal {
     peername: Option<net::SocketAddr>,
     rx: VecDeque<Packet>,
     errors: VecDeque<SockExtendedError>,
+    read_event_counter: EventCounter,
+    error_event_counter: EventCounter,
 }
 
 impl UdpSocket {
@@ -162,6 +165,8 @@ impl UdpSocket {
                 peername: None,
                 rx: VecDeque::new(),
                 errors: VecDeque::new(),
+                read_event_counter: EventCounter::new(),
+                error_event_counter: EventCounter::new(),
             }),
             rx_notify: Notify::new(),
         })
@@ -264,6 +269,10 @@ impl UdpSocket {
 
         let len = cmp::min(buf.buffer_len(), packet.bytes.len());
         buf.write(0, &packet.bytes[..len])?;
+
+        if guard.rx.is_empty() {
+            self.rx_notify.notify();
+        }
 
         Ok((len, SocketAddr::from(packet.sender)))
     }
@@ -422,6 +431,7 @@ impl UdpSocket {
         drop(guard);
 
         socket_guard.rx.push_back(Packet { bytes, sender });
+        socket_guard.read_event_counter.inc();
         socket.rx_notify.notify();
 
         Ok(len)
@@ -433,6 +443,7 @@ impl UdpSocket {
             return;
         }
         guard.errors.push_back(SockExtendedError {});
+        guard.error_event_counter.inc();
         drop(guard);
         self.rx_notify.notify();
     }
@@ -622,6 +633,25 @@ impl OpenFileDescription for UdpSocket {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.rx_notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.internal.lock();
+                result.set_ready(Events::WRITE);
+                if !guard.rx.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                if !guard.errors.is_empty() {
+                    result.set_ready(Events::ERR);
+                }
+                result.add_counter(Events::READ, &guard.read_event_counter);
+                result.add_counter(Events::ERR, &guard.error_event_counter);
+                result
+            })
+            .await
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
