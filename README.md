@@ -74,7 +74,7 @@ freax13@workstation:~/mushroom$ make verify PROFILE=release INPUT=input-file OUT
 Ok
 ```
 
-See [tee/init/README.md](./tee/init/README.md) for an example workload.
+See [tee/example/README.md](./tee/example/README.md) for an example workload.
 
 # Known Issues
 
