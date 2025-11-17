@@ -2095,6 +2095,29 @@ impl SocketAddr {
     }
 }
 
+impl Pointee for Ipv4Addr {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for Ipv4Addr {
+    type I386 = RawIpv4Addr;
+    type Amd64 = RawIpv4Addr;
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct RawIpv4Addr([u8; 4]);
+
+impl From<RawIpv4Addr> for Ipv4Addr {
+    fn from(value: RawIpv4Addr) -> Self {
+        Self::from_bits(u32::from_be_bytes(value.0))
+    }
+}
+
+impl From<Ipv4Addr> for RawIpv4Addr {
+    fn from(value: Ipv4Addr) -> Self {
+        Self(value.to_bits().to_be_bytes())
+    }
+}
+
 #[derive(Default, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct RawSocketAddrInet {
@@ -2102,7 +2125,7 @@ struct RawSocketAddrInet {
     /// port in network byte order
     port: u16,
     /// internet address
-    addr: [u8; 4],
+    addr: RawIpv4Addr,
     _pad: [u8; 8],
 }
 
@@ -2111,10 +2134,7 @@ impl PrimitivePointee for RawSocketAddrInet {}
 
 impl From<RawSocketAddrInet> for SocketAddrV4 {
     fn from(value: RawSocketAddrInet) -> Self {
-        Self::new(
-            Ipv4Addr::from_bits(u32::from_be_bytes(value.addr)),
-            u16::from_be(value.port),
-        )
+        Self::new(Ipv4Addr::from(value.addr), u16::from_be(value.port))
     }
 }
 
@@ -2123,7 +2143,7 @@ impl From<SocketAddrV4> for RawSocketAddrInet {
         Self {
             family: Domain::Inet as u16,
             port: value.port().to_be(),
-            addr: value.ip().to_bits().to_be_bytes(),
+            addr: RawIpv4Addr::from(*value.ip()),
             _pad: [0; 8],
         }
     }

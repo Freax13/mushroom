@@ -496,7 +496,7 @@ impl OpenFileDescription for UdpSocket {
     fn set_socket_option(
         &self,
         virtual_memory: Arc<VirtualMemory>,
-        _: Abi,
+        abi: Abi,
         level: i32,
         optname: i32,
         optval: Pointer<[u8]>,
@@ -513,6 +513,21 @@ impl OpenFileDescription for UdpSocket {
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
                 guard.ip_recverr = optval;
                 Ok(())
+            }
+            (0, 32) => {
+                // IP_MULTICAST_IF
+                match optlen {
+                    4 => {
+                        let optval =
+                            virtual_memory.read_with_abi(optval.cast::<Ipv4Addr>(), abi)?;
+                        ensure!(
+                            optval.is_unspecified() || optval.is_loopback(),
+                            AddrNotAvail
+                        );
+                        Ok(())
+                    }
+                    _ => bail!(Inval),
+                }
             }
             (0, 33) => Ok(()), // IP_MULTICAST_TTL
             (0, 34) => Ok(()), // IP_MULTICAST_LOOP
