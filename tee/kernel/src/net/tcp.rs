@@ -10,6 +10,7 @@ use core::{
     ffi::c_void,
     net::{self, IpAddr},
     ops::Not,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -318,7 +319,14 @@ impl TcpSocket {
             'port: {
                 // If no port has been specified, try to find one that can be
                 // bound to.
-                for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
+                static COUNTER: AtomicUsize = AtomicUsize::new(0);
+                let range = EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END;
+                let len = range.len();
+                let ports = range
+                    .cycle()
+                    .skip(COUNTER.fetch_sub(1, Ordering::Relaxed) % len)
+                    .take(len);
+                for port in ports {
                     let entry = guard.entry(port).or_default();
                     if let Ok(bind_guard) = entry.prepare_bind(
                         socket_addr.ip(),
