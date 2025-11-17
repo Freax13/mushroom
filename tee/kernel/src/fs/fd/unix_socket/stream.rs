@@ -23,7 +23,9 @@ use crate::{
         fd::{
             BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
-            WriteBuf, stream_buffer,
+            WriteBuf,
+            epoll::{EpollRequest, EpollResult, EventCounter},
+            stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,
@@ -550,6 +552,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 connect_notify: Notify::new(),
                 internal: Mutex::new(PassiveInternal {
                     queue: VecDeque::new(),
+                    read_event_counter: EventCounter::new(),
                     backlog: 0,
                 }),
                 localcred: Ucred::from(ctx),
@@ -648,6 +651,7 @@ impl OpenFileDescription for StreamUnixSocket {
                             peercred: cred,
                             localcred: passive.localcred,
                         });
+                        guard.read_event_counter.inc();
                         passive.connect_notify.notify();
 
                         self.activate_notify.notify();
@@ -728,6 +732,36 @@ impl OpenFileDescription for StreamUnixSocket {
 
     fn supports_epoll(&self) -> bool {
         true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
+        match mode {
+            Mode::Active(active) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    &active.read_half.notify,
+                    || active.read_half.lock().epoll_read(),
+                    &active.write_half.notify,
+                    || active.write_half.lock().epoll_write(),
+                )
+                .await
+            }
+            Mode::Passive(passive) => {
+                passive
+                    .connect_notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_event_counter);
+                        result
+                    })
+                    .await
+            }
+        }
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -1043,6 +1077,35 @@ impl BufferGuard<'_> {
 
         NonEmptyEvents::new(ready_events)
     }
+
+    pub fn epoll_read(&self) -> EpollResult {
+        let mut result = EpollResult::new();
+        let buffer = &*self.guard;
+        let strong_count = Arc::strong_count(&self.buffer.buffer);
+        if !buffer.data.is_empty() || strong_count == 1 || buffer.shutdown {
+            result.set_ready(Events::READ);
+        }
+        if strong_count == 1 || buffer.shutdown {
+            result.set_ready(Events::RDHUP);
+        }
+        result
+    }
+
+    pub fn epoll_write(&self) -> EpollResult {
+        let mut result = EpollResult::new();
+        let buffer = &*self.guard;
+        let closed = buffer.shutdown || Arc::strong_count(&self.buffer.buffer) == 1;
+        if buffer.data.len() < buffer.capacity || closed {
+            result.set_ready(Events::WRITE);
+        }
+        if closed {
+            result.set_ready(Events::HUP);
+        }
+        if closed {
+            result.set_ready(Events::ERR);
+        }
+        result
+    }
 }
 
 struct Passive {
@@ -1053,5 +1116,6 @@ struct Passive {
 
 struct PassiveInternal {
     queue: VecDeque<Active>,
+    read_event_counter: EventCounter,
     backlog: usize,
 }
