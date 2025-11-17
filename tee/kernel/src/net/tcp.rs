@@ -652,6 +652,9 @@ impl OpenFileDescription for TcpSocket {
                 } else {
                     guard.get_mut(&bound.bind_addr.port()).unwrap()
                 };
+                // Remove sockets that are no longer active.
+                ports.entries.retain(|entry| entry.mode.strong_count() > 0);
+                // Try to find a match.
                 let duplicate_pair = ports.entries.iter().any(|entry| {
                     entry.local_ip == Some(local_ip) && entry.remote_addr == Some(remote_addr)
                 });
