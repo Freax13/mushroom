@@ -1,11 +1,14 @@
 use std::{
     os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     pin::pin,
+    time::Duration,
     u64,
 };
 
 use nix::{
+    errno::Errno,
     fcntl::{OFlag, open},
+    libc::{TIOCGPTN, TIOCSPTLCK, ioctl},
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::{
         epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags},
@@ -18,6 +21,8 @@ use nix::{
     },
     unistd::{mkfifo, pipe, pipe2, read, unlink, write},
 };
+
+use crate::mount_dev;
 
 struct TestFd {
     socket1: OwnedFd,
@@ -445,4 +450,232 @@ fn recursive_edge() {
     assert_eq!(epoll2.wait(&mut events, PollTimeout::ZERO), Ok(1));
     assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLIN, 2));
     assert_eq!(epoll2.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn pty_edge() {
+    mount_dev();
+
+    let master = open("/dev/ptmx", OFlag::O_RDWR, Mode::empty()).unwrap();
+
+    let mut idx = 0u32;
+    let res = unsafe { ioctl(master.as_raw_fd(), TIOCGPTN, &mut idx) };
+    Errno::result(res).unwrap();
+
+    // The slave cannot be opened yet (it's still locked).
+    assert_eq!(
+        open(&*format!("/dev/pts/{idx}"), OFlag::O_RDWR, Mode::empty()).unwrap_err(),
+        Errno::EIO
+    );
+
+    // Unlock the pseudo terminal.
+    let res = unsafe { ioctl(master.as_raw_fd(), TIOCSPTLCK, &0u32) };
+    Errno::result(res).unwrap();
+
+    // Now we can open the slave.
+    let slave = open(&*format!("/dev/pts/{idx}"), OFlag::O_RDWR, Mode::empty()).unwrap();
+
+    let epoll_master = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    epoll_master
+        .add(
+            &master,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+    let epoll_slave = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    epoll_slave
+        .add(
+            &slave,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLET,
+                2,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&master, b"ABC"), Ok(3));
+
+    // Wait for the terminal to settle.
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&master, b"DEF"), Ok(3));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&master, b"GHI\n"), Ok(4));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 2)
+    );
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&master, b"123"), Ok(3));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buffer = [0; 3];
+    assert_eq!(read(&slave, &mut buffer), Ok(3));
+    assert_eq!(buffer, *b"ABC");
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buffer = [0; 16];
+    assert_eq!(read(&slave, &mut buffer), Ok(7));
+    assert_eq!(buffer[..7], *b"DEFGHI\n");
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buffer = [0; 3];
+    assert_eq!(read(&master, &mut buffer), Ok(3));
+    assert_eq!(buffer, *b"ABC");
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buffer = [0; 16];
+    assert_eq!(read(&master, &mut buffer), Ok(11));
+    assert_eq!(buffer[..11], *b"DEFGHI\r\n123");
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&slave, b"abc"), Ok(3));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&slave, b"def"), Ok(3));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&slave, b"ghi\n"), Ok(4));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(write(&slave, b"123"), Ok(3));
+    std::thread::sleep(Duration::from_millis(1));
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buffer = [0; 3];
+    assert_eq!(read(&master, &mut buffer), Ok(3));
+    assert_eq!(buffer, *b"abc");
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buffer = [0; 16];
+    assert_eq!(read(&master, &mut buffer), Ok(11));
+    assert_eq!(buffer[..11], *b"defghi\r\n123");
+
+    assert_eq!(epoll_master.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
+    assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
 }
