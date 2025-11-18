@@ -25,7 +25,11 @@ use crate::{
         fd::{
             BsdFileLock, BsdFileLockRecord, Events, FdFlags, LazyBsdFileLockRecord, NonEmptyEvents,
             OpenFileDescription, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
-            common_ioctl, dir::open_dir, inotify::Watchers, stream_buffer,
+            common_ioctl,
+            dir::open_dir,
+            epoll::{EpollRequest, EpollResult, EventCounter},
+            inotify::Watchers,
+            stream_buffer,
             unix_socket::StreamUnixSocket,
         },
         node::{
@@ -96,6 +100,10 @@ impl CharDev for Ptmx {
                         input_buffer: ArrayVec::new(),
                         output_buffer: ArrayVec::new(),
                         column_pointer: 0,
+                        master_read_counter: EventCounter::new(),
+                        master_write_counter: EventCounter::new(),
+                        slave_read_counter: EventCounter::new(),
+                        slave_write_counter: EventCounter::new(),
                         win_size: WinSize::default(),
                     }),
                     notify: Notify::new(),
@@ -145,6 +153,11 @@ struct PtyDataInternal {
     input_buffer: ArrayVec<u8, 4095>,
     output_buffer: ArrayVec<u8, 4096>,
     column_pointer: usize,
+
+    master_read_counter: EventCounter,
+    master_write_counter: EventCounter,
+    slave_read_counter: EventCounter,
+    slave_write_counter: EventCounter,
 
     win_size: WinSize,
 }
@@ -258,6 +271,54 @@ impl OpenFileDescription for Pty {
         true
     }
 
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.data
+            .notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.data.internal.lock();
+                if self.master {
+                    if !guard.output_buffer.is_empty()
+                        || (guard.slave_connected && guard.num_slaves == 0)
+                    {
+                        result.set_ready(Events::READ);
+                        result.add_counter(Events::READ, &guard.master_read_counter);
+                    }
+
+                    if guard.input_buffer.len() < guard.input_buffer.capacity()
+                        || guard
+                            .input_buffer
+                            .iter()
+                            .copied()
+                            .all(|c| !guard.is_line_end(c))
+                    {
+                        result.set_ready(Events::WRITE);
+                        result.add_counter(Events::WRITE, &guard.master_write_counter);
+                    }
+                } else {
+                    if guard
+                        .input_buffer
+                        .iter()
+                        .copied()
+                        .any(|c| guard.is_line_end(c))
+                        || guard.master_closed
+                    {
+                        result.set_ready(Events::READ);
+                        result.add_counter(Events::READ, &guard.slave_read_counter);
+                    }
+
+                    if guard.output_buffer.len() < guard.output_buffer.capacity() - 1
+                        || guard.master_closed
+                    {
+                        result.set_ready(Events::WRITE);
+                        result.add_counter(Events::WRITE, &guard.slave_write_counter);
+                    }
+                }
+                result
+            })
+            .await
+    }
+
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let buffer_len = buf.buffer_len();
         if buffer_len == 0 {
@@ -277,6 +338,7 @@ impl OpenFileDescription for Pty {
             let len = cmp::min(buffer_len, guard.output_buffer.len());
             buf.write(0, &guard.output_buffer[..len])?;
             drop(guard.output_buffer.drain(..len));
+            guard.slave_write_counter.inc();
             drop(guard);
 
             self.data.notify.notify();
@@ -312,6 +374,7 @@ impl OpenFileDescription for Pty {
                     len
                 };
                 drop(guard.input_buffer.drain(..remove_len));
+                guard.master_write_counter.inc();
                 drop(guard);
 
                 self.data.notify.notify();
@@ -328,6 +391,7 @@ impl OpenFileDescription for Pty {
                 }
                 buf.write(0, &guard.input_buffer[..len])?;
                 drop(guard.input_buffer.drain(..len));
+                guard.master_write_counter.inc();
                 drop(guard);
 
                 self.data.notify.notify();
@@ -355,7 +419,9 @@ impl OpenFileDescription for Pty {
                 let res = if self.master {
                     guard.write_byte_to_input(c)
                 } else {
-                    guard.write_byte_to_output(c)
+                    guard
+                        .write_byte_to_output(c)
+                        .inspect(|_| guard.slave_write_counter.inc())
                 };
                 match res {
                     Ok(()) => self.data.notify.notify(),
@@ -560,6 +626,7 @@ impl PtyDataInternal {
 
         if self.is_line_end(c) {
             self.input_buffer.try_push(c).map_err(|_| err!(Again))?;
+            self.slave_read_counter.inc();
             return Ok(());
         } else if c == self.termios.special_characters.erase {
             todo!()
@@ -654,6 +721,8 @@ impl PtyDataInternal {
         } else {
             self.column_pointer += 1;
         }
+
+        self.master_read_counter.inc();
 
         Ok(())
     }
