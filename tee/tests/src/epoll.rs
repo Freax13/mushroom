@@ -1,8 +1,6 @@
 use std::{
     os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
-    pin::pin,
     time::Duration,
-    u64,
 };
 
 use nix::{
@@ -13,10 +11,7 @@ use nix::{
     sys::{
         epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags},
         eventfd::{EfdFlags, EventFd},
-        socket::{
-            AddressFamily, SockFlag, SockProtocol, SockType, setsockopt, shutdown, socketpair,
-            sockopt::SndBuf,
-        },
+        socket::{AddressFamily, SockFlag, SockProtocol, SockType, socketpair},
         stat::Mode,
     },
     unistd::{mkfifo, pipe, pipe2, read, unlink, write},
@@ -39,7 +34,7 @@ impl TestFd {
         )
         .unwrap();
         // setsockopt(&socket1, SndBuf, &0).unwrap();
-        let mut this = Self { socket1, socket2 };
+        let this = Self { socket1, socket2 };
         this.clear_readable();
         this.clear_writeable();
         this
@@ -55,8 +50,8 @@ impl TestFd {
     }
 
     fn clear_writeable(&self) {
-        let mut buf = [0; 0x4000];
-        while write(&self.socket1, &mut buf).is_ok_and(|n| n > 0) {}
+        let buf = [0; 0x4000];
+        while write(&self.socket1, &buf).is_ok_and(|n| n > 0) {}
     }
 
     fn set_writable(&self) {
@@ -243,7 +238,7 @@ fn eventfd_edge_in_out() {
 
     let efd = EventFd::from_flags(EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).unwrap();
 
-    let mut event = EpollEvent::new(
+    let event = EpollEvent::new(
         EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLET,
         1,
     );
@@ -285,7 +280,7 @@ fn eventfd_edge_in() {
 
     let efd = EventFd::from_flags(EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).unwrap();
 
-    let mut event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1);
+    let event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1);
     epoll.add(&efd, event).unwrap();
 
     let mut events = [EpollEvent::empty()];
@@ -316,7 +311,7 @@ fn eventfd_edge_out() {
 
     let efd = EventFd::from_flags(EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).unwrap();
 
-    let mut event = EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLET, 1);
+    let event = EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLET, 1);
     epoll.add(&efd, event).unwrap();
 
     let mut events = [EpollEvent::empty()];
@@ -330,7 +325,7 @@ fn eventfd_edge_out() {
     efd.write(u64::MAX - 2).unwrap();
     assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
 
-    efd.read();
+    efd.read().unwrap();
     assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
     assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
     assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
@@ -343,7 +338,7 @@ fn pipe_edge_in() {
     let (rfd, wfd) = pipe().unwrap();
     write(&wfd, &[0]).unwrap();
 
-    let mut event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1);
+    let event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1);
     epoll.add(&rfd, event).unwrap();
 
     let mut events = [EpollEvent::empty()];
@@ -376,7 +371,7 @@ fn pipe_edge_out() {
 
     let (rfd, wfd) = pipe2(OFlag::O_CLOEXEC | OFlag::O_NONBLOCK).unwrap();
 
-    let mut event = EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLET, 1);
+    let event = EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLET, 1);
     epoll.add(&wfd, event).unwrap();
 
     let mut events = [EpollEvent::empty()];
@@ -412,10 +407,10 @@ fn recursive_edge() {
     let epoll2 = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
     let efd = EventFd::from_flags(EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).unwrap();
 
-    let mut event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1);
+    let event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1);
     epoll1.add(&efd, event).unwrap();
 
-    let mut event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 2);
+    let event = EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 2);
     epoll2.add(&epoll1.0, event).unwrap();
 
     let mut events = [EpollEvent::empty()];

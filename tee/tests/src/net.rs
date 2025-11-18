@@ -937,9 +937,6 @@ fn udp_dual_stack_localhost() {
         Err(Errno::ENETUNREACH)
     );
 
-    let addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    let addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
-
     let mut buf = [0; 16];
 
     let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
@@ -1217,9 +1214,6 @@ fn udp_dual_stack_unspecified() {
         ),
         Err(Errno::ENETUNREACH)
     );
-
-    let addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    let addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
     let mut buf = [0; 16];
 

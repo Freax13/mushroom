@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{IoSlice, IoSliceMut},
-    os::fd::{AsRawFd, IntoRawFd, RawFd},
+    os::fd::{AsRawFd, RawFd},
 };
 
 use nix::{
@@ -17,7 +17,7 @@ use nix::{
         },
         stat::fstat,
     },
-    unistd::{close, pipe, pipe2, read, unlink, write},
+    unistd::{pipe2, read, unlink, write},
 };
 
 #[test]
@@ -50,7 +50,6 @@ fn path_double_bind() {
         None,
     )
     .unwrap();
-    let unbound_stat = fstat(&sock).unwrap();
 
     // Sockets start out as unnamed sockets.
     let addr = getsockname::<UnixAddr>(sock.as_raw_fd()).unwrap();
@@ -146,7 +145,7 @@ fn sendmsg_rights() {
         unreachable!()
     };
     assert!(creds.len() == 1);
-    let efd2 = unsafe { std::mem::transmute::<_, EventFd>(creds[0]) };
+    let efd2 = unsafe { std::mem::transmute::<i32, EventFd>(creds[0]) };
 
     efd1.write(5).unwrap();
     assert_eq!(efd2.read().unwrap(), 5);
@@ -235,7 +234,7 @@ fn sendmsg_boundary() {
         unreachable!()
     };
     assert!(creds.len() == 1);
-    let efd2 = unsafe { std::mem::transmute::<_, EventFd>(creds[0]) };
+    let efd2 = unsafe { std::mem::transmute::<i32, EventFd>(creds[0]) };
 
     efd1.write(5).unwrap();
     assert_eq!(efd2.read().unwrap(), 5);
@@ -260,7 +259,7 @@ fn sendmsg_boundary() {
         unreachable!()
     };
     assert!(creds.len() == 1);
-    let efd2 = unsafe { std::mem::transmute::<_, EventFd>(creds[0]) };
+    let efd2 = unsafe { std::mem::transmute::<i32, EventFd>(creds[0]) };
 
     efd1.write(5).unwrap();
     assert_eq!(efd2.read().unwrap(), 5);
@@ -298,7 +297,7 @@ fn sendmsg_boundary() {
         unreachable!()
     };
     assert!(creds.len() == 1);
-    let efd2 = unsafe { std::mem::transmute::<_, EventFd>(creds[0]) };
+    let efd2 = unsafe { std::mem::transmute::<i32, EventFd>(creds[0]) };
 
     efd1.write(5).unwrap();
     assert_eq!(efd2.read().unwrap(), 5);
@@ -421,7 +420,7 @@ fn shutdown_read_write() {
     )
     .unwrap();
 
-    let mut buffer = &mut [0; 4];
+    let buffer = &mut [0; 4];
 
     assert_eq!(write(&sock1, b"1111"), Ok(4));
     assert_eq!(read(&sock2, buffer), Ok(4));
@@ -463,7 +462,7 @@ fn connect_to_file() {
 
     // Connecting to a regular, non-socket file fails.
     let path = "regular-file";
-    let file = File::create(path).unwrap();
+    File::create(path).unwrap();
     let addr = UnixAddr::new(path).unwrap();
     assert_eq!(connect(client.as_raw_fd(), &addr), Err(Errno::ECONNREFUSED));
     unlink(path).unwrap();

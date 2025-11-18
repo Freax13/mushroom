@@ -362,7 +362,7 @@ fn mkdir() {
 fn task_name() {
     let default_name = prctl::get_name().unwrap();
 
-    prctl::set_name(c"my thread name");
+    prctl::set_name(c"my thread name").unwrap();
     assert_eq!(prctl::get_name().unwrap().as_c_str(), c"my thread name");
     std::thread::spawn(move || {
         assert_ne!(prctl::get_name().unwrap().as_c_str(), c"my thread name");
