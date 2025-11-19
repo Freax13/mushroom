@@ -9,7 +9,6 @@ use core::{
 };
 
 use bit_field::BitField;
-use bitflags::bitflags;
 use bytemuck::{CheckedBitPattern, NoUninit, Pod, Zeroable, checked};
 use usize_conversions::FromUsize;
 use x86_64::VirtAddr;
