@@ -16,14 +16,12 @@
     maybe_uninit_as_bytes,
     maybe_uninit_slice,
     maybe_uninit_uninit_array_transpose,
-    no_sanitize,
     pointer_is_aligned_to,
     ptr_metadata,
     slice_ptr_get,
     step_trait,
     sync_unsafe_cell,
     try_trait_v2,
-    vec_deque_pop_if,
     vec_split_at_spare
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]

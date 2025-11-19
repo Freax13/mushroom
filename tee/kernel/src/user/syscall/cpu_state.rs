@@ -807,7 +807,7 @@ struct FpxSwBytes {
 }
 
 pub fn init() {
-    LStar::write(VirtAddr::new(syscall_entry as usize as u64));
+    LStar::write(VirtAddr::new(syscall_entry as *const () as usize as u64));
     SFMask::write(RFlags::DIRECTION_FLAG | RFlags::INTERRUPT_FLAG);
 }
 
