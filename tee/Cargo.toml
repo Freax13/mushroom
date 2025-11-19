@@ -1,4 +1,4 @@
-cargo-features = ["profile-rustflags"]
+cargo-features = ["panic-immediate-abort", "profile-rustflags"]
 
 [workspace]
 members = ["example", "external-tests", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "tests"]
@@ -46,6 +46,7 @@ opt-level = "z"
 lto = "thin"
 debug-assertions = true
 overflow-checks = true
+panic = "immediate-abort"
 
 [patch.crates-io]
 x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "7ae7da5" }

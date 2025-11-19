@@ -12,10 +12,6 @@ CARGO_PROFILE_development = supervisor
 CARGO_PROFILE_release     = supervisor-release
 CARGO_PROFILE = $(CARGO_PROFILE_$(PROFILE))
 
-CARGO_BUILD_STD_FEATURES_development = compiler-builtins-mem
-CARGO_BUILD_STD_FEATURES_release     = compiler-builtins-mem,panic_immediate_abort
-CARGO_BUILD_STD_FEATURES = $(CARGO_BUILD_STD_FEATURES_$(PROFILE))
-
 CARGO_EXTRA_FLAGS_release = --features harden
 CARGO_EXTRA_FLAGS = $(CARGO_EXTRA_FLAGS_$(PROFILE))
 
@@ -25,7 +21,7 @@ supervisor:
 	cargo build \
 		--target supervisor.json \
 		-Z build-std=core,alloc \
-		-Z build-std-features=$(CARGO_BUILD_STD_FEATURES) \
+		-Z build-std-features=compiler-builtins-mem \
 		--profile $(CARGO_PROFILE) \
 		$(CARGO_EXTRA_FLAGS)
 
