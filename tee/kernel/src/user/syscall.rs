@@ -293,6 +293,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
     handlers.register(SysTimerfdCreate);
+    handlers.register(SysEventfd);
     handlers.register(SysFallocate);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
@@ -5275,6 +5276,16 @@ fn timerfd_create(
     Ok(fd_num.get() as u64)
 }
 
+#[syscall(i386 = 323, amd64 = 284)]
+fn eventfd(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    initval: u32,
+) -> SyscallResult {
+    eventfd2(fdtable, ctx, no_file_limit, initval, EventFdFlags::empty())
+}
+
 #[syscall(i386 = 324, amd64 = 285)]
 fn fallocate(
     thread: &Thread,
@@ -5335,7 +5346,7 @@ async fn accept4(
     Ok(fd_num.get() as u64)
 }
 
-#[syscall(i386 = 323, amd64 = 290)]
+#[syscall(i386 = 328, amd64 = 290)]
 fn eventfd2(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
