@@ -85,6 +85,11 @@ impl<T> Receiver<T> {
         RecvFuture(self).await
     }
 
+    pub fn poll_readable(&self) -> bool {
+        let guard = self.0.lock();
+        !guard.values.is_empty()
+    }
+
     pub async fn readable(&self) {
         struct ReadableFuture<'a, T>(&'a Receiver<T>);
 

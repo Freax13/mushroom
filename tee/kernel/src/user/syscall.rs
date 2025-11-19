@@ -4,7 +4,15 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{cmp, ffi::c_void, fmt, future::pending, mem::size_of, num::NonZeroU32, pin::pin};
+use core::{
+    cmp,
+    ffi::c_void,
+    fmt,
+    future::pending,
+    mem::size_of,
+    num::{NonZeroU32, NonZeroUsize},
+    pin::pin,
+};
 
 use arrayvec::ArrayVec;
 use bit_field::{BitArray, BitField};
@@ -26,7 +34,7 @@ use self::{
 };
 use crate::{
     char_dev::mem::random_bytes,
-    error::{ErrorKind, Result, bail, ensure, err},
+    error::{Error, ErrorKind, Result, bail, ensure, err},
     fs::{
         StatFs,
         fd::{
@@ -52,7 +60,7 @@ use crate::{
         path::Path,
     },
     net::{IpVersion, netlink::NetlinkSocket, tcp::TcpSocket, udp::UdpSocket},
-    rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, spawn, r#yield},
+    rt::{futures_unordered::FuturesUnorderedBuilder, oneshot, r#yield},
     time::{self, Tick, now, sleep_until},
     user::{
         futex::FutexScope,
@@ -100,11 +108,7 @@ impl ThreadGuard<'_> {
         if !clear_child_tid.is_null() {
             let virtual_memory = self.virtual_memory().clone();
             let _ = virtual_memory.write(clear_child_tid, 0u32);
-            spawn(async move {
-                let _ = virtual_memory
-                    .futex_wake(clear_child_tid, 1, FutexScope::Global, None)
-                    .await;
-            });
+            let _ = virtual_memory.futex_wake(clear_child_tid, 1, FutexScope::Global, None);
         }
     }
 }
@@ -230,6 +234,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetsid);
     handlers.register(SysCapget);
     handlers.register(SysCapset);
+    handlers.register(SysRtSigpending);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -288,6 +293,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
     handlers.register(SysTimerfdCreate);
+    handlers.register(SysEventfd);
     handlers.register(SysFallocate);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
@@ -328,11 +334,38 @@ async fn read(
     Ok(len)
 }
 
+fn queue_signal_for_epipe(thread: &Thread) -> impl Fn(&Error) {
+    |err| {
+        if err.kind() == ErrorKind::Pipe {
+            let sig_info = SigInfo {
+                signal: Signal::PIPE,
+                code: SigInfoCode::KERNEL,
+                fields: SigFields::None,
+            };
+            thread.queue_signal(sig_info);
+        }
+    }
+}
+
+fn queue_signal_for_efbig(thread: &Thread) -> impl Fn(&Error) {
+    |err| {
+        if err.kind() == ErrorKind::FBig {
+            let sig_info = SigInfo {
+                signal: Signal::XFSZ,
+                code: SigInfoCode::KERNEL,
+                fields: SigFields::None,
+            };
+            thread.queue_signal(sig_info);
+        }
+    }
+}
+
 async fn write_impl(
     thread: &Thread,
     fdtable: Arc<FileDescriptorTable>,
     fd: FdNum,
     buf: impl WriteBuf,
+    ctx: &FileAccessContext,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
 
@@ -341,29 +374,22 @@ async fn write_impl(
     // Start writing to the file descriptor. This first write can be
     // interrupted and restarted. Any errors that occur are report to
     // userspace.
-    let res = thread
-        .interruptable(do_write_io(&**fd, count, || fd.write(&buf)), true)
-        .await;
-    if res.is_err_and(|err| err.kind() == ErrorKind::Pipe) {
-        let sig_info = SigInfo {
-            signal: Signal::PIPE,
-            code: SigInfoCode::KERNEL,
-            fields: SigFields::None,
-        };
-        thread.queue_signal(sig_info);
-    }
+    let mut written = thread
+        .interruptable(do_write_io(&**fd, count, || fd.write(&buf, ctx)), true)
+        .await
+        .inspect_err(queue_signal_for_epipe(thread))
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     // Try to write the rest of the bytes that weren't written in the first
     // write call. This can be interrupted as well, but if that happens, it
     // won't be reported to userspace. Any errors that occur also won't be
     // reported to userspace.
-    let mut written = res?;
     while written != count {
         let res = thread
             .interruptable(
                 do_write_io(&**fd, count - written, || {
                     let buf = OffsetBuf::new(&buf, written);
-                    fd.write(&buf)
+                    fd.write(&buf, ctx)
                 }),
                 false,
             )
@@ -383,13 +409,14 @@ async fn write(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
 ) -> SyscallResult {
     let count = usize_from(count);
     let buf = UserBuf::new(&virtual_memory, buf, count);
-    write_impl(thread, fdtable, fd, buf).await
+    write_impl(thread, fdtable, fd, buf, &ctx).await
 }
 
 #[syscall(i386 = 5, amd64 = 2, interruptable, restartable)]
@@ -909,8 +936,10 @@ fn pread64(
 
 #[syscall(i386 = 181, amd64 = 18)]
 fn pwrite64(
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
@@ -921,7 +950,9 @@ fn pwrite64(
     let count = usize_from(count);
     let pos = usize_from(pos);
     let buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = fd.pwrite(pos, &buf)?;
+    let len = fd
+        .pwrite(pos, &buf, &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     let len = u64::from_usize(len);
     Ok(len)
@@ -950,12 +981,13 @@ async fn writev(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u64,
 ) -> SyscallResult {
     let buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    write_impl(thread, fdtable, fd, buf).await
+    write_impl(thread, fdtable, fd, buf, &ctx).await
 }
 
 #[syscall(i386 = 33, amd64 = 21)]
@@ -1306,6 +1338,7 @@ fn getpid(thread: &Thread) -> SyscallResult {
 #[syscall(i386 = 187, amd64 = 40)]
 async fn sendfile(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] mut ctx: FileAccessContext,
@@ -1338,7 +1371,7 @@ async fn sendfile(
         let page = r#in.get_page(page_offset, false)?;
         let buf = KernelPageWriteBuf::new(&page, offset_in_page, chunk_len);
 
-        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf)).await;
+        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf, &ctx)).await;
         match res {
             Ok(0) => break,
             Ok(n) => {
@@ -1347,6 +1380,14 @@ async fn sendfile(
             }
             Err(err) => {
                 if total_len == 0 {
+                    if err.kind() == ErrorKind::FBig {
+                        let sig_info = SigInfo {
+                            signal: Signal::XFSZ,
+                            code: SigInfoCode::KERNEL,
+                            fields: SigFields::None,
+                        };
+                        thread.queue_signal(sig_info);
+                    }
                     return Err(err);
                 } else {
                     break;
@@ -1369,6 +1410,7 @@ async fn sendfile(
 
 #[syscall(i386 = 239)]
 async fn sendfile64(
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -1379,6 +1421,7 @@ async fn sendfile64(
 ) -> SyscallResult {
     sendfile(
         Abi::Amd64,
+        thread,
         virtual_memory,
         fdtable,
         ctx,
@@ -1404,15 +1447,14 @@ fn socket(
             SocketType::Stream => fdtable.insert(
                 StreamUnixSocket::new(
                     r#type.flags,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                 )
                 .0,
                 r#type,
                 no_file_limit,
             )?,
-            SocketType::Dgram => bail!(NoSys),
-            SocketType::Raw => todo!(),
+            SocketType::Dgram | SocketType::Raw => bail!(NoSys),
             SocketType::Seqpacket => todo!(),
         },
         Domain::Inet | Domain::Inet6 => {
@@ -1422,8 +1464,8 @@ fn socket(
                     TcpSocket::new(
                         ip_version,
                         r#type,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
                     r#type,
                     no_file_limit,
@@ -1484,6 +1526,7 @@ async fn sendto(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     len: u64,
@@ -1507,7 +1550,7 @@ async fn sendto(
     let mut written = thread
         .interruptable(
             do_io(&**fd, Events::WRITE, || {
-                fd.send_to(&buf, flags, dest_addr.clone())
+                fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
             }),
             true,
         )
@@ -1522,7 +1565,7 @@ async fn sendto(
             .interruptable(
                 do_io(&**fd, Events::WRITE, || {
                     let buf = OffsetBuf::new(&buf, written);
-                    fd.send_to(&buf, flags, dest_addr.clone())
+                    fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
                 }),
                 false,
             )
@@ -1585,6 +1628,7 @@ async fn sendmsg(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     msg: Pointer<MsgHdr>,
     flags: SendMsgFlags,
@@ -1592,7 +1636,7 @@ async fn sendmsg(
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
     let len = do_io(&**fd, Events::WRITE, || {
-        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable)
+        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable, &ctx)
     })
     .await?;
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
@@ -1721,8 +1765,8 @@ fn socketpair(
                 SocketType::Seqpacket => {
                     let (half1, half2) = SeqPacketUnixSocket::new_pair(
                         r#type.flags,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     );
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
@@ -1730,8 +1774,8 @@ fn socketpair(
                 SocketType::Dgram => {
                     let (half1, half2) = DgramUnixSocket::new_pair(
                         r#type.flags,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     );
                     res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                     res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
@@ -1833,10 +1877,10 @@ async fn clone(
             Arc::downgrade(process),
             termination_signal,
             process.exe(),
-            process.credentials.lock().clone(),
+            process.credentials.read().clone(),
             process.cwd(),
             process.process_group(),
-            *process.limits.read(),
+            process.limits.clone(),
             process.umask(),
             process.mm_arg_start(),
             process.mm_arg_end(),
@@ -2032,7 +2076,7 @@ async fn execve(
     // Everything was successful, no errors can occour after this point.
 
     let fdtable = fdtable.prepare_for_execve();
-    thread.process().execve(virtual_memory, fdtable, res);
+    thread.process().execve(virtual_memory, fdtable, res).await;
     if let Some(vfork_parent) = thread.lock().vfork_done.take() {
         let _ = vfork_parent.send(());
     }
@@ -2043,7 +2087,7 @@ async fn execve(
 
 #[syscall(i386 = 1, amd64 = 60)]
 async fn exit(thread: &Thread, status: u64) -> SyscallResult {
-    thread.lock().exit(WStatus::exit(status as u8));
+    thread.lock().exit(WStatus::exit(status as u8)).await;
 
     core::future::pending().await
 }
@@ -2067,10 +2111,9 @@ async fn wait4(
     };
 
     let process = &**thread.process();
+    let mut wait_child = process.child_death_notify.wait();
+    let mut wait_ptrace = thread.ptrace_tracer_notify.wait();
     loop {
-        let wait_child = process.child_death_notify.wait();
-        let wait_ptrace = thread.ptrace_tracer_notify.wait();
-
         let res = process
             .poll_child_death(filter)
             .or_else(|| thread.poll_wait_for_tracee(filter));
@@ -2098,8 +2141,7 @@ async fn wait4(
                 }
             }
         }
-
-        future::select(wait_child, wait_ptrace).await;
+        future::select(wait_child.next(), wait_ptrace.next()).await;
     }
 }
 
@@ -2111,7 +2153,7 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
         code: SigInfoCode::USER,
         fields: SigFields::Kill(SigKill {
             pid: process.pid(),
-            uid: process.credentials.lock().real_user_id,
+            uid: process.credentials.read().real_user_id,
         }),
     });
 
@@ -2172,7 +2214,7 @@ fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult 
     virtual_memory.write_bytes(VirtAddr::new(fd), &[0; SIZE * 5])?;
     for (i, bs) in [
         b"Linux\0" as &[u8],
-        b"host\0",
+        b"myhostname\0",
         b"6.1.46\0",
         b"mushroom\0",
         b"x86_64\0",
@@ -2405,14 +2447,33 @@ fn truncate(
     let length = usize_from(length);
     let path = virtual_memory.read(path)?;
     let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
-    link.node.truncate(length)?;
+    link.node
+        .truncate(length, &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
+
+    link.node
+        .watchers()
+        .send_event(InotifyMask::MODIFY, None, None);
+    let parent = link.location.parent().unwrap();
+    let file_name = link.location.file_name().unwrap();
+    parent
+        .watchers()
+        .send_event(InotifyMask::MODIFY, None, Some(file_name));
+
     Ok(0)
 }
 
 #[syscall(i386 = 93, amd64 = 77)]
-fn ftruncate(#[state] fdtable: Arc<FileDescriptorTable>, fd: FdNum, length: u64) -> SyscallResult {
+fn ftruncate(
+    thread: &Thread,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    length: u64,
+) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.truncate(usize_from(length))?;
+    fd.truncate(usize_from(length), &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
 }
 
@@ -2771,7 +2832,7 @@ fn getrlimit(
     resource: Resource,
     rlim: Pointer<RLimit>,
 ) -> SyscallResult {
-    let value = thread.process().limits.read()[resource];
+    let value = thread.process().limits[resource].load();
     virtual_memory.write_with_abi(rlim, value, abi)?;
     Ok(0)
 }
@@ -3004,20 +3065,20 @@ fn ptrace(
 #[syscall(i386 = 199, amd64 = 102)]
 fn getuid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
-        thread.process().credentials.lock().real_user_id.get(),
+        thread.process().credentials.read().real_user_id.get(),
     ))
 }
 
 #[syscall(i386 = 200, amd64 = 104)]
 fn getgid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
-        thread.process().credentials.lock().real_group_id.get(),
+        thread.process().credentials.read().real_group_id.get(),
     ))
 }
 
 #[syscall(i386 = 213, amd64 = 105)]
 fn setuid(thread: &Thread, uid: Uid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     ensure!(
         credentials.is_super_user()
             || credentials.saved_set_user_id == uid
@@ -3030,7 +3091,7 @@ fn setuid(thread: &Thread, uid: Uid) -> SyscallResult {
 
 #[syscall(i386 = 214, amd64 = 106)]
 fn setgid(thread: &Thread, gid: Gid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     ensure!(
         credentials.is_super_user()
             || credentials.saved_set_group_id == gid
@@ -3044,14 +3105,14 @@ fn setgid(thread: &Thread, gid: Gid) -> SyscallResult {
 #[syscall(i386 = 201, amd64 = 107)]
 fn geteuid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
-        thread.process().credentials.lock().effective_user_id.get(),
+        thread.process().credentials.read().effective_user_id.get(),
     ))
 }
 
 #[syscall(i386 = 202, amd64 = 108)]
 fn getegid(thread: &Thread) -> SyscallResult {
     Ok(u64::from(
-        thread.process().credentials.lock().effective_group_id.get(),
+        thread.process().credentials.read().effective_group_id.get(),
     ))
 }
 
@@ -3091,7 +3152,7 @@ fn setsid(thread: &Thread) -> SyscallResult {
 
 #[syscall(i386 = 203, amd64 = 113)]
 fn setreuid(thread: &Thread, ruid: Uid, euid: Uid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     let mut new_credentials = credentials.clone();
 
     if euid != Uid::UNCHANGED {
@@ -3127,7 +3188,7 @@ fn setreuid(thread: &Thread, ruid: Uid, euid: Uid) -> SyscallResult {
 
 #[syscall(i386 = 204, amd64 = 114)]
 fn setregid(thread: &Thread, rguid: Gid, eguid: Gid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     let mut new_credentials = credentials.clone();
 
     if eguid != Gid::UNCHANGED {
@@ -3168,7 +3229,7 @@ fn getgroups(
     size: i32,
     list: Pointer<Gid>,
 ) -> SyscallResult {
-    let credentials = thread.process().credentials.lock();
+    let credentials = thread.process().credentials.read();
 
     let size = usize::try_from(size)?;
     if size != 0 {
@@ -3191,7 +3252,7 @@ fn setgroups(
     size: i32,
     list: Pointer<Gid>,
 ) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
 
     ensure!(credentials.is_super_user(), Perm);
 
@@ -3214,7 +3275,7 @@ fn setgroups(
 
 #[syscall(i386 = 208, amd64 = 117)]
 fn setresuid(thread: &Thread, ruid: Uid, euid: Uid, suid: Uid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     let mut new_credentials = credentials.clone();
 
     for (dest, src) in [
@@ -3248,7 +3309,7 @@ fn getresuid(
     euid: Pointer<Uid>,
     suid: Pointer<Uid>,
 ) -> SyscallResult {
-    let credentials = thread.process().credentials.lock();
+    let credentials = thread.process().credentials.read();
     virtual_memory.write(ruid, credentials.real_user_id)?;
     virtual_memory.write(euid, credentials.effective_user_id)?;
     virtual_memory.write(suid, credentials.saved_set_user_id)?;
@@ -3257,7 +3318,7 @@ fn getresuid(
 
 #[syscall(i386 = 210, amd64 = 119)]
 fn setresgid(thread: &Thread, rgid: Gid, egid: Gid, sgid: Gid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     let mut new_credentials = credentials.clone();
 
     for (dest, src) in [
@@ -3291,7 +3352,7 @@ fn getresgid(
     egid: Pointer<Gid>,
     sgid: Pointer<Gid>,
 ) -> SyscallResult {
-    let credentials = thread.process().credentials.lock();
+    let credentials = thread.process().credentials.read();
     virtual_memory.write(rgid, credentials.real_group_id)?;
     virtual_memory.write(egid, credentials.effective_group_id)?;
     virtual_memory.write(sgid, credentials.saved_set_group_id)?;
@@ -3310,7 +3371,7 @@ fn getpgid(thread: &Thread, pid: u32) -> SyscallResult {
 
 #[syscall(i386 = 215, amd64 = 122)]
 fn setfsuid(thread: &Thread, fsuid: Uid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     ensure!(
         credentials.is_super_user()
             || credentials.real_user_id == fsuid
@@ -3325,7 +3386,7 @@ fn setfsuid(thread: &Thread, fsuid: Uid) -> SyscallResult {
 
 #[syscall(i386 = 216, amd64 = 123)]
 fn setfsgid(thread: &Thread, fsgid: Gid) -> SyscallResult {
-    let mut credentials = thread.process().credentials.lock();
+    let mut credentials = thread.process().credentials.write();
     ensure!(
         credentials.is_super_user()
             || credentials.real_group_id == fsgid
@@ -3424,6 +3485,19 @@ fn capset(
             bail!(Inval)
         }
     }
+}
+
+#[syscall(i386 = 176, amd64 = 127)]
+fn rt_sigpending(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    uset: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let pending_signals = thread.pending_signals();
+    virtual_memory.write_with_abi(uset, pending_signals, abi)?;
+    Ok(0)
 }
 
 #[syscall(i386 = 179, amd64 = 130)]
@@ -3533,7 +3607,7 @@ fn fstatfs(
 }
 
 fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<Arc<Thread>>> {
-    let credentials_guard = thread.process().credentials.lock();
+    let credentials_guard = thread.process().credentials.read();
     let caller_euid = credentials_guard.effective_user_id;
     let caller_ruid = credentials_guard.real_user_id;
     drop(credentials_guard);
@@ -3542,7 +3616,7 @@ fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<
         let mut threads = Vec::new();
 
         for process in processes {
-            let target_euid = process.credentials.lock().effective_user_id;
+            let target_euid = process.credentials.read().effective_user_id;
             ensure!(
                 caller_euid == Uid::SUPER_USER
                     || caller_euid == target_euid
@@ -3575,7 +3649,7 @@ fn find_priority_targets(thread: &Thread, which: Which, who: u32) -> Result<Vec<
         }
         Which::User => {
             let uid = if who == 0 { caller_ruid } else { Uid::new(who) };
-            find_targets(&mut (Process::all().filter(|p| p.credentials.lock().real_user_id == uid)))
+            find_targets(&mut (Process::all().filter(|p| p.credentials.read().real_user_id == uid)))
         }
     }
 }
@@ -3810,7 +3884,7 @@ fn time(
     Ok(u64::from(tv_sec))
 }
 
-#[syscall(i386 = 240, amd64 = 202, interruptable, restartable)]
+#[syscall(i386 = 240, amd64 = 202)]
 async fn futex(
     thread: &Thread,
     abi: Abi,
@@ -3829,10 +3903,7 @@ async fn futex(
     };
 
     match op.op {
-        FutexOp::Wait => {
-            // Set up a future that waits for the futex to be ready.
-            let wait_for_futex = virtual_memory.futex_wait(uaddr, val, scope, None);
-
+        FutexOp::Wait | FutexOp::WaitBitset => {
             // Set up a future that waits for a timeout.
             let sleep_fut;
             let wait_for_deadline = if !utime.is_null() {
@@ -3847,17 +3918,43 @@ async fn futex(
             } else {
                 Fuse::terminated()
             };
-            let mut wait_for_deadline = pin!(wait_for_deadline);
+            // Set up a future that waits for a signal.
+            let wait_for_deadline = pin!(wait_for_deadline);
+            let wait_for_signal = thread.wait_for_signal();
+            let wait_for_signal = pin!(wait_for_signal);
+            let cancel_fut = future::select(wait_for_deadline, wait_for_signal);
 
-            select_biased! {
-                res = wait_for_futex.fuse() => res?,
-                _ = wait_for_deadline => bail!(TimedOut),
+            // Set up a future that waits for the futex to be ready.
+            let bitset = match op.op {
+                FutexOp::Wait => None,
+                FutexOp::WaitBitset => Some(NonZeroU32::try_from(val3 as u32)?),
+                _ => unreachable!(),
+            };
+            let wait_for_futex = virtual_memory.futex_wait(uaddr, val, scope, bitset)?;
+
+            let res = future::select(wait_for_futex, cancel_fut).await;
+            match res {
+                Either::Left(_) => Ok(0),
+                Either::Right((res, wait_for_futex)) => {
+                    if wait_for_futex.now_or_never() {
+                        Ok(0)
+                    } else {
+                        match res {
+                            Either::Left(_) => bail!(TimedOut),
+                            Either::Right((shoud_restart, _)) => {
+                                if shoud_restart {
+                                    bail!(RestartNoIntr)
+                                } else {
+                                    bail!(Intr)
+                                }
+                            }
+                        }
+                    }
+                }
             }
-
-            Ok(0)
         }
         FutexOp::Wake => {
-            let woken = virtual_memory.futex_wake(uaddr, val, scope, None).await?;
+            let woken = virtual_memory.futex_wake(uaddr, val, scope, None)?;
             Ok(u64::from(woken))
         }
         FutexOp::Fd => bail!(NoSys),
@@ -3867,39 +3964,9 @@ async fn futex(
         FutexOp::LockPi => bail!(NoSys),
         FutexOp::UnlockPi => bail!(NoSys),
         FutexOp::TrylockPi => bail!(NoSys),
-        FutexOp::WaitBitset => {
-            // Set up a future that waits for the futex to be ready.
-            let bitset = NonZeroU32::try_from(val3 as u32)?;
-            let wait_for_futex = virtual_memory.futex_wait(uaddr, val, scope, Some(bitset));
-
-            // Set up a future that waits for a timeout.
-            let sleep_fut;
-            let wait_for_deadline = if !utime.is_null() {
-                let deadline = virtual_memory.read_with_abi(utime, abi)?;
-                let clock_id = if op.flags.contains(FutexFlags::CLOCK_REALTIME) {
-                    ClockId::Realtime
-                } else {
-                    ClockId::Monotonic
-                };
-                sleep_fut = sleep_until(deadline, clock_id);
-                sleep_fut.fuse()
-            } else {
-                Fuse::terminated()
-            };
-            let mut wait_for_deadline = pin!(wait_for_deadline);
-
-            select_biased! {
-                res = wait_for_futex.fuse() => res?,
-                _ = wait_for_deadline => bail!(TimedOut),
-            }
-
-            Ok(0)
-        }
         FutexOp::WakeBitset => {
             let bitset = NonZeroU32::try_from(val3 as u32)?;
-            let woken = virtual_memory
-                .futex_wake(uaddr, val, scope, Some(bitset))
-                .await?;
+            let woken = virtual_memory.futex_wake(uaddr, val, scope, Some(bitset))?;
             Ok(u64::from(woken))
         }
         FutexOp::WaitRequeuePi => bail!(NoSys),
@@ -4185,7 +4252,7 @@ async fn clock_nanosleep(
 #[syscall(i386 = 252, amd64 = 231)]
 async fn exit_group(thread: &Thread, status: u64) -> SyscallResult {
     let process = thread.process();
-    process.exit_group(WStatus::exit(status as u8));
+    process.exit_group(WStatus::exit(status as u8)).await;
     core::future::pending().await
 }
 
@@ -4199,11 +4266,13 @@ async fn epoll_wait(
     timeout: i32,
 ) -> SyscallResult {
     let maxevents = usize::try_from(maxevents)?;
+    let maxevents = NonZeroUsize::new(maxevents).ok_or(err!(Inval))?;
 
     let epoll = fdtable.get(epfd)?;
     let epoll_wait_fut = async move {
         let events = epoll.epoll_wait(maxevents).await?;
-        assert!(events.len() <= maxevents);
+        debug_assert!(!events.is_empty());
+        debug_assert!(events.len() <= maxevents.get());
 
         virtual_memory.write(event, &*events)?;
 
@@ -4243,8 +4312,7 @@ fn epoll_ctl(
 
     match op {
         EpollCtlOp::Add => {
-            // Poll the fd once to check if it supports epoll.
-            let _ = fd.epoll_ready(Events::empty())?;
+            ensure!(fd.supports_epoll(), Perm);
 
             let event = virtual_memory.read(event)?;
             epoll.epoll_add(&fd, event)?
@@ -4267,7 +4335,7 @@ fn tgkill(thread: &Thread, tgid: u32, pid: u32, signal: Signal) -> SyscallResult
         code: SigInfoCode::TKILL,
         fields: SigFields::Kill(SigKill {
             pid: process.pid(),
-            uid: process.credentials.lock().real_user_id,
+            uid: process.credentials.read().real_user_id,
         }),
     };
 
@@ -4304,7 +4372,15 @@ fn inotify_add_watch(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let path = virtual_memory.read(pathname)?;
-    let link = lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?;
+    let link = if mask.contains(InotifyMask::DONT_FOLLOW) {
+        lookup_link(thread.process().cwd(), &path, &mut ctx)?
+    } else {
+        lookup_and_resolve_link(thread.process().cwd(), &path, &mut ctx)?
+    };
+    if mask.contains(InotifyMask::ONLYDIR) {
+        let stat = link.node.stat()?;
+        ensure!(stat.mode.ty() == FileType::Dir, IsDir);
+    }
     let wd = fd.add_watch(link.node, mask)?;
     Ok(u64::from(wd))
 }
@@ -4332,7 +4408,9 @@ fn start_dir_for_path(
         // Completly ignore `dfd` if path is absolute.
         Ok(Link::root())
     } else if dfd == FdNum::CWD {
-        Ok(thread.process().cwd())
+        let link = thread.process().cwd();
+        ensure!(!link.location.is_unlinked(), NoEnt);
+        Ok(link)
     } else {
         let fd = fdtable.get(dfd)?;
         fd.as_dir(ctx)
@@ -4520,8 +4598,8 @@ fn mknodat(
             start_dir,
             &pathname,
             mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
             &mut ctx,
         )?,
         FileType::Dir | FileType::Link => bail!(Inval),
@@ -4804,9 +4882,9 @@ fn faccessat(
     };
 
     if !flags.contains(FaccessatFlags::EACCESS) {
-        let credentials = thread.process().credentials.lock();
-        ctx.filesystem_user_id = credentials.real_user_id;
-        ctx.filesystem_group_id = credentials.real_group_id;
+        let credentials = thread.process().credentials.read();
+        ctx.set_filesystem_user_id_override(credentials.real_user_id);
+        ctx.set_filesystem_group_id_override(credentials.real_group_id);
     }
 
     let stat = link.node.stat()?;
@@ -4937,6 +5015,7 @@ async fn ppoll(
 async fn splice(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
     fd_out: FdNum,
@@ -4961,11 +5040,10 @@ async fn splice(
             ensure!(off_in.is_null(), SPipe);
             ensure!(off_out.is_null(), SPipe);
 
+            // Start wait operations on both halves.
+            let mut read_half_wait = read_half.notify().wait();
+            let mut write_half_wait = write_half.notify().wait();
             loop {
-                // Start wait operations on both halves.
-                let read_half_wait = read_half.wait();
-                let write_half_wait = write_half.wait();
-
                 match stream_buffer::splice(read_half, write_half, len) {
                     Ok(len) => return Ok(u64::from_usize(len)),
                     Err(err) => {
@@ -4973,11 +5051,11 @@ async fn splice(
                         match err {
                             SpliceBlockedError::Read => {
                                 ensure!(!pipe_read_nonblock, Again);
-                                read_half_wait.await
+                                read_half_wait.next().await
                             }
                             SpliceBlockedError::Write => {
                                 ensure!(!pipe_write_nonblock, Again);
-                                write_half_wait.await
+                                write_half_wait.next().await
                             }
                         }
                         continue;
@@ -4995,11 +5073,10 @@ async fn splice(
                 None
             };
 
+            // Start a wait operation on the read half.
+            let mut wait = read_half.notify().wait();
             loop {
-                // Start a wait operation on the read half.
-                let wait = read_half.wait();
-
-                let res = fd_in.splice_from(read_half, offset, len);
+                let res = fd_in.splice_from(read_half, offset, len, &ctx);
 
                 // If the operation can't be completed right now, wait and try again.
                 if res
@@ -5014,7 +5091,7 @@ async fn splice(
                 // If the pipe wasn't ready, wait for it to be ready and try again.
                 let Ok(len) = res? else {
                     ensure!(!pipe_read_nonblock, Again);
-                    wait.await;
+                    wait.next().await;
                     continue;
                 };
 
@@ -5036,10 +5113,9 @@ async fn splice(
                 None
             };
 
+            // Start a wait operation on the write half.
+            let mut wait = write_half.notify().wait();
             loop {
-                // Start a wait operation on the write half.
-                let wait = write_half.wait();
-
                 let res = fd_in.splice_to(write_half, offset, len);
 
                 // If the operation can't be completed right now, wait and try again.
@@ -5055,7 +5131,7 @@ async fn splice(
                 // If the pipe wasn't ready, wait for it to be ready and try again.
                 let Ok(len) = res? else {
                     ensure!(!pipe_write_nonblock, Again);
-                    wait.await;
+                    wait.next().await;
                     continue;
                 };
 
@@ -5193,23 +5269,36 @@ fn timerfd_create(
     let timer = Timer::new(
         clockid,
         flags,
-        ctx.filesystem_user_id,
-        ctx.filesystem_group_id,
+        ctx.filesystem_user_id(),
+        ctx.filesystem_group_id(),
     );
     let fd_num = fdtable.insert(timer, flags, no_file_limit)?;
     Ok(fd_num.get() as u64)
 }
 
+#[syscall(i386 = 323, amd64 = 284)]
+fn eventfd(
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    initval: u32,
+) -> SyscallResult {
+    eventfd2(fdtable, ctx, no_file_limit, initval, EventFdFlags::empty())
+}
+
 #[syscall(i386 = 324, amd64 = 285)]
 fn fallocate(
+    thread: &Thread,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     mode: FallocateMode,
     offset: u64,
     length: u64,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    fd.allocate(mode, usize_from(offset), usize_from(length))?;
+    fd.allocate(mode, usize_from(offset), usize_from(length), &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
 }
 
@@ -5257,7 +5346,7 @@ async fn accept4(
     Ok(fd_num.get() as u64)
 }
 
-#[syscall(i386 = 323, amd64 = 290)]
+#[syscall(i386 = 328, amd64 = 290)]
 fn eventfd2(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
@@ -5266,7 +5355,7 @@ fn eventfd2(
     flags: EventFdFlags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
-        EventFd::new(initval, ctx.filesystem_user_id, ctx.filesystem_group_id),
+        EventFd::new(initval, ctx.filesystem_user_id(), ctx.filesystem_group_id()),
         flags,
         no_file_limit,
     )?;
@@ -5281,7 +5370,7 @@ fn epoll_create1(
     flags: EpollCreate1Flags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
-        Epoll::new(ctx.filesystem_user_id, ctx.filesystem_group_id),
+        Epoll::new(ctx.filesystem_user_id(), ctx.filesystem_group_id()),
         flags,
         no_file_limit,
     )?;
@@ -5312,7 +5401,7 @@ fn pipe2(
     flags: Pipe2Flags,
 ) -> SyscallResult {
     let (read_half, write_half) =
-        pipe::anon::new(flags, ctx.filesystem_user_id, ctx.filesystem_group_id);
+        pipe::anon::new(flags, ctx.filesystem_user_id(), ctx.filesystem_group_id());
 
     // Insert the first read half.
     let read_half = fdtable.insert(read_half, flags, no_file_limit)?;
@@ -5339,8 +5428,8 @@ fn inotify_init1(
     let fd = fdtable.insert(
         Inotify::new(
             flags.into(),
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
         ),
         flags,
         no_file_limit,
@@ -5371,8 +5460,10 @@ async fn preadv(
 #[syscall(i386 = 334, amd64 = 296)]
 async fn pwritev(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u32,
@@ -5384,9 +5475,10 @@ async fn pwritev(
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
     let len = do_write_io(&**fd, WriteBuf::buffer_len(&vectored_buf), || {
-        fd.pwrite(pos, &vectored_buf)
+        fd.pwrite(pos, &vectored_buf, &ctx)
     })
-    .await?;
+    .await
+    .inspect_err(queue_signal_for_efbig(thread))?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -5472,28 +5564,42 @@ fn prlimit64(
         thread.process().clone()
     };
 
-    let mut guard = process.limits.write();
-
-    if !old_rlim.is_null() {
-        let value = guard[resource];
-        let value = RLimit64::from(value);
-        virtual_memory.write(old_rlim, value)?;
-    }
+    let atomic_limit = &process.limits[resource];
 
     if !new_rlim.is_null() {
         let value = virtual_memory.read(new_rlim)?;
         let value = RLimit::from(value);
-        let limit = &mut guard[resource];
-
         // Make sure that the limit is well-formed.
         ensure!(value.rlim_cur <= value.rlim_max, Inval);
 
-        // Make sure that the user can set the hard limit.
-        if thread.process().credentials.lock().effective_user_id != Uid::SUPER_USER {
-            ensure!(value.rlim_max <= limit.rlim_max, Perm);
-        }
+        if old_rlim.is_null()
+            && thread.process().credentials.read().effective_user_id == Uid::SUPER_USER
+        {
+            atomic_limit.store(value);
+        } else {
+            let mut current_limit = atomic_limit.load();
+            let is_superuser =
+                thread.process().credentials.read().effective_user_id != Uid::SUPER_USER;
+            let value = loop {
+                // Make sure that the user can set the hard limit.
+                if is_superuser {
+                    ensure!(value.rlim_max <= current_limit.rlim_max, Perm);
+                }
 
-        *limit = value;
+                match atomic_limit.compare_exchange(current_limit, value) {
+                    Ok(old) => break old,
+                    Err(new) => current_limit = new,
+                }
+            };
+            if !old_rlim.is_null() {
+                let value = RLimit64::from(value);
+                virtual_memory.write(old_rlim, value)?;
+            }
+        }
+    } else if !old_rlim.is_null() {
+        let value = atomic_limit.load();
+        let value = RLimit64::from(value);
+        virtual_memory.write(old_rlim, value)?;
     }
 
     Ok(0)
@@ -5504,6 +5610,7 @@ async fn sendmmsg(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     msgvec: Pointer<MMsgHdr>,
     n: u32,
@@ -5522,7 +5629,14 @@ async fn sendmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = do_io(&**socket, Events::WRITE, || {
-            socket.send_msg(&virtual_memory, abi, &mut msg_header.hdr, flags, &fdtable)
+            socket.send_msg(
+                &virtual_memory,
+                abi,
+                &mut msg_header.hdr,
+                flags,
+                &fdtable,
+                &ctx,
+            )
         })
         .await;
         match res {
@@ -5673,8 +5787,10 @@ fn memfd_create(
 
 #[syscall(i386 = 377, amd64 = 326)]
 fn copy_file_range(
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd_in: FdNum,
     off_in: Pointer<LongOffset>,
     fd_out: FdNum,
@@ -5701,7 +5817,9 @@ fn copy_file_range(
     let len = usize::try_from(len)?;
 
     // Do the copy operations.
-    let len = fd_in.copy_file_range(off_in_val, &**fd_out, off_out_val, len)?;
+    let len = fd_in
+        .copy_file_range(off_in_val, &**fd_out, off_out_val, len, &ctx)
+        .inspect_err(queue_signal_for_efbig(thread))?;
 
     // Write the offset back.
     if let Some(off_in_val) = off_in_val {

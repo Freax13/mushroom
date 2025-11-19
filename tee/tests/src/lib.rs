@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+mod epoll;
 mod net;
 mod ready;
 mod unix;
@@ -13,13 +14,14 @@ use std::{
     path::{Path, PathBuf},
     ptr::{NonNull, null_mut},
     sync::{
-        Mutex, PoisonError,
+        Mutex, Once, PoisonError,
         atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
     },
 };
 
 use nix::{
     libc::{SYS_exit, SYS_vfork, sigaltstack, siginfo_t, stack_t},
+    mount::{MsFlags, mount},
     sys::{
         mman::{ProtFlags, mprotect},
         prctl,
@@ -360,10 +362,28 @@ fn mkdir() {
 fn task_name() {
     let default_name = prctl::get_name().unwrap();
 
-    prctl::set_name(c"my thread name");
+    prctl::set_name(c"my thread name").unwrap();
     assert_eq!(prctl::get_name().unwrap().as_c_str(), c"my thread name");
     std::thread::spawn(move || {
         assert_ne!(prctl::get_name().unwrap().as_c_str(), c"my thread name");
         assert_ne!(prctl::get_name().unwrap(), default_name);
+    });
+}
+
+fn mount_dev() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if !std::fs::exists("/dev").unwrap() {
+            create_dir("/dev").unwrap();
+
+            mount(
+                Some("devtmpfs"),
+                "/dev",
+                Some("devtmpfs"),
+                MsFlags::empty(),
+                None::<&str>,
+            )
+            .unwrap();
+        }
     });
 }

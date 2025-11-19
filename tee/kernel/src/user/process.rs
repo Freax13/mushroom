@@ -78,10 +78,10 @@ pub struct Process {
     task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
     pub stop_state: StopState,
-    pub credentials: Mutex<Credentials>,
+    pub credentials: RwLock<Credentials>,
     cwd: Mutex<Link>,
     process_group: Mutex<Arc<ProcessGroup>>,
-    pub limits: RwLock<Limits>,
+    pub limits: Limits,
     umask: AtomicCell<FileMode>,
     /// The usage of all terminated threads.
     pub self_usage: Mutex<Rusage>,
@@ -134,10 +134,10 @@ impl Process {
             task_comm: Mutex::new(task_comm),
             alarm: Mutex::new(None),
             stop_state: StopState::default(),
-            credentials: Mutex::new(credentials),
+            credentials: RwLock::new(credentials),
             cwd: Mutex::new(cwd),
             process_group: Mutex::new(process_group.clone()),
-            limits: RwLock::new(limits),
+            limits,
             umask: AtomicCell::new(umask),
             self_usage: Mutex::default(),
             children_usage: Mutex::default(),
@@ -264,18 +264,18 @@ impl Process {
         self.running.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn exit(&self, exit_status: WStatus, rusage: Rusage) {
+    pub async fn exit(&self, exit_status: WStatus, rusage: Rusage) {
         let mut guard = self.self_usage.lock();
         *guard = guard.merge(rusage);
         drop(guard);
 
         let prev = self.running.fetch_sub(1, Ordering::Relaxed);
         if prev == 1 {
-            self.exit_group(exit_status);
+            self.exit_group(exit_status).await;
         }
     }
 
-    pub fn execve(
+    pub async fn execve(
         &self,
         virtual_memory: VirtualMemory,
         fdtable: FileDescriptorTable,
@@ -297,7 +297,7 @@ impl Process {
 
         // Stop all threads except for the thread group leader.
         for thread in threads.drain(1..).filter_map(|t| t.upgrade()) {
-            thread.terminate(WStatus::exit(0));
+            thread.terminate(WStatus::exit(0)).await;
         }
     }
 
@@ -305,7 +305,7 @@ impl Process {
     ///
     /// The returned exit status may not be the same as the requested
     /// if another thread terminated the thread group at the same time.
-    pub fn exit_group(&self, exit_status: WStatus) {
+    pub async fn exit_group(&self, exit_status: WStatus) {
         if self.pid == 1 {
             // Commit or fail the output depending on the exit status of the
             // init process.
@@ -326,7 +326,7 @@ impl Process {
             .into_iter()
             .filter_map(|t| t.upgrade())
         {
-            thread.terminate(exit_status);
+            thread.terminate(exit_status).await;
         }
         drop(threads);
 
@@ -406,6 +406,10 @@ impl Process {
         }
     }
 
+    pub fn pending_signals(&self) -> Sigset {
+        self.pending_signals.lock().pending_signals()
+    }
+
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
         match sig_info.signal {
             Signal::CONT | Signal::KILL => self.stop_state.cont(),
@@ -450,10 +454,11 @@ impl Process {
             }
         }
 
-        let (self_guard, target_guard) = self.credentials.lock_two(&target.credentials);
+        let self_guard = self.credentials.read();
         if self_guard.is_super_user() {
             return true;
         }
+        let target_guard = target.credentials.read();
         [self_guard.real_user_id, self_guard.effective_user_id]
             .into_iter()
             .any(|uid| [target_guard.real_user_id, target_guard.saved_set_user_id].contains(&uid))

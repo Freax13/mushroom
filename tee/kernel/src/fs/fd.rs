@@ -31,6 +31,7 @@ use crate::{
     error::{ErrorKind, Result, bail, ensure, err},
     fs::{
         FileSystem,
+        fd::epoll::{EpollRequest, EpollResult},
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, Link, OffsetDirEntry, new_ino,
             procfs::{FdINode, FdInfoFile, ProcFs},
@@ -260,6 +261,7 @@ impl Drop for StrongFileDescriptor {
     }
 }
 
+#[derive(Clone)]
 pub struct WeakFileDescriptor(Weak<OpenFileDescriptionData<dyn OpenFileDescription>>);
 
 impl WeakFileDescriptor {
@@ -280,6 +282,12 @@ impl PartialEq<dyn OpenFileDescription> for WeakFileDescriptor {
         let ptr = self.0.as_ptr() as *const c_void;
         let ptr = unsafe { ptr.byte_offset(OFFSET) };
         core::ptr::addr_eq(ptr, other)
+    }
+}
+
+impl PartialEq for WeakFileDescriptor {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
     }
 }
 
@@ -691,8 +699,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let _ = buf;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -709,9 +718,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let _ = pos;
         let _ = buf;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -720,10 +730,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         read_half: &stream_buffer::ReadHalf,
         offset: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let _ = read_half;
         let _ = offset;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -750,11 +762,13 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         fd_out: &dyn OpenFileDescription,
         offset_out: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = offset_in;
         let _ = fd_out;
         let _ = offset_out;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -769,23 +783,33 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         file_in: &dyn File,
         offset_in: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = offset_out;
         let _ = file_in;
         let _ = offset_in;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
 
-    fn truncate(&self, length: usize) -> Result<()> {
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()> {
         let _ = length;
+        let _ = ctx;
         bail!(Inval)
     }
 
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
         let _ = mode;
         let _ = offset;
         let _ = len;
+        let _ = ctx;
         bail!(BadF)
     }
 
@@ -849,10 +873,12 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = buf;
         let _ = flags;
         let _ = addr;
+        let _ = ctx;
         bail!(NotSock)
     }
 
@@ -863,12 +889,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         msg_hdr: &mut MsgHdr,
         flags: SendMsgFlags,
         fdtable: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = vm;
         let _ = abi;
         let _ = msg_hdr;
         let _ = flags;
         let _ = fdtable;
+        let _ = ctx;
         bail!(NotSock)
     }
 
@@ -979,7 +1007,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         let _ = mapping_ctrl;
     }
 
-    async fn epoll_wait(&self, max_events: usize) -> Result<Vec<EpollEvent>> {
+    /// Force epoll file descriptors to poll their watched fds.
+    fn force_poll(&self) {}
+
+    async fn epoll_wait(&self, max_events: NonZeroUsize) -> Result<Vec<EpollEvent>> {
         let _ = max_events;
         bail!(Inval)
     }
@@ -1003,11 +1034,6 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents>;
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        let _ = events;
-        bail!(Perm)
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents;
 
     /// Returns a future that is ready when the file descriptor can process
@@ -1016,6 +1042,24 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     async fn ready_for_write(&self, count: usize) {
         let _ = count;
         self.ready(Events::WRITE).await;
+    }
+
+    fn supports_epoll(&self) -> bool {
+        false
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let events = self.ready(req.events()).await;
+        let events = Events::from(events);
+        let mut result = EpollResult::new();
+        result.set_ready(events);
+
+        result.if_matches(req).unwrap_or_else(|| {
+            panic!(
+                "{} doesn't support edge-triggered epoll",
+                core::any::type_name::<Self>()
+            );
+        })
     }
 
     fn add_watch(&self, node: DynINode, mask: InotifyMask) -> Result<u32> {
@@ -1090,7 +1134,7 @@ where
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Events: u8 {
         const READ = 1 << 0;
         const WRITE = 1 << 1;
@@ -1266,9 +1310,8 @@ impl BsdFileLock {
     }
 
     pub async fn lock_shared(&self, non_blocking: bool) -> Result<()> {
+        let mut wait = non_blocking.then(|| self.record.notify.wait());
         loop {
-            let wait = non_blocking.then(|| self.record.notify.wait());
-
             let mut guard = self.state.lock();
             self.unlock_internal(&mut guard);
             let res =
@@ -1282,15 +1325,13 @@ impl BsdFileLock {
                 return Ok(());
             }
             drop(guard);
-
-            wait.ok_or(err!(Again))?.await;
+            wait.as_mut().ok_or(err!(Again))?.next().await;
         }
     }
 
     pub async fn lock_exclusive(&self, non_blocking: bool) -> Result<()> {
+        let mut wait = non_blocking.not().then(|| self.record.notify.wait());
         loop {
-            let wait = non_blocking.not().then(|| self.record.notify.wait());
-
             let mut guard = self.state.lock();
             self.unlock_internal(&mut guard);
             let res =
@@ -1302,8 +1343,7 @@ impl BsdFileLock {
                 return Ok(());
             }
             drop(guard);
-
-            wait.ok_or(err!(Again))?.await;
+            wait.as_mut().ok_or(err!(Again))?.next().await;
         }
     }
 

@@ -5,6 +5,7 @@ use core::{
 };
 
 use async_trait::async_trait;
+use usize_conversions::usize_from;
 
 use self::{
     directory::Directory,
@@ -24,7 +25,9 @@ use crate::{
     spin::{lazy::Lazy, rwlock::RwLock},
     user::{
         process::Process,
-        syscall::args::{ExtractableThreadState, FileMode, FileType, OpenFlags, Stat, Timespec},
+        syscall::args::{
+            ExtractableThreadState, FileMode, FileType, OpenFlags, Resource, Stat, Timespec,
+        },
         thread::{Gid, ThreadGuard, Uid},
     },
 };
@@ -91,7 +94,7 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>);
 
-    fn truncate(&self, length: usize) -> Result<()>;
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()>;
 
     // Directory related functions.
 
@@ -295,7 +298,11 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord>;
 
-    fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+    fn get_socket(
+        &self,
+        ctx: &FileAccessContext,
+    ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+        let _ = ctx;
         bail!(ConnRefused)
     }
 
@@ -344,6 +351,13 @@ impl LinkLocation {
             file_name,
             unlinked: false,
         }))))
+    }
+
+    pub fn is_unlinked(&self) -> bool {
+        match &self.0 {
+            Some(loc) => loc.read().unlinked,
+            None => false,
+        }
     }
 
     pub fn path(&self) -> Result<Path> {
@@ -411,11 +425,10 @@ fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
 
 #[derive(Clone)]
 pub struct FileAccessContext {
-    pub process: Option<Arc<Process>>,
+    process: Option<Arc<Process>>,
     symlink_recursion_limit: u16,
-    pub filesystem_user_id: Uid,
-    pub filesystem_group_id: Gid,
-    pub supplementary_group_ids: Arc<[Gid]>,
+    filesystem_user_id_override: Option<Uid>,
+    filesystem_group_id_override: Option<Gid>,
 }
 
 impl FileAccessContext {
@@ -439,7 +452,7 @@ impl FileAccessContext {
         let gid = info.gid();
         let mode = info.mode();
 
-        if self.filesystem_user_id == Uid::SUPER_USER {
+        if self.filesystem_user_id() == Uid::SUPER_USER {
             // Access checks are special for the super user: Read and write
             // checks are omitted completly, but for execute at least one
             // execute flag has to be set.
@@ -479,22 +492,63 @@ impl FileAccessContext {
     }
 
     pub fn is_user(&self, uid: Uid) -> bool {
-        self.filesystem_user_id == Uid::SUPER_USER || self.filesystem_user_id == uid
+        let filesystem_user_id = self.filesystem_user_id();
+        filesystem_user_id == Uid::SUPER_USER || filesystem_user_id == uid
     }
 
     pub fn is_in_group(&self, gid: Gid) -> bool {
-        self.filesystem_user_id == Uid::SUPER_USER
-            || self.filesystem_group_id == gid
-            || self.supplementary_group_ids.contains(&gid)
+        self.filesystem_user_id() == Uid::SUPER_USER
+            || self.filesystem_group_id() == gid
+            || self.supplementary_group_ids().contains(&gid)
+    }
+
+    pub fn process(&self) -> Option<&Arc<Process>> {
+        self.process.as_ref()
+    }
+
+    pub fn filesystem_user_id(&self) -> Uid {
+        self.filesystem_user_id_override.unwrap_or_else(|| {
+            self.process.as_ref().map_or(Uid::SUPER_USER, |process| {
+                process.credentials.read().filesystem_user_id
+            })
+        })
+    }
+
+    pub fn set_filesystem_user_id_override(&mut self, uid: Uid) {
+        self.filesystem_user_id_override = Some(uid);
+    }
+
+    pub fn filesystem_group_id(&self) -> Gid {
+        self.filesystem_group_id_override.unwrap_or_else(|| {
+            self.process.as_ref().map_or(Gid::SUPER_USER, |process| {
+                process.credentials.read().filesystem_group_id
+            })
+        })
+    }
+
+    pub fn set_filesystem_group_id_override(&mut self, gid: Gid) {
+        self.filesystem_group_id_override = Some(gid);
+    }
+
+    fn supplementary_group_ids(&self) -> Arc<[Gid]> {
+        self.process.as_ref().map_or_else(
+            || Arc::new([]) as Arc<[_]>,
+            |process| process.credentials.read().supplementary_group_ids.clone(),
+        )
+    }
+
+    pub fn max_file_size(&self) -> usize {
+        self.process.as_ref().map_or(usize::MAX, |process| {
+            usize_from(process.limits[Resource::FSize].load_current())
+        })
     }
 
     pub fn root() -> Self {
         Self {
             process: None,
             symlink_recursion_limit: 16,
-            filesystem_user_id: Uid::SUPER_USER,
-            filesystem_group_id: Gid::SUPER_USER,
-            supplementary_group_ids: Arc::new([]),
+            filesystem_user_id_override: None,
+            filesystem_group_id_override: None,
         }
     }
 }
@@ -508,13 +562,11 @@ pub enum Permission {
 
 impl ExtractableThreadState for FileAccessContext {
     fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        let credentials_guard = guard.process().credentials.lock();
         Self {
             process: Some(guard.process().clone()),
             symlink_recursion_limit: 16,
-            filesystem_user_id: credentials_guard.filesystem_user_id,
-            filesystem_group_id: credentials_guard.filesystem_group_id,
-            supplementary_group_ids: credentials_guard.supplementary_group_ids.clone(),
+            filesystem_user_id_override: None,
+            filesystem_group_id_override: None,
         }
     }
 }
@@ -710,8 +762,8 @@ pub fn create_link(
     parent.node.create_link(
         file_name.into_owned(),
         target,
-        ctx.filesystem_user_id,
-        ctx.filesystem_group_id,
+        ctx.filesystem_user_id(),
+        ctx.filesystem_group_id(),
         true,
     )?;
     Ok(())
@@ -736,8 +788,8 @@ pub fn create_fifo(
         PathSegment::FileName(file_name) => parent.node.create_fifo(
             file_name.into_owned(),
             mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
         ),
     }
 }
@@ -761,8 +813,8 @@ pub fn create_char_dev(
                 major,
                 minor,
                 mode,
-                ctx.filesystem_user_id,
-                ctx.filesystem_group_id,
+                ctx.filesystem_user_id(),
+                ctx.filesystem_group_id(),
             )?;
             Ok(())
         }
@@ -821,7 +873,7 @@ pub fn get_socket(
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
     let link = lookup_and_resolve_link(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
-    link.node.get_socket()
+    link.node.get_socket(ctx)
 }
 
 pub fn mount(

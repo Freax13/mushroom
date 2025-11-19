@@ -14,6 +14,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
             StrongFileDescriptor, WriteBuf,
+            epoll::{EpollRequest, EpollResult},
             pipe::{CAPACITY, PIPE_BUF},
             stream_buffer,
         },
@@ -90,8 +91,8 @@ impl NamedPipe {
             } else {
                 // Wait until at least one reader exists.
                 let counter_value = self.read_open_counter.load(Ordering::SeqCst);
+                let mut wait = self.notify.wait();
                 loop {
-                    let wait = self.notify.wait();
                     if guard.read_half.strong_count() > 0
                         || counter_value != self.read_open_counter.load(Ordering::SeqCst)
                     {
@@ -99,7 +100,7 @@ impl NamedPipe {
                     }
 
                     drop(guard);
-                    wait.await;
+                    wait.next().await;
                     guard = self.internal.lock();
                 }
             }
@@ -190,8 +191,8 @@ impl NamedPipe {
             if !flags.contains(OpenFlags::NONBLOCK) {
                 // Wait until at least one writer exists.
                 let counter_value = self.write_open_counter.load(Ordering::SeqCst);
+                let mut wait = self.notify.wait();
                 loop {
-                    let wait = self.notify.wait();
                     if guard.write_half.strong_count() > 0
                         || counter_value != self.write_open_counter.load(Ordering::SeqCst)
                     {
@@ -199,7 +200,7 @@ impl NamedPipe {
                     }
 
                     drop(guard);
-                    wait.await;
+                    wait.next().await;
                     guard = self.internal.lock();
                 }
             }
@@ -230,12 +231,12 @@ impl OpenFileDescription for ReadHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.read_half.notify();
+        self.read_half.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.read_half.notify();
+        self.read_half.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -243,7 +244,7 @@ impl OpenFileDescription for ReadHalf {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        self.read_half.read(buf)
+        self.read_half.read(buf, false)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -270,21 +271,22 @@ impl OpenFileDescription for ReadHalf {
         self.read_half.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
+    async fn ready(&self, events: Events) -> NonEmptyEvents {
+        self.read_half
+            .notify()
+            .wait_until(|| self.poll_ready(events))
+            .await
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        loop {
-            let wait = self.read_half.wait();
+    fn supports_epoll(&self) -> bool {
+        true
+    }
 
-            let events = self.poll_ready(events);
-            if let Some(events) = events {
-                return events;
-            }
-
-            wait.await;
-        }
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.read_half
+            .notify()
+            .epoll_loop(req, || self.read_half.epoll_ready())
+            .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -307,19 +309,19 @@ impl OpenFileDescription for WriteHalf {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.write_half.notify();
+        self.write_half.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.write_half.notify();
+        self.write_half.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
         self.link.location.path()
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         self.write_half.write(buf)
     }
 
@@ -347,25 +349,26 @@ impl OpenFileDescription for WriteHalf {
         self.write_half.poll_ready(events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        loop {
-            let wait = self.write_half.wait();
-
-            let events = self.poll_ready(events);
-            if let Some(events) = events {
-                return events;
-            }
-
-            wait.await;
-        }
+        self.write_half
+            .notify()
+            .wait_until(|| self.poll_ready(events))
+            .await
     }
 
     async fn ready_for_write(&self, count: usize) {
         self.write_half.ready_for_write(count).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.write_half
+            .notify()
+            .epoll_loop(req, || self.write_half.epoll_ready())
+            .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -389,14 +392,14 @@ impl OpenFileDescription for FullReadWrite {
 
     fn set_flags(&self, flags: OpenFlags) {
         self.flags.lock().update(flags);
-        self.read_half.notify();
-        self.write_half.notify();
+        self.read_half.notify().notify();
+        self.write_half.notify().notify();
     }
 
     fn set_non_blocking(&self, non_blocking: bool) {
         self.flags.lock().set(OpenFlags::NONBLOCK, non_blocking);
-        self.read_half.notify();
-        self.write_half.notify();
+        self.read_half.notify().notify();
+        self.write_half.notify().notify();
     }
 
     fn path(&self) -> Result<Path> {
@@ -404,10 +407,10 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        self.read_half.read(buf)
+        self.read_half.read(buf, false)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         self.write_half.write(buf)
     }
 
@@ -442,26 +445,35 @@ impl OpenFileDescription for FullReadWrite {
         )
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
+        let mut read_wait = self.read_half.notify().wait();
+        let mut write_wait = self.write_half.notify().wait();
         loop {
-            let read_wait = self.read_half.wait();
-            let write_wait = self.write_half.wait();
-
             let events = self.poll_ready(events);
             if let Some(events) = events {
                 return events;
             }
-
-            future::select(read_wait, write_wait).await;
+            future::select(read_wait.next(), write_wait.next()).await;
         }
     }
 
     async fn ready_for_write(&self, count: usize) {
         self.write_half.ready_for_write(count).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        Notify::zip_epoll_loop(
+            req,
+            self.read_half.notify(),
+            || self.read_half.epoll_ready(),
+            self.write_half.notify(),
+            || self.write_half.epoll_ready(),
+        )
+        .await
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

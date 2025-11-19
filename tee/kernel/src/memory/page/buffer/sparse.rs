@@ -2,7 +2,7 @@ use alloc::collections::btree_map::BTreeMap;
 use core::{cmp, ops::Bound};
 
 use crate::{
-    error::{Result, ensure},
+    error::{Result, ensure, err},
     fs::fd::{ReadBuf, WriteBuf},
     memory::page::KernelPage,
 };
@@ -75,8 +75,12 @@ impl SparseBuffer {
         Ok(len)
     }
 
-    pub fn write(&mut self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
-        let len = buf.buffer_len();
+    pub fn write(&mut self, offset: usize, buf: &dyn WriteBuf, max_size: usize) -> Result<usize> {
+        let remaining_len = max_size
+            .checked_sub(offset)
+            .filter(|&remaining| remaining > 0)
+            .ok_or(err!(FBig))?;
+        let len = cmp::min(buf.buffer_len(), remaining_len);
         if len > 0 {
             let start = offset;
             let end = offset + len - 1;

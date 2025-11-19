@@ -6,9 +6,8 @@ use alloc::{
 };
 use core::{
     ffi::{CStr, c_void},
-    fmt,
-    fmt::Debug,
-    ops::{BitAnd, BitAndAssign, BitOrAssign, Deref, DerefMut, Not},
+    fmt::{self, Debug},
+    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Deref, DerefMut, Not},
     pin::{Pin, pin},
     sync::atomic::{AtomicU32, Ordering},
     task::{Context, Poll, Waker},
@@ -269,6 +268,7 @@ impl Thread {
                         let exit = self.run_userspace().unwrap();
 
                         match exit {
+                            Exit::Syscall(args) => self.execute_syscall(args).await,
                             Exit::DivideError => {
                                 let sig_info = SigInfo {
                                     signal: Signal::FPE,
@@ -277,9 +277,16 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
-                            Exit::Syscall(args) => self.execute_syscall(args).await,
+                            Exit::Breakpoint => {
+                                let sig_info = SigInfo {
+                                    signal: Signal::TRAP,
+                                    code: SigInfoCode::KERNEL,
+                                    fields: SigFields::SigFault(SigFault { addr: 0 }),
+                                };
+                                self.queue_signal_or_die(sig_info).await;
+                            }
                             Exit::InvalidOpcode => {
                                 let sig_info = SigInfo {
                                     signal: Signal::ILL,
@@ -288,7 +295,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
                             Exit::GeneralProtectionFault => {
                                 let sig_info = SigInfo {
@@ -298,9 +305,9 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
-                            Exit::PageFault(page_fault) => self.handle_page_fault(page_fault),
+                            Exit::PageFault(page_fault) => self.handle_page_fault(page_fault).await,
                             Exit::SimdFloatingPoint(error) => {
                                 let code = match error {
                                     SimdFloatingPointError::InvalidOperation => {
@@ -319,7 +326,7 @@ impl Thread {
                                         addr: self.cpu_state.lock().faulting_instruction(),
                                     }),
                                 };
-                                self.queue_signal_or_die(sig_info);
+                                self.queue_signal_or_die(sig_info).await;
                             }
                             Exit::Timer => {
                                 // Handle the timer interrupt.
@@ -370,7 +377,7 @@ impl Thread {
         Ok(exit)
     }
 
-    fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
+    async fn handle_page_fault(self: &Arc<Self>, page_fault: PageFaultExit) {
         let virtual_memory = self.lock().virtual_memory().clone();
         let res = virtual_memory.handle_page_fault(page_fault.addr, page_fault.code);
         if let Err(err) = res {
@@ -386,8 +393,13 @@ impl Thread {
                     addr: page_fault.addr,
                 }),
             };
-            self.queue_signal_or_die(sig_info);
+            self.queue_signal_or_die(sig_info).await;
         }
+    }
+
+    pub fn pending_signals(&self) -> Sigset {
+        let pending_signals = self.lock().pending_signals.pending_signals();
+        pending_signals | self.process().pending_signals()
     }
 
     /// Returns true if the signal was not already queued.
@@ -396,22 +408,20 @@ impl Thread {
     }
 
     /// Try to queue a signal and kill the process if the signal is already pending.
-    pub fn queue_signal_or_die(&self, sig_info: SigInfo) {
+    pub async fn queue_signal_or_die(&self, sig_info: SigInfo) {
         if !self.queue_signal(sig_info) {
             self.process()
-                .exit_group(WStatus::signaled(sig_info.signal));
+                .exit_group(WStatus::signaled(sig_info.signal))
+                .await;
         }
     }
 
     async fn deliver_signals(self: &Arc<Self>) -> Result<()> {
+        let mut wait_thread = self.signal_notify.wait();
+        let mut ptrace_wait = self.ptrace_tracee_notify.wait();
+        let mut wait_process = self.process.signals_notify.wait();
         loop {
-            let wait_thread = self.signal_notify.wait().fuse();
-            let ptrace_wait = self.ptrace_tracee_notify.wait().fuse();
-            let wait_process = self.process.signals_notify.wait().fuse();
             let process_not_stopped_fut = self.process.wait_until_not_stopped().fuse();
-            let mut wait_thread = pin!(wait_thread);
-            let mut ptrace_wait = pin!(ptrace_wait);
-            let mut wait_process = pin!(wait_process);
             let mut process_not_stopped_fut = pin!(process_not_stopped_fut);
 
             let mut state = self.lock();
@@ -443,7 +453,14 @@ impl Thread {
                 }
 
                 let virtual_memory = state.virtual_memory.clone();
-                let sigaction = state.signal_handler_table.get(sig_info.signal);
+
+                let mut guard = state.signal_handler_table.sigactions.lock();
+                let entry = &mut guard[sig_info.signal.get() - 1];
+                let sigaction = *entry;
+                if entry.sa_flags.contains(SigactionFlags::RESETHAND) {
+                    entry.sa_handler_or_sigaction = Sigaction::SIG_DFL;
+                }
+                drop(guard);
 
                 match (sigaction.sa_handler_or_sigaction, sig_info.signal) {
                     (Sigaction::SIG_DFL, Signal::CHLD | Signal::CONT) => {
@@ -455,6 +472,7 @@ impl Thread {
                         signal @ (Signal::HUP
                         | Signal::INT
                         | Signal::ILL
+                        | Signal::TRAP
                         | Signal::ABRT
                         | Signal::USR1
                         | Signal::SEGV
@@ -465,7 +483,7 @@ impl Thread {
                     | (_, signal @ Signal::KILL) => {
                         // Terminate.
                         drop(state);
-                        self.process.exit_group(WStatus::signaled(signal));
+                        self.process.exit_group(WStatus::signaled(signal)).await;
                         return core::future::pending().await;
                     }
                     (_, Signal::STOP) => continue,
@@ -517,32 +535,30 @@ impl Thread {
             drop(state);
 
             select_biased! {
-                _ = wait_thread => {}
-                _ = wait_process => {}
+                _ = wait_thread.next().fuse() => {}
+                _ = wait_process.next().fuse() => {}
                 _ = process_not_stopped_fut => {}
-                _ = ptrace_wait => {}
+                _ = ptrace_wait.next().fuse() => {}
             }
         }
     }
 
     /// Returns a future that resolves when the process has a pending signal
     /// and returns whether the running syscall should be restarted.
-    async fn wait_for_signal(&self) -> bool {
+    pub async fn wait_for_signal(&self) -> bool {
+        let mut thread_notify_wait = self.signal_notify.wait();
+        let mut ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
+        let mut process_notify_wait = self.process.signals_notify.wait();
         loop {
-            let thread_notify_wait = self.signal_notify.wait();
-            let ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
-            let process_notify_wait = self.process.signals_notify.wait();
-
             let mut guard = self.lock();
             if let Some(restartable) = guard.get_pending_signal() {
                 return restartable;
             }
             drop(guard);
-
             select_biased! {
-                () = thread_notify_wait.fuse() => {}
-                () = ptrace_tracee_wait.fuse() => {}
-                () = process_notify_wait.fuse() => {}
+                () = thread_notify_wait.next().fuse() => {}
+                () = ptrace_tracee_wait.next().fuse() => {}
+                () = process_notify_wait.next().fuse() => {}
             }
         }
     }
@@ -588,6 +604,7 @@ impl Thread {
                         }
                     }
                     Exit::DivideError
+                    | Exit::Breakpoint
                     | Exit::InvalidOpcode
                     | Exit::GeneralProtectionFault
                     | Exit::PageFault(_)
@@ -801,7 +818,7 @@ impl ThreadGuard<'_> {
             .for_each(|sa| *sa = Sigaction::DEFAULT);
         self.sigaltstack = Stack::default();
 
-        let mut guard = self.thread.process.credentials.lock();
+        let mut guard = self.thread.process.credentials.write();
         guard.saved_set_user_id = guard.effective_user_id;
         guard.saved_set_group_id = guard.effective_group_id;
     }
@@ -881,6 +898,7 @@ impl ThreadGuard<'_> {
                     Signal::HUP
                     | Signal::INT
                     | Signal::ILL
+                    | Signal::TRAP
                     | Signal::ABRT
                     | Signal::USR1
                     | Signal::SEGV
@@ -1176,9 +1194,17 @@ impl Sigset {
     }
 }
 
+impl BitOr for Sigset {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
 impl BitOrAssign for Sigset {
     fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
+        *self = *self | rhs;
     }
 }
 
@@ -1204,6 +1230,16 @@ impl Not for Sigset {
     }
 }
 
+impl FromIterator<Signal> for Sigset {
+    fn from_iter<T: IntoIterator<Item = Signal>>(iter: T) -> Self {
+        let mut sigset = Self::empty();
+        for signal in iter {
+            sigset.add(signal);
+        }
+        sigset
+    }
+}
+
 impl Debug for Sigset {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut debug_set = f.debug_set();
@@ -1225,6 +1261,7 @@ bitflags! {
         const ONSTACK = 0x08000000;
         const RESTART = 0x10000000;
         const NODEFER = 0x40000000;
+        const RESETHAND = 0x80000000;
     }
 }
 
@@ -1269,6 +1306,13 @@ impl PendingSignals {
         Self {
             pending_signals: VecDeque::new(),
         }
+    }
+
+    pub fn pending_signals(&self) -> Sigset {
+        self.pending_signals
+            .iter()
+            .map(|sig_info| sig_info.signal)
+            .collect()
     }
 
     /// Add the signal to the set of pending signals.

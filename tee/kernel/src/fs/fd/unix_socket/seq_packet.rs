@@ -139,7 +139,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok((len, None))
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         let mut bytes = vec![0; len];
         buf.read(0, &mut bytes)?;
@@ -160,22 +160,20 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         NonEmptyEvents::new(ready_events & events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
+        let mut read_wait = self.read_half.notify.wait();
+        let mut write_wait = self.write_half.notify.wait();
         loop {
-            let read_wait = self.read_half.notify.wait();
-            let write_wait = self.write_half.notify.wait();
-
             let events = self.poll_ready(events);
             if let Some(events) = events {
                 return events;
             }
-
-            future::select(read_wait, write_wait).await;
+            future::select(read_wait.next(), write_wait.next()).await;
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

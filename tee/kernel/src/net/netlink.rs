@@ -4,7 +4,8 @@ use core::{cmp, future::pending};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
-use usize_conversions::usize_from;
+use log::warn;
+use usize_conversions::{FromUsize, usize_from};
 
 use crate::{
     error::{Error, Result, bail, ensure, err},
@@ -14,19 +15,20 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
             VectoredUserBuf, WriteBuf,
         },
-        node::FileAccessContext,
+        node::{FileAccessContext, new_ino},
         path::Path,
     },
-    rt::{self, mpmc, mpsc},
-    spin::once::Once,
+    rt::{self, mpmc, mpsc, notify::Notify},
+    spin::{mutex::Mutex, once::Once},
     user::{
         memory::VirtualMemory,
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, MsgHdr, OpenFlags, SentToFlags, SocketAddr, SocketAddrNetlink,
-                SocketType, SocketTypeWithFlags, Stat,
-                pointee::{Pointee, PrimitivePointee},
+                CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
+                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
+                pointee::{Pointee, PrimitivePointee, SizedPointee},
             },
             traits::Abi,
         },
@@ -39,9 +41,18 @@ mod route;
 pub use route::{lo_interface_flags, lo_mtu};
 
 pub struct NetlinkSocket {
+    ino: u64,
     flags: OpenFlags,
     family: NetlinkFamily,
+    internal: Mutex<NetlinkSocketInternal>,
     connection: Once<Connection>,
+    connect_notify: Notify,
+}
+
+struct NetlinkSocketInternal {
+    groups: NetlinkGroups,
+    pktinfo: bool,
+    ext_ack: bool,
 }
 
 struct Connection {
@@ -59,9 +70,16 @@ impl NetlinkSocket {
         let family = NetlinkFamily::try_from(netlink_family)?;
 
         Ok(Self {
+            ino: new_ino(),
             flags: socket_type.flags,
             family,
+            internal: Mutex::new(NetlinkSocketInternal {
+                groups: NetlinkGroups::empty(),
+                pktinfo: false,
+                ext_ack: false,
+            }),
             connection: Once::new(),
+            connect_notify: Notify::new(),
         })
     }
 }
@@ -100,19 +118,83 @@ impl OpenFileDescription for NetlinkSocket {
             }
         });
         ensure!(initialized, Inval);
+        self.connect_notify.notify();
 
         Ok(())
     }
 
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        let guard = self.internal.lock();
         Ok(match (level, optname) {
             (1, 3) => {
                 // SO_TYPE
                 let ty = SocketType::Raw as u32;
                 ty.to_le_bytes().to_vec()
             }
-            _ => bail!(Inval),
+            (270, 3) => {
+                // NETLINK_PKTINFO
+                let val = guard.pktinfo as u32;
+                val.to_ne_bytes().to_vec()
+            }
+            (270, 11) => {
+                // NETLINK_EXT_ACK
+                let val = guard.ext_ack as u32;
+                val.to_ne_bytes().to_vec()
+            }
+            _ => bail!(OpNotSupp),
         })
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        _: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        match (level, optname) {
+            (270, 1) => {
+                // NETLINK_ADD_MEMBERSHIP
+                ensure!(optlen == 4, Inval);
+                let group = virtual_memory.read(optval.cast::<u32>())?;
+                let group_index = group.checked_sub(1).ok_or(err!(Inval))?;
+                let group_bit = u64::checked_shl(1, group_index).ok_or(err!(Inval))?;
+                let Some(group) = NetlinkGroups::from_bits(group_bit) else {
+                    warn!("netlink group not implemented: {group}");
+                    bail!(Inval)
+                };
+                guard.groups |= group;
+                Ok(())
+            }
+            (270, 2) => {
+                // NETLINK_DROP_MEMBERSHIP
+                ensure!(optlen == 4, Inval);
+                let group = virtual_memory.read(optval.cast::<u32>())?;
+                let group_index = group.checked_sub(1).ok_or(err!(Inval))?;
+                let group_bit = u64::checked_shl(1, group_index).ok_or(err!(Inval))?;
+                let group = NetlinkGroups::from_bits(group_bit).ok_or(err!(Inval))?;
+                guard.groups &= !group;
+                Ok(())
+            }
+            (270, 3) => {
+                // NETLINK_PKTINFO
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.pktinfo = optval;
+                Ok(())
+            }
+            (270, 11) => {
+                // NETLINK_EXT_ACK
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ext_ack = optval;
+                Ok(())
+            }
+            _ => bail!(OpNotSupp),
+        }
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {
@@ -129,6 +211,7 @@ impl OpenFileDescription for NetlinkSocket {
         buf: &dyn WriteBuf,
         _flags: SentToFlags,
         _addr: Option<SocketAddr>,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         let connection = self.connection.get().ok_or(err!(NotConn))?;
         // TODO: Should we truncate?
@@ -160,6 +243,28 @@ impl OpenFileDescription for NetlinkSocket {
         let buffer = &buffer[..len];
         vectored_buf.write(0, buffer)?;
 
+        let pktinfo = self.internal.lock().pktinfo;
+        if pktinfo {
+            let mut cmsg_header = CmsgHdr {
+                len: 0,
+                level: 270,
+                r#type: 3,
+            };
+            let payload = 0u32;
+            let header_len = cmsg_header.size(abi);
+            let payload_len = payload.size(abi);
+            cmsg_header.len = u64::from_usize(header_len + payload_len);
+            if msg_hdr.controllen <= cmsg_header.len {
+                let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
+                vm.write(msg_hdr.control.bytes_offset(size).cast(), payload)?;
+                msg_hdr.controllen = cmsg_header.len;
+            } else {
+                msg_hdr.controllen = 0;
+            }
+        } else {
+            msg_hdr.controllen = 0;
+        }
+
         Ok(len)
     }
 
@@ -176,25 +281,47 @@ impl OpenFileDescription for NetlinkSocket {
     }
 
     fn stat(&self) -> Result<Stat> {
-        todo!()
+        Ok(Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Socket, FileMode::from_bits_truncate(0o777)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
         todo!()
     }
 
-    fn poll_ready(&self, _: Events) -> Option<NonEmptyEvents> {
-        todo!()
+    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+        let connection = self.connection.get()?;
+        let mut ready_events = Events::WRITE;
+        if events.contains(Events::READ) {
+            ready_events.set(Events::READ, connection.rx.poll_readable());
+        }
+        NonEmptyEvents::new(ready_events & events)
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
+        // Wait until a connection has been established.
+        let connection = self
+            .connect_notify
+            .wait_until(|| self.connection.get())
+            .await;
+
         let read_fut = async move {
             if !events.contains(Events::READ) {
                 return pending().await;
             }
-            let Some(connection) = self.connection.get() else {
-                return core::future::pending().await;
-            };
             connection.rx.readable().await;
             NonEmptyEvents::READ
         };
@@ -207,6 +334,10 @@ impl OpenFileDescription for NetlinkSocket {
         };
 
         NonEmptyEvents::select(read_fut, write_fut).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
@@ -282,5 +413,11 @@ bitflags! {
         const CREATE = 1 << 10;
         /// Add to the end of the object list.
         const APPEND = 1 << 11;
+    }
+}
+
+bitflags! {
+    pub struct NetlinkGroups: u64 {
+        const LINK = 1 << 0;
     }
 }

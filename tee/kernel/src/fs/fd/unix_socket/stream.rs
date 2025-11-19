@@ -23,7 +23,9 @@ use crate::{
         fd::{
             BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
-            WriteBuf, stream_buffer,
+            WriteBuf,
+            epoll::{EpollRequest, EpollResult, EventCounter},
+            stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,
@@ -112,8 +114,8 @@ impl StreamUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
@@ -134,8 +136,8 @@ impl StreamUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        ctx.filesystem_user_id,
-                        ctx.filesystem_group_id,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
@@ -286,7 +288,7 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
@@ -299,6 +301,7 @@ impl OpenFileDescription for StreamUnixSocket {
         buf: &dyn WriteBuf,
         _: SentToFlags,
         addr: Option<SocketAddr>,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -315,6 +318,7 @@ impl OpenFileDescription for StreamUnixSocket {
         msg_hdr: &mut MsgHdr,
         _: SendMsgFlags,
         fdtable: &FileDescriptorTable,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -385,6 +389,7 @@ impl OpenFileDescription for StreamUnixSocket {
         read_half: &stream_buffer::ReadHalf,
         offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -433,7 +438,7 @@ impl OpenFileDescription for StreamUnixSocket {
             SocketAddrUnix::Pathname(path) => {
                 let guard = self.internal.lock();
 
-                let cwd = ctx.process.as_ref().unwrap().cwd();
+                let cwd = ctx.process().unwrap().cwd();
                 bind_socket(
                     cwd,
                     &path,
@@ -492,6 +497,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(ty.to_le_bytes().to_vec())
             }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            (1, 9) => Ok(0u32.to_ne_bytes().to_vec()), // SO_KEEPALIVE
             (1, 16) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PASSCRED
             (1, 17) => {
                 // SO_PEERCRED
@@ -507,7 +513,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(bytes_of(&cred).to_vec())
             }
             (1, 38) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PROTOCOL
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 
@@ -522,7 +528,7 @@ impl OpenFileDescription for StreamUnixSocket {
     ) -> Result<()> {
         match (level, optname) {
             (1, 2) => Ok(()), // SO_REUSEADDR
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 
@@ -546,6 +552,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 connect_notify: Notify::new(),
                 internal: Mutex::new(PassiveInternal {
                     queue: VecDeque::new(),
+                    read_event_counter: EventCounter::new(),
                     backlog: 0,
                 }),
                 localcred: Ucred::from(ctx),
@@ -644,6 +651,7 @@ impl OpenFileDescription for StreamUnixSocket {
                             peercred: cred,
                             localcred: passive.localcred,
                         });
+                        guard.read_event_counter.inc();
                         passive.connect_notify.notify();
 
                         self.activate_notify.notify();
@@ -681,10 +689,6 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         match mode {
@@ -714,18 +718,50 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    async fn ready_for_write(&self, count: usize) {
-        let Some(mode) = self.mode.get() else {
-            return;
-        };
+    async fn ready_for_write(&self, _count: usize) {
+        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         let Mode::Active(active) = mode else {
             return;
         };
         active
             .write_half
             .notify
-            .wait_until(|| active.write_half.lock().can_write(count).then_some(()))
+            .wait_until(|| active.write_half.lock().can_write().then_some(()))
             .await;
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
+        match mode {
+            Mode::Active(active) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    &active.read_half.notify,
+                    || active.read_half.lock().epoll_read(),
+                    &active.write_half.notify,
+                    || active.write_half.lock().epoll_write(),
+                )
+                .await
+            }
+            Mode::Passive(passive) => {
+                passive
+                    .connect_notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_event_counter);
+                        result
+                    })
+                    .await
+            }
+        }
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -940,9 +976,9 @@ impl BufferGuard<'_> {
         Ok(len)
     }
 
-    pub fn can_write(&self, count: usize) -> bool {
+    pub fn can_write(&self) -> bool {
         let buffer = &*self.guard;
-        buffer.capacity.saturating_sub(buffer.data.len()) >= count
+        buffer.data.len() < buffer.capacity
             || buffer.shutdown
             || Arc::strong_count(&self.buffer.buffer) == 1
     }
@@ -1041,6 +1077,35 @@ impl BufferGuard<'_> {
 
         NonEmptyEvents::new(ready_events)
     }
+
+    pub fn epoll_read(&self) -> EpollResult {
+        let mut result = EpollResult::new();
+        let buffer = &*self.guard;
+        let strong_count = Arc::strong_count(&self.buffer.buffer);
+        if !buffer.data.is_empty() || strong_count == 1 || buffer.shutdown {
+            result.set_ready(Events::READ);
+        }
+        if strong_count == 1 || buffer.shutdown {
+            result.set_ready(Events::RDHUP);
+        }
+        result
+    }
+
+    pub fn epoll_write(&self) -> EpollResult {
+        let mut result = EpollResult::new();
+        let buffer = &*self.guard;
+        let closed = buffer.shutdown || Arc::strong_count(&self.buffer.buffer) == 1;
+        if buffer.data.len() < buffer.capacity || closed {
+            result.set_ready(Events::WRITE);
+        }
+        if closed {
+            result.set_ready(Events::HUP);
+        }
+        if closed {
+            result.set_ready(Events::ERR);
+        }
+        result
+    }
 }
 
 struct Passive {
@@ -1051,5 +1116,6 @@ struct Passive {
 
 struct PassiveInternal {
     queue: VecDeque<Active>,
+    read_event_counter: EventCounter,
     backlog: usize,
 }

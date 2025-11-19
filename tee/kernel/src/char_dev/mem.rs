@@ -108,11 +108,11 @@ impl OpenFileDescription for Null {
         Ok(0)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
-    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -121,6 +121,7 @@ impl OpenFileDescription for Null {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -140,7 +141,7 @@ impl OpenFileDescription for Null {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -232,11 +233,11 @@ impl OpenFileDescription for Zero {
         Ok(buf.buffer_len())
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
-    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -245,6 +246,7 @@ impl OpenFileDescription for Zero {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -266,7 +268,7 @@ impl OpenFileDescription for Zero {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -362,11 +364,11 @@ impl OpenFileDescription for Full {
         Ok(buf.buffer_len())
     }
 
-    fn write(&self, _: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(NoSpc)
     }
 
-    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(NoSpc)
     }
 
@@ -375,6 +377,7 @@ impl OpenFileDescription for Full {
         _read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         _len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         bail!(NoSpc)
     }
@@ -394,7 +397,7 @@ impl OpenFileDescription for Full {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -493,7 +496,7 @@ impl OpenFileDescription for Random {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -502,6 +505,7 @@ impl OpenFileDescription for Random {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -523,7 +527,7 @@ impl OpenFileDescription for Random {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 
@@ -613,7 +617,7 @@ impl OpenFileDescription for URandom {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(buf.buffer_len())
     }
 
@@ -622,6 +626,7 @@ impl OpenFileDescription for URandom {
         read_half: &stream_buffer::ReadHalf,
         _offset: Option<usize>,
         len: usize,
+        _: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         read_half.splice_to(len, |buffer, len| {
             buffer.drain(..len);
@@ -643,7 +648,7 @@ impl OpenFileDescription for URandom {
         Ok(0)
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         Ok(())
     }
 

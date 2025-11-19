@@ -138,8 +138,8 @@ impl TmpFsDir {
                 let node = TmpFsFile::new(
                     self.fs.clone(),
                     mode,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                     false,
                 );
                 entry.insert(TmpFsDirEntry::File(location.clone(), node.clone()));
@@ -296,8 +296,8 @@ impl Directory for TmpFsDir {
                     self.fs.clone(),
                     location,
                     mode,
-                    ctx.filesystem_user_id,
-                    ctx.filesystem_group_id,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
                 );
                 entry.insert(TmpFsDirEntry::Dir(dir.clone()));
                 internal.update_times();
@@ -328,8 +328,8 @@ impl Directory for TmpFsDir {
         let node = TmpFsFile::new(
             self.fs.clone(),
             mode,
-            ctx.filesystem_user_id,
-            ctx.filesystem_group_id,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
             true,
         );
         let filename = FileName::new(format!("#{}", node.ino).as_bytes())
@@ -518,7 +518,7 @@ impl Directory for TmpFsDir {
         node.watchers()
             .send_event(InotifyMask::DELETE_SELF, None, None);
         self.watchers()
-            .send_event(InotifyMask::DELETE_SELF, None, Some(file_name));
+            .send_event(InotifyMask::DELETE, None, Some(file_name));
 
         Ok(())
     }
@@ -539,7 +539,7 @@ impl Directory for TmpFsDir {
         node.watchers()
             .send_event(InotifyMask::DELETE_SELF, None, None);
         self.watchers()
-            .send_event(InotifyMask::DELETE_SELF, None, Some(file_name));
+            .send_event(InotifyMask::DELETE, None, Some(file_name));
 
         Ok(())
     }
@@ -1118,7 +1118,9 @@ impl INode for TmpFsFile {
         }
     }
 
-    fn truncate(&self, len: usize) -> Result<()> {
+    fn truncate(&self, len: usize, ctx: &FileAccessContext) -> Result<()> {
+        ensure!(len <= ctx.max_file_size(), FBig);
+
         let mut guard = self.internal.write();
         guard.buffer.truncate(len)?;
 
@@ -1170,21 +1172,21 @@ impl File for TmpFsFile {
         guard.buffer.read(offset, buf)
     }
 
-    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, offset: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
-        guard.buffer.write(offset, buf)
+        guard.buffer.write(offset, buf, ctx.max_file_size())
     }
 
-    fn append(&self, buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<(usize, usize)> {
         let mut guard = self.internal.write();
         let now = now(ClockId::Realtime);
         guard.ctime = now;
         guard.mtime = now;
         let offset = guard.buffer.len();
-        let len = guard.buffer.write(offset, buf)?;
+        let len = guard.buffer.write(offset, buf, ctx.max_file_size())?;
         Ok((len, offset + len))
     }
 
@@ -1193,7 +1195,19 @@ impl File for TmpFsFile {
         read_half: &stream_buffer::ReadHalf,
         offset: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
+        if len == 0 {
+            return Ok(Ok(0));
+        }
+
+        let max_size = ctx.max_file_size();
+        let remaining_len = max_size
+            .checked_sub(offset)
+            .filter(|&remaining| remaining > 0)
+            .ok_or(err!(FBig))?;
+        let len = cmp::min(len, remaining_len);
+
         read_half.splice_to(len, |buffer, len| {
             let (slice1, slice2) = buffer.as_slices();
             let len1 = cmp::min(len, slice1.len());
@@ -1207,11 +1221,15 @@ impl File for TmpFsFile {
             guard.mtime = now;
             guard
                 .buffer
-                .write(offset, &KernelWriteBuf::new(slice1))
+                .write(offset, &KernelWriteBuf::new(slice1), max_size)
                 .unwrap();
             guard
                 .buffer
-                .write(offset + slice1.len(), &KernelWriteBuf::new(slice2))
+                .write(
+                    offset + slice1.len(),
+                    &KernelWriteBuf::new(slice2),
+                    max_size,
+                )
                 .unwrap();
 
             buffer.drain(..len);
@@ -1258,6 +1276,7 @@ impl File for TmpFsFile {
         out: &dyn File,
         mut offset_out: usize,
         mut len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         // TODO: Update access times.
 
@@ -1265,6 +1284,7 @@ impl File for TmpFsFile {
             return Ok(0);
         }
 
+        let max_size = ctx.max_file_size();
         let mut copied = 0;
 
         if core::ptr::addr_eq(self, out) {
@@ -1297,9 +1317,10 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = guard
-                    .buffer
-                    .write(offset_out, &KernelWriteBuf::new(&chunk[..n]));
+                let res =
+                    guard
+                        .buffer
+                        .write(offset_out, &KernelWriteBuf::new(&chunk[..n]), max_size);
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {
@@ -1341,9 +1362,10 @@ impl File for TmpFsFile {
                 }
 
                 // Copy bytes to the out file.
-                let res = out_guard
-                    .buffer
-                    .write(offset_out, &KernelWriteBuf::new(&chunk[..n]));
+                let res =
+                    out_guard
+                        .buffer
+                        .write(offset_out, &KernelWriteBuf::new(&chunk[..n]), max_size);
                 let n = match res {
                     Ok(n) => n,
                     Err(err) => {
@@ -1368,7 +1390,29 @@ impl File for TmpFsFile {
         Ok(copied)
     }
 
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        let mut guard = self.internal.write();
+        guard.buffer = Buffer::new();
+
+        let now = now(ClockId::Realtime);
+        guard.ctime = now;
+        guard.mtime = now;
+        drop(guard);
+
+        if let Some(mappings_ctrl) = self.mappings_ctrl.try_get() {
+            mappings_ctrl.unmap(self.ino, ..);
+        }
+
+        Ok(())
+    }
+
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
         if mode.bits() == 0 {
             let mut guard = self.internal.write();
             let now = now(ClockId::Realtime);
@@ -1376,6 +1420,7 @@ impl File for TmpFsFile {
             guard.mtime = now;
 
             let new_len = offset + len;
+            ensure!(new_len <= ctx.max_file_size(), FBig);
             if guard.buffer.len() < new_len {
                 guard.buffer.truncate(new_len)?;
             }
@@ -1489,7 +1534,7 @@ impl INode for TmpFsSymlink {
         }
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -1575,7 +1620,7 @@ impl INode for TmpFsCharDev {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1673,7 +1718,7 @@ impl INode for TmpFsFifo {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1764,7 +1809,7 @@ impl INode for TmpFsSocket {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1772,7 +1817,12 @@ impl INode for TmpFsSocket {
         self.bsd_file_lock_record.get()
     }
 
-    fn get_socket(&self) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+    fn get_socket(
+        &self,
+        ctx: &FileAccessContext,
+    ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+        let guard = self.internal.lock();
+        ctx.check_permissions(&guard.ownership, Permission::Write)?;
         self.socket.upgrade().ok_or(err!(ConnRefused))
     }
 

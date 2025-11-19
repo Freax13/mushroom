@@ -23,6 +23,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
             ReadBuf, StrongFileDescriptor,
+            epoll::{EpollRequest, EpollResult, EventCounter},
         },
         node::{DynINode, FileAccessContext, INode, new_ino},
         ownership::Ownership,
@@ -43,13 +44,18 @@ pub struct Inotify {
     ino: u64,
     internal: Mutex<InotifyInternal>,
     registrations: Mutex<RegistrationData>,
-    queue: Mutex<VecDeque<InotifyEvent>>,
+    queue: Mutex<InotifyQueue>,
     notify: Notify,
 }
 
 struct InotifyInternal {
     flags: OpenFlags,
     ownership: Ownership,
+}
+
+struct InotifyQueue {
+    queue: VecDeque<InotifyEvent>,
+    read_counter: EventCounter,
 }
 
 struct RegistrationData {
@@ -71,7 +77,10 @@ impl Inotify {
                 registration_counter: Wrapping(0),
                 registrations: BTreeMap::new(),
             }),
-            queue: Mutex::new(VecDeque::new()),
+            queue: Mutex::new(InotifyQueue {
+                queue: VecDeque::new(),
+                read_counter: EventCounter::new(),
+            }),
             notify: Notify::new(),
         })
     }
@@ -83,12 +92,15 @@ impl Inotify {
         cookie: Option<NonZeroU32>,
         name: Option<&FileName>,
     ) {
-        self.queue.lock().push_back(InotifyEvent {
+        let mut guard = self.queue.lock();
+        guard.queue.push_back(InotifyEvent {
             wd,
             mask,
             cookie,
             name: name.map(|name| name.clone().into_owned()),
         });
+        guard.read_counter.inc();
+        drop(guard);
         self.notify.notify();
     }
 }
@@ -147,24 +159,41 @@ impl OpenFileDescription for Inotify {
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let guard = self.queue.lock();
         let mut ready = Events::empty();
-        ready.set(Events::READ, !guard.is_empty());
+        ready.set(Events::READ, !guard.queue.is_empty());
         NonEmptyEvents::new(ready & events)
-    }
-
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.notify.wait_until(|| self.poll_ready(events)).await
     }
 
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.queue.lock();
+                if !guard.queue.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                result.add_counter(Events::READ, &guard.read_counter);
+                result
+            })
+            .await
+    }
+
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         let mut guard = self.queue.lock();
-        ensure!(!guard.is_empty(), Again);
+        ensure!(!guard.queue.is_empty(), Again);
 
         let mut offset = 0;
-        while let Some(event) = guard.pop_front_if(|e| e.len() < buf.buffer_len() - offset) {
+        while let Some(event) = guard
+            .queue
+            .pop_front_if(|e| e.len() < buf.buffer_len() - offset)
+        {
             let header = InotifyEventHeader {
                 wd: event.wd,
                 mask: event.mask.bits() as u32,

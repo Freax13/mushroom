@@ -31,9 +31,9 @@ impl Timer {
             let state = Arc::downgrade(&state);
             let notify = notify.clone();
             async move {
+                let mut wait = notify.wait();
                 while let Some(state) = state.upgrade() {
                     // Check the timer state.
-                    let wait = notify.wait();
                     let mut guard = state.lock();
                     let (fire, sleep_fut) = match &mut *guard {
                         TimerState::Disarmed => (false, Fuse::terminated()),
@@ -140,7 +140,7 @@ impl Timer {
 
                     // Wait for the timer to expire or for the state to change.
                     select_biased! {
-                        _ = wait.fuse() => {}
+                        _ = wait.next().fuse() => {}
                         _ = { sleep_fut } => {}
                     }
                 }

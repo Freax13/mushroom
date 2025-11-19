@@ -7,7 +7,10 @@ use crate::{
     error::{Result, ensure, err},
     fs::{
         ANON_INODE_FS, FileSystem,
-        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            epoll::{AtomicEventCounter, EpollRequest, EpollResult},
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -25,6 +28,8 @@ pub struct EventFd {
     internal: Mutex<EventFdInternal>,
     notify: Notify,
     counter: AtomicU64,
+    read_event_counter: AtomicEventCounter,
+    write_event_counter: AtomicEventCounter,
     bsd_file_lock: BsdFileLock,
 }
 
@@ -41,6 +46,8 @@ impl EventFd {
             }),
             notify: Notify::new(),
             counter: AtomicU64::new(u64::from(initval)),
+            read_event_counter: AtomicEventCounter::new(),
+            write_event_counter: AtomicEventCounter::new(),
             bsd_file_lock: BsdFileLock::anonymous(),
         }
     }
@@ -58,19 +65,25 @@ impl OpenFileDescription for EventFd {
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
+
         let value = self.counter.swap(0, Ordering::SeqCst);
         ensure!(value != 0, Again);
         buf.write(0, &value.to_ne_bytes())?;
+
+        self.write_event_counter.inc();
+        self.notify.notify();
+
         Ok(8)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
 
         let mut bytes = [0; 8];
         buf.read(0, &mut bytes)?;
         let add = u64::from_ne_bytes(bytes);
         ensure!(add != !0, Inval);
+
         if add != 0 {
             let mut old_value = self.counter.load(Ordering::SeqCst);
             loop {
@@ -86,12 +99,10 @@ impl OpenFileDescription for EventFd {
                     Err(new_value) => old_value = new_value,
                 }
             }
-
-            // If the READ readiness changed send a notification.
-            if old_value == 0 {
-                self.notify.notify();
-            }
         }
+
+        self.read_event_counter.inc();
+        self.notify.notify();
 
         Ok(8)
     }
@@ -108,12 +119,30 @@ impl OpenFileDescription for EventFd {
         NonEmptyEvents::new(ready_events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.notify.wait_until(|| self.poll_ready(events)).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let counter_value = self.counter.load(Ordering::SeqCst);
+                if counter_value != 0 {
+                    result.set_ready(Events::READ);
+                    result.add_atomic_counter(Events::READ, &self.read_event_counter);
+                }
+                if counter_value != !0 {
+                    result.set_ready(Events::WRITE);
+                    result.add_atomic_counter(Events::WRITE, &self.write_event_counter);
+                }
+                result
+            })
+            .await
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

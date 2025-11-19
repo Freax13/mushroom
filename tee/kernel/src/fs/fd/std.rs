@@ -10,6 +10,7 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
+            epoll::{EpollRequest, EpollResult},
             pipe::anon::PIPE_FS,
         },
         node::{FileAccessContext, new_ino},
@@ -104,6 +105,14 @@ impl OpenFileDescription for Stdin {
         pending().await
     }
 
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, _: &EpollRequest) -> EpollResult {
+        pending().await
+    }
+
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
     }
@@ -134,14 +143,14 @@ impl Stdout {
 #[async_trait]
 impl OpenFileDescription for Stdout {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        OpenFlags::WRONLY
     }
 
     fn path(&self) -> Result<Path> {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mut raw = vec![0; buf.buffer_len()];
         buf.read(0, &mut raw)?;
         let chunk = core::str::from_utf8(&raw);
@@ -198,6 +207,20 @@ impl OpenFileDescription for Stdout {
         }
     }
 
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut result = EpollResult::new();
+        result.set_ready(Events::WRITE);
+        if let Some(result) = result.if_matches(req) {
+            result
+        } else {
+            pending().await
+        }
+    }
+
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
     }
@@ -228,14 +251,14 @@ impl Stderr {
 #[async_trait]
 impl OpenFileDescription for Stderr {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        OpenFlags::WRONLY
     }
 
     fn path(&self) -> Result<Path> {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let mut raw = vec![0; buf.buffer_len()];
         buf.read(0, &mut raw)?;
         let chunk = core::str::from_utf8(&raw);
@@ -287,6 +310,20 @@ impl OpenFileDescription for Stderr {
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         if let Some(events) = self.poll_ready(events) {
             events
+        } else {
+            pending().await
+        }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut result = EpollResult::new();
+        result.set_ready(Events::WRITE);
+        if let Some(result) = result.if_matches(req) {
+            result
         } else {
             pending().await
         }

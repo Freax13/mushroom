@@ -151,19 +151,14 @@ impl OpenFileDescription for Timer {
         NonEmptyEvents::new(ready_events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         // timerfd only supports reads.
         if !events.contains(Events::READ) {
             return pending().await;
         }
 
+        let mut wait = self.set_timer_notify.wait();
         loop {
-            let wait = self.set_timer_notify.wait();
-
             let guard = self.internal.lock();
             let deadline = guard.state.next_deadline();
             drop(guard);
@@ -171,16 +166,20 @@ impl OpenFileDescription for Timer {
             let Some(deadline) = deadline else {
                 // If there's no deadline, wait until the timer gets
                 // reconfigured.
-                wait.await;
+                wait.next().await;
                 continue;
             };
 
             // Wait until the timer is reconfigured or the deadline expires.
             select_biased! {
-                _ = wait.fuse() => continue,
+                _ = wait.next().fuse() => continue,
                 _ = sleep_until(deadline, self.clock_id).fuse() => return NonEmptyEvents::READ,
             }
         }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {

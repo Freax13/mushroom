@@ -63,7 +63,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         bail!(IsDir)
     }
 
-    fn write(&self, _: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(IsDir)
     }
 
@@ -71,7 +71,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         bail!(IsDir)
     }
 
-    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, _pos: usize, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(IsDir)
     }
 

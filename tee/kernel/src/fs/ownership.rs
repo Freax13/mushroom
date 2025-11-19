@@ -26,7 +26,7 @@ impl Ownership {
     pub fn chmod(&mut self, mut mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
         ensure!(ctx.is_user(self.uid), Perm);
 
-        if ctx.filesystem_user_id != Uid::SUPER_USER && !ctx.is_in_group(self.gid) {
+        if !ctx.is_user(Uid::SUPER_USER) && !ctx.is_in_group(self.gid) {
             mode.remove(FileMode::SET_GROUP_ID);
         }
 

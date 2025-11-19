@@ -28,6 +28,7 @@ use crate::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
             directory::{Directory, dir_impls},
             new_dev, new_ino,
+            procfs::sys::{SysDir, kernel::HostnameFile},
         },
         path::{FileName, Path},
     },
@@ -44,6 +45,8 @@ use crate::{
         thread::{Gid, Thread, Uid},
     },
 };
+
+mod sys;
 
 pub struct ProcFs {
     dev: u64,
@@ -98,6 +101,13 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
             watchers: Watchers::new(),
         }),
         stat_file: StatFile::new(fs.clone()),
+        sys_dir_ino: new_ino(),
+        sys_dir_bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
+        sys_dir_watchers: Arc::new(Watchers::new()),
+        sys_kernel_dir_ino: new_ino(),
+        sys_kernel_dir_bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
+        sys_kernel_dir_watchers: Arc::new(Watchers::new()),
+        sys_kernel_hostname_file: HostnameFile::new(fs.clone()),
         uptime_file: UptimeFile::new(fs),
     }))
 }
@@ -119,6 +129,13 @@ struct ProcFsRoot {
     net_tcp6_file: Arc<NetTcpFile>,
     self_link: Arc<SelfLink>,
     stat_file: Arc<StatFile>,
+    sys_dir_ino: u64,
+    sys_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    sys_dir_watchers: Arc<Watchers>,
+    sys_kernel_dir_ino: u64,
+    sys_kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    sys_kernel_dir_watchers: Arc<Watchers>,
+    sys_kernel_hostname_file: Arc<HostnameFile>,
     uptime_file: Arc<UptimeFile>,
 }
 
@@ -189,6 +206,7 @@ impl Directory for ProcFsRoot {
             b"net" => NetDir::new(
                 location.clone(),
                 self.fs.clone(),
+                self.net_dir_ino,
                 self.net_dir_bsd_file_lock_record.clone(),
                 self.net_dir_watchers.clone(),
                 self.net_dev_file.clone(),
@@ -197,6 +215,17 @@ impl Directory for ProcFsRoot {
             ),
             b"self" => self.self_link.clone(),
             b"stat" => self.stat_file.clone(),
+            b"sys" => SysDir::new(
+                location.clone(),
+                self.fs.clone(),
+                self.sys_dir_ino,
+                self.sys_dir_bsd_file_lock_record.clone(),
+                self.sys_dir_watchers.clone(),
+                self.sys_kernel_dir_ino,
+                self.sys_kernel_dir_bsd_file_lock_record.clone(),
+                self.sys_kernel_dir_watchers.clone(),
+                self.sys_kernel_hostname_file.clone(),
+            ),
             b"uptime" => self.uptime_file.clone(),
             _ => {
                 let bytes = file_name.as_bytes();
@@ -319,6 +348,11 @@ impl Directory for ProcFsRoot {
             ino: self.stat_file.ino,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: self.sys_dir_ino,
+            ty: FileType::Dir,
+            name: DirEntryName::FileName(FileName::new(b"sys").unwrap()),
         });
         entries.push(DirEntry {
             ino: self.uptime_file.ino,
@@ -560,7 +594,7 @@ impl INode for CpuinfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -587,15 +621,25 @@ impl File for CpuinfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -684,7 +728,7 @@ impl INode for MeminfoFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -711,15 +755,25 @@ impl File for MeminfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -745,9 +799,11 @@ struct NetDir {
 }
 
 impl NetDir {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
+        ino: u64,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
         net_dev_file: Arc<NetDevFile>,
@@ -758,7 +814,7 @@ impl NetDir {
             this: this.clone(),
             location,
             fs: fs.clone(),
-            ino: new_ino(),
+            ino,
             bsd_file_lock_record,
             watchers,
             net_dev_file,
@@ -1052,7 +1108,7 @@ impl INode for NetDevFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1079,15 +1135,25 @@ impl File for NetDevFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1179,7 +1245,7 @@ impl INode for SelfLink {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -1708,7 +1774,7 @@ impl INode for CmdlineFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1753,15 +1819,25 @@ impl File for CmdlineFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1868,7 +1944,7 @@ impl Directory for FdDir {
         let fd_num = FdNum::new(fd_num);
 
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let guard = process.credentials.lock();
+        let guard = process.credentials.read();
         let uid = guard.real_user_id;
         let gid = guard.real_group_id;
         drop(guard);
@@ -2093,7 +2169,7 @@ impl INode for FdINode {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -2230,13 +2306,13 @@ impl INode for FollowedFdINode {
         }
     }
 
-    fn truncate(&self, length: usize) -> Result<()> {
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()> {
         if let Some(link) = self.fd.path_fd_link() {
             // Special case for path fds: Forward the call to the pointed to
             // link.
-            link.node.truncate(length)
+            link.node.truncate(length, ctx)
         } else {
-            self.fd.truncate(length)
+            self.fd.truncate(length, ctx)
         }
     }
 
@@ -2343,7 +2419,7 @@ impl Directory for FdInfoDir {
         let fd_num = FdNum::new(fd_num);
 
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let guard = process.credentials.lock();
+        let guard = process.credentials.read();
         let uid = guard.real_user_id;
         let gid = guard.real_group_id;
         drop(guard);
@@ -2573,7 +2649,7 @@ impl INode for FdInfoFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2602,15 +2678,25 @@ impl File for FdInfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2689,7 +2775,7 @@ impl INode for ExeLink {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -2788,7 +2874,7 @@ impl INode for MapsFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2819,15 +2905,25 @@ impl File for MapsFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2909,7 +3005,7 @@ impl INode for MemFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -2947,7 +3043,7 @@ impl File for MemFile {
         Ok(len)
     }
 
-    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, offset: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let process = self.process.upgrade().ok_or(err!(Srch))?;
         let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let virtual_memory = thread.lock().virtual_memory().clone();
@@ -2964,11 +3060,21 @@ impl File for MemFile {
         Ok(len)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3063,7 +3169,7 @@ impl INode for MountInfoFile {
         Ok(())
     }
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3092,15 +3198,25 @@ impl File for MountInfoFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3193,7 +3309,7 @@ impl INode for RootLink {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Loop)
     }
 
@@ -3277,7 +3393,7 @@ impl INode for ProcessStatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3306,15 +3422,25 @@ impl File for ProcessStatFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3398,7 +3524,7 @@ impl INode for ProcessStatusFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -3427,15 +3553,25 @@ impl File for ProcessStatusFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4018,7 +4154,7 @@ impl INode for TaskCommFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4045,15 +4181,25 @@ impl File for TaskCommFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4151,7 +4297,7 @@ impl INode for StatFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4178,15 +4324,25 @@ impl File for StatFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4289,7 +4445,7 @@ impl INode for UptimeFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -4316,15 +4472,25 @@ impl File for UptimeFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 

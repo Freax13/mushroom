@@ -32,23 +32,24 @@ pub trait File: INode {
     fn register(&self, mapping_ctrl: &MappingCtrl) {
         let _ = mapping_ctrl;
     }
-
     fn unregister(&self, mapping_ctrl: &MappingCtrl) {
         let _ = mapping_ctrl;
     }
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, no_atime: bool) -> Result<usize>;
-    fn write(&self, offset: usize, buf: &dyn WriteBuf) -> Result<usize>;
+    fn write(&self, offset: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize>;
     /// Returns a tuple of `(bytes_written, file_length)`.
-    fn append(&self, buf: &dyn WriteBuf) -> Result<(usize, usize)>;
+    fn append(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<(usize, usize)>;
     fn splice_from(
         &self,
         read_half: &stream_buffer::ReadHalf,
         offset: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let _ = read_half;
         let _ = offset;
         let _ = len;
+        let _ = ctx;
         bail!(Inval)
     }
     fn splice_to(
@@ -70,14 +71,23 @@ pub trait File: INode {
         out: &dyn File,
         offset_out: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let _ = offset_in;
         let _ = out;
         let _ = offset_out;
         let _ = len;
+        let _ = ctx;
         bail!(OpNotSupp)
     }
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()>;
+    fn truncate(&self) -> Result<()>;
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()>;
     fn link_into(
         &self,
         new_dir: DynINode,
@@ -100,7 +110,7 @@ pub fn open_file(
 ) -> Result<StrongFileDescriptor> {
     ensure!(!flags.contains(OpenFlags::DIRECTORY), NotDir);
     if flags.contains(OpenFlags::TRUNC) {
-        file.truncate(0)?;
+        File::truncate(&*file)?;
     }
     Ok(FileFileDescription::new(file, location, flags).into())
 }
@@ -182,18 +192,18 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
         let len = if !guard.flags.contains(OpenFlags::APPEND) {
-            let len = self.file.write(guard.cursor_idx, buf)?;
+            let len = self.file.write(guard.cursor_idx, buf, ctx)?;
             guard.cursor_idx += len;
             len
         } else {
-            let (len, cursor_idx) = self.file.append(buf)?;
+            let (len, cursor_idx) = self.file.append(buf, ctx)?;
             guard.cursor_idx = cursor_idx;
             len
         };
@@ -206,13 +216,13 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf) -> Result<usize> {
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        let len = self.file.write(pos, buf)?;
+        let len = self.file.write(pos, buf, ctx)?;
         drop(guard);
 
         if len > 0 {
@@ -227,6 +237,7 @@ impl OpenFileDescription for FileFileDescription {
         read_half: &stream_buffer::ReadHalf,
         offset: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<Result<usize, PipeBlocked>> {
         let mut guard = self.internal.lock();
         ensure!(
@@ -236,10 +247,10 @@ impl OpenFileDescription for FileFileDescription {
         ensure!(!guard.flags.contains(OpenFlags::APPEND), Inval);
 
         if let Some(offset) = offset {
-            self.file.splice_from(read_half, offset, len)
+            self.file.splice_from(read_half, offset, len, ctx)
         } else {
             self.file
-                .splice_from(read_half, guard.cursor_idx, len)
+                .splice_from(read_half, guard.cursor_idx, len, ctx)
                 .inspect(|res| {
                     if let Ok(len) = res {
                         guard.cursor_idx += len;
@@ -277,15 +288,16 @@ impl OpenFileDescription for FileFileDescription {
         fd_out: &dyn OpenFileDescription,
         offset_out: Option<usize>,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
 
         if let Some(offset_in) = offset_in {
-            fd_out.copy_range_from_file(offset_out, &*self.file, offset_in, len)
+            fd_out.copy_range_from_file(offset_out, &*self.file, offset_in, len, ctx)
         } else {
             let len =
-                fd_out.copy_range_from_file(offset_out, &*self.file, guard.cursor_idx, len)?;
+                fd_out.copy_range_from_file(offset_out, &*self.file, guard.cursor_idx, len, ctx)?;
             guard.cursor_idx += len;
             Ok(len)
         }
@@ -297,6 +309,7 @@ impl OpenFileDescription for FileFileDescription {
         file_in: &dyn File,
         offset_in: usize,
         len: usize,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(
@@ -306,30 +319,39 @@ impl OpenFileDescription for FileFileDescription {
         ensure!(!guard.flags.contains(OpenFlags::APPEND), BadF);
 
         if let Some(offset_out) = offset_out {
-            file_in.copy_file_range(offset_in, &*self.file, offset_out, len)
+            file_in.copy_file_range(offset_in, &*self.file, offset_out, len, ctx)
         } else {
-            let len = file_in.copy_file_range(offset_in, &*self.file, guard.cursor_idx, len)?;
+            let len =
+                file_in.copy_file_range(offset_in, &*self.file, guard.cursor_idx, len, ctx)?;
             guard.cursor_idx += len;
             Ok(len)
         }
     }
 
-    fn truncate(&self, length: usize) -> Result<()> {
+    fn truncate(&self, length: usize, ctx: &FileAccessContext) -> Result<()> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        self.file.truncate(length)
+        INode::truncate(&*self.file, length, ctx)?;
+        self.send_event(InotifyMask::MODIFY, None);
+        Ok(())
     }
 
-    fn allocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
+    fn allocate(
+        &self,
+        mode: FallocateMode,
+        offset: usize,
+        len: usize,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
         let guard = self.internal.lock();
         ensure!(
             guard.flags.contains(OpenFlags::RDWR) || guard.flags.contains(OpenFlags::WRONLY),
             BadF
         );
-        self.file.allocate(mode, offset, len)
+        self.file.allocate(mode, offset, len, ctx)
     }
 
     fn seek(&self, offset: usize, whence: Whence, _: &mut FileAccessContext) -> Result<usize> {

@@ -1328,14 +1328,16 @@ pub struct Time(pub u32);
 
 enum_arg! {
     pub enum Resource {
+        FSize = 1,
         Stack = 3,
         Core = 4,
+        NProc = 6,
         NoFile = 7,
         As = 9,
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RLimit {
     /// Soft limit
     pub rlim_cur: u64,
@@ -1422,6 +1424,7 @@ impl Signal {
     pub const CHLD: Self = Self(17);
     pub const CONT: Self = Self(18);
     pub const STOP: Self = Self(19);
+    pub const XFSZ: Self = Self(25);
 
     pub fn new(value: u8) -> Result<Self> {
         ensure!((1..=64).contains(&value), Inval);
@@ -1891,6 +1894,8 @@ bitflags! {
         const DELETE = 1 << 9;
         const DELETE_SELF = 1 << 10;
         const MOVE_SELF = 1 << 11;
+        const ONLYDIR = 1 << 24;
+        const DONT_FOLLOW = 1 << 25;
     }
 }
 
@@ -2381,9 +2386,9 @@ pub struct Ucred {
 impl From<&FileAccessContext> for Ucred {
     fn from(ctx: &FileAccessContext) -> Self {
         Self {
-            pid: ctx.process.as_ref().unwrap().pid(),
-            uid: ctx.filesystem_user_id,
-            gid: ctx.filesystem_group_id,
+            pid: ctx.process().unwrap().pid(),
+            uid: ctx.filesystem_user_id(),
+            gid: ctx.filesystem_group_id(),
         }
     }
 }

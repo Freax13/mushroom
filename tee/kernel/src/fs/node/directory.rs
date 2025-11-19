@@ -143,7 +143,7 @@ macro_rules! dir_impls {
             Directory::hard_link(self, oldname, follow_symlink, new_dir, newname, ctx)
         }
 
-        fn truncate(&self, _len: usize) -> Result<()> {
+        fn truncate(&self, _len: usize, _: &FileAccessContext) -> Result<()> {
             bail!(IsDir)
         }
     };

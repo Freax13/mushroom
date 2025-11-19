@@ -36,14 +36,6 @@ impl<T> OnceCell<T> {
     }
 
     pub async fn get(&self) -> &T {
-        loop {
-            let wait = self.notify.wait();
-
-            if let Some(value) = self.state.get() {
-                return value;
-            }
-
-            wait.await;
-        }
+        self.notify.wait_until(|| self.state.get()).await
     }
 }

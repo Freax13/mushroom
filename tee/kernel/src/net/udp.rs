@@ -22,8 +22,9 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             common_ioctl,
+            epoll::{EpollRequest, EpollResult, EventCounter},
         },
-        node::FileAccessContext,
+        node::{FileAccessContext, new_ino},
         path::Path,
     },
     net::{
@@ -37,8 +38,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags,
-                SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -61,34 +63,31 @@ impl PortData {
     pub fn bind(
         &mut self,
         ip: IpAddr,
+        ephemeral: bool,
         reuse_addr: bool,
+        reuse_port: bool,
         v6only: bool,
         socket: Weak<OpenFileDescriptionData<UdpSocket>>,
     ) -> Result<()> {
-        if !ip.is_unspecified() {
-            // We only support binding to localhost -> make sure that the
-            // address is a loopback address.
-            ensure!(ip.is_loopback(), AddrNotAvail);
-        }
-
         let mut i = 0;
         while let Some(entry) = self.entries.get(i) {
             i += 1;
             // Skip (and remove) entries whose sockets are no longer live.
-            let Some(socket) = entry.socket.upgrade() else {
+            if entry.socket.strong_count() == 0 {
                 i -= 1;
                 self.entries.swap_remove(i);
                 continue;
             };
 
+            ensure!(!ephemeral, AddrInUse);
+
             let doesnt_overlap = (entry.reuse_addr && reuse_addr)
+                || (entry.reuse_port && reuse_port && entry.local_ip == ip)
                 || (!entry.local_ip.is_unspecified()
                     && !ip.is_unspecified()
                     && entry.local_ip != ip)
                 || ((entry.local_ip.is_ipv4() && ip.is_ipv6() && v6only)
-                    || (entry.local_ip.is_ipv6() && ip.is_ipv4() && {
-                        socket.internal.lock().v6only
-                    }))
+                    || (entry.local_ip.is_ipv6() && ip.is_ipv4() && entry.v6only))
                 || ((entry.local_ip.is_ipv4()
                     && ip.is_ipv6()
                     && entry.local_ip.is_unspecified()
@@ -103,6 +102,8 @@ impl PortData {
         self.entries.push(PortDataEntry {
             local_ip: ip,
             reuse_addr,
+            reuse_port,
+            v6only,
             socket,
         });
 
@@ -113,6 +114,8 @@ impl PortData {
 struct PortDataEntry {
     local_ip: IpAddr,
     reuse_addr: bool,
+    reuse_port: bool,
+    v6only: bool,
     socket: Weak<OpenFileDescriptionData<UdpSocket>>,
 }
 
@@ -121,6 +124,7 @@ const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct UdpSocket {
     this: Weak<OpenFileDescriptionData<Self>>,
+    ino: u64,
     ip_version: IpVersion,
     internal: Mutex<UdpSocketInternal>,
     rx_notify: Notify,
@@ -128,13 +132,18 @@ pub struct UdpSocket {
 
 struct UdpSocketInternal {
     flags: OpenFlags,
+    ip_recverr: bool,
     reuse_addr: bool,
+    reuse_port: bool,
     send_buffer_size: usize,
     receive_buffer_size: usize,
     v6only: bool,
     socketname: Option<net::SocketAddr>,
     peername: Option<net::SocketAddr>,
     rx: VecDeque<Packet>,
+    errors: VecDeque<SockExtendedError>,
+    read_event_counter: EventCounter,
+    error_event_counter: EventCounter,
 }
 
 impl UdpSocket {
@@ -142,16 +151,22 @@ impl UdpSocket {
     pub fn new(ip_version: IpVersion, r#type: SocketTypeWithFlags) -> StrongFileDescriptor {
         StrongFileDescriptor::new_cyclic(|this| Self {
             this: this.clone(),
+            ino: new_ino(),
             ip_version,
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,
+                ip_recverr: false,
                 reuse_addr: false,
+                reuse_port: false,
                 send_buffer_size: 1024 * 1024,
                 receive_buffer_size: 1024 * 1024,
                 v6only: false,
                 socketname: None,
                 peername: None,
                 rx: VecDeque::new(),
+                errors: VecDeque::new(),
+                read_event_counter: EventCounter::new(),
+                error_event_counter: EventCounter::new(),
             }),
             rx_notify: Notify::new(),
         })
@@ -160,12 +175,25 @@ impl UdpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, mut socket_addr: net::SocketAddr) -> Result<bool> {
+    fn try_bind(&self, mut socket_addr: net::SocketAddr, ctx: &FileAccessContext) -> Result<bool> {
         match (self.ip_version, IpVersion::from(socket_addr.ip())) {
             (IpVersion::V4, IpVersion::V4) | (IpVersion::V6, IpVersion::V6) => {}
             (IpVersion::V4, IpVersion::V6) => bail!(AFNoSupport),
             (IpVersion::V6, IpVersion::V4) => bail!(Inval),
         }
+
+        // We only support binding to localhost -> make sure that the
+        // address is a loopback address.
+        ensure!(
+            socket_addr.ip().is_unspecified() || socket_addr.ip().is_loopback(),
+            AddrNotAvail
+        );
+
+        // Make sure that the user has permission to bind the port.
+        ensure!(
+            socket_addr.port() == 0 || socket_addr.port() >= 1024 || ctx.is_user(Uid::SUPER_USER),
+            Acces
+        );
 
         let mut guard = self.internal.lock();
         if guard.socketname.is_some() {
@@ -181,10 +209,16 @@ impl UdpSocket {
                 // bound to.
                 for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
                     let entry = ports_guard.entry(port).or_default();
-                    if entry.entries.is_empty()
-                        && entry
-                            .bind(socket_addr.ip(), false, false, self.this.clone())
-                            .is_ok()
+                    if entry
+                        .bind(
+                            socket_addr.ip(),
+                            true,
+                            guard.reuse_addr,
+                            guard.reuse_port,
+                            guard.v6only,
+                            self.this.clone(),
+                        )
+                        .is_ok()
                     {
                         socket_addr.set_port(port);
                         break 'port;
@@ -196,7 +230,9 @@ impl UdpSocket {
         } else {
             ports_guard.entry(socket_addr.port()).or_default().bind(
                 socket_addr.ip(),
+                false,
                 guard.reuse_addr,
+                guard.reuse_port,
                 guard.v6only,
                 self.this.clone(),
             )?;
@@ -207,11 +243,15 @@ impl UdpSocket {
         Ok(true)
     }
 
-    fn get_or_bind_ephemeral(&self, peername: IpAddr) -> Result<net::SocketAddr> {
+    fn get_or_bind_ephemeral(
+        &self,
+        peername: IpAddr,
+        ctx: &FileAccessContext,
+    ) -> Result<net::SocketAddr> {
         let mut guard = self.internal.lock();
         if guard.socketname.is_none() {
             drop(guard);
-            self.try_bind(net::SocketAddr::new(peername, 0))?;
+            self.try_bind(net::SocketAddr::new(peername, 0), ctx)?;
             guard = self.internal.lock();
         }
         Ok(guard.socketname.unwrap())
@@ -230,17 +270,26 @@ impl UdpSocket {
         let len = cmp::min(buf.buffer_len(), packet.bytes.len());
         buf.write(0, &packet.bytes[..len])?;
 
+        if guard.rx.is_empty() {
+            self.rx_notify.notify();
+        }
+
         Ok((len, SocketAddr::from(packet.sender)))
     }
 
-    fn send(&self, peername: Option<SocketAddr>, buf: &(impl WriteBuf + ?Sized)) -> Result<usize> {
+    fn send(
+        &self,
+        peername: Option<SocketAddr>,
+        buf: &(impl WriteBuf + ?Sized),
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
         let mut peername = if let Some(peername) = peername {
             net::SocketAddr::try_from(peername)?
         } else {
             self.internal.lock().peername.ok_or(err!(NotConn))?
         };
 
-        let mut sender = self.get_or_bind_ephemeral(self.ip_version.unspecified_ip())?;
+        let mut sender = self.get_or_bind_ephemeral(self.ip_version.unspecified_ip(), ctx)?;
 
         // Make sure that the socket can send a packet to the address.
         let peer_ip_version = IpVersion::from(peername.ip());
@@ -279,6 +328,7 @@ impl UdpSocket {
 
         let mut guard = PORTS.lock();
         let Some(data) = guard.get_mut(&peername.port()) else {
+            self.queue_error();
             return Ok(len);
         };
 
@@ -286,6 +336,7 @@ impl UdpSocket {
         let mut socket;
         let mut socket_guard = loop {
             if i >= data.entries.len() {
+                self.queue_error();
                 return Ok(len);
             }
             let idx = (i.wrapping_add(data.round_robin_counter)) % data.entries.len();
@@ -298,13 +349,11 @@ impl UdpSocket {
             };
             socket = s;
 
-            let guard = socket.internal.lock();
-
             // Make sure that the ip versions are compatible.
             match (
                 IpVersion::from(entry.local_ip),
                 self.ip_version,
-                guard.v6only,
+                entry.v6only,
                 v6only,
             ) {
                 (IpVersion::V4, IpVersion::V4, _, _)
@@ -331,11 +380,13 @@ impl UdpSocket {
                 }
             } else {
                 // ipv6
-                if canonical_peer_ip.is_ipv4() && guard.v6only {
+                if canonical_peer_ip.is_ipv4() && entry.v6only {
                     i += 1;
                     continue;
                 }
             }
+
+            let guard = socket.internal.lock();
 
             // If the socket is connected, make sure that the address matches
             // the sender.
@@ -380,9 +431,21 @@ impl UdpSocket {
         drop(guard);
 
         socket_guard.rx.push_back(Packet { bytes, sender });
+        socket_guard.read_event_counter.inc();
         socket.rx_notify.notify();
 
         Ok(len)
+    }
+
+    fn queue_error(&self) {
+        let mut guard = self.internal.lock();
+        if !guard.ip_recverr {
+            return;
+        }
+        guard.errors.push_back(SockExtendedError {});
+        guard.error_event_counter.inc();
+        drop(guard);
+        self.rx_notify.notify();
     }
 }
 
@@ -426,14 +489,14 @@ impl OpenFileDescription for UdpSocket {
                 let val = guard.receive_buffer_size as u32;
                 val.to_ne_bytes().to_vec()
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         })
     }
 
     fn set_socket_option(
         &self,
         virtual_memory: Arc<VirtualMemory>,
-        _: Abi,
+        abi: Abi,
         level: i32,
         optname: i32,
         optval: Pointer<[u8]>,
@@ -444,8 +507,28 @@ impl OpenFileDescription for UdpSocket {
             (0, 2) => Ok(()),  // IP_TTL
             (0, 6) => Ok(()),  // IP_RECVOPTS
             (0, 10) => Ok(()), // IP_MTU_DISCOVER
-            (0, 11) => Ok(()), // IP_RECVERR
-            (0, 32) => Ok(()), // IP_MULTICAST_IF
+            (0, 11) => {
+                // IP_RECVERR
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ip_recverr = optval;
+                Ok(())
+            }
+            (0, 32) => {
+                // IP_MULTICAST_IF
+                match optlen {
+                    4 => {
+                        let optval =
+                            virtual_memory.read_with_abi(optval.cast::<Ipv4Addr>(), abi)?;
+                        ensure!(
+                            optval.is_unspecified() || optval.is_loopback(),
+                            AddrNotAvail
+                        );
+                        Ok(())
+                    }
+                    _ => bail!(Inval),
+                }
+            }
             (0, 33) => Ok(()), // IP_MULTICAST_TTL
             (0, 34) => Ok(()), // IP_MULTICAST_LOOP
             (1, 2) => {
@@ -474,7 +557,13 @@ impl OpenFileDescription for UdpSocket {
                 guard.receive_buffer_size = new_receive_buffer_size;
                 Ok(())
             }
-            (1, 15) => Ok(()),  // SO_REUSEPORT
+            (1, 15) => {
+                // SO_REUSEPORT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.reuse_port = optval;
+                Ok(())
+            }
             (41, 16) => Ok(()), // IPV6_UNICAST_HOPS
             (41, 17) => Ok(()), // IPV6_MULTICAST_IF
             (41, 18) => Ok(()), // IPV6_MULTICAST_HOPS
@@ -487,13 +576,13 @@ impl OpenFileDescription for UdpSocket {
                 guard.v6only = optval;
                 Ok(())
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 
-    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    fn bind(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let addr = net::SocketAddr::try_from(addr)?;
-        ensure!(self.try_bind(addr)?, Inval);
+        ensure!(self.try_bind(addr, ctx)?, Inval);
         Ok(())
     }
 
@@ -508,7 +597,7 @@ impl OpenFileDescription for UdpSocket {
         Ok(SocketAddr::from(addr))
     }
 
-    async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         match addr {
             SocketAddr::Unspecified => {
                 let mut guard = self.internal.lock();
@@ -520,7 +609,7 @@ impl OpenFileDescription for UdpSocket {
                     remote_addr.ip().is_loopback() || remote_addr.ip().is_unspecified(),
                     NetUnreach
                 );
-                self.get_or_bind_ephemeral(IpAddr::V4(Ipv4Addr::LOCALHOST))?;
+                self.get_or_bind_ephemeral(IpAddr::V4(Ipv4Addr::LOCALHOST), ctx)?;
                 let mut guard = self.internal.lock();
                 ensure!(guard.peername.is_none(), IsConn);
                 guard.peername = Some(net::SocketAddr::V4(remote_addr));
@@ -531,7 +620,7 @@ impl OpenFileDescription for UdpSocket {
                     remote_addr.ip().is_loopback() || remote_addr.ip().is_unspecified(),
                     NetUnreach
                 );
-                self.get_or_bind_ephemeral(IpAddr::V6(Ipv6Addr::LOCALHOST))?;
+                self.get_or_bind_ephemeral(IpAddr::V6(Ipv6Addr::LOCALHOST), ctx)?;
                 let mut guard = self.internal.lock();
                 ensure!(guard.peername.is_none(), IsConn);
                 guard.peername = Some(net::SocketAddr::V6(remote_addr));
@@ -543,20 +632,41 @@ impl OpenFileDescription for UdpSocket {
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
-        if events.contains(Events::READ) {
-            ready_events.set(Events::READ, !self.internal.lock().rx.is_empty());
+        if events.intersects(Events::READ | Events::ERR) {
+            let guard = self.internal.lock();
+            ready_events.set(Events::READ, !guard.rx.is_empty());
+            ready_events.set(Events::ERR, !guard.errors.is_empty());
         }
         ready_events.set(Events::WRITE, true);
         ready_events &= events;
         NonEmptyEvents::new(ready_events)
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
         self.rx_notify.wait_until(|| self.poll_ready(events)).await
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.rx_notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.internal.lock();
+                result.set_ready(Events::WRITE);
+                if !guard.rx.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                if !guard.errors.is_empty() {
+                    result.set_ready(Events::ERR);
+                }
+                result.add_counter(Events::READ, &guard.read_event_counter);
+                result.add_counter(Events::ERR, &guard.error_event_counter);
+                result
+            })
+            .await
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
@@ -594,8 +704,8 @@ impl OpenFileDescription for UdpSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
-        self.send(None, buf)
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
+        self.send(None, buf, ctx)
     }
 
     fn send_to(
@@ -603,8 +713,9 @@ impl OpenFileDescription for UdpSocket {
         buf: &dyn WriteBuf,
         _: SentToFlags,
         addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
-        self.send(addr, buf)
+        self.send(addr, buf, ctx)
     }
 
     fn send_msg(
@@ -614,6 +725,7 @@ impl OpenFileDescription for UdpSocket {
         msg_hdr: &mut MsgHdr,
         _: SendMsgFlags,
         _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         if msg_hdr.controllen != 0 {
             todo!()
@@ -630,7 +742,7 @@ impl OpenFileDescription for UdpSocket {
         };
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send(peername, &vectored_buf)
+        self.send(peername, &vectored_buf, ctx)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -642,7 +754,21 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn stat(&self) -> Result<Stat> {
-        todo!()
+        Ok(Stat {
+            dev: 0,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Socket, FileMode::from_bits_truncate(0o777)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
@@ -690,3 +816,5 @@ struct Packet {
     bytes: Box<[u8]>,
     sender: net::SocketAddr,
 }
+
+struct SockExtendedError {}

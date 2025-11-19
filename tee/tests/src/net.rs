@@ -562,6 +562,29 @@ fn test_oob() -> Result<()> {
     assert_eq!(buffer[0..1], *b"8");
     assert!(sockatmark(&sock2)?);
 
+    // Peeking OOB data doesn't remove it.
+
+    socket::send(fd1, b"1234", MsgFlags::MSG_OOB)?;
+
+    // We expect to be able to read all but the last byte using a normal recv.
+    assert!(!sockatmark(&sock2)?);
+    assert_eq!(
+        socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB | MsgFlags::MSG_PEEK)?,
+        1
+    );
+    assert_eq!(buffer[0..1], *b"4");
+
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::empty()), Ok(3));
+    assert_eq!(buffer[0..3], *b"123");
+
+    // The OOB mark is reset.
+    assert!(sockatmark(&sock2)?);
+
+    // Read the OOB data.
+    assert_eq!(socket::recv(fd2, &mut buffer, MsgFlags::MSG_OOB)?, 1);
+    assert_eq!(buffer[0..1], *b"4");
+    assert!(sockatmark(&sock2)?);
+
     Ok(())
 }
 
@@ -914,9 +937,6 @@ fn udp_dual_stack_localhost() {
         Err(Errno::ENETUNREACH)
     );
 
-    let addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    let addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
-
     let mut buf = [0; 16];
 
     let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
@@ -1195,9 +1215,6 @@ fn udp_dual_stack_unspecified() {
         Err(Errno::ENETUNREACH)
     );
 
-    let addrv4 = SockaddrIn::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    let addrv6 = SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
-
     let mut buf = [0; 16];
 
     let (len, addr) = socket::recvfrom::<SockaddrIn>(sock4.as_raw_fd(), &mut buf).unwrap();
@@ -1258,32 +1275,6 @@ fn udp_dual_stack_unspecified() {
 
 #[test]
 fn udp_bind() {
-    fn bind(ip_addr: IpAddr, port: u16, reuse_addr: bool, v6only: bool) -> Result<OwnedFd> {
-        let domain = match ip_addr {
-            IpAddr::V4(_) => AddressFamily::Inet,
-            IpAddr::V6(_) => AddressFamily::Inet6,
-        };
-        let socket = socket::socket(domain, SockType::Datagram, SockFlag::empty(), None)?;
-
-        socket::setsockopt(&socket, ReuseAddr, &reuse_addr)?;
-        if ip_addr.is_ipv6() {
-            socket::setsockopt(&socket, Ipv6V6Only, &v6only)?;
-        }
-
-        match ip_addr {
-            IpAddr::V4(addr) => socket::bind(
-                socket.as_raw_fd(),
-                &SockaddrIn::from(SocketAddrV4::new(addr, port)),
-            )?,
-            IpAddr::V6(addr) => socket::bind(
-                socket.as_raw_fd(),
-                &SockaddrIn6::from(SocketAddrV6::new(addr, port, 0, 0)),
-            )?,
-        }
-
-        Ok(socket)
-    }
-
     let ips = [
         IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         IpAddr::V4(Ipv4Addr::LOCALHOST),

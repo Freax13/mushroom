@@ -126,6 +126,33 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         Ok(DevPtsDirectory::new(location))
     })?;
 
+    let stderr_name = FileName::new(b"stderr").unwrap();
+    tmp_fs_dir.create_link(
+        stderr_name,
+        Path::new(b"/proc/self/fd/2".to_vec()).unwrap(),
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+        true,
+    )?;
+
+    let stdin_name = FileName::new(b"stdin").unwrap();
+    tmp_fs_dir.create_link(
+        stdin_name,
+        Path::new(b"/proc/self/fd/0".to_vec()).unwrap(),
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+        true,
+    )?;
+
+    let stdout_name = FileName::new(b"stdout").unwrap();
+    tmp_fs_dir.create_link(
+        stdout_name,
+        Path::new(b"/proc/self/fd/1".to_vec()).unwrap(),
+        Uid::SUPER_USER,
+        Gid::SUPER_USER,
+        true,
+    )?;
+
     let tty_name = FileName::new(b"tty").unwrap();
     tmp_fs_dir.create_char_dev(
         tty_name,

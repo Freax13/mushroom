@@ -10,6 +10,7 @@ use core::{
     ffi::c_void,
     net::{self, IpAddr},
     ops::Not,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -23,6 +24,7 @@ use crate::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
             LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, ReadBuf,
             StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf, common_ioctl,
+            epoll::{EpollRequest, EpollResult, EventCounter},
             file::{File, open_file},
             inotify::Watchers,
             stream_buffer,
@@ -77,18 +79,14 @@ impl PortData {
     pub fn prepare_bind(
         &mut self,
         ip: IpAddr,
+        ephemeral: bool,
         reuse_addr: bool,
         reuse_port: bool,
+        v6only: bool,
         effective_uid: Uid,
     ) -> Result<BindGuard<'_>> {
         let ip_version = IpVersion::from(ip);
         let local_ip = ip.is_unspecified().not().then_some(ip);
-
-        if let Some(local_ip) = local_ip {
-            // We only support binding to localhost -> make sure that the
-            // address is a loopback address.
-            ensure!(local_ip.is_loopback(), AddrNotAvail);
-        }
 
         let mut i = 0;
         while let Some(entry) = self.entries.get(i) {
@@ -100,9 +98,22 @@ impl PortData {
                 continue;
             };
 
+            ensure!(!ephemeral, AddrInUse);
+
             // Skip entries with a different address family.
-            if entry.ip_version != ip_version {
-                continue;
+            match (entry.ip_version, ip_version) {
+                (IpVersion::V4, IpVersion::V4) => {}
+                (IpVersion::V4, IpVersion::V6) => {
+                    if v6only {
+                        continue;
+                    }
+                }
+                (IpVersion::V6, IpVersion::V4) => {
+                    if entry.v6only {
+                        continue;
+                    }
+                }
+                (IpVersion::V6, IpVersion::V6) => {}
             }
 
             // Skip entries that don't overlap with `ip`.
@@ -129,6 +140,15 @@ impl PortData {
                 );
             }
 
+            // The check for listening sockets only applies for v4 sockets.
+            if entry.ip_version == IpVersion::V6
+                && ip_version == IpVersion::V6
+                && entry.v6only
+                && v6only
+            {
+                continue;
+            }
+
             // Fail if there's already a listening socket.
             let is_listening = mode
                 .get()
@@ -142,6 +162,7 @@ impl PortData {
             local_ip,
             reuse_addr,
             reuse_port,
+            v6only,
             effective_uid,
         })
     }
@@ -187,6 +208,7 @@ struct BindGuard<'a> {
     local_ip: Option<IpAddr>,
     reuse_addr: bool,
     reuse_port: bool,
+    v6only: bool,
     effective_uid: Uid,
 }
 
@@ -199,6 +221,7 @@ impl BindGuard<'_> {
             remote_addr: None,
             reuse_addr: self.reuse_addr,
             reuse_port: self.reuse_port,
+            v6only: self.v6only,
             effective_uid: self.effective_uid,
             mode,
         });
@@ -212,6 +235,7 @@ struct PortDataEntry {
     remote_addr: Option<net::SocketAddr>,
     reuse_addr: bool,
     reuse_port: bool,
+    v6only: bool,
     effective_uid: Uid,
     mode: Weak<Once<Mode>>,
 }
@@ -264,12 +288,26 @@ impl TcpSocket {
     /// Try to bind the socket to an address. Returns `true` if the socket was
     /// bound, returns `false` if the socket was already bound. Returns
     /// `Err(..)` if the socket could not be bound to the given address.
-    fn try_bind(&self, mut socket_addr: net::SocketAddr) -> Result<bool> {
+    fn try_bind(&self, mut socket_addr: net::SocketAddr, ctx: &FileAccessContext) -> Result<bool> {
         ensure!(IpVersion::from(socket_addr.ip()) == self.ip_version, Inval);
+
+        // We only support binding to localhost -> make sure that the
+        // address is a loopback address.
+        ensure!(
+            socket_addr.ip().is_unspecified() || socket_addr.ip().is_loopback(),
+            AddrNotAvail
+        );
+
+        // Make sure that the user has permission to bind the port.
+        ensure!(
+            socket_addr.port() == 0 || socket_addr.port() >= 1024 || ctx.is_user(Uid::SUPER_USER),
+            Acces
+        );
 
         let guard = self.internal.lock();
         let reuse_addr = guard.reuse_addr;
         let reuse_port = guard.reuse_port;
+        let v6only = guard.v6only;
         drop(guard);
 
         let effective_uid = Uid::SUPER_USER; // TODO
@@ -281,11 +319,23 @@ impl TcpSocket {
             'port: {
                 // If no port has been specified, try to find one that can be
                 // bound to.
-                for port in EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END {
+                static COUNTER: AtomicUsize = AtomicUsize::new(0);
+                let range = EPHEMERAL_PORT_START..=EPHEMERAL_PORT_END;
+                let len = range.len();
+                let ports = range
+                    .cycle()
+                    .skip(COUNTER.fetch_sub(1, Ordering::Relaxed) % len)
+                    .take(len);
+                for port in ports {
                     let entry = guard.entry(port).or_default();
-                    if let Ok(bind_guard) =
-                        entry.prepare_bind(socket_addr.ip(), false, false, effective_uid)
-                    {
+                    if let Ok(bind_guard) = entry.prepare_bind(
+                        socket_addr.ip(),
+                        true,
+                        reuse_addr,
+                        reuse_port,
+                        v6only,
+                        effective_uid,
+                    ) {
                         socket_addr.set_port(port);
                         break 'port bind_guard;
                     }
@@ -296,8 +346,10 @@ impl TcpSocket {
         } else {
             guard.entry(socket_addr.port()).or_default().prepare_bind(
                 socket_addr.ip(),
+                false,
                 reuse_addr,
                 reuse_port,
+                v6only,
                 effective_uid,
             )?
         };
@@ -322,8 +374,8 @@ impl TcpSocket {
         Ok(true)
     }
 
-    fn get_or_bind_ephemeral(&self) -> Result<&BoundSocket> {
-        self.try_bind(self.ip_version.unspecified_addr())?;
+    fn get_or_bind_ephemeral(&self, ctx: &FileAccessContext) -> Result<&BoundSocket> {
+        self.try_bind(self.ip_version.unspecified_addr(), ctx)?;
         Ok(self.bound_socket.get().unwrap())
     }
 }
@@ -345,9 +397,9 @@ impl OpenFileDescription for TcpSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    fn bind(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let addr = net::SocketAddr::try_from(addr)?;
-        ensure!(self.try_bind(addr)?, Inval);
+        ensure!(self.try_bind(addr, ctx)?, Inval);
         Ok(())
     }
 
@@ -378,11 +430,11 @@ impl OpenFileDescription for TcpSocket {
         Ok(SocketAddr::from(active.remote_addr))
     }
 
-    fn listen(&self, backlog: usize, _: &FileAccessContext) -> Result<()> {
+    fn listen(&self, backlog: usize, ctx: &FileAccessContext) -> Result<()> {
         // Make sure that the backlog is never empty.
         let backlog = cmp::max(backlog, 1);
 
-        let bound = self.get_or_bind_ephemeral()?;
+        let bound = self.get_or_bind_ephemeral(ctx)?;
 
         let guard = PORTS.lock();
         // Check if the socket is allowed to listen on the given port.
@@ -396,6 +448,7 @@ impl OpenFileDescription for TcpSocket {
                 internal: Mutex::new(PassiveTcpSocketInternal {
                     backlog: 0,
                     queue: VecDeque::new(),
+                    read_counter: EventCounter::new(),
                 }),
             })
         });
@@ -464,10 +517,10 @@ impl OpenFileDescription for TcpSocket {
         Ok((fd, socket_addr))
     }
 
-    async fn connect(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let v6only = self.internal.lock().v6only;
 
-        let bound = self.get_or_bind_ephemeral()?;
+        let bound = self.get_or_bind_ephemeral(ctx)?;
 
         let remote_addr = net::SocketAddr::try_from(addr)?;
 
@@ -508,10 +561,16 @@ impl OpenFileDescription for TcpSocket {
 
                 // Skip over entries that don't have a matching domain.
                 match (entry.ip_version, self.ip_version) {
-                    (IpVersion::V4, IpVersion::V4) => {}        // matches
-                    (IpVersion::V4, IpVersion::V6) => continue, // doesn't match
-                    (IpVersion::V6, IpVersion::V4) => {
+                    (IpVersion::V4, IpVersion::V4) => {} // matches
+                    (IpVersion::V4, IpVersion::V6) => {
                         if v6only {
+                            continue; // doesn't match
+                        } else {
+                            // matches
+                        }
+                    }
+                    (IpVersion::V6, IpVersion::V4) => {
+                        if entry.v6only {
                             continue; // doesn't match
                         } else {
                             // matches
@@ -593,6 +652,9 @@ impl OpenFileDescription for TcpSocket {
                 } else {
                     guard.get_mut(&bound.bind_addr.port()).unwrap()
                 };
+                // Remove sockets that are no longer active.
+                ports.entries.retain(|entry| entry.mode.strong_count() > 0);
+                // Try to find a match.
                 let duplicate_pair = ports.entries.iter().any(|entry| {
                     entry.local_ip == Some(local_ip) && entry.remote_addr == Some(remote_addr)
                 });
@@ -651,7 +713,7 @@ impl OpenFileDescription for TcpSocket {
                 let val = guard.receive_buffer_size as u32;
                 val.to_ne_bytes().to_vec()
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         })
     }
 
@@ -741,7 +803,7 @@ impl OpenFileDescription for TcpSocket {
                 guard.v6only = optval;
                 Ok(())
             }
-            _ => bail!(Inval),
+            _ => bail!(OpNotSupp),
         }
     }
 
@@ -768,7 +830,7 @@ impl OpenFileDescription for TcpSocket {
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        active.read_half.read(buf)
+        active.read_half.read(buf, false)
     }
 
     fn recv_from(
@@ -776,9 +838,7 @@ impl OpenFileDescription for TcpSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) {
-            todo!()
-        }
+        let peek = flags.contains(RecvFromFlags::PEEK);
 
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
@@ -786,7 +846,7 @@ impl OpenFileDescription for TcpSocket {
             bail!(NotConn);
         };
         let len = if flags.contains(RecvFromFlags::OOB) {
-            let oob_data = active.read_half.read_oob()?;
+            let oob_data = active.read_half.read_oob(peek)?;
             if buf.buffer_len() != 0 {
                 buf.write(0, &[oob_data])?;
                 1
@@ -794,7 +854,7 @@ impl OpenFileDescription for TcpSocket {
                 0
             }
         } else {
-            active.read_half.read(buf)?
+            active.read_half.read(buf, peek)?
         };
         Ok((len, None))
     }
@@ -818,7 +878,7 @@ impl OpenFileDescription for TcpSocket {
         Ok(len)
     }
 
-    fn write(&self, buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
@@ -832,6 +892,7 @@ impl OpenFileDescription for TcpSocket {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
+        _: &FileAccessContext,
     ) -> Result<usize> {
         ensure!(addr.is_none(), IsConn);
 
@@ -852,6 +913,7 @@ impl OpenFileDescription for TcpSocket {
         msg_hdr: &mut MsgHdr,
         flags: SendMsgFlags,
         _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         ensure!(!flags.contains(SendMsgFlags::FASTOPEN), OpNotSupp);
 
@@ -873,7 +935,7 @@ impl OpenFileDescription for TcpSocket {
         };
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send_to(&vectored_buf, SentToFlags::empty(), addr)
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
     fn path(&self) -> Result<Path> {
@@ -931,20 +993,11 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn epoll_ready(&self, events: Events) -> Result<Option<NonEmptyEvents>> {
-        Ok(self.poll_ready(events))
-    }
-
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        let mode = loop {
-            let wait = self.activate_notify.wait();
-            if let Some(bound) = self.bound_socket.get()
-                && let Some(mode) = bound.mode.get()
-            {
-                break mode;
-            }
-            wait.await;
-        };
+        let mode = self
+            .activate_notify
+            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
+            .await;
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 if !events.contains(Events::READ) {
@@ -964,25 +1017,52 @@ impl OpenFileDescription for TcpSocket {
                     .await
             }
             Mode::Active(active_tcp_socket) => {
-                let wait_read = async {
-                    loop {
-                        let wait = active_tcp_socket.read_half.wait();
-                        if let Some(events) = active_tcp_socket.read_half.poll_ready(events) {
-                            return events;
-                        }
-                        wait.await;
-                    }
-                };
-                let wait_write = async {
-                    loop {
-                        let wait = active_tcp_socket.write_half.wait();
-                        if let Some(events) = active_tcp_socket.write_half.poll_ready(events) {
-                            return events;
-                        }
-                        wait.await;
-                    }
-                };
+                let wait_read = active_tcp_socket
+                    .read_half
+                    .notify()
+                    .wait_until(|| active_tcp_socket.read_half.poll_ready(events));
+                let wait_write = active_tcp_socket
+                    .write_half
+                    .notify()
+                    .wait_until(|| active_tcp_socket.write_half.poll_ready(events));
                 NonEmptyEvents::select(wait_read, wait_write).await
+            }
+        }
+    }
+
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self
+            .activate_notify
+            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
+            .await;
+        match mode {
+            Mode::Passive(passive_tcp_socket) => {
+                passive_tcp_socket
+                    .notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive_tcp_socket.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_counter);
+                        result
+                    })
+                    .await
+            }
+            Mode::Active(active_tcp_socket) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    active_tcp_socket.read_half.notify(),
+                    || active_tcp_socket.read_half.epoll_ready(),
+                    active_tcp_socket.write_half.notify(),
+                    || active_tcp_socket.write_half.epoll_ready(),
+                )
+                .await
             }
         }
     }
@@ -1050,8 +1130,16 @@ impl Drop for TcpSocket {
             return;
         };
 
-        active_tcp_socket.read_half.shutdown();
-        active_tcp_socket.write_half.shutdown();
+        let send_rst = active_tcp_socket.read_half.close();
+
+        // If the socket was closed with remaining bytes, immediately drop the
+        // connection.
+        if send_rst {
+            return;
+        } else {
+            // Otherwise, properly shut down the write half.
+            active_tcp_socket.write_half.shutdown();
+        }
 
         // Keep the socket alive until the deadline.
         let mode = bound.mode.clone();
@@ -1083,6 +1171,7 @@ struct PassiveTcpSocket {
 struct PassiveTcpSocketInternal {
     backlog: usize,
     queue: VecDeque<ActiveTcpSocket>,
+    read_counter: EventCounter,
 }
 
 impl PassiveTcpSocket {
@@ -1106,6 +1195,7 @@ impl ConnectGuard<'_> {
             self.passive_socket.notify.notify();
         }
         self.guard.queue.push_back(socket);
+        self.guard.read_counter.inc();
     }
 }
 
@@ -1311,7 +1401,7 @@ impl INode for NetTcpFile {
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
 
-    fn truncate(&self, _length: usize) -> Result<()> {
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
         bail!(Acces)
     }
 
@@ -1338,15 +1428,25 @@ impl File for NetTcpFile {
         Ok(len)
     }
 
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf) -> Result<usize> {
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(Acces)
     }
 
-    fn append(&self, _buf: &dyn WriteBuf) -> Result<(usize, usize)> {
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
         bail!(Acces)
     }
 
-    fn allocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
         bail!(Acces)
     }
 

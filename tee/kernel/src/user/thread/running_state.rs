@@ -5,7 +5,7 @@ use futures::{FutureExt, select_biased};
 
 use crate::{
     fs::fd::FileDescriptorTable,
-    rt::{notify::Notify, spawn},
+    rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
         memory::VirtualMemory,
@@ -45,7 +45,7 @@ impl ThreadRunningState {
 }
 
 impl ThreadGuard<'_> {
-    pub fn exit(&mut self, status: WStatus) {
+    pub async fn exit(&mut self, status: WStatus) {
         let running_state = &self.thread.running_state;
         let mut guard = running_state.state.lock();
 
@@ -61,7 +61,7 @@ impl ThreadGuard<'_> {
 
                 self.do_exit();
 
-                self.process().exit(status, self.get_rusage());
+                self.process().exit(status, self.get_rusage()).await;
             }
             State::Paused => {}
             State::Terminated => {}
@@ -71,7 +71,7 @@ impl ThreadGuard<'_> {
 }
 
 impl Thread {
-    pub fn terminate(self: Arc<Self>, exit_status: WStatus) {
+    pub async fn terminate(self: Arc<Self>, exit_status: WStatus) {
         let running_state = &self.running_state;
         let mut guard = running_state.state.lock();
 
@@ -81,31 +81,29 @@ impl Thread {
                 running_state.notify.notify();
                 drop(guard);
 
-                spawn(async move {
-                    // If there's tracer, send a exit event.
-                    let mut guard = self.lock();
-                    if let Some(tracer) = guard.tracer.upgrade() {
-                        guard.ptrace_state = PtraceState::Exit { reported: false };
-                        drop(guard);
-                        tracer.ptrace_tracer_notify.notify();
-                        drop(tracer);
-
-                        guard = self
-                            .ptrace_tracee_notify
-                            .wait_until(|| {
-                                let guard = self.lock();
-                                guard.ptrace_state.is_stopped().not().then_some(guard)
-                            })
-                            .await;
-                    }
-                    let rusage = guard.get_rusage();
+                // If there's tracer, send a exit event.
+                let mut guard = self.lock();
+                if let Some(tracer) = guard.tracer.upgrade() {
+                    guard.ptrace_state = PtraceState::Exit { reported: false };
                     drop(guard);
+                    tracer.ptrace_tracer_notify.notify();
+                    drop(tracer);
 
-                    self.process.exit(exit_status, rusage);
+                    guard = self
+                        .ptrace_tracee_notify
+                        .wait_until(|| {
+                            let guard = self.lock();
+                            guard.ptrace_state.is_stopped().not().then_some(guard)
+                        })
+                        .await;
+                }
+                let rusage = guard.get_rusage();
+                drop(guard);
 
-                    let mut guard = self.lock();
-                    guard.do_exit();
-                });
+                Box::pin(self.process.exit(exit_status, rusage)).await;
+
+                let mut guard = self.lock();
+                guard.do_exit();
             }
             State::Paused | State::Restart(_) => {
                 *guard = State::Terminated;
