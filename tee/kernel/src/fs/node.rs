@@ -508,7 +508,7 @@ impl FileAccessContext {
 
     pub fn filesystem_user_id(&self) -> Uid {
         self.filesystem_user_id_override.unwrap_or_else(|| {
-            self.process.as_ref().map_or(Uid::SUPER_USER, |process| {
+            self.process().map_or(Uid::SUPER_USER, |process| {
                 process.credentials.read().filesystem_user_id
             })
         })
@@ -520,7 +520,7 @@ impl FileAccessContext {
 
     pub fn filesystem_group_id(&self) -> Gid {
         self.filesystem_group_id_override.unwrap_or_else(|| {
-            self.process.as_ref().map_or(Gid::SUPER_USER, |process| {
+            self.process().map_or(Gid::SUPER_USER, |process| {
                 process.credentials.read().filesystem_group_id
             })
         })
@@ -531,14 +531,14 @@ impl FileAccessContext {
     }
 
     fn supplementary_group_ids(&self) -> Arc<[Gid]> {
-        self.process.as_ref().map_or_else(
+        self.process().map_or_else(
             || Arc::new([]) as Arc<[_]>,
             |process| process.credentials.read().supplementary_group_ids.clone(),
         )
     }
 
     pub fn max_file_size(&self) -> usize {
-        self.process.as_ref().map_or(usize::MAX, |process| {
+        self.process().map_or(usize::MAX, |process| {
             usize_from(process.limits[Resource::FSize].load_current())
         })
     }
@@ -872,7 +872,7 @@ pub fn get_socket(
     path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
-    let link = lookup_and_resolve_link(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
+    let link = lookup_and_resolve_link(ctx.process().unwrap().cwd(), path, ctx)?;
     link.node.get_socket(ctx)
 }
 
