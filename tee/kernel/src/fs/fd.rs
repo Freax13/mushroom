@@ -694,8 +694,9 @@ pub trait OpenFileDescription: Send + Sync + 'static {
 
     fn path(&self) -> Result<Path>;
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, ctx: &FileAccessContext) -> Result<usize> {
         let _ = buf;
+        let _ = ctx;
         bail!(Inval)
     }
 
@@ -712,9 +713,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(SPipe)
     }
 
-    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf, ctx: &FileAccessContext) -> Result<usize> {
         let _ = pos;
         let _ = buf;
+        let _ = ctx;
         bail!(Inval)
     }
 

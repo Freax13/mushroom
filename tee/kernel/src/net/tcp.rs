@@ -378,6 +378,15 @@ impl TcpSocket {
         self.try_bind(self.ip_version.unspecified_addr(), ctx)?;
         Ok(self.bound_socket.get().unwrap())
     }
+
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active.read_half.read(buf, false)
+    }
 }
 
 #[async_trait]
@@ -824,13 +833,8 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
-        let Mode::Active(active) = mode else {
-            bail!(NotConn);
-        };
-        active.read_half.read(buf, false)
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        self.read(buf)
     }
 
     fn recv_from(

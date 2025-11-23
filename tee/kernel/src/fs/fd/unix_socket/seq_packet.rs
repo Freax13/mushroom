@@ -94,6 +94,15 @@ impl SeqPacketUnixSocket {
             },
         )
     }
+
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        let Some(data) = self.read_half.read()? else {
+            return Ok(0);
+        };
+        let len = cmp::min(data.len(), buf.buffer_len());
+        buf.write(0, &data[..len])?;
+        Ok(len)
+    }
 }
 
 #[async_trait]
@@ -117,13 +126,8 @@ impl OpenFileDescription for SeqPacketUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let Some(data) = self.read_half.read()? else {
-            return Ok(0);
-        };
-        let len = cmp::min(data.len(), buf.buffer_len());
-        buf.write(0, &data[..len])?;
-        Ok(len)
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        self.read(buf)
     }
 
     fn recv_from(

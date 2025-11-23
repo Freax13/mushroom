@@ -182,7 +182,7 @@ impl OpenFileDescription for Timer {
         true
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
 
         let now = now(self.clock_id);

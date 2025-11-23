@@ -10,6 +10,7 @@ use crate::{
     error::{Result, bail, ensure},
     fs::{
         fd::{FileDescriptor, KernelReadBuf},
+        node::FileAccessContext,
         path::Path,
     },
     user::{
@@ -100,6 +101,7 @@ pub trait ProgramHeaderEntry: Pod {
 
 pub fn load_elf<E>(
     file: &FileDescriptor,
+    ctx: &FileAccessContext,
     mut vm: VirtualMemoryWriteGuard<'_>,
     load_bias: u64,
 ) -> Result<LoaderInfo>
@@ -107,7 +109,7 @@ where
     E: ElfLoaderParams,
 {
     let mut header = <E::Header>::zeroed();
-    file.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
+    file.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)), ctx)?;
 
     header.e_ident().verify()?;
 
@@ -141,6 +143,7 @@ where
         file.pread(
             offset,
             &mut KernelReadBuf::new(bytes_of_mut(&mut program_header_entry)),
+            ctx,
         )?;
 
         let p_type = program_header_entry.p_type();
@@ -193,6 +196,7 @@ where
                 file.pread(
                     usize_from(p_offset),
                     &mut KernelReadBuf::new(&mut raw_interpreter_path),
+                    ctx,
                 )?;
                 interpreter_path = Some(Path::new(raw_interpreter_path)?);
             }

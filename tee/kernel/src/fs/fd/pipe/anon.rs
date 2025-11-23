@@ -83,7 +83,7 @@ impl OpenFileDescription for ReadHalf {
         path(self.ino)
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         self.stream_buffer.read(buf, false)
     }
 

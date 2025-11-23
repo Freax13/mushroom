@@ -188,7 +188,7 @@ impl OpenFileDescription for StreamUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);

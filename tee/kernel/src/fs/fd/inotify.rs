@@ -185,7 +185,7 @@ impl OpenFileDescription for Inotify {
             .await
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let mut guard = self.queue.lock();
         ensure!(!guard.queue.is_empty(), Again);
 

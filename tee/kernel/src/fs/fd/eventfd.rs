@@ -63,7 +63,7 @@ impl OpenFileDescription for EventFd {
         Path::new(b"anon_inode:[eventfd]".to_vec())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
 
         let value = self.counter.swap(0, Ordering::SeqCst);

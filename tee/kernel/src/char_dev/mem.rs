@@ -100,11 +100,11 @@ impl OpenFileDescription for Null {
         }
     }
 
-    fn read(&self, _buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, _buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
-    fn pread(&self, _pos: usize, _buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, _buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
@@ -223,12 +223,12 @@ impl OpenFileDescription for Zero {
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
-    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
@@ -354,12 +354,12 @@ impl OpenFileDescription for Full {
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
-    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
@@ -488,7 +488,7 @@ impl OpenFileDescription for Random {
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         for (offset, random) in (0..len).zip(random_bytes()) {
             buf.write(offset, &[random])?;
@@ -609,7 +609,7 @@ impl OpenFileDescription for URandom {
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         for (offset, random) in (0..len).zip(random_bytes()) {
             buf.write(offset, &[random])?;

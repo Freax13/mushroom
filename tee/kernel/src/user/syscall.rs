@@ -322,6 +322,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 async fn read(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
@@ -329,7 +330,7 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&**fd, Events::READ, || fd.read(&mut buf)).await?;
+    let len = do_io(&**fd, Events::READ, || fd.read(&mut buf, &ctx)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -920,6 +921,7 @@ fn ioctl(
 fn pread64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
@@ -929,7 +931,7 @@ fn pread64(
     let count = usize_from(count);
     let pos = usize_from(pos);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = fd.pread(pos, &mut buf)?;
+    let len = fd.pread(pos, &mut buf, &ctx)?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -963,6 +965,7 @@ async fn readv(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u64,
@@ -970,7 +973,7 @@ async fn readv(
     let fd = fdtable.get(fd)?;
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    let len = do_io(&**fd, Events::READ, || fd.read(&mut vectored_buf)).await?;
+    let len = do_io(&**fd, Events::READ, || fd.read(&mut vectored_buf, &ctx)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -5442,6 +5445,7 @@ async fn preadv(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u64,
@@ -5452,7 +5456,10 @@ async fn preadv(
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_io(&**fd, Events::READ, || fd.pread(pos, &mut vectored_buf)).await?;
+    let len = do_io(&**fd, Events::READ, || {
+        fd.pread(pos, &mut vectored_buf, &ctx)
+    })
+    .await?;
     let len = u64::from_usize(len);
     Ok(len)
 }

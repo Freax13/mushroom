@@ -163,7 +163,7 @@ impl OpenFileDescription for FileFileDescription {
         self.location.path()
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let mut guard = self.internal.lock();
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
         let no_atime = guard.flags.contains(OpenFlags::NOATIME);
@@ -178,7 +178,7 @@ impl OpenFileDescription for FileFileDescription {
         Ok(len)
     }
 
-    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let guard = self.internal.lock();
         ensure!(!guard.flags.contains(OpenFlags::WRONLY), BadF);
         let no_atime = guard.flags.contains(OpenFlags::NOATIME);

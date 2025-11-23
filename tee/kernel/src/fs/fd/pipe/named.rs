@@ -243,7 +243,7 @@ impl OpenFileDescription for ReadHalf {
         self.link.location.path()
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         self.read_half.read(buf, false)
     }
 
@@ -406,7 +406,7 @@ impl OpenFileDescription for FullReadWrite {
         self.link.location.path()
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         self.read_half.read(buf, false)
     }
 

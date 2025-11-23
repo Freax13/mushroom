@@ -59,7 +59,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         self.dir.location().path()
     }
 
-    fn read(&self, _: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, _: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(IsDir)
     }
 
@@ -67,7 +67,7 @@ impl OpenFileDescription for DirectoryFileDescription {
         bail!(IsDir)
     }
 
-    fn pread(&self, _pos: usize, _: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, _: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         bail!(IsDir)
     }
 

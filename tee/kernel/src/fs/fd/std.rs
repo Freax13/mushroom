@@ -56,12 +56,12 @@ impl OpenFileDescription for Stdin {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() == 0, Inval);
         Ok(0)
     }
 
-    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() == 0, Inval);
         Ok(0)
     }

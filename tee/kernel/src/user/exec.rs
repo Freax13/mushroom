@@ -47,12 +47,12 @@ impl VirtualMemory {
         self.modify().map_sigreturn_trampoline();
 
         let mut header = [0; 4];
-        fd.pread(0, &mut KernelReadBuf::new(&mut header))?;
+        fd.pread(0, &mut KernelReadBuf::new(&mut header), ctx)?;
 
         match header {
             elf::MAGIC => {
                 let mut header = ElfIdent::zeroed();
-                fd.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)))?;
+                fd.pread(0, &mut KernelReadBuf::new(bytes_of_mut(&mut header)), ctx)?;
 
                 match header.verify()? {
                     Abi::I386 => self.start_elf::<elf::ElfLoaderParams32>(
@@ -94,7 +94,7 @@ impl VirtualMemory {
     where
         E: ElfLoaderParams,
     {
-        let info = elf::load_elf::<E>(file, self.modify(), 0x2000_0000)?;
+        let info = elf::load_elf::<E>(file, ctx, self.modify(), 0x2000_0000)?;
 
         let mut entrypoint = info.entry;
         let mut brk_start = info.end;
@@ -115,7 +115,7 @@ impl VirtualMemory {
                 interpreter_link
                     .node
                     .open(interpreter_link.location, OpenFlags::empty(), ctx)?;
-            let info = elf::load_elf::<E>(&file, self.modify(), info.base + 0x2000_0000)?;
+            let info = elf::load_elf::<E>(&file, ctx, self.modify(), info.base + 0x2000_0000)?;
 
             entrypoint = info.entry;
             brk_start = cmp::max(brk_start, info.end);
@@ -280,7 +280,7 @@ impl VirtualMemory {
         stack_limit: CurrentStackLimit,
     ) -> Result<ExecResult> {
         let mut bytes = [0; 128];
-        let len = file.pread(0, &mut KernelReadBuf::new(&mut bytes))?;
+        let len = file.pread(0, &mut KernelReadBuf::new(&mut bytes), ctx)?;
         let bytes = &bytes[..len];
 
         // Strip shebang.

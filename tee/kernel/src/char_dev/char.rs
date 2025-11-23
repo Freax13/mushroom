@@ -319,7 +319,7 @@ impl OpenFileDescription for Pty {
             .await
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let buffer_len = buf.buffer_len();
         if buffer_len == 0 {
             return Ok(0);
