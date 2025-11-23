@@ -5543,7 +5543,8 @@ async fn recvmmsg(
                 msgvec = msgvec.bytes_offset(offset);
                 i += 1;
             }
-            Err(err) => break i.checked_sub(1).ok_or(err)?,
+            Err(err) if i == 0 => return Err(err),
+            Err(_) => break i,
         }
     };
     Ok(u64::from_usize(n))
@@ -5646,7 +5647,8 @@ async fn sendmmsg(
                 msgvec = msgvec.bytes_offset(offset);
                 i += 1;
             }
-            Err(err) => break i.checked_sub(1).ok_or(err)?,
+            Err(err) if i == 0 => return Err(err),
+            Err(_) => break i,
         }
     };
     Ok(u64::from_usize(n))

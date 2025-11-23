@@ -254,7 +254,7 @@ impl OpenFileDescription for NetlinkSocket {
             let header_len = cmsg_header.size(abi);
             let payload_len = payload.size(abi);
             cmsg_header.len = u64::from_usize(header_len + payload_len);
-            if msg_hdr.controllen <= cmsg_header.len {
+            if msg_hdr.controllen >= cmsg_header.len {
                 let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
                 vm.write(msg_hdr.control.bytes_offset(size).cast(), payload)?;
                 msg_hdr.controllen = cmsg_header.len;

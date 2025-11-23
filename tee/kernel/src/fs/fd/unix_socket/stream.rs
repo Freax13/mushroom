@@ -586,6 +586,7 @@ impl OpenFileDescription for StreamUnixSocket {
         };
         let mut guard = passive.internal.lock();
         let active = guard.queue.pop_front().ok_or(err!(Again))?;
+        passive.connect_notify.notify();
         drop(guard);
 
         let addr = SocketAddr::Unix(active.peername.clone());

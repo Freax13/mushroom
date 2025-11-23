@@ -4,7 +4,7 @@ use core::{
     ffi::c_void,
     fmt::{self, Display},
     marker::PhantomData,
-    net::{self, SocketAddrV4, SocketAddrV6},
+    net::{self, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     ops::Add,
 };
 
@@ -2450,4 +2450,17 @@ pub struct UserCapData {
     pub effective: u32,
     pub permitted: u32,
     pub inheritable: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PktInfo {
+    pub ifindex: u32,
+    pub spec_dst: Ipv4Addr,
+    pub addr: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PktInfo6 {
+    pub spec_dst: Ipv6Addr,
+    pub ifindex: u32,
 }

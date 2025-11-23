@@ -12,7 +12,8 @@ use core::{
 };
 
 use async_trait::async_trait;
-use usize_conversions::usize_from;
+use usize_conversions::{FromUsize, usize_from};
+use x86_64::align_up;
 
 use crate::{
     error::{Result, bail, ensure, err},
@@ -38,9 +39,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
-                SendMsgFlags, SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
-                Timespec,
+                CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, PktInfo, PktInfo6,
+                Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketType,
+                SocketTypeWithFlags, Stat, Timespec, pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -138,6 +139,8 @@ struct UdpSocketInternal {
     send_buffer_size: usize,
     receive_buffer_size: usize,
     v6only: bool,
+    ipv4_pktinfo: bool,
+    ipv6_pktinfo: bool,
     socketname: Option<net::SocketAddr>,
     peername: Option<net::SocketAddr>,
     rx: VecDeque<Packet>,
@@ -161,6 +164,8 @@ impl UdpSocket {
                 send_buffer_size: 1024 * 1024,
                 receive_buffer_size: 1024 * 1024,
                 v6only: false,
+                ipv4_pktinfo: false,
+                ipv6_pktinfo: false,
                 socketname: None,
                 peername: None,
                 rx: VecDeque::new(),
@@ -257,7 +262,12 @@ impl UdpSocket {
         Ok(guard.socketname.unwrap())
     }
 
-    fn recv(&self, buf: &mut (impl ReadBuf + ?Sized), peek: bool) -> Result<(usize, SocketAddr)> {
+    /// Returns a tuple of (size, sender, matching destination address)
+    fn recv(
+        &self,
+        buf: &mut (impl ReadBuf + ?Sized),
+        peek: bool,
+    ) -> Result<(usize, net::SocketAddr, IpAddr)> {
         let mut guard = self.internal.lock();
         let packed_owned;
         let packet = if peek {
@@ -274,11 +284,12 @@ impl UdpSocket {
             self.rx_notify.notify();
         }
 
-        Ok((len, SocketAddr::from(packet.sender)))
+        Ok((len, packet.source, packet.destination))
     }
 
     fn send(
         &self,
+        source_override: Option<IpAddr>,
         peername: Option<SocketAddr>,
         buf: &(impl WriteBuf + ?Sized),
         ctx: &FileAccessContext,
@@ -289,14 +300,15 @@ impl UdpSocket {
             self.internal.lock().peername.ok_or(err!(NotConn))?
         };
 
-        let mut sender = self.get_or_bind_ephemeral(self.ip_version.unspecified_ip(), ctx)?;
+        let sockname = self.get_or_bind_ephemeral(self.ip_version.unspecified_ip(), ctx)?;
+        let mut source = sockname;
 
         // Make sure that the socket can send a packet to the address.
         let peer_ip_version = IpVersion::from(peername.ip());
         let v6only = self.internal.lock().v6only;
         match (
             self.ip_version,
-            sender.ip().is_unspecified(),
+            source.ip().is_unspecified(),
             v6only,
             peer_ip_version,
             IpVersion::from(peername.ip().to_canonical()),
@@ -316,8 +328,8 @@ impl UdpSocket {
         let canonical_peer_ip = peername.ip().to_canonical();
 
         // If the ip is all zeroes, the packet gets sent by localhost.
-        if sender.ip().is_unspecified() {
-            sender.set_ip(self.ip_version.localhost_ip());
+        if source.ip().is_unspecified() {
+            source.set_ip(self.ip_version.localhost_ip());
         }
 
         let len = buf.buffer_len();
@@ -391,8 +403,8 @@ impl UdpSocket {
             // If the socket is connected, make sure that the address matches
             // the sender.
             let matches = guard.peername.is_none_or(|peer| {
-                (peer.ip() == sender.ip() || sender.ip().is_unspecified())
-                    && (peer.port() == sender.port())
+                (peer.ip() == source.ip() || source.ip().is_unspecified())
+                    && (peer.port() == source.port())
             });
             if !matches {
                 i += 1;
@@ -402,26 +414,26 @@ impl UdpSocket {
             // Fix the sender address.
             match (
                 IpVersion::from(entry.local_ip),
-                sender.ip(),
+                source.ip(),
                 IpVersion::from(canonical_peer_ip),
             ) {
                 (IpVersion::V4, IpAddr::V4(_), _)
                 | (IpVersion::V6, IpAddr::V6(_), IpVersion::V6) => {}
                 (IpVersion::V4, IpAddr::V6(_), _) => {
-                    if !sender.ip().is_loopback() {
+                    if !source.ip().is_loopback() {
                         todo!();
                     }
-                    sender.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
+                    source.set_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
                 }
                 (IpVersion::V6, IpAddr::V4(addr), IpVersion::V4) => {
-                    sender.set_ip(IpAddr::V6(addr.to_ipv6_mapped()))
+                    source.set_ip(IpAddr::V6(addr.to_ipv6_mapped()))
                 }
                 (IpVersion::V6, IpAddr::V4(_), IpVersion::V6) => {}
                 (IpVersion::V6, IpAddr::V6(_), IpVersion::V4) => {
-                    if !sender.ip().is_loopback() {
+                    if !source.ip().is_loopback() {
                         todo!();
                     }
-                    sender.set_ip(IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped()))
+                    source.set_ip(IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped()))
                 }
             }
 
@@ -430,7 +442,34 @@ impl UdpSocket {
         data.round_robin_counter = data.round_robin_counter.wrapping_add(i).wrapping_add(1);
         drop(guard);
 
-        socket_guard.rx.push_back(Packet { bytes, sender });
+        if let Some(source_override) = source_override
+            && IpVersion::from(source.ip()) == IpVersion::from(source_override)
+        {
+            ensure!(source_override.is_loopback(), NetUnreach);
+            source.set_ip(source_override);
+        }
+
+        let other_sockname = socket_guard.socketname.unwrap();
+        let destination = if !other_sockname.ip().is_unspecified() {
+            other_sockname.ip()
+        } else if let Some(source_override) = source_override
+            .filter(|ip| IpVersion::from(*ip) == IpVersion::from(other_sockname.ip()))
+        {
+            source_override
+        } else if !sockname.ip().is_unspecified() {
+            sockname.ip()
+        } else {
+            match (sockname.ip(), other_sockname.ip()) {
+                (IpAddr::V6(_), IpAddr::V6(_)) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+                _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            }
+        };
+
+        socket_guard.rx.push_back(Packet {
+            bytes,
+            source,
+            destination,
+        });
         socket_guard.read_event_counter.inc();
         socket.rx_notify.notify();
 
@@ -504,8 +543,15 @@ impl OpenFileDescription for UdpSocket {
     ) -> Result<()> {
         let mut guard = self.internal.lock();
         match (level, optname) {
-            (0, 2) => Ok(()),  // IP_TTL
-            (0, 6) => Ok(()),  // IP_RECVOPTS
+            (0, 2) => Ok(()), // IP_TTL
+            (0, 6) => Ok(()), // IP_RECVOPTS
+            (0, 8) => {
+                // IP_PKTINFO
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ipv4_pktinfo = optval;
+                Ok(())
+            }
             (0, 10) => Ok(()), // IP_MTU_DISCOVER
             (0, 11) => {
                 // IP_RECVERR
@@ -574,6 +620,13 @@ impl OpenFileDescription for UdpSocket {
                 ensure!(self.ip_version == IpVersion::V6, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
                 guard.v6only = optval;
+                Ok(())
+            }
+            (41, 49) => {
+                // IPV6_RECVPKTINFO
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ipv6_pktinfo = optval;
                 Ok(())
             }
             _ => bail!(OpNotSupp),
@@ -670,7 +723,7 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let (len, _addr) = self.recv(buf, false)?;
+        let (len, _, _) = self.recv(buf, false)?;
         Ok(len)
     }
 
@@ -680,8 +733,8 @@ impl OpenFileDescription for UdpSocket {
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
         let peek = flags.contains(RecvFromFlags::PEEK);
-        let (len, addr) = self.recv(buf, peek)?;
-        Ok((len, Some(addr)))
+        let (len, source, _) = self.recv(buf, peek)?;
+        Ok((len, Some(SocketAddr::from(source))))
     }
 
     fn recv_msg(
@@ -693,19 +746,77 @@ impl OpenFileDescription for UdpSocket {
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, addr) = self.recv(&mut vectored_buf, false)?;
+        let (len, source, destination) = self.recv(&mut vectored_buf, false)?;
 
         if msg_hdr.namelen != 0 {
-            msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
+            let source = SocketAddr::from(source);
+            msg_hdr.namelen = source.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
         }
 
-        msg_hdr.controllen = 0;
+        let guard = self.internal.lock();
+        let ipv4_pktinfo = guard.ipv4_pktinfo;
+        let ipv6_pktinfo = guard.ipv6_pktinfo;
+        drop(guard);
+
+        match destination {
+            IpAddr::V4(destination) => {
+                if ipv4_pktinfo {
+                    let mut cmsg_header = CmsgHdr {
+                        len: 0,
+                        level: 0,
+                        r#type: 8,
+                    };
+                    let payload = PktInfo {
+                        ifindex: 1,
+                        spec_dst: destination,
+                        addr: destination,
+                    };
+                    let header_len = cmsg_header.size(abi);
+                    let payload_len = payload.size(abi);
+                    cmsg_header.len = u64::from_usize(header_len + payload_len);
+                    if msg_hdr.controllen >= cmsg_header.len {
+                        let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
+                        vm.write_with_abi(msg_hdr.control.bytes_offset(size).cast(), payload, abi)?;
+                        msg_hdr.controllen = cmsg_header.len;
+                    } else {
+                        msg_hdr.controllen = 0;
+                    }
+                } else {
+                    msg_hdr.controllen = 0;
+                }
+            }
+            IpAddr::V6(destination) => {
+                if ipv6_pktinfo {
+                    let mut cmsg_header = CmsgHdr {
+                        len: 0,
+                        level: 41,
+                        r#type: 50,
+                    };
+                    let payload = PktInfo6 {
+                        spec_dst: destination,
+                        ifindex: 1,
+                    };
+                    let header_len = cmsg_header.size(abi);
+                    let payload_len = payload.size(abi);
+                    cmsg_header.len = u64::from_usize(header_len + payload_len);
+                    if msg_hdr.controllen >= cmsg_header.len {
+                        let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
+                        vm.write_with_abi(msg_hdr.control.bytes_offset(size).cast(), payload, abi)?;
+                        msg_hdr.controllen = cmsg_header.len;
+                    } else {
+                        msg_hdr.controllen = 0;
+                    }
+                } else {
+                    msg_hdr.controllen = 0;
+                }
+            }
+        }
 
         Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
-        self.send(None, buf, ctx)
+        self.send(None, None, buf, ctx)
     }
 
     fn send_to(
@@ -715,7 +826,7 @@ impl OpenFileDescription for UdpSocket {
         addr: Option<SocketAddr>,
         ctx: &FileAccessContext,
     ) -> Result<usize> {
-        self.send(addr, buf, ctx)
+        self.send(None, addr, buf, ctx)
     }
 
     fn send_msg(
@@ -727,6 +838,53 @@ impl OpenFileDescription for UdpSocket {
         _: &FileDescriptorTable,
         ctx: &FileAccessContext,
     ) -> Result<usize> {
+        let mut source = None;
+        while msg_hdr.controllen > 0 {
+            let (len, header) = vm.read_sized_with_abi(msg_hdr.control, abi)?;
+            ensure!(msg_hdr.controllen >= header.len, Inval);
+            let buffer_len = usize_from(header.len).checked_sub(len).ok_or(err!(Inval))?;
+
+            match (header.level, header.r#type) {
+                (0, 8) => {
+                    // IP_PKTINFO
+                    ensure!(source.is_none(), Inval);
+
+                    let (len, pktinfo) = vm.read_sized_with_abi::<PktInfo, _>(
+                        msg_hdr.control.bytes_offset(len).cast(),
+                        abi,
+                    )?;
+                    ensure!(buffer_len == len, Inval);
+
+                    ensure!(pktinfo.ifindex == 0 || pktinfo.ifindex == 1, NoDev);
+
+                    source = Some(IpAddr::V4(pktinfo.spec_dst));
+                }
+                (41, 50) => {
+                    // IPV6_PKTINFO
+                    ensure!(source.is_none(), Inval);
+
+                    let (len, pktinfo) = vm.read_sized_with_abi::<PktInfo6, _>(
+                        msg_hdr.control.bytes_offset(len).cast(),
+                        abi,
+                    )?;
+                    ensure!(buffer_len == len, Inval);
+
+                    ensure!(pktinfo.ifindex == 0 || pktinfo.ifindex == 1, NoDev);
+
+                    source = Some(IpAddr::V6(pktinfo.spec_dst));
+                }
+                _ => bail!(Inval),
+            }
+
+            let align = match abi {
+                Abi::I386 => 4,
+                Abi::Amd64 => 8,
+            };
+            let offset = align_up(header.len, align);
+            msg_hdr.control = msg_hdr.control.bytes_offset(usize_from(offset));
+            msg_hdr.controllen = msg_hdr.controllen.saturating_sub(offset);
+        }
+
         if msg_hdr.controllen != 0 {
             todo!()
         }
@@ -742,7 +900,7 @@ impl OpenFileDescription for UdpSocket {
         };
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send(peername, &vectored_buf, ctx)
+        self.send(source, peername, &vectored_buf, ctx)
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
@@ -814,7 +972,8 @@ impl OpenFileDescription for UdpSocket {
 
 struct Packet {
     bytes: Box<[u8]>,
-    sender: net::SocketAddr,
+    source: net::SocketAddr,
+    destination: IpAddr,
 }
 
 struct SockExtendedError {}

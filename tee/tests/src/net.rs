@@ -1,5 +1,6 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
+    io::{IoSlice, IoSliceMut},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
     sync::atomic::{AtomicU16, Ordering},
 };
@@ -7,12 +8,13 @@ use std::{
 use nix::{
     Result,
     errno::Errno,
-    libc::{Ioctl, ioctl},
+    libc::{Ioctl, in_addr, in_pktinfo, ioctl},
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::socket::{
-        self, AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn, SockaddrIn6,
-        getpeername, getsockname, setsockopt, shutdown,
-        sockopt::{Ipv6V6Only, ReuseAddr, ReusePort},
+        self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag,
+        SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrStorage, getpeername, getsockname,
+        recvmsg, sendmsg, setsockopt, shutdown,
+        sockopt::{Ipv4PacketInfo, Ipv6RecvPacketInfo, Ipv6V6Only, ReuseAddr, ReusePort},
     },
     unistd::close,
 };
@@ -1398,6 +1400,271 @@ fn udp_bind() {
                                 assert_eq!(res, Err(Errno::EADDRINUSE));
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn udp_pktinfo() {
+    let addrs = [
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ];
+    for src in addrs {
+        let v6only_values: &[Option<bool>] = if src.is_ipv6() {
+            &[Some(false), Some(true)]
+        } else {
+            &[None]
+        };
+        for src_v6only in v6only_values {
+            let src_family = match src {
+                IpAddr::V4(_) => AddressFamily::Inet,
+                IpAddr::V6(_) => AddressFamily::Inet6,
+            };
+            let sender = socket::socket(
+                src_family,
+                SockType::Datagram,
+                SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                SockProtocol::Udp,
+            )
+            .unwrap();
+            if let Some(v6only) = src_v6only {
+                setsockopt(&sender, Ipv6V6Only, v6only).unwrap();
+            }
+            let src_storage = SockaddrStorage::from(SocketAddr::new(src, 0));
+            socket::bind(sender.as_raw_fd(), &src_storage).unwrap();
+
+            for dst in addrs {
+                let v6only_values: &[Option<bool>] = if dst.is_ipv6() {
+                    &[Some(false), Some(true)]
+                } else {
+                    &[None]
+                };
+                for dst_v6only in v6only_values {
+                    dbg!((src, src_v6only, dst, dst_v6only));
+
+                    let dst_family = match dst {
+                        IpAddr::V4(_) => AddressFamily::Inet,
+                        IpAddr::V6(_) => AddressFamily::Inet6,
+                    };
+                    let receiver = socket::socket(
+                        dst_family,
+                        SockType::Datagram,
+                        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                        SockProtocol::Udp,
+                    )
+                    .unwrap();
+                    if let Some(v6only) = dst_v6only {
+                        setsockopt(&receiver, Ipv6V6Only, v6only).unwrap();
+                    }
+                    setsockopt(&receiver, Ipv4PacketInfo, &true).unwrap();
+                    if dst.is_ipv6() {
+                        setsockopt(&receiver, Ipv6RecvPacketInfo, &true).unwrap();
+                    }
+                    let dst_storage = SockaddrStorage::from(SocketAddr::new(dst, 0));
+                    socket::bind(receiver.as_raw_fd(), &dst_storage).unwrap();
+                    let dst_addr = getsockname::<SockaddrStorage>(receiver.as_raw_fd()).unwrap();
+
+                    let res = sendmsg(
+                        sender.as_raw_fd(),
+                        &[IoSlice::new(b"foo")],
+                        &[],
+                        MsgFlags::empty(),
+                        Some(&dst_addr),
+                    );
+                    if res.is_err() {
+                        continue;
+                    }
+
+                    let mut buf = [0; 4];
+                    let mut ioslice = IoSliceMut::new(&mut buf);
+                    let mut cmsg_buffer = [0; 64];
+                    let res = recvmsg::<SockaddrStorage>(
+                        receiver.as_raw_fd(),
+                        core::slice::from_mut(&mut ioslice),
+                        Some(&mut cmsg_buffer),
+                        MsgFlags::empty(),
+                    );
+                    let received = res.is_ok();
+                    if let Ok(msg) = res {
+                        let mut cmsgs = msg.cmsgs().unwrap();
+                        let cmsg = cmsgs.next().unwrap();
+                        match cmsg {
+                            ControlMessageOwned::Ipv4PacketInfo(pktinfo) => {
+                                let IpAddr::V4(dst) = dst else {
+                                    unreachable!();
+                                };
+                                let addr = if !dst.is_unspecified() {
+                                    dst
+                                } else {
+                                    match src {
+                                        IpAddr::V4(src) => {
+                                            if !src.is_unspecified() {
+                                                src
+                                            } else {
+                                                Ipv4Addr::LOCALHOST
+                                            }
+                                        }
+                                        IpAddr::V6(_) => Ipv4Addr::LOCALHOST,
+                                    }
+                                };
+
+                                assert_eq!(pktinfo.ipi_ifindex, 1);
+                                let ipi_spec_dst =
+                                    Ipv4Addr::from_bits(u32::from_be(pktinfo.ipi_spec_dst.s_addr));
+                                let ipi_addr =
+                                    Ipv4Addr::from_bits(u32::from_be(pktinfo.ipi_addr.s_addr));
+                                assert_eq!(ipi_spec_dst, ipi_addr);
+                                assert_eq!(ipi_spec_dst, addr);
+
+                                let addr = match src {
+                                    IpAddr::V4(src) => {
+                                        if !src.is_unspecified() {
+                                            src
+                                        } else {
+                                            Ipv4Addr::LOCALHOST
+                                        }
+                                    }
+                                    IpAddr::V6(_) => Ipv4Addr::LOCALHOST,
+                                };
+                                assert_eq!(
+                                    msg.address.unwrap().as_sockaddr_in().unwrap().ip(),
+                                    addr
+                                );
+                            }
+                            ControlMessageOwned::Ipv6PacketInfo(pktinfo) => {
+                                assert_eq!(pktinfo.ipi6_ifindex, 1);
+                                let ipi_spec_dst = Ipv6Addr::from_octets(pktinfo.ipi6_addr.s6_addr);
+                                assert_eq!(ipi_spec_dst, Ipv6Addr::LOCALHOST);
+
+                                assert_eq!(
+                                    msg.address.unwrap().as_sockaddr_in6().unwrap().ip(),
+                                    Ipv6Addr::LOCALHOST
+                                );
+                            }
+                            _ => todo!(),
+                        }
+                        assert_eq!(cmsgs.next(), None);
+                        assert_eq!(msg.bytes, 3);
+
+                        assert_eq!(buf[..3], *b"foo");
+                    }
+
+                    let src_override = Ipv4Addr::new(127, 0, 0, 3);
+                    let send_res = sendmsg(
+                        sender.as_raw_fd(),
+                        &[IoSlice::new(b"bar")],
+                        &[ControlMessage::Ipv4PacketInfo(&in_pktinfo {
+                            ipi_ifindex: 1,
+                            ipi_spec_dst: in_addr {
+                                s_addr: src_override.to_bits().to_be(),
+                            },
+                            ipi_addr: in_addr {
+                                s_addr: src_override.to_bits().to_be(),
+                            },
+                        })],
+                        MsgFlags::empty(),
+                        Some(&dst_addr),
+                    );
+                    assert_eq!(send_res, Ok(3));
+                    let mut buf = [0; 4];
+                    let mut ioslice = IoSliceMut::new(&mut buf);
+                    let mut cmsg_buffer = [0; 64];
+                    let res = recvmsg::<SockaddrStorage>(
+                        receiver.as_raw_fd(),
+                        core::slice::from_mut(&mut ioslice),
+                        Some(&mut cmsg_buffer),
+                        MsgFlags::empty(),
+                    );
+                    assert_eq!(received, res.is_ok());
+                    if let Ok(msg) = res {
+                        let mut cmsgs = msg.cmsgs().unwrap();
+                        let cmsg = cmsgs.next().unwrap();
+                        match cmsg {
+                            ControlMessageOwned::Ipv4PacketInfo(pktinfo) => {
+                                let IpAddr::V4(dst) = dst else {
+                                    unreachable!();
+                                };
+                                let addr = if !dst.is_unspecified() {
+                                    dst
+                                } else {
+                                    src_override
+                                };
+
+                                assert_eq!(pktinfo.ipi_ifindex, 1);
+                                let ipi_spec_dst =
+                                    Ipv4Addr::from_bits(u32::from_be(pktinfo.ipi_spec_dst.s_addr));
+                                let ipi_addr =
+                                    Ipv4Addr::from_bits(u32::from_be(pktinfo.ipi_addr.s_addr));
+                                assert_eq!(ipi_spec_dst, ipi_addr);
+                                assert_eq!(ipi_spec_dst, addr);
+
+                                assert_eq!(
+                                    msg.address.unwrap().as_sockaddr_in().unwrap().ip(),
+                                    src_override
+                                );
+                            }
+                            ControlMessageOwned::Ipv6PacketInfo(pktinfo) => {
+                                assert_eq!(pktinfo.ipi6_ifindex, 1);
+                                let ipi_spec_dst = Ipv6Addr::from_octets(pktinfo.ipi6_addr.s6_addr);
+                                assert_eq!(ipi_spec_dst, Ipv6Addr::LOCALHOST);
+
+                                assert_eq!(
+                                    msg.address.unwrap().as_sockaddr_in6().unwrap().ip(),
+                                    Ipv6Addr::LOCALHOST
+                                );
+                            }
+                            _ => todo!(),
+                        }
+                        assert_eq!(cmsgs.next(), None);
+                        assert_eq!(msg.bytes, 3);
+                        assert_eq!(buf[..3], *b"bar");
+                    }
+
+                    // ipi_addr is ignored.
+                    let res = sendmsg(
+                        sender.as_raw_fd(),
+                        &[IoSlice::new(b"baz")],
+                        &[ControlMessage::Ipv4PacketInfo(&in_pktinfo {
+                            ipi_ifindex: 1,
+                            ipi_spec_dst: in_addr {
+                                s_addr: Ipv4Addr::LOCALHOST.to_bits().to_be(),
+                            },
+                            ipi_addr: in_addr {
+                                s_addr: Ipv4Addr::new(1, 2, 3, 4).to_bits().to_be(),
+                            },
+                        })],
+                        MsgFlags::empty(),
+                        Some(&dst_addr),
+                    );
+                    assert_eq!(res, Ok(3));
+
+                    // ipi_spec_dst is not ignored.
+                    let res = sendmsg(
+                        sender.as_raw_fd(),
+                        &[IoSlice::new(b"baz")],
+                        &[ControlMessage::Ipv4PacketInfo(&in_pktinfo {
+                            ipi_ifindex: 1,
+                            ipi_spec_dst: in_addr {
+                                s_addr: Ipv4Addr::new(1, 1, 1, 1).to_bits().to_be(),
+                            },
+                            ipi_addr: in_addr {
+                                s_addr: Ipv4Addr::LOCALHOST.to_bits().to_be(),
+                            },
+                        })],
+                        MsgFlags::empty(),
+                        Some(&dst_addr),
+                    );
+                    if src.is_ipv4() || dst.is_ipv4() {
+                        assert_eq!(res, Err(Errno::ENETUNREACH));
+                    } else {
+                        assert_eq!(res, Ok(3));
                     }
                 }
             }

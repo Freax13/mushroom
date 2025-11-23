@@ -30,10 +30,10 @@ use crate::{
             args::{
                 CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec,
                 ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr,
-                MsgHdr, Offset, OutputMode, PSelectSigsetArg, Pointer, RLimit, Rusage, SigEvent,
-                SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo,
-                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserCapData,
-                UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                MsgHdr, Offset, OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit,
+                Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
+                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
+                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -2983,3 +2983,70 @@ impl PrimitivePointee for UserCapHeader {}
 
 impl Pointee for UserCapData {}
 impl PrimitivePointee for UserCapData {}
+
+impl Pointee for PktInfo {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for PktInfo {
+    type I386 = RawPktInfo;
+    type Amd64 = RawPktInfo;
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawPktInfo {
+    pub ifindex: u32,
+    pub spec_dst: RawIpv4Addr,
+    pub addr: RawIpv4Addr,
+}
+
+impl From<RawPktInfo> for PktInfo {
+    fn from(value: RawPktInfo) -> Self {
+        Self {
+            ifindex: value.ifindex,
+            spec_dst: Ipv4Addr::from(value.spec_dst),
+            addr: Ipv4Addr::from(value.addr),
+        }
+    }
+}
+
+impl From<PktInfo> for RawPktInfo {
+    fn from(value: PktInfo) -> Self {
+        Self {
+            ifindex: value.ifindex,
+            spec_dst: RawIpv4Addr::from(value.spec_dst),
+            addr: RawIpv4Addr::from(value.addr),
+        }
+    }
+}
+
+impl Pointee for PktInfo6 {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for PktInfo6 {
+    type I386 = RawPktInfo6;
+    type Amd64 = RawPktInfo6;
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawPktInfo6 {
+    pub spec_dst: [u8; 16],
+    pub ifindex: u32,
+}
+
+impl From<RawPktInfo6> for PktInfo6 {
+    fn from(value: RawPktInfo6) -> Self {
+        Self {
+            spec_dst: Ipv6Addr::from_octets(value.spec_dst),
+            ifindex: value.ifindex,
+        }
+    }
+}
+
+impl From<PktInfo6> for RawPktInfo6 {
+    fn from(value: PktInfo6) -> Self {
+        Self {
+            spec_dst: value.spec_dst.octets(),
+            ifindex: value.ifindex,
+        }
+    }
+}
