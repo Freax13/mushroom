@@ -28,7 +28,7 @@ use crate::{
         syscall::args::{
             ExtractableThreadState, FileMode, FileType, OpenFlags, Resource, Stat, Timespec,
         },
-        thread::{Gid, ThreadGuard, Uid},
+        thread::{Gid, Thread, ThreadGuard, Uid},
     },
 };
 
@@ -561,7 +561,7 @@ pub enum Permission {
 }
 
 impl ExtractableThreadState for FileAccessContext {
-    fn extract_from_thread(guard: &ThreadGuard) -> Self {
+    fn extract_from_thread(_: &Arc<Thread>, guard: &ThreadGuard) -> Self {
         Self {
             process: Some(guard.process().clone()),
             symlink_recursion_limit: 16,

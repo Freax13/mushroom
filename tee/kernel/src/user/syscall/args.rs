@@ -45,17 +45,17 @@ pub trait SyscallArg: Send + Copy {
 /// These states can be used as inputs for syscalls with the `#[state]`
 /// attribute.
 pub trait ExtractableThreadState: Send {
-    fn extract_from_thread(guard: &ThreadGuard) -> Self;
+    fn extract_from_thread(thread: &Arc<Thread>, guard: &ThreadGuard) -> Self;
 }
 
 impl ExtractableThreadState for Arc<FileDescriptorTable> {
-    fn extract_from_thread(guard: &ThreadGuard) -> Self {
+    fn extract_from_thread(_: &Arc<Thread>, guard: &ThreadGuard) -> Self {
         guard.thread.fdtable.lock().clone()
     }
 }
 
 impl ExtractableThreadState for Arc<VirtualMemory> {
-    fn extract_from_thread(guard: &ThreadGuard) -> Self {
+    fn extract_from_thread(_: &Arc<Thread>, guard: &ThreadGuard) -> Self {
         guard.virtual_memory().clone()
     }
 }

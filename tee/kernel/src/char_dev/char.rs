@@ -47,8 +47,8 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                ExtractableThreadState, FileMode, FileType, FileTypeAndMode, InputMode, LocalMode,
-                OpenFlags, OutputMode, Pointer, Stat, Termios, Timespec, WinSize,
+                FileMode, FileType, FileTypeAndMode, InputMode, LocalMode, OpenFlags, OutputMode,
+                Pointer, Resource, Stat, Termios, Timespec, WinSize,
             },
             traits::Abi,
         },
@@ -541,7 +541,8 @@ impl OpenFileDescription for Pty {
                 let flags = arg.get().as_u64();
 
                 let pty = Self::new_slave(self.data.clone(), OpenFlags::from_bits_retain(flags))?;
-                let no_file_limit = CurrentNoFileLimit::extract_from_thread(thread);
+                let no_file_limit = thread.process().limits[Resource::NoFile].load_current();
+                let no_file_limit = CurrentNoFileLimit::new(no_file_limit);
                 let fd = thread.thread.fdtable.lock().insert(
                     pty,
                     FdFlags::from_bits_retain(flags),

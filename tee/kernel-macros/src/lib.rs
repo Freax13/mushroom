@@ -37,7 +37,7 @@ fn expand_syscall(attr: SyscallAttr, mut input: ItemFn) -> Result<impl Into<Toke
         let mut pat = pat.clone();
         pat.mutability.take();
         quote! {
-            let #pat = <#ty as ExtractableThreadState>::extract_from_thread(&guard);
+            let #pat = <#ty as ExtractableThreadState>::extract_from_thread(&thread, &guard);
         }
     });
     let arg_bindings = syscall_inputs

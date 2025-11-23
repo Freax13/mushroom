@@ -851,7 +851,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let thread = Thread::empty(tid);
 
     let mut guard = thread.lock();
-    let mut ctx = FileAccessContext::extract_from_thread(&guard);
+    let mut ctx = FileAccessContext::extract_from_thread(&thread, &guard);
 
     let file = TmpFsFile::new(
         TmpFs::new(),
