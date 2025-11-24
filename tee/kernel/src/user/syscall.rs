@@ -330,7 +330,7 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&**fd, Events::READ, || fd.read(&mut buf, &ctx)).await?;
+    let len = do_io(&***fd, Events::READ, || fd.read(&mut buf, &ctx)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -376,7 +376,7 @@ async fn write_impl(
     // interrupted and restarted. Any errors that occur are report to
     // userspace.
     let mut written = thread
-        .interruptable(do_write_io(&**fd, count, || fd.write(&buf, ctx)), true)
+        .interruptable(do_write_io(&***fd, count, || fd.write(&buf, ctx)), true)
         .await
         .inspect_err(queue_signal_for_epipe(thread))
         .inspect_err(queue_signal_for_efbig(thread))?;
@@ -388,7 +388,7 @@ async fn write_impl(
     while written != count {
         let res = thread
             .interruptable(
-                do_write_io(&**fd, count - written, || {
+                do_write_io(&***fd, count - written, || {
                     let buf = OffsetBuf::new(&buf, written);
                     fd.write(&buf, ctx)
                 }),
@@ -973,7 +973,7 @@ async fn readv(
     let fd = fdtable.get(fd)?;
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    let len = do_io(&**fd, Events::READ, || fd.read(&mut vectored_buf, &ctx)).await?;
+    let len = do_io(&***fd, Events::READ, || fd.read(&mut vectored_buf, &ctx)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -1374,7 +1374,7 @@ async fn sendfile(
         let page = r#in.get_page(page_offset, false)?;
         let buf = KernelPageWriteBuf::new(&page, offset_in_page, chunk_len);
 
-        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf, &ctx)).await;
+        let res = do_write_io(&***r#in, chunk_len, || out.write(&buf, &ctx)).await;
         match res {
             Ok(0) => break,
             Ok(n) => {
@@ -1552,7 +1552,7 @@ async fn sendto(
     // userspace.
     let mut written = thread
         .interruptable(
-            do_io(&**fd, Events::WRITE, || {
+            do_io(&***fd, Events::WRITE, || {
                 fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
             }),
             true,
@@ -1566,7 +1566,7 @@ async fn sendto(
     while written != len {
         let res = thread
             .interruptable(
-                do_io(&**fd, Events::WRITE, || {
+                do_io(&***fd, Events::WRITE, || {
                     let buf = OffsetBuf::new(&buf, written);
                     fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
                 }),
@@ -1605,7 +1605,7 @@ async fn recv_from(
         Events::READ
     };
     let (len, addr) = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&**fd, events, || fd.recv_from(&mut buf, flags)).await?
+        do_io(&***fd, events, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
@@ -1638,7 +1638,7 @@ async fn sendmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&**fd, Events::WRITE, || {
+    let len = do_io(&***fd, Events::WRITE, || {
         fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable, &ctx)
     })
     .await?;
@@ -1658,7 +1658,7 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&**fd, Events::READ, || {
+    let len = do_io(&***fd, Events::READ, || {
         fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
     })
     .await?;
@@ -2326,7 +2326,7 @@ async fn fcntl(
                 ),
                 FcntlCmd::OfdSetLk | FcntlCmd::OfdSetLkW => {
                     ensure!(flock.pid == 0, Inval);
-                    (UnixLockOwner::ofd(&**fd), None)
+                    (UnixLockOwner::ofd(&***fd), None)
                 }
                 _ => unreachable!(),
             };
@@ -4320,10 +4320,10 @@ fn epoll_ctl(
             let event = virtual_memory.read(event)?;
             epoll.epoll_add(&fd, event)?
         }
-        EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
+        EpollCtlOp::Del => epoll.epoll_del(&***fd)?,
         EpollCtlOp::Mod => {
             let event = virtual_memory.read(event)?;
-            epoll.epoll_mod(&**fd, event)?
+            epoll.epoll_mod(&***fd, event)?
         }
     }
 
@@ -5335,7 +5335,7 @@ async fn accept4(
     flags: Accept4Flags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let (socket, addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
+    let (socket, addr) = do_io(&***fd, Events::READ, || fd.accept(flags)).await?;
     let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
 
     if !upeer_sockaddr.is_null() {
@@ -5456,7 +5456,7 @@ async fn preadv(
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_io(&**fd, Events::READ, || {
+    let len = do_io(&***fd, Events::READ, || {
         fd.pread(pos, &mut vectored_buf, &ctx)
     })
     .await?;
@@ -5481,7 +5481,7 @@ async fn pwritev(
 
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_write_io(&**fd, WriteBuf::buffer_len(&vectored_buf), || {
+    let len = do_write_io(&***fd, WriteBuf::buffer_len(&vectored_buf), || {
         fd.pwrite(pos, &vectored_buf, &ctx)
     })
     .await
@@ -5527,7 +5527,7 @@ async fn recvmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = {
-            let recv_fut = do_io(&**socket, Events::READ, || {
+            let recv_fut = do_io(&***socket, Events::READ, || {
                 socket.recv_msg(
                     &virtual_memory,
                     abi,
@@ -5636,7 +5636,7 @@ async fn sendmmsg(
 
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
-        let res = do_io(&**socket, Events::WRITE, || {
+        let res = do_io(&***socket, Events::WRITE, || {
             socket.send_msg(
                 &virtual_memory,
                 abi,
@@ -5827,7 +5827,7 @@ fn copy_file_range(
 
     // Do the copy operations.
     let len = fd_in
-        .copy_file_range(off_in_val, &**fd_out, off_out_val, len, &ctx)
+        .copy_file_range(off_in_val, &***fd_out, off_out_val, len, &ctx)
         .inspect_err(queue_signal_for_efbig(thread))?;
 
     // Write the offset back.

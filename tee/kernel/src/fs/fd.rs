@@ -146,7 +146,7 @@ impl FileDescriptor {
 }
 
 impl Deref for FileDescriptor {
-    type Target = OpenFileDescriptionData<dyn OpenFileDescription>;
+    type Target = Arc<OpenFileDescriptionData<dyn OpenFileDescription>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -163,7 +163,7 @@ impl Eq for FileDescriptor {}
 
 impl PartialEq<dyn OpenFileDescription> for FileDescriptor {
     fn eq(&self, other: &dyn OpenFileDescription) -> bool {
-        core::ptr::eq(&***self, other)
+        core::ptr::eq(&****self, other)
     }
 }
 
