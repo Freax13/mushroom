@@ -12,9 +12,9 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            StrongFileDescriptor, WriteBuf,
-            epoll::{EpollRequest, EpollResult},
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, StrongFileDescriptor, WriteBuf,
+            epoll::{EpollReady, EpollRequest, EpollResult, WeakEpollReady},
             pipe::{CAPACITY, PIPE_BUF},
             stream_buffer,
         },
@@ -278,19 +278,22 @@ impl OpenFileDescription for ReadHalf {
             .await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for ReadHalf {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         self.read_half
             .notify()
             .epoll_loop(req, || self.read_half.epoll_ready())
             .await
-    }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -360,19 +363,22 @@ impl OpenFileDescription for WriteHalf {
         self.write_half.ready_for_write(count).await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for WriteHalf {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         self.write_half
             .notify()
             .epoll_loop(req, || self.write_half.epoll_ready())
             .await
-    }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -461,10 +467,17 @@ impl OpenFileDescription for FullReadWrite {
         self.write_half.ready_for_write(count).await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for FullReadWrite {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         Notify::zip_epoll_loop(
             req,
@@ -474,9 +487,5 @@ impl OpenFileDescription for FullReadWrite {
             || self.write_half.epoll_ready(),
         )
         .await
-    }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
     }
 }

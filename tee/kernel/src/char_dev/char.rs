@@ -24,10 +24,10 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, BsdFileLockRecord, Events, FdFlags, LazyBsdFileLockRecord, NonEmptyEvents,
-            OpenFileDescription, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
-            common_ioctl,
+            OpenFileDescription, OpenFileDescriptionData, PipeBlocked, ReadBuf,
+            StrongFileDescriptor, WriteBuf, common_ioctl,
             dir::open_dir,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             inotify::Watchers,
             stream_buffer,
             unix_socket::StreamUnixSocket,
@@ -267,56 +267,8 @@ impl OpenFileDescription for Pty {
             .await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        self.data
-            .notify
-            .epoll_loop(req, || {
-                let mut result = EpollResult::new();
-                let guard = self.data.internal.lock();
-                if self.master {
-                    if !guard.output_buffer.is_empty()
-                        || (guard.slave_connected && guard.num_slaves == 0)
-                    {
-                        result.set_ready(Events::READ);
-                        result.add_counter(Events::READ, &guard.master_read_counter);
-                    }
-
-                    if guard.input_buffer.len() < guard.input_buffer.capacity()
-                        || guard
-                            .input_buffer
-                            .iter()
-                            .copied()
-                            .all(|c| !guard.is_line_end(c))
-                    {
-                        result.set_ready(Events::WRITE);
-                        result.add_counter(Events::WRITE, &guard.master_write_counter);
-                    }
-                } else {
-                    if guard
-                        .input_buffer
-                        .iter()
-                        .copied()
-                        .any(|c| guard.is_line_end(c))
-                        || guard.master_closed
-                    {
-                        result.set_ready(Events::READ);
-                        result.add_counter(Events::READ, &guard.slave_read_counter);
-                    }
-
-                    if guard.output_buffer.len() < guard.output_buffer.capacity() - 1
-                        || guard.master_closed
-                    {
-                        result.set_ready(Events::WRITE);
-                        result.add_counter(Events::WRITE, &guard.slave_write_counter);
-                    }
-                }
-                result
-            })
-            .await
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
@@ -556,6 +508,57 @@ impl OpenFileDescription for Pty {
 
     fn as_tty(&self) -> Option<Arc<PtyData>> {
         Some(self.data.clone())
+    }
+}
+
+#[async_trait]
+impl EpollReady for Pty {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.data
+            .notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.data.internal.lock();
+                if self.master {
+                    if !guard.output_buffer.is_empty()
+                        || (guard.slave_connected && guard.num_slaves == 0)
+                    {
+                        result.set_ready(Events::READ);
+                        result.add_counter(Events::READ, &guard.master_read_counter);
+                    }
+
+                    if guard.input_buffer.len() < guard.input_buffer.capacity()
+                        || guard
+                            .input_buffer
+                            .iter()
+                            .copied()
+                            .all(|c| !guard.is_line_end(c))
+                    {
+                        result.set_ready(Events::WRITE);
+                        result.add_counter(Events::WRITE, &guard.master_write_counter);
+                    }
+                } else {
+                    if guard
+                        .input_buffer
+                        .iter()
+                        .copied()
+                        .any(|c| guard.is_line_end(c))
+                        || guard.master_closed
+                    {
+                        result.set_ready(Events::READ);
+                        result.add_counter(Events::READ, &guard.slave_read_counter);
+                    }
+
+                    if guard.output_buffer.len() < guard.output_buffer.capacity() - 1
+                        || guard.master_closed
+                    {
+                        result.set_ready(Events::WRITE);
+                        result.add_counter(Events::WRITE, &guard.slave_write_counter);
+                    }
+                }
+                result
+            })
+            .await
     }
 }
 

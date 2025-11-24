@@ -4315,8 +4315,6 @@ fn epoll_ctl(
 
     match op {
         EpollCtlOp::Add => {
-            ensure!(fd.supports_epoll(), Perm);
-
             let event = virtual_memory.read(event)?;
             epoll.epoll_add(&fd, event)?
         }

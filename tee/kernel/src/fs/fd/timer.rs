@@ -8,7 +8,11 @@ use crate::{
     error::{Result, ensure, err},
     fs::{
         FileSystem,
-        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf,
+            epoll::{BasicEpoll, WeakEpollReady},
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -178,8 +182,8 @@ impl OpenFileDescription for Timer {
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(BasicEpoll::new(&self)))
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {

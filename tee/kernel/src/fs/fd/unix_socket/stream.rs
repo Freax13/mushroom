@@ -24,7 +24,7 @@ use crate::{
             BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
             WriteBuf,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
@@ -731,38 +731,8 @@ impl OpenFileDescription for StreamUnixSocket {
             .await;
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
-        match mode {
-            Mode::Active(active) => {
-                Notify::zip_epoll_loop(
-                    req,
-                    &active.read_half.notify,
-                    || active.read_half.lock().epoll_read(),
-                    &active.write_half.notify,
-                    || active.write_half.lock().epoll_write(),
-                )
-                .await
-            }
-            Mode::Passive(passive) => {
-                passive
-                    .connect_notify
-                    .epoll_loop(req, || {
-                        let mut result = EpollResult::new();
-                        let guard = passive.internal.lock();
-                        if !guard.queue.is_empty() {
-                            result.set_ready(Events::READ);
-                        }
-                        result.add_counter(Events::READ, &guard.read_event_counter);
-                        result
-                    })
-                    .await
-            }
-        }
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -798,6 +768,39 @@ impl OpenFileDescription for StreamUnixSocket {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for StreamUnixSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
+        match mode {
+            Mode::Active(active) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    &active.read_half.notify,
+                    || active.read_half.lock().epoll_read(),
+                    &active.write_half.notify,
+                    || active.write_half.lock().epoll_write(),
+                )
+                .await
+            }
+            Mode::Passive(passive) => {
+                passive
+                    .connect_notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_event_counter);
+                        result
+                    })
+                    .await
+            }
+        }
     }
 }
 

@@ -9,8 +9,9 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            VectoredUserBuf, WriteBuf,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
+            epoll::{BasicEpoll, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -242,8 +243,8 @@ impl OpenFileDescription for DgramUnixSocket {
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(BasicEpoll::new(&self)))
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {

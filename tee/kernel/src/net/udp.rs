@@ -23,7 +23,7 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             common_ioctl,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         path::Path,
@@ -699,27 +699,8 @@ impl OpenFileDescription for UdpSocket {
         self.rx_notify.wait_until(|| self.poll_ready(events)).await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        self.rx_notify
-            .epoll_loop(req, || {
-                let mut result = EpollResult::new();
-                let guard = self.internal.lock();
-                result.set_ready(Events::WRITE);
-                if !guard.rx.is_empty() {
-                    result.set_ready(Events::READ);
-                }
-                if !guard.errors.is_empty() {
-                    result.set_ready(Events::ERR);
-                }
-                result.add_counter(Events::READ, &guard.read_event_counter);
-                result.add_counter(Events::ERR, &guard.error_event_counter);
-                result
-            })
-            .await
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
@@ -967,6 +948,28 @@ impl OpenFileDescription for UdpSocket {
             }
             _ => common_ioctl(self, thread, cmd, arg, abi),
         }
+    }
+}
+
+#[async_trait]
+impl EpollReady for UdpSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.rx_notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.internal.lock();
+                result.set_ready(Events::WRITE);
+                if !guard.rx.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                if !guard.errors.is_empty() {
+                    result.set_ready(Events::ERR);
+                }
+                result.add_counter(Events::READ, &guard.read_event_counter);
+                result.add_counter(Events::ERR, &guard.error_event_counter);
+                result
+            })
+            .await
     }
 }
 

@@ -12,8 +12,9 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            VectoredUserBuf, WriteBuf,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
+            epoll::{BasicEpoll, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         path::Path,
@@ -336,8 +337,8 @@ impl OpenFileDescription for NetlinkSocket {
         NonEmptyEvents::select(read_fut, write_fut).await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(BasicEpoll::new(&self)))
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {

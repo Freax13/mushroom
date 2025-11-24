@@ -31,7 +31,7 @@ use crate::{
     error::{ErrorKind, Result, bail, ensure, err},
     fs::{
         FileSystem,
-        fd::epoll::{EpollRequest, EpollResult},
+        fd::epoll::WeakEpollReady,
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, Link, OffsetDirEntry, new_ino,
             procfs::{FdINode, FdInfoFile, ProcFs},
@@ -1046,22 +1046,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         self.ready(Events::WRITE).await;
     }
 
-    fn supports_epoll(&self) -> bool {
-        false
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        let events = self.ready(req.events()).await;
-        let events = Events::from(events);
-        let mut result = EpollResult::new();
-        result.set_ready(events);
-
-        result.if_matches(req).unwrap_or_else(|| {
-            panic!(
-                "{} doesn't support edge-triggered epoll",
-                core::any::type_name::<Self>()
-            );
-        })
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        bail!(Perm)
     }
 
     fn add_watch(&self, node: DynINode, mask: InotifyMask) -> Result<u32> {

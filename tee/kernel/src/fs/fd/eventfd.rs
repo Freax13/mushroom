@@ -8,8 +8,9 @@ use crate::{
     fs::{
         ANON_INODE_FS, FileSystem,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
-            epoll::{AtomicEventCounter, EpollRequest, EpollResult},
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, WriteBuf,
+            epoll::{AtomicEventCounter, EpollReady, EpollRequest, EpollResult, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -123,26 +124,8 @@ impl OpenFileDescription for EventFd {
         self.notify.wait_until(|| self.poll_ready(events)).await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        self.notify
-            .epoll_loop(req, || {
-                let mut result = EpollResult::new();
-                let counter_value = self.counter.load(Ordering::SeqCst);
-                if counter_value != 0 {
-                    result.set_ready(Events::READ);
-                    result.add_atomic_counter(Events::READ, &self.read_event_counter);
-                }
-                if counter_value != !0 {
-                    result.set_ready(Events::WRITE);
-                    result.add_atomic_counter(Events::WRITE, &self.write_event_counter);
-                }
-                result
-            })
-            .await
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -179,5 +162,26 @@ impl OpenFileDescription for EventFd {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for EventFd {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let counter_value = self.counter.load(Ordering::SeqCst);
+                if counter_value != 0 {
+                    result.set_ready(Events::READ);
+                    result.add_atomic_counter(Events::READ, &self.read_event_counter);
+                }
+                if counter_value != !0 {
+                    result.set_ready(Events::WRITE);
+                    result.add_atomic_counter(Events::WRITE, &self.write_event_counter);
+                }
+                result
+            })
+            .await
     }
 }

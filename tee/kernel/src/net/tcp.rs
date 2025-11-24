@@ -22,9 +22,10 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
-            LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf, common_ioctl,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf,
+            common_ioctl,
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             file::{File, open_file},
             inotify::Watchers,
             stream_buffer,
@@ -1034,41 +1035,8 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        let mode = self
-            .activate_notify
-            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
-            .await;
-        match mode {
-            Mode::Passive(passive_tcp_socket) => {
-                passive_tcp_socket
-                    .notify
-                    .epoll_loop(req, || {
-                        let mut result = EpollResult::new();
-                        let guard = passive_tcp_socket.internal.lock();
-                        if !guard.queue.is_empty() {
-                            result.set_ready(Events::READ);
-                        }
-                        result.add_counter(Events::READ, &guard.read_counter);
-                        result
-                    })
-                    .await
-            }
-            Mode::Active(active_tcp_socket) => {
-                Notify::zip_epoll_loop(
-                    req,
-                    active_tcp_socket.read_half.notify(),
-                    || active_tcp_socket.read_half.epoll_ready(),
-                    active_tcp_socket.write_half.notify(),
-                    || active_tcp_socket.write_half.epoll_ready(),
-                )
-                .await
-            }
-        }
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn ioctl(
@@ -1104,6 +1072,42 @@ impl OpenFileDescription for TcpSocket {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
+    }
+}
+
+#[async_trait]
+impl EpollReady for TcpSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self
+            .activate_notify
+            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
+            .await;
+        match mode {
+            Mode::Passive(passive_tcp_socket) => {
+                passive_tcp_socket
+                    .notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive_tcp_socket.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_counter);
+                        result
+                    })
+                    .await
+            }
+            Mode::Active(active_tcp_socket) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    active_tcp_socket.read_half.notify(),
+                    || active_tcp_socket.read_half.epoll_ready(),
+                    active_tcp_socket.write_half.notify(),
+                    || active_tcp_socket.write_half.epoll_ready(),
+                )
+                .await
+            }
+        }
     }
 }
 

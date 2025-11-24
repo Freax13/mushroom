@@ -8,7 +8,11 @@ use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
-        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, WriteBuf,
+            epoll::{BasicEpoll, WeakEpollReady},
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -176,8 +180,8 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(BasicEpoll::new(&self)))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
