@@ -3,17 +3,20 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
     sync::atomic::{AtomicU16, Ordering},
+    time::Duration,
 };
 
 use nix::{
     Result,
     errno::Errno,
+    fcntl::{FcntlArg, OFlag, fcntl},
     libc::{Ioctl, in_addr, in_pktinfo, ioctl},
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::socket::{
         self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag,
-        SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrStorage, getpeername, getsockname,
-        recvmsg, sendmsg, setsockopt, shutdown,
+        SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrStorage, accept, connect,
+        getpeername, getsockname, listen, recv, recvmsg, send, sendmsg, setsockopt, shutdown,
+        socket,
         sockopt::{Ipv4PacketInfo, Ipv6RecvPacketInfo, Ipv6V6Only, ReuseAddr, ReusePort},
     },
     unistd::close,
@@ -1670,4 +1673,144 @@ fn udp_pktinfo() {
             }
         }
     }
+}
+
+fn tcp_socket_pair() -> (OwnedFd, OwnedFd) {
+    let server = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        SockProtocol::Tcp,
+    )
+    .unwrap();
+    let sock1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        SockProtocol::Tcp,
+    )
+    .unwrap();
+
+    listen(&server, Backlog::MAXALLOWABLE).unwrap();
+    let addr = getsockname::<SockaddrStorage>(server.as_raw_fd()).unwrap();
+    connect(sock1.as_raw_fd(), &addr).unwrap();
+
+    let sock2 = accept(server.as_raw_fd()).unwrap();
+    let sock2 = unsafe { OwnedFd::from_raw_fd(sock2) };
+    (sock1, sock2)
+}
+
+fn set_non_blocking<Fd: AsFd>(fd: Fd, non_blocking: bool) {
+    let flags = fcntl(&fd, FcntlArg::F_GETFL).unwrap();
+    let mut flags = OFlag::from_bits_truncate(flags);
+    flags.set(OFlag::O_NONBLOCK, non_blocking);
+    fcntl(&fd, FcntlArg::F_SETFL(flags)).unwrap();
+}
+
+/// WAITALL has no effect when used with non-blocking a socket.
+#[test]
+fn tcp_waitall_nonblock() {
+    let (sock1, sock2) = tcp_socket_pair();
+    set_non_blocking(&sock1, true);
+    set_non_blocking(&sock2, true);
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(8)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn tcp_waitall_dontwait() {
+    let (sock1, sock2) = tcp_socket_pair();
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(
+            sock1.as_raw_fd(),
+            &mut buf,
+            MsgFlags::MSG_WAITALL | MsgFlags::MSG_DONTWAIT
+        ),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(
+            sock1.as_raw_fd(),
+            &mut buf,
+            MsgFlags::MSG_WAITALL | MsgFlags::MSG_DONTWAIT
+        ),
+        Ok(8)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn tcp_waitall() {
+    let (sock1, sock2) = tcp_socket_pair();
+
+    // Send the first half of the message.
+    assert_eq!(
+        send(sock1.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    // Delay sending more bytes.
+    std::thread::spawn(move || {
+        // Wait for half a second.
+        std::thread::sleep(Duration::from_millis(500));
+        // Send the second half of the message.
+        assert_eq!(
+            send(sock1.as_raw_fd(), b"90abcdef", MsgFlags::empty()),
+            Ok(8)
+        );
+    });
+
+    // Make sure that all 16 bytes are received.
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock2.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(16)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn tcp_waitall_oob() {
+    let (sock1, sock2) = tcp_socket_pair();
+
+    // Send the first half of the message.
+    assert_eq!(
+        send(sock1.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    // Send a OOB message.
+    assert_eq!(send(sock1.as_raw_fd(), b"90ab", MsgFlags::MSG_OOB), Ok(4));
+
+    // Make sure that all 12 bytes are received.
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock2.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(11)
+    );
 }
