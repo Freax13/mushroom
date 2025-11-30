@@ -321,14 +321,10 @@ impl Process {
             return;
         }
 
-        let mut threads = self.threads.lock();
-        for thread in core::mem::take(&mut *threads)
-            .into_iter()
-            .filter_map(|t| t.upgrade())
-        {
+        let threads = core::mem::take(&mut *self.threads.lock());
+        for thread in threads.into_iter().filter_map(|t| t.upgrade()) {
             thread.terminate(exit_status).await;
         }
-        drop(threads);
 
         if let Some(termination_signal) = self.termination_signal
             && let Some(parent) = self.parent.upgrade()
