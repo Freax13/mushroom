@@ -21,12 +21,12 @@ use bitflags::Flags;
 use futures::future::{Either, select};
 
 use crate::{
-    error::{Result, bail, ensure, err},
+    error::{ErrorKind, Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
-            StrongFileDescriptor, WeakFileDescriptor,
+            BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, StrongFileDescriptor, WeakFileDescriptor,
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -927,4 +927,52 @@ pub trait EpollReady: Send + Sync + 'static {
     /// Returns a future resolving when the file descriptor's ready state
     /// matches the request.
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult;
+}
+
+/// Do some potentially blocking IO. If the closure returns Again, the epoll
+/// interface is used to wait for for an edge for the given event.
+pub async fn do_edge_triggered_io<R>(
+    fd: &FileDescriptor,
+    events: Events,
+    ctx: &FileAccessContext,
+    mut callback: impl FnMut() -> Result<R>,
+) -> Result<R> {
+    // Try optimistically calling the callback.
+    let err = match callback() {
+        Ok(value) => return Ok(value),
+        Err(err) if err.kind() == ErrorKind::Again => err, // Enter the epoll loop.
+        Err(err) => return Err(err),
+    };
+
+    // Check if this operation is supposed to block.
+    let flags = fd.flags();
+    let non_blocking = flags.contains(OpenFlags::NONBLOCK);
+    if non_blocking {
+        return Err(err);
+    }
+
+    // Create an epoll handle.
+    let epoll = (**fd).clone().epoll_ready(ctx)?;
+
+    // Start out with zero counter values.
+    let mut req = EpollRequest {
+        events,
+        last_ready_values: Events::empty(),
+        min_counter_values: FlagArray::default(),
+    };
+    loop {
+        // For for the ready state to change.
+        let ready = epoll.epoll_ready(req).unwrap().await;
+
+        // Try calling the callback again.
+        match callback() {
+            Ok(value) => return Ok(value),
+            Err(err) if err.kind() == ErrorKind::Again => {}
+            Err(err) => return Err(err),
+        }
+
+        // Update the request for the next try.
+        req.min_counter_values = ready.counter_values;
+        req.last_ready_values = ready.ready_events & req.events;
+    }
 }
