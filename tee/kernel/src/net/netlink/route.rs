@@ -54,6 +54,7 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
             const RTM_GETLINK: u16 = 0x12;
             const RTM_NEWADDR: u16 = 0x14;
             const RTM_GETADDR: u16 = 0x16;
+            const RTM_NEWROUTE: u16 = 0x18;
             const RTM_GETROUTE: u16 = 0x1a;
             match header.r#type {
                 RTM_GETLINK => {
@@ -229,7 +230,191 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
                 RTM_GETROUTE => {
                     let mut response = Vec::new();
 
-                    // Respond with no routes.
+                    let mut rta_attrs = Vec::new();
+
+                    let rta_data = u32::from((RouteTable::LOCAL).0).to_ne_bytes();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_TABLE,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(&rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = &Ipv4Addr::new(127, 0, 0, 0).octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_DST,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = &Ipv4Addr::LOCALHOST.octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_PREFSRC,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = c"lo".to_bytes_with_nul();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_OIF,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let new_addr_header = MsgHeader {
+                        len: (size_of::<MsgHeader>() + size_of::<RtMsg>() + rta_attrs.len()) as u32,
+                        r#type: RTM_NEWROUTE,
+                        flags: MsgHeaderFlags::MULTI,
+                        seq: header.seq,
+                        pid,
+                    };
+                    response.extend_from_slice(bytes_of(&new_addr_header));
+
+                    let new_route_data = RtMsg {
+                        family: Domain::Inet as u8,
+                        dst_len: 8,
+                        src_len: 0,
+                        tos: 0,
+                        table: RouteTable::LOCAL,
+                        protocol: RouteProtocol::KERNEL,
+                        scope: RouteScope::HOST,
+                        r#type: RouteType::LOCAL,
+                        flags: RouteFlags::empty(),
+                    };
+                    response.extend_from_slice(bytes_of(&new_route_data));
+
+                    response.extend_from_slice(&rta_attrs);
+
+                    let mut rta_attrs = Vec::new();
+
+                    let rta_data = u32::from((RouteTable::LOCAL).0).to_ne_bytes();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_TABLE,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(&rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = &Ipv4Addr::new(127, 0, 0, 0).octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_DST,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = &Ipv4Addr::LOCALHOST.octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_PREFSRC,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = c"lo".to_bytes_with_nul();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_OIF,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let new_addr_header = MsgHeader {
+                        len: (size_of::<MsgHeader>() + size_of::<RtMsg>() + rta_attrs.len()) as u32,
+                        r#type: RTM_NEWROUTE,
+                        flags: MsgHeaderFlags::MULTI,
+                        seq: header.seq,
+                        pid,
+                    };
+                    response.extend_from_slice(bytes_of(&new_addr_header));
+
+                    let new_route_data = RtMsg {
+                        family: Domain::Inet as u8,
+                        dst_len: 8,
+                        src_len: 0,
+                        tos: 0,
+                        table: RouteTable::LOCAL,
+                        protocol: RouteProtocol::KERNEL,
+                        scope: RouteScope::HOST,
+                        r#type: RouteType::LOCAL,
+                        flags: RouteFlags::empty(),
+                    };
+                    response.extend_from_slice(bytes_of(&new_route_data));
+
+                    response.extend_from_slice(&rta_attrs);
+
+                    let mut rta_attrs = Vec::new();
+
+                    let rta_data = u32::from((RouteTable::LOCAL).0).to_ne_bytes();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_TABLE,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(&rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = &Ipv4Addr::new(127, 255, 255, 255).octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_DST,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = &Ipv4Addr::LOCALHOST.octets();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_PREFSRC,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let rta_data = c"lo".to_bytes_with_nul();
+                    let rta_header = RtAttr {
+                        len: (size_of::<RtAttr>() + rta_data.len()) as u16,
+                        r#type: RtAttrType::RTA_OIF,
+                    };
+                    rta_attrs.extend_from_slice(bytes_of(&rta_header));
+                    rta_attrs.extend_from_slice(rta_data);
+                    rta_attrs.resize(rta_attrs.len().next_multiple_of(4), 0); // add padding
+
+                    let new_addr_header = MsgHeader {
+                        len: (size_of::<MsgHeader>() + size_of::<RtMsg>() + rta_attrs.len()) as u32,
+                        r#type: RTM_NEWROUTE,
+                        flags: MsgHeaderFlags::MULTI,
+                        seq: header.seq,
+                        pid,
+                    };
+                    response.extend_from_slice(bytes_of(&new_addr_header));
+
+                    let new_route_data = RtMsg {
+                        family: Domain::Inet as u8,
+                        dst_len: 32,
+                        src_len: 0,
+                        tos: 0,
+                        table: RouteTable::LOCAL,
+                        protocol: RouteProtocol::KERNEL,
+                        scope: RouteScope::LINK,
+                        r#type: RouteType::BROADCAST,
+                        flags: RouteFlags::empty(),
+                    };
+                    response.extend_from_slice(bytes_of(&new_route_data));
+
+                    response.extend_from_slice(&rta_attrs);
 
                     let done_header = MsgHeader {
                         len: size_of::<MsgHeader>() as u32,
@@ -333,6 +518,125 @@ impl AddrScope {
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
+struct RtMsg {
+    /// Address family of route
+    family: u8,
+    /// Length of destination
+    dst_len: u8,
+    /// Length of source
+    src_len: u8,
+    /// TOS filter
+    tos: u8,
+    /// Routing table ID
+    table: RouteTable,
+    /// Routing protocol
+    protocol: RouteProtocol,
+    scope: RouteScope,
+    r#type: RouteType,
+    flags: RouteFlags,
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+struct RouteTable(u8);
+
+#[expect(dead_code)]
+impl RouteTable {
+    const UNSPEC: Self = Self(0);
+    const COMPAT: Self = Self(252);
+    const DEFAULT: Self = Self(253);
+    const MAIN: Self = Self(254);
+    const LOCAL: Self = Self(255);
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+struct RouteProtocol(u8);
+
+#[expect(dead_code)]
+impl RouteProtocol {
+    const UNSPEC: Self = Self(0);
+    /// Route installed by ICMP redirects; not used by current IPv4
+    const REDIRECT: Self = Self(1);
+    /// Route installed by kernel
+    const KERNEL: Self = Self(2);
+    /// Route installed during boot
+    const BOOT: Self = Self(3);
+    /// Route installed by administrator
+    const STATIC: Self = Self(4);
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+struct RouteScope(u8);
+
+#[expect(dead_code)]
+impl RouteScope {
+    const UNIVERSE: Self = Self(0);
+    const SITE: Self = Self(200);
+    const LINK: Self = Self(253);
+    const HOST: Self = Self(254);
+    const NOWHERE: Self = Self(255);
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+struct RouteType(u8);
+
+#[expect(dead_code)]
+impl RouteType {
+    const UNSPEC: Self = Self(0);
+    /// Gateway or direct route
+    const UNICAST: Self = Self(1);
+    /// Accept locally
+    const LOCAL: Self = Self(2);
+    /// Accept locally as broadcast, send as broadcast
+    const BROADCAST: Self = Self(3);
+    /// Accept locally as broadcast, but send as unicast
+    const ANYCAST: Self = Self(4);
+    /// Multicast route
+    const MULTICAST: Self = Self(5);
+    /// Drop
+    const BLACKHOLE: Self = Self(6);
+    /// Destination is unreachable  
+    const UNREACHABLE: Self = Self(7);
+    /// Administratively prohibited
+    const PROHIBIT: Self = Self(8);
+    /// Not in this table
+    const THROW: Self = Self(9);
+    /// Translate this address
+    const NAT: Self = Self(10);
+    /// Use external resolver
+    const XRESOLVE: Self = Self(11);
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
+    #[repr(transparent)]
+    pub struct RouteFlags: u32 {
+        /// Notify user of route change
+        const NOTIFY = 0x100;
+        /// This route is cloned
+        const CLONED = 0x200;
+        /// Multipath equalizer: NI
+        const EQUALIZE = 0x400;
+        /// Prefix addresses
+        const PREFIX = 0x800;
+        /// set rtm_table to FIB lookup result
+        const LOOKUP_TABLE = 0x1000;
+        /// return full fib lookup match
+        const FIB_MATCH = 0x2000;
+        /// route is offloaded
+        const OFFLOAD = 0x4000;
+        /// route is trapping packets
+        const TRAP = 0x8000;
+        /// route offload failed
+        const OFFLOAD_FAILED = 0x20000000;
+    }
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
 struct RtAttr {
     pub len: u16,
     pub r#type: RtAttrType,
@@ -351,4 +655,9 @@ impl RtAttrType {
     const IFA_ADDRESS: Self = Self(1);
     const IFA_LOCAL: Self = Self(2);
     const IFA_LABEL: Self = Self(3);
+
+    const RTA_DST: Self = Self(1);
+    const RTA_OIF: Self = Self(4);
+    const RTA_PREFSRC: Self = Self(7);
+    const RTA_TABLE: Self = Self(15);
 }
