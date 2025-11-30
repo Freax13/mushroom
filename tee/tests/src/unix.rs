@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{IoSlice, IoSliceMut},
     os::fd::{AsRawFd, RawFd},
+    time::Duration,
 };
 
 use nix::{
@@ -610,4 +611,106 @@ fn shutdown_then_read() {
     assert_eq!(read(&sock1, &mut buf), Ok(0));
 
     assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+/// WAITALL has no effect when used with non-blocking a socket.
+#[test]
+fn waitall_nonblock() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(8)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn waitall_dontwait() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::empty(),
+    )
+    .unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(
+            sock1.as_raw_fd(),
+            &mut buf,
+            MsgFlags::MSG_WAITALL | MsgFlags::MSG_DONTWAIT
+        ),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(
+            sock1.as_raw_fd(),
+            &mut buf,
+            MsgFlags::MSG_WAITALL | MsgFlags::MSG_DONTWAIT
+        ),
+        Ok(8)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn waitall() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::empty(),
+    )
+    .unwrap();
+
+    // Send the first half of the message.
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    // Delay sending more bytes.
+    std::thread::spawn(move || {
+        // Wait for half a second.
+        std::thread::sleep(Duration::from_millis(500));
+        // Send the second half of the message.
+        assert_eq!(
+            send(sock2.as_raw_fd(), b"90abcdef", MsgFlags::empty()),
+            Ok(8)
+        );
+    });
+
+    // Make sure that all 16 bytes are received.
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(16)
+    );
 }
