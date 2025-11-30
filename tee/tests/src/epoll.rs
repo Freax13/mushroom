@@ -11,8 +11,13 @@ use nix::{
     sys::{
         epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags},
         eventfd::{EfdFlags, EventFd},
-        socket::{AddressFamily, SockFlag, SockProtocol, SockType, socketpair},
+        socket::{
+            AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType, recv, send, socketpair,
+        },
         stat::Mode,
+        time::TimeSpec,
+        timer::{Expiration, TimerSetTimeFlags},
+        timerfd::{TimerFd, TimerFlags},
     },
     unistd::{mkfifo, pipe, pipe2, read, unlink, write},
 };
@@ -673,4 +678,249 @@ fn pty_edge() {
     assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(1));
     assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 2));
     assert_eq!(epoll_slave.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn timerfd_edge_triggered() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let timer = TimerFd::new(
+        nix::sys::timerfd::ClockId::CLOCK_MONOTONIC,
+        TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
+    )
+    .unwrap();
+    let interval = Duration::from_millis(500);
+    timer
+        .set(
+            Expiration::Interval(TimeSpec::from_duration(interval)),
+            TimerSetTimeFlags::empty(),
+        )
+        .unwrap();
+
+    epoll
+        .add(
+            &timer,
+            EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1),
+        )
+        .unwrap();
+
+    std::thread::sleep(interval / 2);
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 8];
+    assert_eq!(read(&timer, &mut buf), Err(Errno::EAGAIN));
+
+    std::thread::sleep(interval);
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLIN, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 8];
+    assert_eq!(read(&timer, &mut buf), Ok(8));
+    assert_eq!(u64::from_ne_bytes(buf), 1);
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    std::thread::sleep(interval * 3);
+
+    let mut buf = [0; 8];
+    assert_eq!(read(&timer, &mut buf), Ok(8));
+    assert_eq!(u64::from_ne_bytes(buf), 3);
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    std::thread::sleep(interval);
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLIN, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    std::thread::sleep(interval);
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(read(&timer, &mut buf), Ok(8));
+    assert_eq!(u64::from_ne_bytes(buf), 2);
+}
+
+#[test]
+fn unix_dgram_edge_triggered() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+
+    epoll
+        .add(
+            &sock1,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock1.as_raw_fd(), b"foo", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock2.as_raw_fd(), b"bar", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock2.as_raw_fd(), b"baz", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock2.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"foo");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"bar");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"baz");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    drop(sock2);
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn unix_seqpacket_edge_triggered() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+
+    epoll
+        .add(
+            &sock1,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock1.as_raw_fd(), b"foo", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock2.as_raw_fd(), b"bar", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock2.as_raw_fd(), b"baz", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock2.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"foo");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"bar");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"baz");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    drop(sock2);
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(0));
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(
+            EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP,
+            1
+        )
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
 }
