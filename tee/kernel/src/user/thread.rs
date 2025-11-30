@@ -28,7 +28,7 @@ use crate::{
     error::{Result, bail, ensure},
     exception::eoi,
     fs::{
-        fd::{FileDescriptor, FileDescriptorTable},
+        fd::{FileDescriptor, FileDescriptorTable, epoll::EventCounter},
         node::{FileAccessContext, Link, LinkLocation, ROOT_NODE, procfs::ThreadInos},
         path::{FileName, Path},
     },
@@ -65,7 +65,7 @@ pub struct Thread {
     // Immutable state.
     tid: u32,
     process: Arc<Process>,
-    signal_notify: Notify,
+    pub signal_notify: Notify,
     running_state: ThreadRunningState,
     usage: ThreadUsage,
 
@@ -398,8 +398,15 @@ impl Thread {
     }
 
     pub fn pending_signals(&self) -> Sigset {
-        let pending_signals = self.lock().pending_signals.pending_signals();
-        pending_signals | self.process().pending_signals()
+        self.lock().pending_signals.pending_signals()
+    }
+
+    pub fn pending_signals_with_counter(&self) -> (Sigset, EventCounter) {
+        let guard = self.lock();
+        (
+            guard.pending_signals.pending_signals(),
+            guard.pending_signals.queue_counter(),
+        )
     }
 
     /// Returns true if the signal was not already queued.
@@ -881,10 +888,7 @@ impl ThreadGuard<'_> {
             }
 
             if self.pending_signal_info.is_none() {
-                self.pending_signal_info = self.pending_signals.pop(mask);
-            }
-            if self.pending_signal_info.is_none() {
-                self.pending_signal_info = self.process().pop_signal(mask);
+                self.pending_signal_info = self.get_signal(mask);
             }
             let pending_signal_info = self.pending_signal_info?;
 
@@ -938,6 +942,12 @@ impl ThreadGuard<'_> {
     fn pop_signal(&mut self) -> Option<SigInfo> {
         self.get_pending_signal()?;
         self.pending_signal_info.take()
+    }
+
+    pub fn get_signal(&mut self, mask: Sigset) -> Option<SigInfo> {
+        self.pending_signals
+            .pop(mask)
+            .or_else(|| self.process().pop_signal(mask))
     }
 
     pub fn get_rusage(&self) -> Rusage {
@@ -1192,6 +1202,10 @@ impl Sigset {
     pub fn from_bits(bits: u64) -> Self {
         Self(bits)
     }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::empty()
+    }
 }
 
 impl BitOr for Sigset {
@@ -1299,12 +1313,14 @@ pub enum NewTls {
 
 pub struct PendingSignals {
     pending_signals: VecDeque<SigInfo>,
+    queue_counter: EventCounter,
 }
 
 impl PendingSignals {
     pub const fn new() -> Self {
         Self {
             pending_signals: VecDeque::new(),
+            queue_counter: EventCounter::new(),
         }
     }
 
@@ -1315,10 +1331,15 @@ impl PendingSignals {
             .collect()
     }
 
+    pub fn queue_counter(&self) -> EventCounter {
+        self.queue_counter.clone()
+    }
+
     /// Add the signal to the set of pending signals.
     ///
     /// Returns true if the signal was added.
     pub fn add(&mut self, sig_info: SigInfo) -> bool {
+        self.queue_counter.inc();
         let is_pending = self
             .pending_signals
             .iter()
@@ -1392,6 +1413,191 @@ pub enum SigFields {
     Timer(SigTimer),
     SigChld(SigChld),
     SigFault(SigFault),
+}
+
+impl SigFields {
+    /// PID of sender
+    pub fn pid(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(sig_kill) => sig_kill.pid,
+            Self::Timer(_) => 0,
+            Self::SigChld(sig_chld) => sig_chld.pid as u32,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Real UID of sender
+    pub fn uid(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(sig_kill) => sig_kill.uid.get(),
+            Self::Timer(_) => 0,
+            Self::SigChld(sig_chld) => sig_chld.uid,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// File descriptor (SIGIO)
+    pub fn fd(&self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Kernel timer ID (POSIX timer)
+    pub fn tid(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(sig_timer) => sig_timer.tid.0 as u32,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Band event (SIGIO)
+    pub fn band(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// POSIX timer overrun count
+    pub fn overrun(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(sig_timer) => sig_timer.overrun,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Trap number that caused signal
+    pub fn trapno(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Exit status or signal (SIGCHLD)
+    pub fn status(&self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(sig_chld) => sig_chld.status.raw() as i32,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Integer sent by sigqueue(3)
+    pub fn int(&self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Pointer sent by sigqueue(3)
+    pub fn ptr(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// User CPU time consumed (SIGCHLD)
+    pub fn utime(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(sig_chld) => sig_chld.utime as u64,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// System CPU time consumed (SIGCHLD)
+    pub fn stime(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(sig_chld) => sig_chld.stime as u64,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    /// Address that generated signal (for hardware-generated signals)
+    pub fn addr(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(sig_fault) => sig_fault.addr,
+        }
+    }
+
+    pub fn addr_lsb(&self) -> u16 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    pub fn syscall(&self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    pub fn call_addr(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
+
+    pub fn arch(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Kill(_) => 0,
+            Self::Timer(_) => 0,
+            Self::SigChld(_) => 0,
+            Self::SigFault(_) => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

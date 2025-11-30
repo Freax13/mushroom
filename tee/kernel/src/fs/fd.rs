@@ -56,7 +56,7 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, ThreadGuard, Uid},
+        thread::{Gid, Sigset, ThreadGuard, Uid},
     },
 };
 
@@ -69,6 +69,7 @@ pub mod inotify;
 pub mod mem;
 pub mod path;
 pub mod pipe;
+pub mod signal;
 mod std;
 pub mod stream_buffer;
 pub mod timer;
@@ -288,6 +289,12 @@ impl PartialEq<dyn OpenFileDescription> for WeakFileDescriptor {
 impl PartialEq for WeakFileDescriptor {
     fn eq(&self, other: &Self) -> bool {
         self.0.ptr_eq(&other.0)
+    }
+}
+
+impl From<Weak<OpenFileDescriptionData<dyn OpenFileDescription>>> for WeakFileDescriptor {
+    fn from(value: Weak<OpenFileDescriptionData<dyn OpenFileDescription>>) -> Self {
+        Self(value)
     }
 }
 
@@ -1084,6 +1091,11 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn set_time(&self, flags: SetTimeFlags, new: ITimerspec) -> Result<ITimerspec> {
         let _ = flags;
         let _ = new;
+        bail!(Inval)
+    }
+
+    fn update_signal_mask(&self, mask: Sigset) -> Result<()> {
+        let _ = mask;
         bail!(Inval)
     }
 

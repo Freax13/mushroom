@@ -24,7 +24,7 @@ use crate::{
     user::{
         memory::VirtualMemory,
         syscall::traits::Abi,
-        thread::{Gid, Sigset, Thread, ThreadGuard, Uid},
+        thread::{Gid, SigInfo, Sigset, Thread, ThreadGuard, Uid},
     },
 };
 
@@ -2463,4 +2463,81 @@ pub struct PktInfo {
 pub struct PktInfo6 {
     pub spec_dst: Ipv6Addr,
     pub ifindex: u32,
+}
+
+bitflags! {
+    pub struct SignalFdFlags {
+        const NON_BLOCK = 1 << 11;
+        const CLOEXEC = 1 << 19;
+    }
+}
+
+impl From<SignalFdFlags> for OpenFlags {
+    fn from(value: SignalFdFlags) -> Self {
+        OpenFlags::from_bits(value.bits()).unwrap()
+    }
+}
+
+impl From<SignalFdFlags> for FdFlags {
+    fn from(value: SignalFdFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(SignalFdFlags::CLOEXEC));
+        flags
+    }
+}
+
+#[derive(Debug, Clone, Copy, NoUninit)]
+#[repr(C)]
+pub struct SignalfdSiginfo {
+    pub signo: u32,
+    pub errno: i32,
+    pub code: i32,
+    pub pid: u32,
+    pub uid: u32,
+    pub fd: i32,
+    pub tid: u32,
+    pub band: u32,
+    pub overrun: u32,
+    pub trapno: u32,
+    pub status: i32,
+    pub int: i32,
+    pub ptr: u64,
+    pub utime: u64,
+    pub stime: u64,
+    pub addr: u64,
+    pub addr_lsb: u16,
+    __pad2: u16,
+    pub syscall: i32,
+    pub call_addr: u64,
+    pub arch: u32,
+    __pad: [u8; 28],
+}
+
+impl From<SigInfo> for SignalfdSiginfo {
+    fn from(value: SigInfo) -> Self {
+        Self {
+            signo: value.signal.get() as u32,
+            errno: 0,
+            code: value.code.get(),
+            pid: value.fields.pid(),
+            uid: value.fields.uid(),
+            fd: value.fields.fd(),
+            tid: value.fields.tid(),
+            band: value.fields.band(),
+            overrun: value.fields.overrun(),
+            trapno: value.fields.trapno(),
+            status: value.fields.status(),
+            int: value.fields.int(),
+            ptr: value.fields.ptr(),
+            utime: value.fields.utime(),
+            stime: value.fields.stime(),
+            addr: value.fields.addr(),
+            addr_lsb: value.fields.addr_lsb(),
+            __pad2: 0,
+            syscall: value.fields.syscall(),
+            call_addr: value.fields.call_addr(),
+            arch: value.fields.arch(),
+            __pad: [0; 28],
+        }
+    }
 }

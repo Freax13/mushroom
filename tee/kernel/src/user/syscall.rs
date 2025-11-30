@@ -47,6 +47,7 @@ use crate::{
             mem::MemFd,
             path::PathFd,
             pipe,
+            signal::SignalFd,
             stream_buffer::{self, SpliceBlockedError},
             timer::Timer,
             unix_socket::{DgramUnixSocket, SeqPacketUnixSocket, StreamUnixSocket},
@@ -292,11 +293,13 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysSignalfd);
     handlers.register(SysTimerfdCreate);
     handlers.register(SysEventfd);
     handlers.register(SysFallocate);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
+    handlers.register(SysSignalfd4);
     handlers.register(SysEventfd2);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
@@ -3518,7 +3521,7 @@ fn rt_sigpending(
     uset: Pointer<Sigset>,
     sigsetsize: u64,
 ) -> SyscallResult {
-    let pending_signals = thread.pending_signals();
+    let pending_signals = thread.pending_signals() | thread.process().pending_signals();
     virtual_memory.write_with_abi(uset, pending_signals, abi)?;
     Ok(0)
 }
@@ -5283,6 +5286,28 @@ async fn epoll_pwait(
     res
 }
 
+#[syscall(i386 = 321, amd64 = 282)]
+fn signalfd(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    ufd: FdNum,
+    user_mask: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    signalfd4(
+        abi,
+        virtual_memory,
+        fdtable,
+        no_file_limit,
+        ufd,
+        user_mask,
+        sigsetsize,
+        SignalFdFlags::empty(),
+    )
+}
+
 #[syscall(i386 = 322, amd64 = 283)]
 fn timerfd_create(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -5371,6 +5396,28 @@ async fn accept4(
     }
 
     Ok(fd_num.get() as u64)
+}
+
+#[syscall(i386 = 327, amd64 = 289)]
+fn signalfd4(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    ufd: FdNum,
+    user_mask: Pointer<Sigset>,
+    sigsetsize: u64,
+    flags: SignalFdFlags,
+) -> SyscallResult {
+    let user_mask = virtual_memory.read_with_abi(user_mask, abi)?;
+    let fd_num = if ufd.get() == -1 {
+        fdtable.insert(SignalFd::new(user_mask, flags), flags, no_file_limit)?
+    } else {
+        let fd = fdtable.get(ufd)?;
+        fd.update_signal_mask(user_mask)?;
+        ufd
+    };
+    Ok(fd_num.get().try_into().unwrap())
 }
 
 #[syscall(i386 = 328, amd64 = 290)]

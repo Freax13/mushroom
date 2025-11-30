@@ -28,7 +28,7 @@ use crate::{
     error::{Result, bail, err},
     fs::{
         StaticFile,
-        fd::FileDescriptorTable,
+        fd::{FileDescriptorTable, epoll::EventCounter},
         node::{
             FileAccessContext, INode, Link, LinkLocation, ROOT_NODE,
             procfs::ProcessInos,
@@ -408,6 +408,11 @@ impl Process {
 
     pub fn pending_signals(&self) -> Sigset {
         self.pending_signals.lock().pending_signals()
+    }
+
+    pub fn pending_signals_with_counter(&self) -> (Sigset, EventCounter) {
+        let guard = self.pending_signals.lock();
+        (guard.pending_signals(), guard.queue_counter())
     }
 
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
