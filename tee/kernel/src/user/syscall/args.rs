@@ -1904,6 +1904,7 @@ bitflags! {
         const MOVE_SELF = 1 << 11;
         const ONLYDIR = 1 << 24;
         const DONT_FOLLOW = 1 << 25;
+        const EXCL_UNLINK = 1 << 26;
     }
 }
 
