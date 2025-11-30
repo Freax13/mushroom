@@ -5,19 +5,19 @@ use async_trait::async_trait;
 use futures::future;
 
 use crate::{
-    error::{Result, bail, ensure},
+    error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
-            epoll::{BasicEpoll, WeakEpollReady},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
     },
-    rt::notify::{Notify, NotifyOnDrop},
+    rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
         memory::VirtualMemory,
@@ -48,29 +48,18 @@ struct DgramUnixSocketInternal {
 
 impl DgramUnixSocket {
     pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
-        let state1 = Arc::new(State::new());
-        let state2 = Arc::new(State::new());
-
-        let notify1 = Arc::new(Notify::new());
-        let notify2 = Arc::new(Notify::new());
+        let buffer1 = Arc::new(Buffer::new());
+        let buffer2 = Arc::new(Buffer::new());
 
         let read_half1 = ReadHalf {
-            state: state1.clone(),
-            notify: NotifyOnDrop(notify1.clone()),
+            buffer: buffer1.clone(),
         };
         let read_half2 = ReadHalf {
-            state: state2.clone(),
-            notify: NotifyOnDrop(notify2.clone()),
+            buffer: buffer2.clone(),
         };
 
-        let write_half1 = WriteHalf {
-            state: state2,
-            notify: NotifyOnDrop(notify2),
-        };
-        let write_half2 = WriteHalf {
-            state: state1,
-            notify: NotifyOnDrop(notify1),
-        };
+        let write_half1 = WriteHalf { buffer: buffer2 };
+        let write_half2 = WriteHalf { buffer: buffer1 };
 
         (
             Self {
@@ -105,9 +94,7 @@ impl DgramUnixSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let Some(data) = self.read_half.read()? else {
-            return Ok(0);
-        };
+        let data = self.read_half.read()?;
         let len = cmp::min(data.len(), buf.buffer_len());
         buf.write(0, &data[..len])?;
         Ok(len)
@@ -222,18 +209,15 @@ impl OpenFileDescription for DgramUnixSocket {
         let mut ready_events = Events::empty();
         ready_events.set(
             Events::READ,
-            !self.read_half.state.buffer.lock().is_empty()
-                || Arc::strong_count(&self.read_half.state) == 1,
+            !self.read_half.buffer.internal.lock().packets.is_empty(),
         );
-        ready_events.set(Events::WRITE, Arc::strong_count(&self.write_half.state) > 1);
-        ready_events.set(Events::HUP, Arc::strong_count(&self.read_half.state) == 1);
-        ready_events.set(Events::ERR, Arc::strong_count(&self.write_half.state) == 1);
+        ready_events.set(Events::WRITE, true);
         NonEmptyEvents::new(ready_events & events)
     }
 
     async fn ready(&self, events: Events) -> NonEmptyEvents {
-        let mut read_wait = self.read_half.notify.wait();
-        let mut write_wait = self.write_half.notify.wait();
+        let mut read_wait = self.read_half.buffer.notify.wait();
+        let mut write_wait = self.write_half.buffer.notify.wait();
         loop {
             let events = self.poll_ready(events);
             if let Some(events) = events {
@@ -244,7 +228,7 @@ impl OpenFileDescription for DgramUnixSocket {
     }
 
     fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
-        Ok(Box::new(BasicEpoll::new(&self)))
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {
@@ -291,49 +275,84 @@ impl OpenFileDescription for DgramUnixSocket {
     }
 }
 
-struct State {
-    buffer: Mutex<VecDeque<Box<[u8]>>>,
+#[async_trait]
+impl EpollReady for DgramUnixSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        Notify::zip_epoll_loop(
+            req,
+            &self.read_half.buffer.notify,
+            || {
+                let mut result = EpollResult::new();
+                let guard = self.read_half.buffer.internal.lock();
+                if !guard.packets.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                result.add_counter(Events::READ, &guard.read_counter);
+                result
+            },
+            &self.write_half.buffer.notify,
+            || {
+                let mut result = EpollResult::new();
+                let guard = self.write_half.buffer.internal.lock();
+                result.set_ready(Events::WRITE);
+                result.add_counter(Events::WRITE, &guard.write_counter);
+                drop(guard);
+                result
+            },
+        )
+        .await
+    }
 }
 
-impl State {
+struct Buffer {
+    internal: Mutex<BufferInternal>,
+    notify: Notify,
+}
+
+struct BufferInternal {
+    packets: VecDeque<Box<[u8]>>,
+    read_counter: EventCounter,
+    write_counter: EventCounter,
+}
+
+impl Buffer {
     fn new() -> Self {
         Self {
-            buffer: Mutex::new(VecDeque::new()),
+            internal: Mutex::new(BufferInternal {
+                packets: VecDeque::new(),
+                read_counter: EventCounter::new(),
+                write_counter: EventCounter::new(),
+            }),
+            notify: Notify::new(),
         }
     }
 }
 
 struct ReadHalf {
-    state: Arc<State>,
-    notify: NotifyOnDrop,
+    buffer: Arc<Buffer>,
 }
 
 impl ReadHalf {
-    fn read(&self) -> Result<Option<Box<[u8]>>> {
-        let mut guard = self.state.buffer.lock();
-        if let Some(packet) = guard.pop_front() {
-            return Ok(Some(packet));
-        }
+    fn read(&self) -> Result<Box<[u8]>> {
+        let mut guard = self.buffer.internal.lock();
+        let packet = guard.packets.pop_front().ok_or(err!(Again))?;
+        guard.write_counter.inc();
         drop(guard);
-
-        if Arc::strong_count(&self.state) == 1 {
-            return Ok(None);
-        }
-
-        bail!(Again)
+        self.buffer.notify.notify();
+        Ok(packet)
     }
 }
 
 struct WriteHalf {
-    state: Arc<State>,
-    notify: NotifyOnDrop,
+    buffer: Arc<Buffer>,
 }
 
 impl WriteHalf {
     fn write(&self, data: Box<[u8]>) {
-        let mut guard = self.state.buffer.lock();
-        guard.push_back(data);
+        let mut guard = self.buffer.internal.lock();
+        guard.packets.push_back(data);
+        guard.read_counter.inc();
         drop(guard);
-        self.notify.notify();
+        self.buffer.notify.notify();
     }
 }
