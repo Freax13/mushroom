@@ -244,7 +244,7 @@ impl OpenFileDescription for ReadHalf {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read_half.read(buf, false)
+        self.read_half.read(buf, false, false)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -419,7 +419,7 @@ impl OpenFileDescription for FullReadWrite {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read_half.read(buf, false)
+        self.read_half.read(buf, false, false)
     }
 
     fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {

@@ -380,13 +380,13 @@ impl TcpSocket {
         Ok(self.bound_socket.get().unwrap())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, waitall: bool) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        active.read_half.read(buf, false)
+        active.read_half.read(buf, false, waitall)
     }
 }
 
@@ -835,7 +835,7 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read(buf)
+        self.read(buf, false)
     }
 
     fn recv_from(
@@ -843,10 +843,10 @@ impl OpenFileDescription for TcpSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::WAITALL) {
-            todo!()
-        }
         let peek = flags.contains(RecvFromFlags::PEEK);
+        let waitall = flags.contains(RecvFromFlags::WAITALL)
+            && !flags.contains(RecvFromFlags::DONTWAIT)
+            && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
 
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
@@ -862,7 +862,7 @@ impl OpenFileDescription for TcpSocket {
                 0
             }
         } else {
-            active.read_half.read(buf, peek)?
+            active.read_half.read(buf, peek, waitall)?
         };
         Ok((len, None))
     }
@@ -876,15 +876,15 @@ impl OpenFileDescription for TcpSocket {
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
-        if flags.contains(RecvMsgFlags::WAITALL) {
-            todo!()
-        }
+        let waitall = flags.contains(RecvMsgFlags::WAITALL)
+            && !flags.contains(RecvMsgFlags::DONTWAIT)
+            && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
 
         ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == 0, Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = self.read(&mut vectored_buf)?;
+        let len = self.read(&mut vectored_buf, waitall)?;
 
         msg_hdr.controllen = 0;
 

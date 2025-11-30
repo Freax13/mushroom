@@ -187,7 +187,7 @@ pub struct ReadHalf {
 }
 
 impl ReadHalf {
-    pub fn read(&self, buf: &mut dyn ReadBuf, peek: bool) -> Result<usize> {
+    pub fn read(&self, buf: &mut dyn ReadBuf, peek: bool, waitall: bool) -> Result<usize> {
         if buf.buffer_len() == 0 {
             return Ok(0);
         }
@@ -198,7 +198,6 @@ impl ReadHalf {
             guard.bytes.pop_front().unwrap();
         }
         let mut len = buf.buffer_len();
-        guard.oob_mark_state.clamp_read_length(&mut len);
 
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
@@ -218,6 +217,14 @@ impl ReadHalf {
         }
         let was_full =
             guard.capacity.saturating_sub(guard.bytes.len()) < guard.ty.atomic_write_size();
+
+        let old_len = len;
+        guard.oob_mark_state.clamp_read_length(&mut len);
+        let clamped = old_len != len;
+
+        if !clamped && waitall {
+            ensure!(guard.bytes.len() >= len, Again);
+        }
 
         let len = cmp::min(len, guard.bytes.len());
         let (slice1, slice2) = guard.bytes.as_slices();
