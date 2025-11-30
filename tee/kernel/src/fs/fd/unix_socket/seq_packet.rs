@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::future;
 
 use crate::{
-    error::{Result, bail},
+    error::{Result, bail, ensure},
     fs::{
         FileSystem,
         fd::{
@@ -21,8 +21,8 @@ use crate::{
     spin::mutex::Mutex,
     user::{
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SocketAddr, Stat,
-            Timespec,
+            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SentToFlags, SocketAddr,
+            Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -153,6 +153,22 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         buf.read(0, &mut bytes)?;
         self.write_half.write(Box::from(bytes));
         Ok(len)
+    }
+
+    fn send_to(
+        &self,
+        buf: &dyn WriteBuf,
+        flags: SentToFlags,
+        addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
+        ensure!(addr.is_none(), IsConn);
+
+        if flags != SentToFlags::empty() {
+            todo!()
+        }
+
+        self.write(buf, ctx)
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
