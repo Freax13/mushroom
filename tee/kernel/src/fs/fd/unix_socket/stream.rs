@@ -419,8 +419,12 @@ impl OpenFileDescription for StreamUnixSocket {
             bail!(NotConn);
         };
         match how {
-            ShutdownHow::Rd => active.read_half.lock().shutdown(),
-            ShutdownHow::Wr => active.write_half.lock().shutdown(),
+            ShutdownHow::Rd => {
+                active.read_half.lock().shutdown();
+            }
+            ShutdownHow::Wr => {
+                active.write_half.lock().shutdown();
+            }
             ShutdownHow::RdWr => {
                 active.read_half.lock().shutdown();
                 active.write_half.lock().shutdown();
@@ -813,13 +817,43 @@ struct Active {
     peercred: Ucred,
 }
 
+impl Drop for Active {
+    fn drop(&mut self) {
+        let reset = self.read_half.lock().shutdown();
+        if reset {
+            // If the socket was closed with remaining bytes, change the buffer
+            // into a special failed state.
+            self.write_half.lock().reset_conn();
+        } else {
+            // Otherwise, properly shut down the write half.
+            self.write_half.lock().shutdown();
+        }
+    }
+}
+
 struct Buffer {
     data: VecDeque<u8>,
     capacity: usize,
     boundaries: VecDeque<MessageBoundary>,
     total_sent: usize,
     total_received: usize,
-    shutdown: bool,
+    state: BufferState,
+}
+
+#[derive(Clone, Copy)]
+enum BufferState {
+    Open,
+    Shutdown,
+    Reset,
+}
+
+impl BufferState {
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Self::Open => false,
+            Self::Shutdown | Self::Reset => true,
+        }
+    }
 }
 
 struct MessageBoundary {
@@ -842,7 +876,7 @@ impl Buffer {
             boundaries: VecDeque::new(),
             total_sent: 0,
             total_received: 0,
-            shutdown: false,
+            state: BufferState::Open,
         }
     }
 }
@@ -895,8 +929,10 @@ impl BufferGuard<'_> {
         }
 
         if buffer.data.is_empty() {
-            if buffer.shutdown {
-                return Ok((0, None));
+            match buffer.state {
+                BufferState::Open => {}
+                BufferState::Shutdown => return Ok((0, None)),
+                BufferState::Reset => bail!(ConnReset),
             }
 
             if Arc::strong_count(&self.buffer.buffer) == 1 {
@@ -948,7 +984,7 @@ impl BufferGuard<'_> {
             return Ok(0);
         }
 
-        ensure!(!buffer.shutdown, Pipe);
+        ensure!(!buffer.state.is_closed(), Pipe);
         ensure!(Arc::strong_count(&self.buffer.buffer) > 1, Pipe);
 
         let remaining_capacity = buffer.capacity.saturating_sub(buffer.data.len());
@@ -983,7 +1019,7 @@ impl BufferGuard<'_> {
     pub fn can_write(&self) -> bool {
         let buffer = &*self.guard;
         buffer.data.len() < buffer.capacity
-            || buffer.shutdown
+            || buffer.state.is_closed()
             || Arc::strong_count(&self.buffer.buffer) == 1
     }
 
@@ -998,7 +1034,7 @@ impl BufferGuard<'_> {
             return Ok(Ok(0));
         }
 
-        ensure!(!buffer.shutdown, Pipe);
+        ensure!(!buffer.state.is_closed(), Pipe);
         ensure!(Arc::strong_count(&self.buffer.buffer) > 1, Pipe);
 
         let len = cmp::min(len, buffer.capacity.saturating_sub(buffer.data.len()));
@@ -1021,8 +1057,10 @@ impl BufferGuard<'_> {
         }
 
         if buffer.data.is_empty() {
-            if buffer.shutdown {
-                return Ok(Ok(0));
+            match buffer.state {
+                BufferState::Open => {}
+                BufferState::Shutdown => return Ok(Ok(0)),
+                BufferState::Reset => bail!(ConnReset),
             }
 
             if Arc::strong_count(&self.buffer.buffer) == 1 {
@@ -1049,8 +1087,19 @@ impl BufferGuard<'_> {
         })
     }
 
-    pub fn shutdown(&mut self) {
-        self.guard.shutdown = true;
+    /// Close the buffer.
+    ///
+    /// Returns `true` if there are remaining bytes in the buffer.
+    pub fn shutdown(&mut self) -> bool {
+        if !self.guard.state.is_closed() {
+            self.guard.state = BufferState::Shutdown;
+            self.buffer.notify.notify();
+        }
+        !self.guard.data.is_empty()
+    }
+
+    pub fn reset_conn(&mut self) {
+        self.guard.state = BufferState::Reset;
         self.buffer.notify.notify();
     }
 
@@ -1061,9 +1110,9 @@ impl BufferGuard<'_> {
         let strong_count = Arc::strong_count(&self.buffer.buffer);
         ready_events.set(
             Events::READ,
-            !buffer.data.is_empty() || strong_count == 1 || buffer.shutdown,
+            !buffer.data.is_empty() || strong_count == 1 || buffer.state.is_closed(),
         );
-        ready_events.set(Events::RDHUP, strong_count == 1 || buffer.shutdown);
+        ready_events.set(Events::RDHUP, strong_count == 1 || buffer.state.is_closed());
 
         ready_events &= events;
         NonEmptyEvents::new(ready_events)
@@ -1073,7 +1122,7 @@ impl BufferGuard<'_> {
         let buffer = &*self.guard;
 
         let mut ready_events = Events::empty();
-        let closed = buffer.shutdown || Arc::strong_count(&self.buffer.buffer) == 1;
+        let closed = buffer.state.is_closed() || Arc::strong_count(&self.buffer.buffer) == 1;
         ready_events.set(Events::WRITE, buffer.data.len() < buffer.capacity || closed);
         ready_events &= events;
         ready_events.set(Events::HUP, closed);
@@ -1086,10 +1135,10 @@ impl BufferGuard<'_> {
         let mut result = EpollResult::new();
         let buffer = &*self.guard;
         let strong_count = Arc::strong_count(&self.buffer.buffer);
-        if !buffer.data.is_empty() || strong_count == 1 || buffer.shutdown {
+        if !buffer.data.is_empty() || strong_count == 1 || buffer.state.is_closed() {
             result.set_ready(Events::READ);
         }
-        if strong_count == 1 || buffer.shutdown {
+        if strong_count == 1 || buffer.state.is_closed() {
             result.set_ready(Events::RDHUP);
         }
         result
@@ -1098,7 +1147,7 @@ impl BufferGuard<'_> {
     pub fn epoll_write(&self) -> EpollResult {
         let mut result = EpollResult::new();
         let buffer = &*self.guard;
-        let closed = buffer.shutdown || Arc::strong_count(&self.buffer.buffer) == 1;
+        let closed = buffer.state.is_closed() || Arc::strong_count(&self.buffer.buffer) == 1;
         if buffer.data.len() < buffer.capacity || closed {
             result.set_ready(Events::WRITE);
         }
