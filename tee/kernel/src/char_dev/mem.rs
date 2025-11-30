@@ -88,23 +88,23 @@ impl OpenFileDescription for Null {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn read(&self, _buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, _buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
-    fn pread(&self, _pos: usize, _buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, _buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         Ok(0)
     }
 
@@ -211,24 +211,24 @@ impl OpenFileDescription for Zero {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
-    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
@@ -342,24 +342,24 @@ impl OpenFileDescription for Full {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
 
-    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         buf.fill_all(0)?;
         Ok(buf.buffer_len())
     }
@@ -476,19 +476,19 @@ impl OpenFileDescription for Random {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         for (offset, random) in (0..len).zip(random_bytes()) {
             buf.write(offset, &[random])?;
@@ -597,19 +597,19 @@ impl OpenFileDescription for URandom {
         Ok(self.fs.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let len = buf.buffer_len();
         for (offset, random) in (0..len).zip(random_bytes()) {
             buf.write(offset, &[random])?;

@@ -6,7 +6,7 @@ use core::{
 
 use bit_field::BitField;
 
-use crate::spin::mutex::Mutex;
+use crate::{exception::TimerInterruptGuard, spin::mutex::Mutex};
 
 pub struct FuturesUnorderedBuilder<T> {
     futures: Vec<Option<T>>,
@@ -33,6 +33,7 @@ impl<T> FuturesUnorderedBuilder<T> {
         let mut guard = self.waker.internal.lock();
         guard.polled_once = false;
         guard.ready_indices.clear();
+        guard.ready_indices.reserve(self.futures.len());
         guard.waker = Waker::noop().clone();
         drop(guard);
 
@@ -123,7 +124,9 @@ where
             Poll::Pending
         } else {
             while let Some(i) = guard.ready_indices.pop_front() {
-                let slot = &mut this.futures[i];
+                let Some(slot) = this.futures.get_mut(i) else {
+                    continue;
+                };
                 let Some(future) = slot else {
                     continue;
                 };
@@ -179,7 +182,7 @@ fn encode_ptr(ptr: *const FuturesUnorderedWaker, index: usize) -> *const () {
 }
 
 struct FuturesUnorderedWaker {
-    internal: Mutex<FuturesUnorderedWakerInternal>,
+    internal: Mutex<FuturesUnorderedWakerInternal, TimerInterruptGuard>,
 }
 
 struct FuturesUnorderedWakerInternal {
@@ -210,12 +213,13 @@ impl FuturesUnorderedWaker {
 
     fn wake(&self, idx: usize) {
         let mut guard = self.internal.lock();
+        if guard.ready_indices.is_empty() {
+            guard.waker.wake_by_ref();
+        }
         if !guard.ready_indices.contains(&idx) {
             guard.ready_indices.push_back(idx);
         }
-        let waker = guard.waker.clone();
         drop(guard);
-        waker.wake();
     }
 
     const VTABLE: RawWakerVTable = RawWakerVTable::new(

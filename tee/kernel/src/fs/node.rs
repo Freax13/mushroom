@@ -28,7 +28,7 @@ use crate::{
         syscall::args::{
             ExtractableThreadState, FileMode, FileType, OpenFlags, Resource, Stat, Timespec,
         },
-        thread::{Gid, ThreadGuard, Uid},
+        thread::{Gid, Thread, ThreadGuard, Uid},
     },
 };
 
@@ -425,7 +425,7 @@ fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
 
 #[derive(Clone)]
 pub struct FileAccessContext {
-    process: Option<Arc<Process>>,
+    thread: Option<Arc<Thread>>,
     symlink_recursion_limit: u16,
     filesystem_user_id_override: Option<Uid>,
     filesystem_group_id_override: Option<Gid>,
@@ -502,13 +502,17 @@ impl FileAccessContext {
             || self.supplementary_group_ids().contains(&gid)
     }
 
+    pub fn thread(&self) -> Option<&Arc<Thread>> {
+        self.thread.as_ref()
+    }
+
     pub fn process(&self) -> Option<&Arc<Process>> {
-        self.process.as_ref()
+        self.thread().map(|thread| thread.process())
     }
 
     pub fn filesystem_user_id(&self) -> Uid {
         self.filesystem_user_id_override.unwrap_or_else(|| {
-            self.process.as_ref().map_or(Uid::SUPER_USER, |process| {
+            self.process().map_or(Uid::SUPER_USER, |process| {
                 process.credentials.read().filesystem_user_id
             })
         })
@@ -520,7 +524,7 @@ impl FileAccessContext {
 
     pub fn filesystem_group_id(&self) -> Gid {
         self.filesystem_group_id_override.unwrap_or_else(|| {
-            self.process.as_ref().map_or(Gid::SUPER_USER, |process| {
+            self.process().map_or(Gid::SUPER_USER, |process| {
                 process.credentials.read().filesystem_group_id
             })
         })
@@ -531,21 +535,21 @@ impl FileAccessContext {
     }
 
     fn supplementary_group_ids(&self) -> Arc<[Gid]> {
-        self.process.as_ref().map_or_else(
+        self.process().map_or_else(
             || Arc::new([]) as Arc<[_]>,
             |process| process.credentials.read().supplementary_group_ids.clone(),
         )
     }
 
     pub fn max_file_size(&self) -> usize {
-        self.process.as_ref().map_or(usize::MAX, |process| {
+        self.process().map_or(usize::MAX, |process| {
             usize_from(process.limits[Resource::FSize].load_current())
         })
     }
 
     pub fn root() -> Self {
         Self {
-            process: None,
+            thread: None,
             symlink_recursion_limit: 16,
             filesystem_user_id_override: None,
             filesystem_group_id_override: None,
@@ -561,9 +565,9 @@ pub enum Permission {
 }
 
 impl ExtractableThreadState for FileAccessContext {
-    fn extract_from_thread(guard: &ThreadGuard) -> Self {
+    fn extract_from_thread(thread: &Arc<Thread>, _: &ThreadGuard) -> Self {
         Self {
-            process: Some(guard.process().clone()),
+            thread: Some(thread.clone()),
             symlink_recursion_limit: 16,
             filesystem_user_id_override: None,
             filesystem_group_id_override: None,
@@ -872,7 +876,7 @@ pub fn get_socket(
     path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
-    let link = lookup_and_resolve_link(ctx.process.as_ref().unwrap().cwd(), path, ctx)?;
+    let link = lookup_and_resolve_link(ctx.process().unwrap().cwd(), path, ctx)?;
     link.node.get_socket(ctx)
 }
 

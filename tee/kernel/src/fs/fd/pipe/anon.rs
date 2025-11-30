@@ -7,8 +7,9 @@ use crate::{
     fs::{
         FileSystem, StatFs,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
-            epoll::{EpollRequest, EpollResult},
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, WriteBuf,
+            epoll::{EpollReady, EpollRequest, EpollResult, WeakEpollReady},
             pipe::{CAPACITY, PIPE_BUF},
             stream_buffer,
         },
@@ -83,30 +84,26 @@ impl OpenFileDescription for ReadHalf {
         path(self.ino)
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        self.stream_buffer.read(buf, false)
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        self.stream_buffer.read(buf, false, false)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         self.stream_buffer.poll_ready(events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.stream_buffer
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        self.stream_buffer
-            .notify()
-            .epoll_loop(req, || self.stream_buffer.epoll_ready())
-            .await
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -146,6 +143,16 @@ impl OpenFileDescription for ReadHalf {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for ReadHalf {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.stream_buffer
+            .notify()
+            .epoll_loop(req, || self.stream_buffer.epoll_ready())
+            .await
     }
 }
 
@@ -216,34 +223,40 @@ impl OpenFileDescription for WriteHalf {
         Some(&self.stream_buffer)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         self.stream_buffer.poll_ready(events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.stream_buffer
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    async fn ready_for_write(&self, count: usize) {
+    async fn ready_for_write(&self, count: usize, _: &FileAccessContext) {
         self.stream_buffer.ready_for_write(count).await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for WriteHalf {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         self.stream_buffer
             .notify()
             .epoll_loop(req, || self.stream_buffer.epoll_ready())
             .await
-    }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
     }
 }
 

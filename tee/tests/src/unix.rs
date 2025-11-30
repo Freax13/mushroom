@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{IoSlice, IoSliceMut},
     os::fd::{AsRawFd, RawFd},
+    time::Duration,
 };
 
 use nix::{
@@ -12,8 +13,8 @@ use nix::{
         eventfd::EventFd,
         socket::{
             AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, Shutdown,
-            SockFlag, SockType, UnixAddr, bind, connect, getsockname, listen, recv, recvmsg, send,
-            sendmsg, shutdown, socket, socketpair,
+            SockFlag, SockProtocol, SockType, UnixAddr, bind, connect, getsockname, listen, recv,
+            recvmsg, send, sendmsg, shutdown, socket, socketpair,
         },
         stat::fstat,
     },
@@ -499,4 +500,217 @@ fn connect_to_file() {
     assert_eq!(connect(client.as_raw_fd(), &addr), Err(Errno::ECONNREFUSED));
 
     unlink(path).unwrap();
+}
+
+#[test]
+fn close_empty() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Err(Errno::EAGAIN));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn close_empty_after_write() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock2, &mut buf), Ok(3));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn close_with_data() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    drop(sock2);
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Err(Errno::ECONNRESET));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn shutdown_with_data() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    shutdown(sock2.as_raw_fd(), Shutdown::Both).unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Err(Errno::ECONNRESET));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn shutdown_then_read() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    shutdown(sock2.as_raw_fd(), Shutdown::Both).unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+    assert_eq!(read(&sock2, &mut buf), Ok(3));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+/// WAITALL has no effect when used with non-blocking a socket.
+#[test]
+fn waitall_nonblock() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(8)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn waitall_dontwait() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::empty(),
+    )
+    .unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(
+            sock1.as_raw_fd(),
+            &mut buf,
+            MsgFlags::MSG_WAITALL | MsgFlags::MSG_DONTWAIT
+        ),
+        Err(Errno::EAGAIN)
+    );
+
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(
+            sock1.as_raw_fd(),
+            &mut buf,
+            MsgFlags::MSG_WAITALL | MsgFlags::MSG_DONTWAIT
+        ),
+        Ok(8)
+    );
+}
+
+/// WAITALL has no effect when used with DONTWAIT a socket.
+#[test]
+fn waitall() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::empty(),
+    )
+    .unwrap();
+
+    // Send the first half of the message.
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"12345678", MsgFlags::empty()),
+        Ok(8)
+    );
+
+    // Delay sending more bytes.
+    std::thread::spawn(move || {
+        // Wait for half a second.
+        std::thread::sleep(Duration::from_millis(500));
+        // Send the second half of the message.
+        assert_eq!(
+            send(sock2.as_raw_fd(), b"90abcdef", MsgFlags::empty()),
+            Ok(8)
+        );
+    });
+
+    // Make sure that all 16 bytes are received.
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
+        Ok(16)
+    );
 }

@@ -8,7 +8,11 @@ use core::{
 use std::{
     iter::once,
     os::unix::thread::JoinHandleExt,
-    sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, mpsc},
+    sync::{
+        Arc, Condvar, LazyLock, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -181,6 +185,7 @@ pub fn main(
     // Create a bunch of APs.
     let dynamic_memory = Arc::new(Mutex::new(DynamicMemory::new()));
     let (sender, receiver) = mpsc::channel();
+    let started = Arc::new(AtomicUsize::new(1));
     let run_states = repeat_with(RunState::default)
         .take(usize::from(MAX_APS_COUNT))
         .collect::<Arc<[_]>>();
@@ -197,10 +202,18 @@ pub fn main(
             let sender = sender.clone();
             let dynamic_slot = dynamic_slot.clone();
             let dynamic_memory = dynamic_memory.clone();
+            let started = started.clone();
             let run_states = run_states.clone();
             std::thread::spawn(move || {
-                let res =
-                    run_kernel_vcpu(i, ap, &sender, &dynamic_slot, &dynamic_memory, &run_states);
+                let res = run_kernel_vcpu(
+                    i,
+                    ap,
+                    &sender,
+                    &dynamic_slot,
+                    &dynamic_memory,
+                    &started,
+                    &run_states,
+                );
                 if let Err(err) = res {
                     let _ = sender.send(OutputEvent::Fail(err));
                 }
@@ -253,6 +266,7 @@ fn run_kernel_vcpu(
     sender: &mpsc::Sender<OutputEvent<()>>,
     dynamic_slot: &Slot,
     dynamic_memory: &Mutex<DynamicMemory>,
+    started: &AtomicUsize,
     run_states: &[RunState],
 ) -> Result<()> {
     let kvm_run = ap.get_kvm_run_block()?;
@@ -359,7 +373,8 @@ fn run_kernel_vcpu(
                 let mut regs = ap.get_regs()?;
                 match regs.rax {
                     nr if nr == SupervisorCallNr::StartNextAp as u64 => {
-                        if let Some(run_state) = run_states.get(usize::from(id) + 1) {
+                        let next_idx = started.fetch_add(1, Ordering::Relaxed);
+                        if let Some(run_state) = run_states.get(next_idx) {
                             run_state.kick();
                         }
                     }

@@ -28,7 +28,7 @@ use crate::{
     error::{Result, bail, err},
     fs::{
         StaticFile,
-        fd::FileDescriptorTable,
+        fd::{FileDescriptorTable, epoll::EventCounter},
         node::{
             FileAccessContext, INode, Link, LinkLocation, ROOT_NODE,
             procfs::ProcessInos,
@@ -321,14 +321,10 @@ impl Process {
             return;
         }
 
-        let mut threads = self.threads.lock();
-        for thread in core::mem::take(&mut *threads)
-            .into_iter()
-            .filter_map(|t| t.upgrade())
-        {
+        let threads = core::mem::take(&mut *self.threads.lock());
+        for thread in threads.into_iter().filter_map(|t| t.upgrade()) {
             thread.terminate(exit_status).await;
         }
-        drop(threads);
 
         if let Some(termination_signal) = self.termination_signal
             && let Some(parent) = self.parent.upgrade()
@@ -408,6 +404,11 @@ impl Process {
 
     pub fn pending_signals(&self) -> Sigset {
         self.pending_signals.lock().pending_signals()
+    }
+
+    pub fn pending_signals_with_counter(&self) -> (Sigset, EventCounter) {
+        let guard = self.pending_signals.lock();
+        (guard.pending_signals(), guard.queue_counter())
     }
 
     pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
@@ -851,7 +852,7 @@ static INIT_THREAD: Lazy<Arc<Thread>> = Lazy::new(|| {
     let thread = Thread::empty(tid);
 
     let mut guard = thread.lock();
-    let mut ctx = FileAccessContext::extract_from_thread(&guard);
+    let mut ctx = FileAccessContext::extract_from_thread(&thread, &guard);
 
     let file = TmpFsFile::new(
         TmpFs::new(),

@@ -184,6 +184,7 @@ jobs:
           - swtpm
           - tinysparql
           - pulseaudio
+          - ell
         tee:
           - snp
           - tdx

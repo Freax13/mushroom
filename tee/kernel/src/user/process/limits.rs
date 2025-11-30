@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::{
     arch::{asm, x86_64::cmpxchg16b},
     cell::SyncUnsafeCell,
@@ -9,7 +10,7 @@ use core::{
 
 use crate::user::{
     syscall::args::{ExtractableThreadState, RLimit, Resource},
-    thread::ThreadGuard,
+    thread::{Thread, ThreadGuard},
 };
 
 #[derive(Clone)]
@@ -160,8 +161,8 @@ impl<R> Clone for CurrentLimit<R> {
 impl<R> Copy for CurrentLimit<R> {}
 
 impl<R: ConstResource> ExtractableThreadState for CurrentLimit<R> {
-    fn extract_from_thread(guard: &ThreadGuard) -> Self {
-        Self::new(guard.process().limits[R::RESOURCE].load_current())
+    fn extract_from_thread(thread: &Arc<Thread>, _: &ThreadGuard) -> Self {
+        Self::new(thread.process().limits[R::RESOURCE].load_current())
     }
 }
 

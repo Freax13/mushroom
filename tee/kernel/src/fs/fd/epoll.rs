@@ -11,7 +11,7 @@ use core::{
     mem::transmute_copy,
     num::NonZeroUsize,
     ops::Not,
-    pin::Pin,
+    pin::{Pin, pin},
     sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll, Waker, ready},
 };
@@ -21,12 +21,12 @@ use bitflags::Flags;
 use futures::future::{Either, select};
 
 use crate::{
-    error::{Result, bail, ensure, err},
+    error::{ErrorKind, Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
             BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription,
-            StrongFileDescriptor, WeakFileDescriptor,
+            OpenFileDescriptionData, StrongFileDescriptor, WeakFileDescriptor,
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -93,7 +93,7 @@ impl Epoll {
                         .interest_list
                         .iter_mut()
                         .enumerate()
-                        .find(|(_, entry)| entry.fd == wfd)
+                        .find(|(_, entry)| entry.epoll_ready.fd() == wfd)
                     {
                         entry.ready_events = result.ready_events;
                         entry.current_values = result.counter_values;
@@ -107,7 +107,7 @@ impl Epoll {
                     } else {
                         let mut cursor = guard.ready_list.cursor_front_mut();
                         while let Some(entry) = cursor.current() {
-                            if entry.fd != wfd {
+                            if entry.epoll_ready.fd() != wfd {
                                 cursor.move_next();
                                 continue;
                             }
@@ -130,39 +130,35 @@ impl Epoll {
 
                 async fn wait_on_fd(
                     wfd: WeakFileDescriptor,
-                    fd: FileDescriptor,
+                    future: Pin<Box<dyn Future<Output = EpollResult> + Send>>,
                     request: EpollRequest,
                 ) -> (WeakFileDescriptor, EpollResult) {
-                    let mut result = fd.epoll_ready(&request).await;
+                    let mut result = future.await;
                     result.ready_events &= request.events;
                     (wfd, result)
                 }
                 let mut i = 0;
                 while let Some(entry) = guard.interest_list.get(i) {
                     debug_assert!(!entry.ready());
-                    let Some(fd) = entry.fd.upgrade().filter(|fd| !fd.is_closed()) else {
+                    let request = entry.request();
+                    let Some(future) = entry.epoll_ready.epoll_ready(request) else {
                         guard.interest_list.swap_remove(i);
                         continue;
                     };
-                    if !entry.events.is_empty() {
-                        let request = entry.request();
-                        let wfd = entry.fd.clone();
-                        builder.push(wait_on_fd(wfd, fd, request));
-                    }
+                    let wfd = entry.epoll_ready.fd();
+                    builder.push(wait_on_fd(wfd, future, request));
                     i += 1;
                 }
                 let mut cursor = guard.ready_list.cursor_front_mut();
                 while let Some(entry) = cursor.current() {
                     debug_assert!(entry.ready());
-                    let Some(fd) = entry.fd.upgrade().filter(|fd| !fd.is_closed()) else {
+                    let request = entry.request();
+                    let Some(future) = entry.epoll_ready.epoll_ready(request) else {
                         cursor.remove_current().unwrap();
                         continue;
                     };
-                    if !entry.events.is_empty() {
-                        let request = entry.request();
-                        let wfd = entry.fd.clone();
-                        builder.push(wait_on_fd(wfd, fd, request));
-                    }
+                    let wfd = entry.epoll_ready.fd();
+                    builder.push(wait_on_fd(wfd, future, request));
                     cursor.move_next();
                 }
 
@@ -209,7 +205,7 @@ impl OpenFileDescription for Epoll {
         guard
             .interest_list
             .iter_mut()
-            .filter_map(|entry| entry.fd.upgrade())
+            .filter_map(|entry| entry.epoll_ready.fd().upgrade())
             .for_each(|epoll| {
                 epoll.force_poll();
             });
@@ -237,7 +233,12 @@ impl OpenFileDescription for Epoll {
                     assert!(entry.ready());
 
                     // Make sure that the fd hasn't been closed.
-                    if entry.fd.upgrade().is_none_or(|fd| fd.is_closed()) {
+                    if entry
+                        .epoll_ready
+                        .fd()
+                        .upgrade()
+                        .is_none_or(|fd| fd.is_closed())
+                    {
                         cursor.remove_current().unwrap();
                         continue;
                     }
@@ -279,7 +280,7 @@ impl OpenFileDescription for Epoll {
         Ok(events)
     }
 
-    fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
+    fn epoll_add(&self, epoll_ready: Box<dyn WeakEpollReady>, event: EpollEvent) -> Result<()> {
         assert!(
             !event
                 .events
@@ -295,13 +296,13 @@ impl OpenFileDescription for Epoll {
                 .interest_list
                 .iter()
                 .chain(guard.ready_list.iter())
-                .any(|entry| entry.fd == *fd),
+                .any(|entry| entry.epoll_ready.fd() == epoll_ready.fd()),
             Exist
         );
         // Register the file descriptor.
         guard
             .interest_list
-            .push(InterestListEntry::new(FileDescriptor::downgrade(fd), event));
+            .push(InterestListEntry::new(epoll_ready, event));
         drop(guard);
         self.notify.notify();
         Ok(())
@@ -309,13 +310,17 @@ impl OpenFileDescription for Epoll {
 
     fn epoll_del(&self, fd: &dyn OpenFileDescription) -> Result<()> {
         let mut guard = self.internal.lock();
-        if let Some(idx) = guard.interest_list.iter().position(|entry| entry.fd == *fd) {
+        if let Some(idx) = guard
+            .interest_list
+            .iter()
+            .position(|entry| entry.epoll_ready.fd() == *fd)
+        {
             guard.interest_list.swap_remove(idx);
         } else {
             let mut cursor = guard.ready_list.cursor_front_mut();
             loop {
                 let entry = cursor.current().ok_or(err!(NoEnt))?;
-                if entry.fd != *fd {
+                if entry.epoll_ready.fd() != *fd {
                     cursor.move_next();
                     continue;
                 }
@@ -338,18 +343,22 @@ impl OpenFileDescription for Epoll {
         );
 
         let mut guard = self.internal.lock();
-        if let Some(entry) = guard.interest_list.iter_mut().find(|entry| entry.fd == *fd) {
-            *entry = InterestListEntry::new(entry.fd.clone(), event);
+        if let Some(entry) = guard
+            .interest_list
+            .iter_mut()
+            .find(|entry| entry.epoll_ready.fd() == *fd)
+        {
+            *entry = InterestListEntry::new(entry.epoll_ready.clone_epoll_ready(), event);
         } else {
             let mut cursor = guard.ready_list.cursor_front_mut();
             loop {
                 let entry = cursor.current().ok_or(err!(NoEnt))?;
-                if entry.fd != *fd {
+                if entry.epoll_ready.fd() != *fd {
                     cursor.move_next();
                     continue;
                 }
 
-                *entry = InterestListEntry::new(entry.fd.clone(), event);
+                *entry = InterestListEntry::new(entry.epoll_ready.clone_epoll_ready(), event);
 
                 let entry = cursor.remove_current().unwrap();
                 guard.interest_list.push(entry);
@@ -393,7 +402,7 @@ impl OpenFileDescription for Epoll {
         bail!(BadF)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         if !events.contains(Events::READ) {
             return None;
         }
@@ -407,7 +416,7 @@ impl OpenFileDescription for Epoll {
             .then_some(NonEmptyEvents::READ)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         if !events.contains(Events::READ) {
             return pending().await;
         }
@@ -425,10 +434,20 @@ impl OpenFileDescription for Epoll {
             .await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for Epoll {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         self.force_poll();
         self.notify
@@ -443,14 +462,10 @@ impl OpenFileDescription for Epoll {
             })
             .await
     }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
-    }
 }
 
 struct InterestListEntry {
-    fd: WeakFileDescriptor,
+    epoll_ready: Box<dyn WeakEpollReady>,
 
     data: u64,
     events: Events,
@@ -463,9 +478,9 @@ struct InterestListEntry {
 }
 
 impl InterestListEntry {
-    fn new(fd: WeakFileDescriptor, event: EpollEvent) -> Self {
+    fn new(epoll_ready: Box<dyn WeakEpollReady>, event: EpollEvent) -> Self {
         Self {
-            fd,
+            epoll_ready,
             data: event.data,
             events: Events::from(event.events) | Events::ERR | Events::HUP,
             oneshot: event.events.contains(EpollEvents::ONESHOT),
@@ -493,6 +508,7 @@ impl InterestListEntry {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EventCounter(u64);
 
 impl EventCounter {
@@ -517,7 +533,7 @@ impl AtomicEventCounter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct EpollRequest {
     events: Events,
     last_ready_values: Events,
@@ -854,5 +870,109 @@ impl<T> ExternallyPollableTaskHandle<T> {
             }
             Poll::Pending => {}
         }
+    }
+}
+
+pub trait WeakEpollReady: Send + Sync {
+    /// Returns a future resolving when the file descriptor's ready state
+    /// matches the request or `None` when the file descriptor has been closed.
+    fn epoll_ready(
+        &self,
+        req: EpollRequest,
+    ) -> Option<Pin<Box<dyn Future<Output = EpollResult> + Send>>>;
+
+    /// Get a weak reference to the file descriptor polled by this instance.
+    fn fd(&self) -> WeakFileDescriptor;
+
+    /// Clone to a dyn Box.
+    fn clone_epoll_ready(&self) -> Box<dyn WeakEpollReady>;
+}
+
+impl<T> WeakEpollReady for Weak<OpenFileDescriptionData<T>>
+where
+    T: EpollReady + OpenFileDescription,
+{
+    fn epoll_ready(
+        &self,
+        req: EpollRequest,
+    ) -> Option<Pin<Box<dyn Future<Output = EpollResult> + Send>>> {
+        self.upgrade().filter(|fd| !fd.is_closed()).map(|this| {
+            Box::pin(async move {
+                {
+                    let ready_future = EpollReady::epoll_ready(&**this, &req);
+                    let closed_future = this.wait_until_closed();
+                    let pinned = pin!(closed_future);
+                    if let Either::Left((res, _)) = select(ready_future, pinned).await {
+                        return res;
+                    }
+                    // End the scope to drop `closed_future`.
+                }
+                drop(this);
+                pending().await
+            }) as Pin<Box<_>>
+        })
+    }
+
+    fn fd(&self) -> WeakFileDescriptor {
+        WeakFileDescriptor(Clone::clone(self) as Weak<_>)
+    }
+
+    fn clone_epoll_ready(&self) -> Box<dyn WeakEpollReady> {
+        Box::new(Clone::clone(self))
+    }
+}
+
+#[async_trait]
+pub trait EpollReady: Send + Sync + 'static {
+    /// Returns a future resolving when the file descriptor's ready state
+    /// matches the request.
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult;
+}
+
+/// Do some potentially blocking IO. If the closure returns Again, the epoll
+/// interface is used to wait for for an edge for the given event.
+pub async fn do_edge_triggered_io<R>(
+    fd: &FileDescriptor,
+    events: Events,
+    ctx: &FileAccessContext,
+    mut callback: impl FnMut() -> Result<R>,
+) -> Result<R> {
+    // Try optimistically calling the callback.
+    let err = match callback() {
+        Ok(value) => return Ok(value),
+        Err(err) if err.kind() == ErrorKind::Again => err, // Enter the epoll loop.
+        Err(err) => return Err(err),
+    };
+
+    // Check if this operation is supposed to block.
+    let flags = fd.flags();
+    let non_blocking = flags.contains(OpenFlags::NONBLOCK);
+    if non_blocking {
+        return Err(err);
+    }
+
+    // Create an epoll handle.
+    let epoll = (**fd).clone().epoll_ready(ctx)?;
+
+    // Start out with zero counter values.
+    let mut req = EpollRequest {
+        events,
+        last_ready_values: Events::empty(),
+        min_counter_values: FlagArray::default(),
+    };
+    loop {
+        // For for the ready state to change.
+        let ready = epoll.epoll_ready(req).unwrap().await;
+
+        // Try calling the callback again.
+        match callback() {
+            Ok(value) => return Ok(value),
+            Err(err) if err.kind() == ErrorKind::Again => {}
+            Err(err) => return Err(err),
+        }
+
+        // Update the request for the next try.
+        req.min_counter_values = ready.counter_values;
+        req.last_ready_values = ready.ready_events & req.events;
     }
 }

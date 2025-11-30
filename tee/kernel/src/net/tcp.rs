@@ -22,9 +22,10 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
-            LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf, common_ioctl,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf,
+            common_ioctl,
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             file::{File, open_file},
             inotify::Watchers,
             stream_buffer,
@@ -50,8 +51,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
-                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow,
-                SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
+                MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags,
+                ShutdownHow, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -377,6 +378,15 @@ impl TcpSocket {
     fn get_or_bind_ephemeral(&self, ctx: &FileAccessContext) -> Result<&BoundSocket> {
         self.try_bind(self.ip_version.unspecified_addr(), ctx)?;
         Ok(self.bound_socket.get().unwrap())
+    }
+
+    fn read(&self, buf: &mut dyn ReadBuf, waitall: bool) -> Result<usize> {
+        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
+        let mode = bound.mode.get().ok_or(err!(NotConn))?;
+        let Mode::Active(active) = mode else {
+            bail!(NotConn);
+        };
+        active.read_half.read(buf, false, waitall)
     }
 }
 
@@ -824,13 +834,8 @@ impl OpenFileDescription for TcpSocket {
         Ok(())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
-        let Mode::Active(active) = mode else {
-            bail!(NotConn);
-        };
-        active.read_half.read(buf, false)
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        self.read(buf, false)
     }
 
     fn recv_from(
@@ -839,6 +844,9 @@ impl OpenFileDescription for TcpSocket {
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
         let peek = flags.contains(RecvFromFlags::PEEK);
+        let waitall = flags.contains(RecvFromFlags::WAITALL)
+            && !flags.contains(RecvFromFlags::DONTWAIT)
+            && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
 
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
@@ -854,7 +862,7 @@ impl OpenFileDescription for TcpSocket {
                 0
             }
         } else {
-            active.read_half.read(buf, peek)?
+            active.read_half.read(buf, peek, waitall)?
         };
         Ok((len, None))
     }
@@ -864,14 +872,19 @@ impl OpenFileDescription for TcpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
+        let waitall = flags.contains(RecvMsgFlags::WAITALL)
+            && !flags.contains(RecvMsgFlags::DONTWAIT)
+            && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
+
         ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == 0, Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = self.read(&mut vectored_buf)?;
+        let len = self.read(&mut vectored_buf, waitall)?;
 
         msg_hdr.controllen = 0;
 
@@ -973,7 +986,7 @@ impl OpenFileDescription for TcpSocket {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let bound = self.bound_socket.get()?;
         let mode = bound.mode.get()?;
         match mode {
@@ -993,7 +1006,7 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         let mode = self
             .activate_notify
             .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
@@ -1030,41 +1043,11 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        let mode = self
-            .activate_notify
-            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
-            .await;
-        match mode {
-            Mode::Passive(passive_tcp_socket) => {
-                passive_tcp_socket
-                    .notify
-                    .epoll_loop(req, || {
-                        let mut result = EpollResult::new();
-                        let guard = passive_tcp_socket.internal.lock();
-                        if !guard.queue.is_empty() {
-                            result.set_ready(Events::READ);
-                        }
-                        result.add_counter(Events::READ, &guard.read_counter);
-                        result
-                    })
-                    .await
-            }
-            Mode::Active(active_tcp_socket) => {
-                Notify::zip_epoll_loop(
-                    req,
-                    active_tcp_socket.read_half.notify(),
-                    || active_tcp_socket.read_half.epoll_ready(),
-                    active_tcp_socket.write_half.notify(),
-                    || active_tcp_socket.write_half.epoll_ready(),
-                )
-                .await
-            }
-        }
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn ioctl(
@@ -1100,6 +1083,42 @@ impl OpenFileDescription for TcpSocket {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
+    }
+}
+
+#[async_trait]
+impl EpollReady for TcpSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mode = self
+            .activate_notify
+            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
+            .await;
+        match mode {
+            Mode::Passive(passive_tcp_socket) => {
+                passive_tcp_socket
+                    .notify
+                    .epoll_loop(req, || {
+                        let mut result = EpollResult::new();
+                        let guard = passive_tcp_socket.internal.lock();
+                        if !guard.queue.is_empty() {
+                            result.set_ready(Events::READ);
+                        }
+                        result.add_counter(Events::READ, &guard.read_counter);
+                        result
+                    })
+                    .await
+            }
+            Mode::Active(active_tcp_socket) => {
+                Notify::zip_epoll_loop(
+                    req,
+                    active_tcp_socket.read_half.notify(),
+                    || active_tcp_socket.read_half.epoll_ready(),
+                    active_tcp_socket.write_half.notify(),
+                    || active_tcp_socket.write_half.epoll_ready(),
+                )
+                .await
+            }
+        }
     }
 }
 

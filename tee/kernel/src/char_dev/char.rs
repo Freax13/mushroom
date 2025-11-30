@@ -24,10 +24,10 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, BsdFileLockRecord, Events, FdFlags, LazyBsdFileLockRecord, NonEmptyEvents,
-            OpenFileDescription, PipeBlocked, ReadBuf, StrongFileDescriptor, WriteBuf,
-            common_ioctl,
+            OpenFileDescription, OpenFileDescriptionData, PipeBlocked, ReadBuf,
+            StrongFileDescriptor, WriteBuf, common_ioctl,
             dir::open_dir,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             inotify::Watchers,
             stream_buffer,
             unix_socket::StreamUnixSocket,
@@ -47,8 +47,8 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                ExtractableThreadState, FileMode, FileType, FileTypeAndMode, InputMode, LocalMode,
-                OpenFlags, OutputMode, Pointer, Stat, Termios, Timespec, WinSize,
+                FileMode, FileType, FileTypeAndMode, InputMode, LocalMode, OpenFlags, OutputMode,
+                Pointer, Resource, Stat, Termios, Timespec, WinSize,
             },
             traits::Abi,
         },
@@ -224,7 +224,7 @@ impl OpenFileDescription for Pty {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         let guard = self.data.internal.lock();
         if self.master {
@@ -260,66 +260,21 @@ impl OpenFileDescription for Pty {
         NonEmptyEvents::new(ready_events & events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.data
             .notify
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        self.data
-            .notify
-            .epoll_loop(req, || {
-                let mut result = EpollResult::new();
-                let guard = self.data.internal.lock();
-                if self.master {
-                    if !guard.output_buffer.is_empty()
-                        || (guard.slave_connected && guard.num_slaves == 0)
-                    {
-                        result.set_ready(Events::READ);
-                        result.add_counter(Events::READ, &guard.master_read_counter);
-                    }
-
-                    if guard.input_buffer.len() < guard.input_buffer.capacity()
-                        || guard
-                            .input_buffer
-                            .iter()
-                            .copied()
-                            .all(|c| !guard.is_line_end(c))
-                    {
-                        result.set_ready(Events::WRITE);
-                        result.add_counter(Events::WRITE, &guard.master_write_counter);
-                    }
-                } else {
-                    if guard
-                        .input_buffer
-                        .iter()
-                        .copied()
-                        .any(|c| guard.is_line_end(c))
-                        || guard.master_closed
-                    {
-                        result.set_ready(Events::READ);
-                        result.add_counter(Events::READ, &guard.slave_read_counter);
-                    }
-
-                    if guard.output_buffer.len() < guard.output_buffer.capacity() - 1
-                        || guard.master_closed
-                    {
-                        result.set_ready(Events::WRITE);
-                        result.add_counter(Events::WRITE, &guard.slave_write_counter);
-                    }
-                }
-                result
-            })
-            .await
-    }
-
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let buffer_len = buf.buffer_len();
         if buffer_len == 0 {
             return Ok(0);
@@ -541,7 +496,8 @@ impl OpenFileDescription for Pty {
                 let flags = arg.get().as_u64();
 
                 let pty = Self::new_slave(self.data.clone(), OpenFlags::from_bits_retain(flags))?;
-                let no_file_limit = CurrentNoFileLimit::extract_from_thread(thread);
+                let no_file_limit = thread.process().limits[Resource::NoFile].load_current();
+                let no_file_limit = CurrentNoFileLimit::new(no_file_limit);
                 let fd = thread.thread.fdtable.lock().insert(
                     pty,
                     FdFlags::from_bits_retain(flags),
@@ -555,6 +511,57 @@ impl OpenFileDescription for Pty {
 
     fn as_tty(&self) -> Option<Arc<PtyData>> {
         Some(self.data.clone())
+    }
+}
+
+#[async_trait]
+impl EpollReady for Pty {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.data
+            .notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.data.internal.lock();
+                if self.master {
+                    if !guard.output_buffer.is_empty()
+                        || (guard.slave_connected && guard.num_slaves == 0)
+                    {
+                        result.set_ready(Events::READ);
+                        result.add_counter(Events::READ, &guard.master_read_counter);
+                    }
+
+                    if guard.input_buffer.len() < guard.input_buffer.capacity()
+                        || guard
+                            .input_buffer
+                            .iter()
+                            .copied()
+                            .all(|c| !guard.is_line_end(c))
+                    {
+                        result.set_ready(Events::WRITE);
+                        result.add_counter(Events::WRITE, &guard.master_write_counter);
+                    }
+                } else {
+                    if guard
+                        .input_buffer
+                        .iter()
+                        .copied()
+                        .any(|c| guard.is_line_end(c))
+                        || guard.master_closed
+                    {
+                        result.set_ready(Events::READ);
+                        result.add_counter(Events::READ, &guard.slave_read_counter);
+                    }
+
+                    if guard.output_buffer.len() < guard.output_buffer.capacity() - 1
+                        || guard.master_closed
+                    {
+                        result.set_ready(Events::WRITE);
+                        result.add_counter(Events::WRITE, &guard.slave_write_counter);
+                    }
+                }
+                result
+            })
+            .await
     }
 }
 

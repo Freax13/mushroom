@@ -23,7 +23,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
             ReadBuf, StrongFileDescriptor,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{DynINode, FileAccessContext, INode, new_ino},
         ownership::Ownership,
@@ -110,6 +110,7 @@ impl OpenFileDescription for Inotify {
     fn flags(&self) -> OpenFlags {
         self.internal.lock().flags
     }
+
     fn set_flags(&self, flags: OpenFlags) {
         self.internal.lock().flags.update(flags);
     }
@@ -156,36 +157,27 @@ impl OpenFileDescription for Inotify {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let guard = self.queue.lock();
         let mut ready = Events::empty();
         ready.set(Events::READ, !guard.queue.is_empty());
         NonEmptyEvents::new(ready & events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        self.notify.wait_until(|| self.poll_ready(events)).await
-    }
-
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.notify
-            .epoll_loop(req, || {
-                let mut result = EpollResult::new();
-                let guard = self.queue.lock();
-                if !guard.queue.is_empty() {
-                    result.set_ready(Events::READ);
-                }
-                result.add_counter(Events::READ, &guard.read_counter);
-                result
-            })
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
+    }
+
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let mut guard = self.queue.lock();
         ensure!(!guard.queue.is_empty(), Again);
 
@@ -276,6 +268,23 @@ impl OpenFileDescription for Inotify {
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
+    }
+}
+
+#[async_trait]
+impl EpollReady for Inotify {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.queue.lock();
+                if !guard.queue.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                result.add_counter(Events::READ, &guard.read_counter);
+                result
+            })
+            .await
     }
 }
 

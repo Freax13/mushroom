@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
-use core::{cmp, future::pending};
+use core::cmp;
 
 use async_trait::async_trait;
 use bitflags::bitflags;
@@ -12,8 +12,9 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription, ReadBuf,
-            VectoredUserBuf, WriteBuf,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
+            epoll::{EpollReady, EpollRequest, EpollResult, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         path::Path,
@@ -26,8 +27,8 @@ use crate::{
         syscall::{
             args::{
                 CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
-                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
-                Timespec,
+                RecvMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
+                SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee, SizedPointee},
             },
             traits::Abi,
@@ -227,6 +228,7 @@ impl OpenFileDescription for NetlinkSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
@@ -302,46 +304,56 @@ impl OpenFileDescription for NetlinkSocket {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let connection = self.connection.get()?;
-        let mut ready_events = Events::WRITE;
-        if events.contains(Events::READ) {
-            ready_events.set(Events::READ, connection.rx.poll_readable());
-        }
-        NonEmptyEvents::new(ready_events & events)
+        NonEmptyEvents::zip(
+            connection.rx.poll_ready(events),
+            NonEmptyEvents::new(Events::WRITE & events),
+        )
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         // Wait until a connection has been established.
         let connection = self
             .connect_notify
             .wait_until(|| self.connection.get())
             .await;
-
-        let read_fut = async move {
-            if !events.contains(Events::READ) {
-                return pending().await;
-            }
-            connection.rx.readable().await;
-            NonEmptyEvents::READ
-        };
-
-        let write_fut = async move {
-            if !events.contains(Events::WRITE) {
-                return pending().await;
-            }
-            NonEmptyEvents::WRITE
-        };
-
-        NonEmptyEvents::select(read_fut, write_fut).await
+        connection
+            .rx
+            .notify()
+            .wait_until(|| self.poll_ready(events, ctx))
+            .await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         todo!()
+    }
+}
+
+#[async_trait]
+impl EpollReady for NetlinkSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        // Wait until a connection has been established.
+        let connection = self
+            .connect_notify
+            .wait_until(|| self.connection.get())
+            .await;
+        connection
+            .rx
+            .notify()
+            .epoll_loop(req, || {
+                let mut result = connection.rx.epoll_ready();
+                result.set_ready(Events::WRITE);
+                result
+            })
+            .await
     }
 }
 
@@ -360,6 +372,7 @@ impl TryFrom<i32> for NetlinkFamily {
     }
 }
 
+const NLMSG_ERROR: u16 = 2;
 const NLMSG_DONE: u16 = 3;
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -393,6 +406,9 @@ bitflags! {
         const ACK = 1 << 2;
         /// Echo this request.
         const ECHO = 1 << 3;
+
+        // Additional flag bits for ERROR responses:
+        const CAPPED = 1 << 8;
 
         // Additional flag bits for GET requests:
 

@@ -78,12 +78,12 @@ impl OpenFileDescription for Output {
         Ok(self.stat)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & Events::WRITE)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await

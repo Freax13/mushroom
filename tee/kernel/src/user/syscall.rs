@@ -41,12 +41,13 @@ use crate::{
             Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf, ReadBuf,
             StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
             WriteBuf, do_io, do_write_io,
-            epoll::Epoll,
+            epoll::{Epoll, do_edge_triggered_io},
             eventfd::EventFd,
             inotify::Inotify,
             mem::MemFd,
             path::PathFd,
             pipe,
+            signal::SignalFd,
             stream_buffer::{self, SpliceBlockedError},
             timer::Timer,
             unix_socket::{DgramUnixSocket, SeqPacketUnixSocket, StreamUnixSocket},
@@ -292,11 +293,13 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
+    handlers.register(SysSignalfd);
     handlers.register(SysTimerfdCreate);
     handlers.register(SysEventfd);
     handlers.register(SysFallocate);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
+    handlers.register(SysSignalfd4);
     handlers.register(SysEventfd2);
     handlers.register(SysEpollCreate1);
     handlers.register(SysDup3);
@@ -322,6 +325,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
 async fn read(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
@@ -329,7 +333,7 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&**fd, Events::READ, || fd.read(&mut buf)).await?;
+    let len = do_io(&***fd, Events::READ, &ctx, || fd.read(&mut buf, &ctx)).await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -375,7 +379,10 @@ async fn write_impl(
     // interrupted and restarted. Any errors that occur are report to
     // userspace.
     let mut written = thread
-        .interruptable(do_write_io(&**fd, count, || fd.write(&buf, ctx)), true)
+        .interruptable(
+            do_write_io(&***fd, count, ctx, || fd.write(&buf, ctx)),
+            true,
+        )
         .await
         .inspect_err(queue_signal_for_epipe(thread))
         .inspect_err(queue_signal_for_efbig(thread))?;
@@ -387,7 +394,7 @@ async fn write_impl(
     while written != count {
         let res = thread
             .interruptable(
-                do_write_io(&**fd, count - written, || {
+                do_write_io(&***fd, count - written, ctx, || {
                     let buf = OffsetBuf::new(&buf, written);
                     fd.write(&buf, ctx)
                 }),
@@ -562,6 +569,7 @@ fn lstat64(
 async fn poll(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fds: Pointer<Pollfd>,
     nfds: u64,
     timeout: i32,
@@ -573,12 +581,13 @@ async fn poll(
             now(ClockId::Monotonic) + Timespec::from_ms(timeout.into()),
         )),
     };
-    poll_impl(virtual_memory, fdtable, fds, nfds, deadline).await
+    poll_impl(virtual_memory, fdtable, &ctx, fds, nfds, deadline).await
 }
 
 async fn poll_impl(
     virtual_memory: Arc<VirtualMemory>,
     fdtable: Arc<FileDescriptorTable>,
+    ctx: &FileAccessContext,
     fds: Pointer<Pollfd>,
     nfds: u64,
     deadline: Option<Option<Timespec>>,
@@ -596,10 +605,12 @@ async fn poll_impl(
                 pollfd.revents = PollEvents::empty();
             } else if let Ok(fd) = fdtable.get(pollfd.fd) {
                 let events = Events::from(pollfd.events) | Events::HUP | Events::ERR;
-                let revents = fd.poll_ready(events).map_or(Events::empty(), Events::from);
+                let revents = fd
+                    .poll_ready(events, ctx)
+                    .map_or(Events::empty(), Events::from);
                 pollfd.revents = PollEvents::from(revents);
 
-                builder.push(async move { fd.ready(events).await });
+                builder.push(async move { fd.ready(events, ctx).await });
             } else {
                 pollfd.revents = PollEvents::NVAL;
             }
@@ -920,6 +931,7 @@ fn ioctl(
 fn pread64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     buf: Pointer<[u8]>,
     count: u64,
@@ -929,7 +941,7 @@ fn pread64(
     let count = usize_from(count);
     let pos = usize_from(pos);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = fd.pread(pos, &mut buf)?;
+    let len = fd.pread(pos, &mut buf, &ctx)?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -963,6 +975,7 @@ async fn readv(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u64,
@@ -970,7 +983,10 @@ async fn readv(
     let fd = fdtable.get(fd)?;
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    let len = do_io(&**fd, Events::READ, || fd.read(&mut vectored_buf)).await?;
+    let len = do_io(&***fd, Events::READ, &ctx, || {
+        fd.read(&mut vectored_buf, &ctx)
+    })
+    .await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -1034,6 +1050,7 @@ async fn select(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     numfds: i32,
     readfds: Pointer<FdSet>,
     writefds: Pointer<FdSet>,
@@ -1049,6 +1066,7 @@ async fn select(
     select_impl(
         virtual_memory,
         fdtable,
+        &ctx,
         numfds,
         readfds,
         writefds,
@@ -1058,9 +1076,11 @@ async fn select(
     .await
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn select_impl(
     virtual_memory: Arc<VirtualMemory>,
     fdtable: Arc<FileDescriptorTable>,
+    ctx: &FileAccessContext,
     numfds: i32,
     readfds: Pointer<FdSet>,
     writefds: Pointer<FdSet>,
@@ -1128,7 +1148,9 @@ async fn select_impl(
             events.set(Events::PRI, except);
 
             let fd = fdtable.get(FdNum::new(i as i32))?;
-            let ready_events = fd.poll_ready(events).map_or(Events::empty(), Events::from);
+            let ready_events = fd
+                .poll_ready(events, ctx)
+                .map_or(Events::empty(), Events::from);
 
             if ready_events.contains(Events::READ) {
                 result_readfds.as_mut().unwrap().set_bit(i, true);
@@ -1143,7 +1165,7 @@ async fn select_impl(
                 set += 1;
             }
 
-            builder.push(async move { fd.ready(events).await });
+            builder.push(async move { fd.ready(events, ctx).await });
         }
 
         if set != 0 {
@@ -1371,7 +1393,7 @@ async fn sendfile(
         let page = r#in.get_page(page_offset, false)?;
         let buf = KernelPageWriteBuf::new(&page, offset_in_page, chunk_len);
 
-        let res = do_write_io(&**r#in, chunk_len, || out.write(&buf, &ctx)).await;
+        let res = do_write_io(&***r#in, chunk_len, &ctx, || out.write(&buf, &ctx)).await;
         match res {
             Ok(0) => break,
             Ok(n) => {
@@ -1504,6 +1526,7 @@ async fn connect(
 async fn accept(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd: FdNum,
     upeer_sockaddr: Pointer<SocketAddr>,
@@ -1512,6 +1535,7 @@ async fn accept(
     accept4(
         virtual_memory,
         fdtable,
+        ctx,
         no_file_limit,
         fd,
         upeer_sockaddr,
@@ -1549,7 +1573,7 @@ async fn sendto(
     // userspace.
     let mut written = thread
         .interruptable(
-            do_io(&**fd, Events::WRITE, || {
+            do_io(&***fd, Events::WRITE, &ctx, || {
                 fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
             }),
             true,
@@ -1563,7 +1587,7 @@ async fn sendto(
     while written != len {
         let res = thread
             .interruptable(
-                do_io(&**fd, Events::WRITE, || {
+                do_io(&***fd, Events::WRITE, &ctx, || {
                     let buf = OffsetBuf::new(&buf, written);
                     fd.send_to(&buf, flags, dest_addr.clone(), &ctx)
                 }),
@@ -1584,6 +1608,7 @@ async fn sendto(
 async fn recv_from(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     sockfd: FdNum,
     buf: Pointer<[u8]>,
     len: u64,
@@ -1602,7 +1627,7 @@ async fn recv_from(
         Events::READ
     };
     let (len, addr) = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&**fd, events, || fd.recv_from(&mut buf, flags)).await?
+        do_edge_triggered_io(&fd, events, &ctx, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
@@ -1635,7 +1660,7 @@ async fn sendmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&**fd, Events::WRITE, || {
+    let len = do_io(&***fd, Events::WRITE, &ctx, || {
         fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable, &ctx)
     })
     .await?;
@@ -1648,6 +1673,7 @@ async fn recvmsg(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd: FdNum,
     msg: Pointer<MsgHdr>,
@@ -1655,8 +1681,15 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&**fd, Events::READ, || {
-        fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
+    let len = do_edge_triggered_io(&fd, Events::READ, &ctx, || {
+        fd.recv_msg(
+            &virtual_memory,
+            abi,
+            &mut msg_hdr,
+            flags,
+            &fdtable,
+            no_file_limit,
+        )
     })
     .await?;
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
@@ -2323,7 +2356,7 @@ async fn fcntl(
                 ),
                 FcntlCmd::OfdSetLk | FcntlCmd::OfdSetLkW => {
                     ensure!(flock.pid == 0, Inval);
-                    (UnixLockOwner::ofd(&**fd), None)
+                    (UnixLockOwner::ofd(&***fd), None)
                 }
                 _ => unreachable!(),
             };
@@ -3495,7 +3528,7 @@ fn rt_sigpending(
     uset: Pointer<Sigset>,
     sigsetsize: u64,
 ) -> SyscallResult {
-    let pending_signals = thread.pending_signals();
+    let pending_signals = thread.pending_signals() | thread.process().pending_signals();
     virtual_memory.write_with_abi(uset, pending_signals, abi)?;
     Ok(0)
 }
@@ -4302,6 +4335,7 @@ async fn epoll_wait(
 fn epoll_ctl(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     epfd: FdNum,
     op: EpollCtlOp,
     fd: FdNum,
@@ -4312,15 +4346,14 @@ fn epoll_ctl(
 
     match op {
         EpollCtlOp::Add => {
-            ensure!(fd.supports_epoll(), Perm);
-
+            let epoll_ready = Arc::clone(&*fd).epoll_ready(&ctx)?;
             let event = virtual_memory.read(event)?;
-            epoll.epoll_add(&fd, event)?
+            epoll.epoll_add(epoll_ready, event)?
         }
-        EpollCtlOp::Del => epoll.epoll_del(&**fd)?,
+        EpollCtlOp::Del => epoll.epoll_del(&***fd)?,
         EpollCtlOp::Mod => {
             let event = virtual_memory.read(event)?;
-            epoll.epoll_mod(&**fd, event)?
+            epoll.epoll_mod(&***fd, event)?
         }
     }
 
@@ -4907,6 +4940,7 @@ async fn pselect6(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     numfds: i32,
     readfds: Pointer<FdSet>,
     writefds: Pointer<FdSet>,
@@ -4943,6 +4977,7 @@ async fn pselect6(
             select_impl(
                 virtual_memory,
                 fdtable,
+                &ctx,
                 numfds,
                 readfds,
                 writefds,
@@ -4968,6 +5003,7 @@ async fn ppoll(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fds: Pointer<Pollfd>,
     nfds: u64,
     timeout: Pointer<Timespec>,
@@ -4997,7 +5033,7 @@ async fn ppoll(
 
     let res = thread
         .interruptable(
-            poll_impl(virtual_memory, fdtable, fds, nfds, deadline),
+            poll_impl(virtual_memory, fdtable, &ctx, fds, nfds, deadline),
             false,
         )
         .await;
@@ -5084,7 +5120,7 @@ async fn splice(
                     .is_err_and(|err| err.kind() == ErrorKind::Again)
                 {
                     ensure!(!write_nonblock, Again);
-                    fd_out.ready_for_write(1).await;
+                    fd_out.ready_for_write(1, &ctx).await;
                     continue;
                 }
 
@@ -5124,7 +5160,7 @@ async fn splice(
                     .is_err_and(|err| err.kind() == ErrorKind::Again)
                 {
                     ensure!(!read_nonblock, Again);
-                    fd_in.ready(Events::READ).await;
+                    fd_in.ready(Events::READ, &ctx).await;
                     continue;
                 }
 
@@ -5257,6 +5293,28 @@ async fn epoll_pwait(
     res
 }
 
+#[syscall(i386 = 321, amd64 = 282)]
+fn signalfd(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    ufd: FdNum,
+    user_mask: Pointer<Sigset>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    signalfd4(
+        abi,
+        virtual_memory,
+        fdtable,
+        no_file_limit,
+        ufd,
+        user_mask,
+        sigsetsize,
+        SignalFdFlags::empty(),
+    )
+}
+
 #[syscall(i386 = 322, amd64 = 283)]
 fn timerfd_create(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -5325,6 +5383,7 @@ fn timerfd_settime(
 async fn accept4(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd: FdNum,
     upeer_sockaddr: Pointer<SocketAddr>,
@@ -5332,7 +5391,7 @@ async fn accept4(
     flags: Accept4Flags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let (socket, addr) = do_io(&**fd, Events::READ, || fd.accept(flags)).await?;
+    let (socket, addr) = do_io(&***fd, Events::READ, &ctx, || fd.accept(flags)).await?;
     let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
 
     if !upeer_sockaddr.is_null() {
@@ -5344,6 +5403,28 @@ async fn accept4(
     }
 
     Ok(fd_num.get() as u64)
+}
+
+#[syscall(i386 = 327, amd64 = 289)]
+fn signalfd4(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    ufd: FdNum,
+    user_mask: Pointer<Sigset>,
+    sigsetsize: u64,
+    flags: SignalFdFlags,
+) -> SyscallResult {
+    let user_mask = virtual_memory.read_with_abi(user_mask, abi)?;
+    let fd_num = if ufd.get() == -1 {
+        fdtable.insert(SignalFd::new(user_mask, flags), flags, no_file_limit)?
+    } else {
+        let fd = fdtable.get(ufd)?;
+        fd.update_signal_mask(user_mask)?;
+        ufd
+    };
+    Ok(fd_num.get().try_into().unwrap())
 }
 
 #[syscall(i386 = 328, amd64 = 290)]
@@ -5442,6 +5523,7 @@ async fn preadv(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     fd: FdNum,
     vec: Pointer<Iovec>,
     vlen: u64,
@@ -5452,7 +5534,10 @@ async fn preadv(
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_io(&**fd, Events::READ, || fd.pread(pos, &mut vectored_buf)).await?;
+    let len = do_io(&***fd, Events::READ, &ctx, || {
+        fd.pread(pos, &mut vectored_buf, &ctx)
+    })
+    .await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -5474,7 +5559,7 @@ async fn pwritev(
 
     let vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
     let pos = usize_from(pos_h) << 32 | usize_from(pos_l);
-    let len = do_write_io(&**fd, WriteBuf::buffer_len(&vectored_buf), || {
+    let len = do_write_io(&***fd, WriteBuf::buffer_len(&vectored_buf), &ctx, || {
         fd.pwrite(pos, &vectored_buf, &ctx)
     })
     .await
@@ -5488,6 +5573,7 @@ async fn recvmmsg(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
     #[state] no_file_limit: CurrentNoFileLimit,
     fd: FdNum,
     msgvec: Pointer<MMsgHdr>,
@@ -5520,11 +5606,12 @@ async fn recvmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = {
-            let recv_fut = do_io(&**socket, Events::READ, || {
+            let recv_fut = do_io(&***socket, Events::READ, &ctx, || {
                 socket.recv_msg(
                     &virtual_memory,
                     abi,
                     &mut msg_header.hdr,
+                    flags.into(),
                     &fdtable,
                     no_file_limit,
                 )
@@ -5629,7 +5716,7 @@ async fn sendmmsg(
 
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
-        let res = do_io(&**socket, Events::WRITE, || {
+        let res = do_io(&***socket, Events::WRITE, &ctx, || {
             socket.send_msg(
                 &virtual_memory,
                 abi,
@@ -5820,7 +5907,7 @@ fn copy_file_range(
 
     // Do the copy operations.
     let len = fd_in
-        .copy_file_range(off_in_val, &**fd_out, off_out_val, len, &ctx)
+        .copy_file_range(off_in_val, &***fd_out, off_out_val, len, &ctx)
         .inspect_err(queue_signal_for_efbig(thread))?;
 
     // Write the offset back.

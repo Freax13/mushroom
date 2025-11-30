@@ -5,10 +5,14 @@ use async_trait::async_trait;
 use futures::future;
 
 use crate::{
-    error::{Result, bail},
+    error::{Result, bail, ensure},
     fs::{
         FileSystem,
-        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, WriteBuf,
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -17,8 +21,8 @@ use crate::{
     spin::mutex::Mutex,
     user::{
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SocketAddr, Stat,
-            Timespec,
+            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SentToFlags, SocketAddr,
+            Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -39,8 +43,8 @@ struct SeqPacketUnixSocketInternal {
 
 impl SeqPacketUnixSocket {
     pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
-        let state1 = Arc::new(State::new());
-        let state2 = Arc::new(State::new());
+        let state1 = Arc::new(Mutex::new(State::new()));
+        let state2 = Arc::new(Mutex::new(State::new()));
 
         let notify1 = Arc::new(Notify::new());
         let notify2 = Arc::new(Notify::new());
@@ -94,6 +98,15 @@ impl SeqPacketUnixSocket {
             },
         )
     }
+
+    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+        let Some(data) = self.read_half.read()? else {
+            return Ok(0);
+        };
+        let len = cmp::min(data.len(), buf.buffer_len());
+        buf.write(0, &data[..len])?;
+        Ok(len)
+    }
 }
 
 #[async_trait]
@@ -117,13 +130,8 @@ impl OpenFileDescription for SeqPacketUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let Some(data) = self.read_half.read()? else {
-            return Ok(0);
-        };
-        let len = cmp::min(data.len(), buf.buffer_len());
-        buf.write(0, &data[..len])?;
-        Ok(len)
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        self.read(buf)
     }
 
     fn recv_from(
@@ -131,7 +139,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) {
+        if flags.contains(RecvFromFlags::PEEK) || flags.contains(RecvFromFlags::WAITALL) {
             todo!()
         }
 
@@ -147,24 +155,39 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok(len)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn send_to(
+        &self,
+        buf: &dyn WriteBuf,
+        flags: SentToFlags,
+        addr: Option<SocketAddr>,
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
+        ensure!(addr.is_none(), IsConn);
+
+        if flags != SentToFlags::empty() {
+            todo!()
+        }
+
+        self.write(buf, ctx)
+    }
+
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         ready_events.set(
             Events::READ,
-            !self.read_half.state.buffer.lock().is_empty()
+            !self.read_half.state.lock().packets.is_empty()
                 || Arc::strong_count(&self.read_half.state) == 1,
         );
-        ready_events.set(Events::WRITE, Arc::strong_count(&self.write_half.state) > 1);
+        ready_events.set(Events::WRITE, true);
         ready_events.set(Events::HUP, Arc::strong_count(&self.read_half.state) == 1);
-        ready_events.set(Events::ERR, Arc::strong_count(&self.write_half.state) == 1);
         NonEmptyEvents::new(ready_events & events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         let mut read_wait = self.read_half.notify.wait();
         let mut write_wait = self.write_half.notify.wait();
         loop {
-            let events = self.poll_ready(events);
+            let events = self.poll_ready(events, ctx);
             if let Some(events) = events {
                 return events;
             }
@@ -172,8 +195,11 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -212,27 +238,64 @@ impl OpenFileDescription for SeqPacketUnixSocket {
     }
 }
 
+#[async_trait]
+impl EpollReady for SeqPacketUnixSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        Notify::zip_epoll_loop(
+            req,
+            &self.read_half.notify,
+            || {
+                let mut result = EpollResult::new();
+                let guard = self.read_half.state.lock();
+                if !guard.packets.is_empty() || Arc::strong_count(&self.read_half.state) == 1 {
+                    result.set_ready(Events::READ);
+                }
+                if Arc::strong_count(&self.read_half.state) == 1 {
+                    result.set_ready(Events::HUP);
+                }
+                result.add_counter(Events::READ, &guard.read_counter);
+                result
+            },
+            &self.write_half.notify,
+            || {
+                let mut result = EpollResult::new();
+                let guard = self.write_half.state.lock();
+                result.set_ready(Events::WRITE);
+                result.add_counter(Events::WRITE, &guard.write_counter);
+                result
+            },
+        )
+        .await
+    }
+}
+
 struct State {
-    buffer: Mutex<VecDeque<Box<[u8]>>>,
+    packets: VecDeque<Box<[u8]>>,
+    read_counter: EventCounter,
+    write_counter: EventCounter,
 }
 
 impl State {
     fn new() -> Self {
         Self {
-            buffer: Mutex::new(VecDeque::new()),
+            packets: VecDeque::new(),
+            read_counter: EventCounter::new(),
+            write_counter: EventCounter::new(),
         }
     }
 }
 
 struct ReadHalf {
-    state: Arc<State>,
+    state: Arc<Mutex<State>>,
     notify: NotifyOnDrop,
 }
 
 impl ReadHalf {
     fn read(&self) -> Result<Option<Box<[u8]>>> {
-        let mut guard = self.state.buffer.lock();
-        if let Some(packet) = guard.pop_front() {
+        let mut guard = self.state.lock();
+        if let Some(packet) = guard.packets.pop_front() {
+            guard.write_counter.inc();
+            self.notify.notify();
             return Ok(Some(packet));
         }
         drop(guard);
@@ -246,14 +309,15 @@ impl ReadHalf {
 }
 
 struct WriteHalf {
-    state: Arc<State>,
+    state: Arc<Mutex<State>>,
     notify: NotifyOnDrop,
 }
 
 impl WriteHalf {
     fn write(&self, data: Box<[u8]>) {
-        let mut guard = self.state.buffer.lock();
-        guard.push_back(data);
+        let mut guard = self.state.lock();
+        guard.packets.push_back(data);
+        guard.read_counter.inc();
         drop(guard);
         self.notify.notify();
     }

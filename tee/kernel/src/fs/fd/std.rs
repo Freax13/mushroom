@@ -9,8 +9,9 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, WriteBuf,
-            epoll::{EpollRequest, EpollResult},
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            ReadBuf, WriteBuf,
+            epoll::{EpollReady, EpollRequest, EpollResult, WeakEpollReady},
             pipe::anon::PIPE_FS,
         },
         node::{FileAccessContext, new_ino},
@@ -56,12 +57,12 @@ impl OpenFileDescription for Stdin {
         Path::new(format!("pipe:[{}]", self.ino).into_bytes())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() == 0, Inval);
         Ok(0)
     }
 
-    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn pread(&self, _pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() == 0, Inval);
         Ok(0)
     }
@@ -97,24 +98,30 @@ impl OpenFileDescription for Stdin {
         Ok(PIPE_FS.clone())
     }
 
-    fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, _events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         None
     }
 
-    async fn ready(&self, _events: Events) -> NonEmptyEvents {
+    async fn ready(&self, _events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         pending().await
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, _: &EpollRequest) -> EpollResult {
-        pending().await
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for Stdin {
+    async fn epoll_ready(&self, _: &EpollRequest) -> EpollResult {
+        pending().await
     }
 }
 
@@ -195,22 +202,32 @@ impl OpenFileDescription for Stdout {
         Ok(PIPE_FS.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & Events::WRITE)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for Stdout {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         let mut result = EpollResult::new();
         result.set_ready(Events::WRITE);
@@ -219,10 +236,6 @@ impl OpenFileDescription for Stdout {
         } else {
             pending().await
         }
-    }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
     }
 }
 
@@ -303,22 +316,31 @@ impl OpenFileDescription for Stderr {
         Ok(PIPE_FS.clone())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & Events::WRITE)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await
         }
     }
 
-    fn supports_epoll(&self) -> bool {
-        true
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
+        Ok(&self.bsd_file_lock)
+    }
+}
+#[async_trait]
+impl EpollReady for Stderr {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
         let mut result = EpollResult::new();
         result.set_ready(Events::WRITE);
@@ -327,9 +349,5 @@ impl OpenFileDescription for Stderr {
         } else {
             pending().await
         }
-    }
-
-    fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
-        Ok(&self.bsd_file_lock)
     }
 }

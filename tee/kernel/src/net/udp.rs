@@ -23,7 +23,7 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             common_ioctl,
-            epoll::{EpollRequest, EpollResult, EventCounter},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         path::Path,
@@ -40,8 +40,8 @@ use crate::{
         syscall::{
             args::{
                 CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, PktInfo, PktInfo6,
-                Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketType,
-                SocketTypeWithFlags, Stat, Timespec, pointee::SizedPointee,
+                Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr,
+                SocketType, SocketTypeWithFlags, Stat, Timespec, pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -683,7 +683,7 @@ impl OpenFileDescription for UdpSocket {
         Ok(())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         if events.intersects(Events::READ | Events::ERR) {
             let guard = self.internal.lock();
@@ -695,34 +695,20 @@ impl OpenFileDescription for UdpSocket {
         NonEmptyEvents::new(ready_events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        self.rx_notify.wait_until(|| self.poll_ready(events)).await
-    }
-
-    fn supports_epoll(&self) -> bool {
-        true
-    }
-
-    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.rx_notify
-            .epoll_loop(req, || {
-                let mut result = EpollResult::new();
-                let guard = self.internal.lock();
-                result.set_ready(Events::WRITE);
-                if !guard.rx.is_empty() {
-                    result.set_ready(Events::READ);
-                }
-                if !guard.errors.is_empty() {
-                    result.set_ready(Events::ERR);
-                }
-                result.add_counter(Events::READ, &guard.read_event_counter);
-                result.add_counter(Events::ERR, &guard.error_event_counter);
-                result
-            })
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        Ok(Box::new(Arc::downgrade(&self)))
+    }
+
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         let (len, _, _) = self.recv(buf, false)?;
         Ok(len)
     }
@@ -742,6 +728,7 @@ impl OpenFileDescription for UdpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
@@ -967,6 +954,28 @@ impl OpenFileDescription for UdpSocket {
             }
             _ => common_ioctl(self, thread, cmd, arg, abi),
         }
+    }
+}
+
+#[async_trait]
+impl EpollReady for UdpSocket {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        self.rx_notify
+            .epoll_loop(req, || {
+                let mut result = EpollResult::new();
+                let guard = self.internal.lock();
+                result.set_ready(Events::WRITE);
+                if !guard.rx.is_empty() {
+                    result.set_ready(Events::READ);
+                }
+                if !guard.errors.is_empty() {
+                    result.set_ready(Events::ERR);
+                }
+                result.add_counter(Events::READ, &guard.read_event_counter);
+                result.add_counter(Events::ERR, &guard.error_event_counter);
+                result
+            })
+            .await
     }
 }
 
