@@ -12,8 +12,8 @@ use nix::{
         eventfd::EventFd,
         socket::{
             AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, Shutdown,
-            SockFlag, SockType, UnixAddr, bind, connect, getsockname, listen, recv, recvmsg, send,
-            sendmsg, shutdown, socket, socketpair,
+            SockFlag, SockProtocol, SockType, UnixAddr, bind, connect, getsockname, listen, recv,
+            recvmsg, send, sendmsg, shutdown, socket, socketpair,
         },
         stat::fstat,
     },
@@ -499,4 +499,115 @@ fn connect_to_file() {
     assert_eq!(connect(client.as_raw_fd(), &addr), Err(Errno::ECONNREFUSED));
 
     unlink(path).unwrap();
+}
+
+#[test]
+fn close_empty() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Err(Errno::EAGAIN));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn close_empty_after_write() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock2, &mut buf), Ok(3));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn close_with_data() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    drop(sock2);
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Err(Errno::ECONNRESET));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn shutdown_with_data() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    shutdown(sock2.as_raw_fd(), Shutdown::Both).unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Err(Errno::ECONNRESET));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn shutdown_then_read() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    write(&sock1, b"FOO").unwrap();
+
+    shutdown(sock2.as_raw_fd(), Shutdown::Both).unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+    assert_eq!(read(&sock2, &mut buf), Ok(3));
+
+    drop(sock2);
+
+    assert_eq!(read(&sock1, &mut buf), Ok(0));
+
+    assert_eq!(write(&sock1, b"FOO"), Err(Errno::EPIPE));
 }
