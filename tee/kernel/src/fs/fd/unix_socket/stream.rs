@@ -382,7 +382,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 };
                 let offset = align_up(header.len, align);
                 msg_hdr.control = msg_hdr.control.bytes_offset(usize_from(offset));
-                msg_hdr.controllen -= offset;
+                msg_hdr.controllen = msg_hdr.controllen.saturating_sub(offset);
             }
 
             Some(ancillary_data)
