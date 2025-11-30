@@ -677,7 +677,7 @@ impl OpenFileDescription for StreamUnixSocket {
         Ok(())
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mode = self.mode.get()?;
         match mode {
             Mode::Active(active) => {
@@ -694,7 +694,7 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         match mode {
             Mode::Active(active) => {
@@ -723,7 +723,7 @@ impl OpenFileDescription for StreamUnixSocket {
         }
     }
 
-    async fn ready_for_write(&self, _count: usize) {
+    async fn ready_for_write(&self, _count: usize, _: &FileAccessContext) {
         let mode = self.activate_notify.wait_until(|| self.mode.get()).await;
         let Mode::Active(active) = mode else {
             return;
@@ -735,7 +735,10 @@ impl OpenFileDescription for StreamUnixSocket {
             .await;
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

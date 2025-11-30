@@ -88,18 +88,21 @@ impl OpenFileDescription for ReadHalf {
         self.stream_buffer.read(buf, false)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         self.stream_buffer.poll_ready(events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.stream_buffer
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 
@@ -220,22 +223,25 @@ impl OpenFileDescription for WriteHalf {
         Some(&self.stream_buffer)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         self.stream_buffer.poll_ready(events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.stream_buffer
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    async fn ready_for_write(&self, count: usize) {
+    async fn ready_for_write(&self, count: usize, _: &FileAccessContext) {
         self.stream_buffer.ready_for_write(count).await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

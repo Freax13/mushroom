@@ -303,7 +303,7 @@ impl OpenFileDescription for NetlinkSocket {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let connection = self.connection.get()?;
         NonEmptyEvents::zip(
             connection.rx.poll_ready(events),
@@ -311,7 +311,7 @@ impl OpenFileDescription for NetlinkSocket {
         )
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         // Wait until a connection has been established.
         let connection = self
             .connect_notify
@@ -320,11 +320,14 @@ impl OpenFileDescription for NetlinkSocket {
         connection
             .rx
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

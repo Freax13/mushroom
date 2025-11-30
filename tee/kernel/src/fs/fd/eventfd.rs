@@ -108,7 +108,7 @@ impl OpenFileDescription for EventFd {
         Ok(8)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let counter_value = self.counter.load(Ordering::SeqCst);
 
         let mut ready_events = Events::empty();
@@ -120,11 +120,16 @@ impl OpenFileDescription for EventFd {
         NonEmptyEvents::new(ready_events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        self.notify.wait_until(|| self.poll_ready(events)).await
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        self.notify
+            .wait_until(|| self.poll_ready(events, ctx))
+            .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

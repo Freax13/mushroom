@@ -25,8 +25,8 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, FileDescriptor, NonEmptyEvents, OpenFileDescription,
-            OpenFileDescriptionData, StrongFileDescriptor, WeakFileDescriptor,
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
+            StrongFileDescriptor, WeakFileDescriptor,
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -280,7 +280,7 @@ impl OpenFileDescription for Epoll {
         Ok(events)
     }
 
-    fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
+    fn epoll_add(&self, epoll_ready: Box<dyn WeakEpollReady>, event: EpollEvent) -> Result<()> {
         assert!(
             !event
                 .events
@@ -289,8 +289,6 @@ impl OpenFileDescription for Epoll {
             event.events
         );
 
-        let epoll_ready = Arc::clone(&**fd).epoll_ready()?;
-
         let mut guard = self.internal.lock();
         // Make sure that the file descriptor is not already registered.
         ensure!(
@@ -298,7 +296,7 @@ impl OpenFileDescription for Epoll {
                 .interest_list
                 .iter()
                 .chain(guard.ready_list.iter())
-                .any(|entry| entry.epoll_ready.fd() == *fd),
+                .any(|entry| entry.epoll_ready.fd() == epoll_ready.fd()),
             Exist
         );
         // Register the file descriptor.
@@ -404,7 +402,7 @@ impl OpenFileDescription for Epoll {
         bail!(BadF)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         if !events.contains(Events::READ) {
             return None;
         }
@@ -418,7 +416,7 @@ impl OpenFileDescription for Epoll {
             .then_some(NonEmptyEvents::READ)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         if !events.contains(Events::READ) {
             return pending().await;
         }
@@ -436,7 +434,10 @@ impl OpenFileDescription for Epoll {
             .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

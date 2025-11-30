@@ -267,18 +267,21 @@ impl OpenFileDescription for ReadHalf {
         Some(&self.read_half)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         self.read_half.poll_ready(events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.read_half
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 
@@ -348,22 +351,25 @@ impl OpenFileDescription for WriteHalf {
         Some(&self.write_half)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         self.write_half.poll_ready(events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.write_half
             .notify()
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    async fn ready_for_write(&self, count: usize) {
+    async fn ready_for_write(&self, count: usize, _: &FileAccessContext) {
         self.write_half.ready_for_write(count).await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 
@@ -444,18 +450,18 @@ impl OpenFileDescription for FullReadWrite {
         Some(&self.write_half)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::zip(
             self.read_half.poll_ready(events),
             self.write_half.poll_ready(events),
         )
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         let mut read_wait = self.read_half.notify().wait();
         let mut write_wait = self.write_half.notify().wait();
         loop {
-            let events = self.poll_ready(events);
+            let events = self.poll_ready(events, ctx);
             if let Some(events) = events {
                 return events;
             }
@@ -463,11 +469,14 @@ impl OpenFileDescription for FullReadWrite {
         }
     }
 
-    async fn ready_for_write(&self, count: usize) {
+    async fn ready_for_write(&self, count: usize, _: &FileAccessContext) {
         self.write_half.ready_for_write(count).await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

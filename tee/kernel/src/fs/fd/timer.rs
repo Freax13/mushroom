@@ -144,7 +144,7 @@ impl OpenFileDescription for Timer {
         Ok(old_time)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         if events.contains(Events::READ) {
             let guard = self.internal.lock();
@@ -159,7 +159,7 @@ impl OpenFileDescription for Timer {
         NonEmptyEvents::new(ready_events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         // timerfd only supports reads.
         if !events.contains(Events::READ) {
             return pending().await;
@@ -186,7 +186,10 @@ impl OpenFileDescription for Timer {
         }
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

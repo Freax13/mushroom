@@ -978,7 +978,7 @@ impl OpenFileDescription for TcpSocket {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let bound = self.bound_socket.get()?;
         let mode = bound.mode.get()?;
         match mode {
@@ -998,7 +998,7 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         let mode = self
             .activate_notify
             .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
@@ -1035,7 +1035,10 @@ impl OpenFileDescription for TcpSocket {
         }
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

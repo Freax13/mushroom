@@ -1017,8 +1017,8 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn epoll_add(&self, fd: &FileDescriptor, event: EpollEvent) -> Result<()> {
-        let _ = fd;
+    fn epoll_add(&self, epoll_ready: Box<dyn WeakEpollReady>, event: EpollEvent) -> Result<()> {
+        let _ = epoll_ready;
         let _ = event;
         bail!(Inval)
     }
@@ -1034,19 +1034,23 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents>;
+    fn poll_ready(&self, events: Events, ctx: &FileAccessContext) -> Option<NonEmptyEvents>;
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents;
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents;
 
     /// Returns a future that is ready when the file descriptor can process
     /// write of `size` bytes. Note that this doesn't necessairly mean that all
     /// `size` bytes will be written.
-    async fn ready_for_write(&self, count: usize) {
+    async fn ready_for_write(&self, count: usize, ctx: &FileAccessContext) {
         let _ = count;
-        self.ready(Events::WRITE).await;
+        self.ready(Events::WRITE, ctx).await;
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        ctx: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
+        let _ = ctx;
         bail!(Perm)
     }
 
@@ -1200,6 +1204,7 @@ impl BitOrAssign for NonEmptyEvents {
 pub async fn do_io<R>(
     fd: &(impl OpenFileDescription + ?Sized),
     events: Events,
+    ctx: &FileAccessContext,
     mut callback: impl FnMut() -> Result<R>,
 ) -> Result<R> {
     let flags = fd.flags();
@@ -1212,7 +1217,7 @@ pub async fn do_io<R>(
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
-                fd.ready(events).await;
+                fd.ready(events, ctx).await;
             }
             Err(err) => return Err(err),
         }
@@ -1222,6 +1227,7 @@ pub async fn do_io<R>(
 pub async fn do_write_io<R>(
     fd: &(impl OpenFileDescription + ?Sized),
     count: usize,
+    ctx: &FileAccessContext,
     mut callback: impl FnMut() -> Result<R>,
 ) -> Result<R> {
     let flags = fd.flags();
@@ -1234,7 +1240,7 @@ pub async fn do_write_io<R>(
             Ok(value) => return Ok(value),
             Err(err) if err.kind() == ErrorKind::Again && !non_blocking => {
                 // Wait for the fd to be ready, then try again.
-                fd.ready_for_write(count).await;
+                fd.ready_for_write(count, ctx).await;
             }
             Err(err) => return Err(err),
         }

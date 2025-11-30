@@ -92,11 +92,11 @@ impl OpenFileDescription for MemFd {
         todo!()
     }
 
-    fn poll_ready(&self, _: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, _: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         todo!()
     }
 
-    async fn ready(&self, _: Events) -> NonEmptyEvents {
+    async fn ready(&self, _: Events, _: &FileAccessContext) -> NonEmptyEvents {
         todo!()
     }
 

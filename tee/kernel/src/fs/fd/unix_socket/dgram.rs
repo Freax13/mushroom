@@ -205,7 +205,7 @@ impl OpenFileDescription for DgramUnixSocket {
         self.write(&vectored_buf, ctx)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         ready_events.set(
             Events::READ,
@@ -215,11 +215,11 @@ impl OpenFileDescription for DgramUnixSocket {
         NonEmptyEvents::new(ready_events & events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         let mut read_wait = self.read_half.buffer.notify.wait();
         let mut write_wait = self.write_half.buffer.notify.wait();
         loop {
-            let events = self.poll_ready(events);
+            let events = self.poll_ready(events, ctx);
             if let Some(events) = events {
                 return events;
             }
@@ -227,7 +227,10 @@ impl OpenFileDescription for DgramUnixSocket {
         }
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

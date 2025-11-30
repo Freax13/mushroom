@@ -445,12 +445,12 @@ impl OpenFileDescription for FileFileDescription {
         self.file.unregister(mapping_ctrl);
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & (Events::READ | Events::WRITE))
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(event) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(event) = self.poll_ready(events, ctx) {
             event
         } else {
             pending().await

@@ -164,12 +164,12 @@ impl OpenFileDescription for DirectoryFileDescription {
         Ok(entries)
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         NonEmptyEvents::new(events & Events::READ)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        if let Some(events) = self.poll_ready(events) {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        if let Some(events) = self.poll_ready(events, ctx) {
             events
         } else {
             pending().await

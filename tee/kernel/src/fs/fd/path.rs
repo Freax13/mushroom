@@ -61,11 +61,11 @@ impl OpenFileDescription for PathFd {
         self.link.node.read_link(ctx).map_err(|_| err!(NoEnt))
     }
 
-    fn poll_ready(&self, _events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, _events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         None
     }
 
-    async fn ready(&self, _events: Events) -> NonEmptyEvents {
+    async fn ready(&self, _events: Events, _: &FileAccessContext) -> NonEmptyEvents {
         pending().await
     }
 

@@ -224,7 +224,7 @@ impl OpenFileDescription for Pty {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
         let guard = self.data.internal.lock();
         if self.master {
@@ -260,14 +260,17 @@ impl OpenFileDescription for Pty {
         NonEmptyEvents::new(ready_events & events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
         self.data
             .notify
-            .wait_until(|| self.poll_ready(events))
+            .wait_until(|| self.poll_ready(events, ctx))
             .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 

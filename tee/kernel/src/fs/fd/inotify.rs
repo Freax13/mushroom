@@ -110,6 +110,7 @@ impl OpenFileDescription for Inotify {
     fn flags(&self) -> OpenFlags {
         self.internal.lock().flags
     }
+
     fn set_flags(&self, flags: OpenFlags) {
         self.internal.lock().flags.update(flags);
     }
@@ -156,18 +157,23 @@ impl OpenFileDescription for Inotify {
         todo!()
     }
 
-    fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
+    fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let guard = self.queue.lock();
         let mut ready = Events::empty();
         ready.set(Events::READ, !guard.queue.is_empty());
         NonEmptyEvents::new(ready & events)
     }
 
-    async fn ready(&self, events: Events) -> NonEmptyEvents {
-        self.notify.wait_until(|| self.poll_ready(events)).await
+    async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
+        self.notify
+            .wait_until(|| self.poll_ready(events, ctx))
+            .await
     }
 
-    fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
+    fn epoll_ready(
+        self: Arc<OpenFileDescriptionData<Self>>,
+        _: &FileAccessContext,
+    ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 
