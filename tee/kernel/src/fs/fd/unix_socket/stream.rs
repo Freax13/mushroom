@@ -854,6 +854,8 @@ struct Buffer {
     total_sent: usize,
     total_received: usize,
     state: BufferState,
+    read_counter: EventCounter,
+    write_counter: EventCounter,
 }
 
 #[derive(Clone, Copy)]
@@ -893,6 +895,8 @@ impl Buffer {
             total_sent: 0,
             total_received: 0,
             state: BufferState::Open,
+            read_counter: EventCounter::new(),
+            write_counter: EventCounter::new(),
         }
     }
 }
@@ -985,6 +989,7 @@ impl BufferGuard<'_> {
             .pop_front_if(|b| b.boundary < buffer.total_received)
             .map(|b| b.data);
 
+        buffer.write_counter.inc();
         self.buffer.notify.notify();
 
         Ok((len, ancillary_data))
@@ -1030,6 +1035,7 @@ impl BufferGuard<'_> {
 
         buffer.total_sent += len;
 
+        buffer.read_counter.inc();
         self.buffer.notify.notify();
 
         Ok(len)
@@ -1060,6 +1066,7 @@ impl BufferGuard<'_> {
         read_half.splice_to(len, |buf, len| {
             buffer.data.extend(buf.drain(..len));
             buffer.total_sent += len;
+            buffer.read_counter.inc();
             self.buffer.notify.notify();
         })
     }
@@ -1102,6 +1109,7 @@ impl BufferGuard<'_> {
             buffer
                 .boundaries
                 .pop_front_if(|b| b.boundary <= buffer.total_received);
+            buffer.read_counter.inc();
             self.buffer.notify.notify();
         })
     }
@@ -1160,6 +1168,7 @@ impl BufferGuard<'_> {
         if strong_count == 1 || buffer.state.is_closed() {
             result.set_ready(Events::RDHUP);
         }
+        result.add_counter(Events::READ, &buffer.read_counter);
         result
     }
 
@@ -1173,9 +1182,7 @@ impl BufferGuard<'_> {
         if closed {
             result.set_ready(Events::HUP);
         }
-        if closed {
-            result.set_ready(Events::ERR);
-        }
+        result.add_counter(Events::READ, &buffer.write_counter);
         result
     }
 }
