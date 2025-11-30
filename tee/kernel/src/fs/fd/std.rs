@@ -11,7 +11,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
             ReadBuf, WriteBuf,
-            epoll::{BasicEpoll, WeakEpollReady},
+            epoll::{EpollReady, EpollRequest, EpollResult, WeakEpollReady},
             pipe::anon::PIPE_FS,
         },
         node::{FileAccessContext, new_ino},
@@ -107,11 +107,18 @@ impl OpenFileDescription for Stdin {
     }
 
     fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
-        Ok(Box::new(BasicEpoll::new(&self)))
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for Stdin {
+    async fn epoll_ready(&self, _: &EpollRequest) -> EpollResult {
+        pending().await
     }
 }
 
@@ -205,11 +212,24 @@ impl OpenFileDescription for Stdout {
     }
 
     fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
-        Ok(Box::new(BasicEpoll::new(&self)))
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+
+#[async_trait]
+impl EpollReady for Stdout {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut result = EpollResult::new();
+        result.set_ready(Events::WRITE);
+        if let Some(result) = result.if_matches(req) {
+            result
+        } else {
+            pending().await
+        }
     }
 }
 
@@ -303,10 +323,22 @@ impl OpenFileDescription for Stderr {
     }
 
     fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
-        Ok(Box::new(BasicEpoll::new(&self)))
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn bsd_file_lock(&self) -> Result<&BsdFileLock> {
         Ok(&self.bsd_file_lock)
+    }
+}
+#[async_trait]
+impl EpollReady for Stderr {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut result = EpollResult::new();
+        result.set_ready(Events::WRITE);
+        if let Some(result) = result.if_matches(req) {
+            result
+        } else {
+            pending().await
+        }
     }
 }
