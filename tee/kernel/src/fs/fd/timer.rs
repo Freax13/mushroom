@@ -11,7 +11,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
             ReadBuf,
-            epoll::{BasicEpoll, WeakEpollReady},
+            epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -49,7 +49,10 @@ impl Timer {
             clock_id,
             internal: Mutex::new(TimerInternal {
                 flags: OpenFlags::from(flags),
-                state: TimerState::Disarmed,
+                state: TimerState {
+                    counter: EventCounter::new(),
+                    deadline: TimerStateDeadline::Disarmed,
+                },
                 ownership: Ownership::new(FileMode::from_bits_retain(0o444), uid, gid),
             }),
             set_timer_notify: Notify::new(),
@@ -121,23 +124,24 @@ impl OpenFileDescription for Timer {
             todo!();
         }
 
-        let new_state = match (new.value != Timespec::ZERO, new.interval != Timespec::ZERO) {
-            (_, true) => TimerState::Periodic {
+        let new_deadline = match (new.value != Timespec::ZERO, new.interval != Timespec::ZERO) {
+            (_, true) => TimerStateDeadline::Periodic {
                 deadline,
                 interval: new.interval,
             },
-            (true, false) => TimerState::Oneshot { deadline },
-            (false, false) => TimerState::Disarmed,
+            (true, false) => TimerStateDeadline::Oneshot { deadline },
+            (false, false) => TimerStateDeadline::Disarmed,
         };
 
         let mut guard = self.internal.lock();
-        let mut old_state = core::mem::replace(&mut guard.state, new_state);
+        let _ = guard.state.advance(now);
+        let old_time = guard.state.get_value(now);
+        guard.state.deadline = new_deadline;
         drop(guard);
 
         self.set_timer_notify.notify();
 
-        let _ = old_state.advance(now);
-        Ok(old_state.get_value(now))
+        Ok(old_time)
     }
 
     fn poll_ready(&self, events: Events) -> Option<NonEmptyEvents> {
@@ -183,7 +187,7 @@ impl OpenFileDescription for Timer {
     }
 
     fn epoll_ready(self: Arc<OpenFileDescriptionData<Self>>) -> Result<Box<dyn WeakEpollReady>> {
-        Ok(Box::new(BasicEpoll::new(&self)))
+        Ok(Box::new(Arc::downgrade(&self)))
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
@@ -195,6 +199,8 @@ impl OpenFileDescription for Timer {
         let expirations = guard.state.advance(now).ok_or(err!(Again))?;
         drop(guard);
 
+        self.set_timer_notify.notify();
+
         buf.write(0, &expirations.get().to_ne_bytes())?;
 
         Ok(8)
@@ -205,8 +211,49 @@ impl OpenFileDescription for Timer {
     }
 }
 
+#[async_trait]
+impl EpollReady for Timer {
+    async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
+        let mut wait = self.set_timer_notify.wait();
+        loop {
+            let mut state = self.internal.lock().state.clone();
+
+            let start_deadline = state.next_deadline();
+            let now = now(self.clock_id);
+            let _ = state.advance(now);
+
+            let mut result = EpollResult::new();
+            if let Some(start_deadline) = start_deadline
+                && start_deadline <= now
+            {
+                result.set_ready(Events::READ);
+            }
+            result.add_counter(Events::READ, &state.counter);
+            if let Some(result) = result.if_matches(req) {
+                return result;
+            }
+
+            let Some(deadline) = state.next_deadline() else {
+                wait.next().await;
+                continue;
+            };
+
+            select_biased! {
+                _ = wait.next().fuse() => {}
+                _ = sleep_until(deadline, self.clock_id).fuse() => {},
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
-enum TimerState {
+struct TimerState {
+    counter: EventCounter,
+    deadline: TimerStateDeadline,
+}
+
+#[derive(Clone)]
+enum TimerStateDeadline {
     Disarmed,
     Periodic {
         deadline: Timespec,
@@ -219,29 +266,33 @@ enum TimerState {
 
 impl TimerState {
     fn next_deadline(&self) -> Option<Timespec> {
-        match *self {
-            TimerState::Disarmed => None,
-            TimerState::Periodic { deadline, .. } | TimerState::Oneshot { deadline } => {
-                Some(deadline)
-            }
+        match self.deadline {
+            TimerStateDeadline::Disarmed => None,
+            TimerStateDeadline::Periodic { deadline, .. }
+            | TimerStateDeadline::Oneshot { deadline } => Some(deadline),
         }
     }
 
     #[must_use]
     fn advance(&mut self, now: Timespec) -> Option<NonZeroU64> {
-        match self {
-            TimerState::Disarmed => None,
-            TimerState::Periodic { deadline, interval } => {
+        match self.deadline {
+            TimerStateDeadline::Disarmed => None,
+            TimerStateDeadline::Periodic {
+                ref mut deadline,
+                interval,
+            } => {
                 let mut expired = 0;
                 while *deadline <= now {
                     expired += 1;
-                    *deadline = deadline.saturating_add(*interval);
+                    *deadline = deadline.saturating_add(interval);
                 }
+                self.counter.inc();
                 NonZeroU64::new(expired)
             }
-            TimerState::Oneshot { deadline } => {
-                if *deadline <= now {
-                    *self = Self::Disarmed;
+            TimerStateDeadline::Oneshot { deadline } => {
+                if deadline <= now {
+                    self.deadline = TimerStateDeadline::Disarmed;
+                    self.counter.inc();
                     NonZeroU64::new(1)
                 } else {
                     None
@@ -251,16 +302,18 @@ impl TimerState {
     }
 
     fn get_value(&self, now: Timespec) -> ITimerspec {
-        match *self {
-            TimerState::Disarmed => ITimerspec {
+        match self.deadline {
+            TimerStateDeadline::Disarmed => ITimerspec {
                 interval: Timespec::ZERO,
                 value: Timespec::ZERO,
             },
-            TimerState::Periodic { deadline, interval } => ITimerspec {
+            TimerStateDeadline::Periodic {
+                deadline, interval, ..
+            } => ITimerspec {
                 interval,
                 value: deadline.saturating_sub(now),
             },
-            TimerState::Oneshot { deadline } => ITimerspec {
+            TimerStateDeadline::Oneshot { deadline } => ITimerspec {
                 interval: Timespec::ZERO,
                 value: deadline.saturating_sub(now),
             },

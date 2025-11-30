@@ -507,6 +507,7 @@ impl InterestListEntry {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EventCounter(u64);
 
 impl EventCounter {
