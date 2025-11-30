@@ -747,6 +747,92 @@ fn timerfd_edge_triggered() {
 }
 
 #[test]
+fn unix_stream_edge_triggered() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None::<SockProtocol>,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+
+    epoll
+        .add(
+            &sock1,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock1.as_raw_fd(), b"foo", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock2.as_raw_fd(), b"bar", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(sock2.as_raw_fd(), b"baz", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock2.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(3));
+    assert_eq!(buf[..3], *b"foo");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(6));
+    assert_eq!(buf[..6], *b"barbaz");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    drop(sock2);
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(0));
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(
+            EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP,
+            1
+        )
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
 fn unix_dgram_edge_triggered() {
     let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
 
