@@ -425,7 +425,7 @@ fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
 
 #[derive(Clone)]
 pub struct FileAccessContext {
-    process: Option<Arc<Process>>,
+    thread: Option<Arc<Thread>>,
     symlink_recursion_limit: u16,
     filesystem_user_id_override: Option<Uid>,
     filesystem_group_id_override: Option<Gid>,
@@ -502,8 +502,12 @@ impl FileAccessContext {
             || self.supplementary_group_ids().contains(&gid)
     }
 
+    pub fn thread(&self) -> Option<&Arc<Thread>> {
+        self.thread.as_ref()
+    }
+
     pub fn process(&self) -> Option<&Arc<Process>> {
-        self.process.as_ref()
+        self.thread().map(|thread| thread.process())
     }
 
     pub fn filesystem_user_id(&self) -> Uid {
@@ -545,7 +549,7 @@ impl FileAccessContext {
 
     pub fn root() -> Self {
         Self {
-            process: None,
+            thread: None,
             symlink_recursion_limit: 16,
             filesystem_user_id_override: None,
             filesystem_group_id_override: None,
@@ -561,9 +565,9 @@ pub enum Permission {
 }
 
 impl ExtractableThreadState for FileAccessContext {
-    fn extract_from_thread(_: &Arc<Thread>, guard: &ThreadGuard) -> Self {
+    fn extract_from_thread(thread: &Arc<Thread>, _: &ThreadGuard) -> Self {
         Self {
-            process: Some(guard.process().clone()),
+            thread: Some(thread.clone()),
             symlink_recursion_limit: 16,
             filesystem_user_id_override: None,
             filesystem_group_id_override: None,
