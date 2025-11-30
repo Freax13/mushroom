@@ -27,8 +27,8 @@ use crate::{
         syscall::{
             args::{
                 CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
-                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
-                Timespec,
+                RecvMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
+                SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee, SizedPointee},
             },
             traits::Abi,
@@ -228,6 +228,7 @@ impl OpenFileDescription for NetlinkSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {

@@ -51,8 +51,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
-                InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags,
-                SetTimeFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+                InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
+                SentToFlags, SetTimeFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
             },
             traits::Abi,
         },
@@ -924,12 +924,14 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        flags: RecvMsgFlags,
         fdtable: &FileDescriptorTable,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<usize> {
         let _ = vm;
         let _ = abi;
         let _ = msg_hdr;
+        let _ = flags;
         let _ = fdtable;
         let _ = no_file_limit;
         bail!(NotSock)

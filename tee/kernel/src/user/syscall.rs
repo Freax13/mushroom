@@ -41,7 +41,7 @@ use crate::{
             Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf, ReadBuf,
             StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
             WriteBuf, do_io, do_write_io,
-            epoll::Epoll,
+            epoll::{Epoll, do_edge_triggered_io},
             eventfd::EventFd,
             inotify::Inotify,
             mem::MemFd,
@@ -1627,7 +1627,7 @@ async fn recv_from(
         Events::READ
     };
     let (len, addr) = if !flags.contains(RecvFromFlags::DONTWAIT) {
-        do_io(&***fd, events, &ctx, || fd.recv_from(&mut buf, flags)).await?
+        do_edge_triggered_io(&fd, events, &ctx, || fd.recv_from(&mut buf, flags)).await?
     } else {
         fd.recv_from(&mut buf, flags)?
     };
@@ -1681,8 +1681,15 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_io(&***fd, Events::READ, &ctx, || {
-        fd.recv_msg(&virtual_memory, abi, &mut msg_hdr, &fdtable, no_file_limit)
+    let len = do_edge_triggered_io(&fd, Events::READ, &ctx, || {
+        fd.recv_msg(
+            &virtual_memory,
+            abi,
+            &mut msg_hdr,
+            flags,
+            &fdtable,
+            no_file_limit,
+        )
     })
     .await?;
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
@@ -5604,6 +5611,7 @@ async fn recvmmsg(
                     &virtual_memory,
                     abi,
                     &mut msg_header.hdr,
+                    flags.into(),
                     &fdtable,
                     no_file_limit,
                 )

@@ -1784,7 +1784,9 @@ pub struct CmsgHdr {
 
 bitflags! {
     pub struct RecvMsgFlags {
-        const CMSG_CLOEXEC = 0x40000000;
+        const DONTWAIT = 1 << 6;
+        const WAITALL = 1 << 8;
+        const CMSG_CLOEXEC = 1 << 30;
     }
 }
 
@@ -1829,6 +1831,7 @@ bitflags! {
         const OOB = 1 << 0;
         const PEEK = 1 << 1;
         const DONTWAIT = 1 << 6;
+        const WAITALL = 1 << 8;
     }
 }
 
@@ -1856,6 +1859,12 @@ pub struct MMsgHdr {
 
 bitflags! {
     pub struct RecvMMsgFlags {}
+}
+
+impl From<RecvMMsgFlags> for RecvMsgFlags {
+    fn from(value: RecvMMsgFlags) -> Self {
+        RecvMsgFlags::from_bits_truncate(value.bits())
+    }
 }
 
 bitflags! {

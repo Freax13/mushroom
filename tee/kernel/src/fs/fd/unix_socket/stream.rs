@@ -42,8 +42,9 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
-                Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
-                SocketAddrUnix, SocketType, Stat, Timespec, Ucred, pointee::SizedPointee,
+                Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow,
+                SocketAddr, SocketAddrUnix, SocketType, Stat, Timespec, Ucred,
+                pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -196,7 +197,7 @@ impl OpenFileDescription for StreamUnixSocket {
         active
             .read_half
             .lock()
-            .read(buf, false)
+            .read(buf, false, false)
             .map(|(len, _ancillary_data)| len)
     }
 
@@ -210,10 +211,13 @@ impl OpenFileDescription for StreamUnixSocket {
             bail!(NotConn);
         };
         let peek = flags.contains(RecvFromFlags::PEEK);
+        let waitall = flags.contains(RecvFromFlags::WAITALL)
+            && !flags.contains(RecvFromFlags::DONTWAIT)
+            && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
         active
             .read_half
             .lock()
-            .read(buf, peek)
+            .read(buf, peek, waitall)
             .map(|(len, _ancillary_data)| (len, None))
     }
 
@@ -222,6 +226,7 @@ impl OpenFileDescription for StreamUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        flags: RecvMsgFlags,
         fdtable: &FileDescriptorTable,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<usize> {
@@ -231,7 +236,14 @@ impl OpenFileDescription for StreamUnixSocket {
         };
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, ancillary_data) = active.read_half.lock().read(&mut vectored_buf, false)?;
+        let waitall = flags.contains(RecvMsgFlags::WAITALL)
+            && !flags.contains(RecvMsgFlags::DONTWAIT)
+            && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
+        let (len, ancillary_data) =
+            active
+                .read_half
+                .lock()
+                .read(&mut vectored_buf, false, waitall)?;
 
         if let Some(ancillary_data) = ancillary_data {
             let align = match abi {
@@ -257,8 +269,9 @@ impl OpenFileDescription for StreamUnixSocket {
                         };
                         payload_len = next_payload_len;
 
-                        let flags = FdFlags::empty(); // TODO: Set CLOEXEC if requested
-                        let Ok(num) = fdtable.insert(fd, flags, no_file_limit) else {
+                        let mut fd_flags = FdFlags::empty();
+                        fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
+                        let Ok(num) = fdtable.insert(fd, fd_flags, no_file_limit) else {
                             break;
                         };
 
@@ -923,11 +936,12 @@ impl BufferGuard<'_> {
         &mut self,
         buf: &mut dyn ReadBuf,
         peek: bool,
+        waitall: bool,
     ) -> Result<(usize, Option<AncillaryData>)> {
         let buffer = &mut *self.guard;
 
-        let len = buf.buffer_len();
-        if len == 0 {
+        let buffer_len = buf.buffer_len();
+        if buffer_len == 0 {
             return Ok((0, None));
         }
 
@@ -945,11 +959,13 @@ impl BufferGuard<'_> {
             bail!(Again)
         }
 
-        let mut len = cmp::min(len, buffer.data.len());
+        let mut len = cmp::min(buffer_len, buffer.data.len());
 
         if let Some(front) = buffer.boundaries.front() {
             let next_message_boundary = (front.boundary + front.len) - buffer.total_received;
             len = cmp::min(len, next_message_boundary);
+        } else if waitall {
+            ensure!(len == buffer_len, Again);
         }
 
         let (slice1, slice2) = buffer.data.as_slices();

@@ -139,7 +139,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) {
+        if flags.contains(RecvFromFlags::PEEK) || flags.contains(RecvFromFlags::WAITALL) {
             todo!()
         }
 

@@ -25,7 +25,8 @@ use crate::{
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
-                SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat, Timespec,
+                RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -144,6 +145,7 @@ impl OpenFileDescription for DgramUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {

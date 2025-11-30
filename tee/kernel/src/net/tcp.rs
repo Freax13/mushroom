@@ -51,8 +51,8 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
-                MsgHdr, OpenFlags, Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow,
-                SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
+                MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags,
+                ShutdownHow, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -843,6 +843,9 @@ impl OpenFileDescription for TcpSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
+        if flags.contains(RecvFromFlags::WAITALL) {
+            todo!()
+        }
         let peek = flags.contains(RecvFromFlags::PEEK);
 
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
@@ -869,9 +872,14 @@ impl OpenFileDescription for TcpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
+        if flags.contains(RecvMsgFlags::WAITALL) {
+            todo!()
+        }
+
         ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == 0, Inval);
 

@@ -40,8 +40,8 @@ use crate::{
         syscall::{
             args::{
                 CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, PktInfo, PktInfo6,
-                Pointer, RecvFromFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketType,
-                SocketTypeWithFlags, Stat, Timespec, pointee::SizedPointee,
+                Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr,
+                SocketType, SocketTypeWithFlags, Stat, Timespec, pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -728,6 +728,7 @@ impl OpenFileDescription for UdpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
+        _: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
