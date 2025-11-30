@@ -5,7 +5,7 @@ use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable, bytes_of, pod_read_unaligned};
 
 use crate::{
-    net::netlink::{MsgHeader, MsgHeaderFlags, NLMSG_DONE},
+    net::netlink::{MsgHeader, MsgHeaderFlags, NLMSG_DONE, NLMSG_ERROR},
     rt::{mpmc, mpsc},
     user::syscall::args::Domain,
 };
@@ -428,6 +428,30 @@ pub async fn handle(pid: u32, tx: mpmc::Sender<Vec<u8>>, mut rx: mpsc::Receiver<
                     let _ = tx.send(response);
                 }
                 ty => log::warn!("unknown request type: {ty:#02x}"),
+            }
+
+            if header.flags.contains(MsgHeaderFlags::ACK) {
+                // Send acknowledgment.
+
+                let mut response = Vec::new();
+
+                // response header
+                let error_header = MsgHeader {
+                    len: size_of::<MsgHeader>() as u32 + 4,
+                    r#type: NLMSG_ERROR,
+                    flags: MsgHeaderFlags::CAPPED,
+                    seq: header.seq,
+                    pid,
+                };
+                response.extend_from_slice(bytes_of(&error_header));
+
+                let error = 0i32;
+                response.extend_from_slice(bytes_of(&error));
+
+                // original request header
+                response.extend_from_slice(bytes_of(&header));
+
+                let _ = tx.send(response);
             }
         }
     }

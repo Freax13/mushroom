@@ -371,6 +371,7 @@ impl TryFrom<i32> for NetlinkFamily {
     }
 }
 
+const NLMSG_ERROR: u16 = 2;
 const NLMSG_DONE: u16 = 3;
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -404,6 +405,9 @@ bitflags! {
         const ACK = 1 << 2;
         /// Echo this request.
         const ECHO = 1 << 3;
+
+        // Additional flag bits for ERROR responses:
+        const CAPPED = 1 << 8;
 
         // Additional flag bits for GET requests:
 
