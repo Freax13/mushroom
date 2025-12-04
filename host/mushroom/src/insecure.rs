@@ -18,13 +18,21 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use bit_field::BitField;
+use bytemuck::bytes_of;
 use constants::{
     INSECURE_SUPERVISOR_CALL_PORT, MAX_APS_COUNT, TIMER_VECTOR,
     physical_address::{DYNAMIC_2MIB, kernel, supervisor},
 };
+use kvm_bindings::{
+    CpuId, KVM_CAP_X86_USER_SPACE_MSR, KVM_MAX_CPUID_ENTRIES, Xsave, kvm_cpuid_entry2,
+    kvm_enable_cap, kvm_interrupt, kvm_segment, kvm_userspace_memory_region, kvm_xcr, kvm_xcrs,
+    kvm_xsave, kvm_xsave2,
+};
+use kvm_ioctls::{Cap, Kvm, VcpuExit, VcpuFd};
 use loader::Input;
 use mushroom_verify::{HashedInput, InputHash, OutputHash, forge_insecure_attestation_report};
 use nix::{
+    libc::{EFAULT, EINTR},
     sys::{
         mman::{MmapAdvise, madvise},
         pthread::pthread_kill,
@@ -37,21 +45,19 @@ use nix::{
 };
 use supervisor_services::{SlotIndex, SupervisorCallNr};
 use tracing::info;
-use volatile::map_field;
+use vmm_sys_util::fam::FamStruct;
 use x86_64::{
     registers::{
         control::{Cr0Flags, Cr4Flags},
         model_specific::EferFlags,
         xcontrol::XCr0Flags,
     },
-    structures::paging::{PageSize, Size2MiB},
+    structures::paging::{PageSize, Size2MiB, Size4KiB},
 };
 
 use crate::{
-    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, install_signal_handler, is_efault,
-    kvm::{KvmCap, KvmCpuidEntry2, KvmExit, KvmHandle, KvmSegment, VcpuHandle},
-    logging::start_log_collection,
-    slot::Slot,
+    MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, install_signal_handler,
+    logging::start_log_collection, slot::Slot,
 };
 
 static KVM_XSAVE_SIZE: OnceLock<usize> = OnceLock::new();
@@ -66,23 +72,29 @@ const TIMER_PERIOD: Duration = Duration::from_millis(10);
 
 /// Create the VM, load the kernel, init & input and run the APs.
 pub fn main(
-    kvm_handle: &KvmHandle,
+    kvm: &Kvm,
     kernel: &[u8],
     init: &[u8],
     load_kasan_shadow_mappings: bool,
     inputs: &[Input<impl AsRef<[u8]>>],
     timeout: Duration,
 ) -> Result<MushroomResult> {
-    let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
+    let mut cpuid_entries = kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?;
     let piafb = cpuid_entries
+        .as_mut_slice()
         .iter_mut()
         .find(|entry| entry.function == 1 && entry.index == 0)
         .context("failed to find 'processor info and feature bits' entry")?;
     // Enable CPUID
     piafb.ecx.set_bit(21, true);
 
-    let mut cpuid_entries = Vec::from(cpuid_entries);
-    for entry in kvm_handle.get_supported_hv_cpuid()?.iter().copied() {
+    let mut cpuid_entries = cpuid_entries.as_slice().to_vec();
+    for entry in kvm
+        .get_supported_hv_cpuid(KVM_MAX_CPUID_ENTRIES)?
+        .as_slice()
+        .iter()
+        .copied()
+    {
         if let Some(e) = cpuid_entries
             .iter_mut()
             .find(|e| e.function == entry.function && e.index == entry.index)
@@ -94,7 +106,7 @@ pub fn main(
     }
 
     // Push CPUID entries advertising the insecure supervisor call interface.
-    cpuid_entries.push(KvmCpuidEntry2 {
+    cpuid_entries.push(kvm_cpuid_entry2 {
         function: 0x4000_0100,
         index: 0,
         flags: 0,
@@ -104,7 +116,7 @@ pub fn main(
         edx: 0x534e4920,
         padding: [0; 3],
     });
-    cpuid_entries.push(KvmCpuidEntry2 {
+    cpuid_entries.push(kvm_cpuid_entry2 {
         function: 0x4000_0101,
         index: 0,
         flags: 0,
@@ -115,24 +127,32 @@ pub fn main(
         padding: [0; 3],
     });
 
-    let vm = kvm_handle.create_vm()?;
+    let cpuid_entries = CpuId::from_entries(&cpuid_entries).unwrap();
+
+    let vm = kvm.create_vm()?;
     let vm = Arc::new(vm);
 
     const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
     const KVM_MSR_EXIT_REASON_FILTER: u64 = 2;
-    vm.enable_capability(
-        KvmCap::X86_USER_SPACE_MSR,
-        KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
-    )?;
+    vm.enable_cap(&kvm_enable_cap {
+        cap: KVM_CAP_X86_USER_SPACE_MSR,
+        args: [
+            KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
+            0,
+            0,
+            0,
+        ],
+        ..Default::default()
+    })
+    .context("failed to enable user space MSR handling")?;
 
-    vm.set_tsc_khz(u64::from(TSC_MHZ) * 1000)?;
+    vm.set_tsc_khz(TSC_MHZ * 1000)?;
 
     if KVM_XSAVE_SIZE.get().is_none() {
-        let xsave_size = kvm_handle.check_extension(KvmCap::XSAVE2)?;
-        let xsave_size = xsave_size
-            .context("KVM doesn't support KVM_CAP_XSAVE2")?
-            .get() as usize;
-        let _ = KVM_XSAVE_SIZE.set(xsave_size);
+        let xsave_size = vm.check_extension_int(Cap::Xsave2);
+        let fam_size = (xsave_size as usize - std::mem::size_of::<kvm_xsave>())
+            .div_ceil(std::mem::size_of::<<kvm_xsave2 as FamStruct>::Entry>());
+        let _ = KVM_XSAVE_SIZE.set(fam_size);
     }
     let (mut load_commands, _host_data) =
         loader::generate_load_commands(None, kernel, init, load_kasan_shadow_mappings, inputs);
@@ -149,11 +169,20 @@ pub fn main(
             .count();
 
         // Create and map the slot.
-        let slot = Slot::new(&vm, gpa, num_pages * 0x1000, true, false)
+        let slot = Slot::new2(&vm, gpa, num_pages * Size4KiB::SIZE as usize, true, false)
             .context("failed to create slot")?;
         let slot_id = u16::try_from(memory_slots.len())?;
+        let shared_mapping = slot.shared_mapping().unwrap();
+        let memory_region = kvm_userspace_memory_region {
+            slot: u32::from(slot_id),
+            guest_phys_addr: gpa.start_address().as_u64(),
+            memory_size: num_pages as u64 * Size4KiB::SIZE,
+            userspace_addr: shared_mapping.as_ptr().as_ptr().addr() as u64,
+            ..Default::default()
+        };
         unsafe {
-            vm.map_encrypted_memory(slot_id, &slot)?;
+            vm.set_user_memory_region(memory_region)
+                .context("failed to add memory region")?;
         }
 
         // Populate the slot's content.
@@ -171,10 +200,19 @@ pub fn main(
     let len =
         DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
     let len = usize::try_from(len)?;
-    let dynamic_slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, true, false)?;
+    let dynamic_slot = Slot::new2(&vm, DYNAMIC_2MIB.start, len, true, false)?;
     let slot_id = u16::try_from(memory_slots.len())?;
+    let shared_mapping = dynamic_slot.shared_mapping().unwrap();
+    let memory_region = kvm_userspace_memory_region {
+        slot: u32::from(slot_id),
+        guest_phys_addr: DYNAMIC_2MIB.start.start_address().as_u64(),
+        memory_size: len as u64,
+        userspace_addr: shared_mapping.as_ptr().as_ptr().addr() as u64,
+        ..Default::default()
+    };
     unsafe {
-        vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
+        vm.set_user_memory_region(memory_region)
+            .context("failed to add memory region")?;
     }
     let dynamic_slot = Arc::new(dynamic_slot);
 
@@ -191,8 +229,8 @@ pub fn main(
         .collect::<Arc<[_]>>();
     let aps = (0..MAX_APS_COUNT)
         .map(|i| {
-            let ap = vm.create_vcpu(i32::from(i))?;
-            ap.set_cpuid(&cpuid_entries)?;
+            let ap = vm.create_vcpu(u64::from(i))?;
+            ap.set_cpuid2(&cpuid_entries)?;
             Ok(ap)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -262,21 +300,18 @@ pub fn main(
 
 fn run_kernel_vcpu(
     id: u8,
-    ap: VcpuHandle,
+    mut ap: VcpuFd,
     sender: &mpsc::Sender<OutputEvent<()>>,
     dynamic_slot: &Slot,
     dynamic_memory: &Mutex<DynamicMemory>,
     started: &AtomicUsize,
     run_states: &[RunState],
 ) -> Result<()> {
-    let kvm_run = ap.get_kvm_run_block()?;
-    let kvm_run = kvm_run.as_ptr();
-
     let mut sregs = ap.get_sregs()?;
-    sregs.es = KvmSegment::DATA64;
-    sregs.cs = KvmSegment::CODE64;
-    sregs.ss = KvmSegment::DATA64;
-    sregs.ds = KvmSegment::DATA64;
+    sregs.es = DATA64;
+    sregs.cs = CODE64;
+    sregs.ss = DATA64;
+    sregs.ds = DATA64;
     sregs.efer = EferFlags::SYSTEM_CALL_EXTENSIONS.bits()
         | EferFlags::LONG_MODE_ENABLE.bits()
         | EferFlags::LONG_MODE_ACTIVE.bits()
@@ -295,16 +330,22 @@ fn run_kernel_vcpu(
         | Cr0Flags::EXTENSION_TYPE.bits()
         | Cr0Flags::WRITE_PROTECT.bits()
         | Cr0Flags::PAGING.bits();
-    ap.set_sregs(sregs)?;
-    ap.set_xcr(
-        0,
-        XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
-    )?;
+    ap.set_sregs(&sregs)?;
+    let mut xcrs = kvm_xcrs {
+        nr_xcrs: 1,
+        ..Default::default()
+    };
+    xcrs.xcrs[0] = kvm_xcr {
+        xcr: 0,
+        value: XCr0Flags::X87.bits() | XCr0Flags::SSE.bits() | XCr0Flags::AVX.bits(),
+        ..Default::default()
+    };
+    ap.set_xcrs(&xcrs)?;
 
     let mut regs = ap.get_regs()?;
     regs.rip = 0xffff_8000_0000_0000;
     regs.rsp = 0xffff_8000_0400_3ff8;
-    ap.set_regs(regs)?;
+    ap.set_regs(&regs)?;
 
     let xsave_size = *KVM_XSAVE_SIZE.get().unwrap();
 
@@ -330,46 +371,46 @@ fn run_kernel_vcpu(
     while !run_state.is_stopped() {
         // Check if we need to inject a timer interrupt.
         if !in_service_timer_irq && last_timer_injection.elapsed() >= TIMER_PERIOD {
-            let cr8 = map_field!(kvm_run.cr8).read();
+            let kvm_run = ap.get_kvm_run();
+            let cr8 = kvm_run.cr8;
             if cr8 != 0 && cr8 <= u64::from(TIMER_VECTOR >> 4) {
                 // The interrupt has been blocked out by the TPR. Don't ask to
                 // be notified about the interrupt window for now.
-                map_field!(kvm_run.request_interrupt_window).write(0);
-            } else if map_field!(kvm_run.ready_for_interrupt_injection).read() != 0 {
+                kvm_run.request_interrupt_window = 0;
+            } else if kvm_run.ready_for_interrupt_injection != 0 {
                 // The interrupt is ready.
 
                 // Stop asking for the interrupt window.
-                map_field!(kvm_run.request_interrupt_window).write(0);
+                kvm_run.request_interrupt_window = 0;
 
                 // Inject the interrupt.
-                ap.interrupt(TIMER_VECTOR)?;
+                ap.interrupt(&kvm_interrupt {
+                    irq: u32::from(TIMER_VECTOR),
+                })?;
 
                 last_timer_injection = Instant::now();
                 in_service_timer_irq = true;
             } else {
                 // Ask to be notified when the guest can receive an interrupt.
-                map_field!(kvm_run.request_interrupt_window).write(1);
+                kvm_run.request_interrupt_window = 1;
             }
         }
 
         // Run the AP.
         let res = ap.run();
-        match res {
-            Ok(_) => {}
-            Err(err) if is_efault(&err) => {
+        let exit = match res {
+            Ok(exit) => exit,
+            Err(err) if err.errno() == EINTR => continue,
+            Err(err) if err.errno() == EFAULT => {
                 // The VM has been shut down.
                 break;
             }
-            Err(err) => {
-                panic!("{err}");
-            }
-        }
+            Err(err) => panic!("{err}"),
+        };
 
         // Check the exit.
-        let kvm_run_value = kvm_run.read();
-        let mut exit = kvm_run_value.exit();
         match exit {
-            KvmExit::Io(io) if io.port == INSECURE_SUPERVISOR_CALL_PORT => {
+            VcpuExit::IoOut(port, _) if port == INSECURE_SUPERVISOR_CALL_PORT => {
                 let mut regs = ap.get_regs()?;
                 match regs.rax {
                     nr if nr == SupervisorCallNr::StartNextAp as u64 => {
@@ -393,7 +434,7 @@ fn run_kernel_vcpu(
                             .allocate_slot_id()
                             .context("OOM")?;
                         regs.rax = u64::from(slot_idx.get());
-                        ap.set_regs(regs)?;
+                        ap.set_regs(&regs)?;
                     }
                     nr if nr == SupervisorCallNr::DeallocateMemory as u64 => {
                         let slot_idx = SlotIndex::new(u16::try_from(regs.rdi)?);
@@ -410,13 +451,14 @@ fn run_kernel_vcpu(
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = regs.rdi as usize;
 
-                        let mut xsave_buffer = vec![0; xsave_size];
+                        let mut xsave_buffer = Xsave::new(xsave_size)?;
                         unsafe {
                             ap.get_xsave2(&mut xsave_buffer)?;
                         }
 
-                        let xmm = &xsave_buffer[XMM_OFFSET..][..16 * 16];
-                        let ymm = &xsave_buffer[*YMM_OFFSET..][..16 * 16];
+                        let xsave = bytes_of(&xsave_buffer.as_fam_struct_ref().xsave.region);
+                        let xmm = &xsave[XMM_OFFSET..][..16 * 16];
+                        let ymm = &xsave[*YMM_OFFSET..][..16 * 16];
 
                         // The xmm and ymm registers are split into two
                         // buffers. Reassemble the values into a single
@@ -443,32 +485,22 @@ fn run_kernel_vcpu(
                     nr => unimplemented!("unknown supervisor call: {nr}"),
                 }
             }
-            KvmExit::RdMsr(ref mut msr) => {
+            VcpuExit::X86Rdmsr(msr) => {
                 const GUEST_TSC_FREQ: u32 = 0xC001_0134;
                 match msr.index {
-                    GUEST_TSC_FREQ => msr.data = u64::from(TSC_MHZ),
+                    GUEST_TSC_FREQ => *msr.data = u64::from(TSC_MHZ),
                     _ => todo!(),
                 }
-
-                kvm_run.update(|mut k| {
-                    k.set_exit(exit);
-                    k
-                });
             }
-            KvmExit::WrMsr(msr) => match msr.index {
+            VcpuExit::X86Wrmsr(msr) => match msr.index {
                 // EOI.
                 0x80b => in_service_timer_irq = false,
                 index => unimplemented!("unimplemented MSR write to {index:#x}"),
             },
-            KvmExit::IrqWindowOpen => {}
-            KvmExit::Interrupted => {}
-            KvmExit::SetTpr => {}
-            exit => {
-                let regs = ap.get_regs()?;
-                println!("{:x}", regs.rip);
-
-                panic!("unexpected exit {exit:?}");
-            }
+            VcpuExit::IrqWindowOpen => {}
+            VcpuExit::Intr => {}
+            VcpuExit::SetTpr => {}
+            exit => panic!("unexpected exit {exit:?}"),
         }
     }
 
@@ -566,3 +598,34 @@ impl DynamicMemory {
         self.in_use[usize::from(id.get())] = false;
     }
 }
+
+const CODE64: kvm_segment = kvm_segment {
+    base: 0,
+    limit: 0xffff_ffff,
+    selector: 0x10,
+    type_: 0xb,
+    present: 1,
+    dpl: 0,
+    db: 0,
+    s: 1,
+    l: 1,
+    g: 1,
+    avl: 0,
+    unusable: 0,
+    padding: 0,
+};
+const DATA64: kvm_segment = kvm_segment {
+    base: 0,
+    limit: 0xffff_ffff,
+    selector: 0x10,
+    type_: 0x3,
+    present: 1,
+    dpl: 0,
+    db: 1,
+    s: 1,
+    l: 0,
+    g: 1,
+    avl: 0,
+    unusable: 0,
+    padding: 0,
+};

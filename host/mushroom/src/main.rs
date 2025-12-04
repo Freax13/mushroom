@@ -328,17 +328,11 @@ async fn run(run: RunCommand) -> Result<()> {
         }
         #[cfg(feature = "insecure")]
         Tee::Insecure => {
+            let kvm = Kvm::new()?;
             if run.profile_folder.is_some() {
                 warn!("Profiling in insecure mode is currently not supported.");
             }
-            mushroom::insecure::main(
-                &kvm_handle,
-                &kernel,
-                &init,
-                run.config.kasan,
-                &inputs,
-                timeout,
-            )?
+            mushroom::insecure::main(&kvm, &kernel, &init, run.config.kasan, &inputs, timeout)?
         }
     };
 

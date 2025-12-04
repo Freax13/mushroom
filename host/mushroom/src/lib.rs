@@ -73,11 +73,6 @@ fn find_slot(gpa: PhysFrame, slots: &[Slot]) -> Result<&Slot> {
         .context("failed to find slot which contains ghcb")
 }
 
-fn is_efault(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<nix::Error>()
-        .is_some_and(|&err| err == nix::Error::EFAULT)
-}
-
 fn install_signal_handler() {
     static INSTALL_SIGNAL_HANDLER: Once = Once::new();
     INSTALL_SIGNAL_HANDLER.call_once(|| {
