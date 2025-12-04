@@ -19,6 +19,8 @@ vcek-kds = { path = "vcek-kds" }
 edition = "2024"
 
 [patch.crates-io]
+kvm-bindings = { git = "https://github.com/Freax13/kvm-ioctls.git", rev = "c4d7a84" }
+kvm-ioctls = { git = "https://github.com/Freax13/kvm-ioctls.git", rev = "c4d7a84" }
 x86_64 = { git = "https://github.com/rust-osdev/x86_64.git", rev = "7ae7da5" }
 
 [profile.dev.package.sha2]

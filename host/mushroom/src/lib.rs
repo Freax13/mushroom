@@ -25,7 +25,7 @@ mod slot;
 pub use kvm::KvmHandle;
 pub use loader::{HashType, Input};
 
-const TSC_MHZ: u64 = 100;
+const TSC_MHZ: u32 = 100;
 
 /// The signal used to kick threads out of KVM_RUN.
 const SIG_KICK: Signal = Signal::SIGUSR1;

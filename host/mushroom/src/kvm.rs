@@ -7,7 +7,7 @@ use std::{
     fs::OpenOptions,
     mem::{size_of, size_of_val},
     num::{NonZeroU32, NonZeroUsize},
-    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
     ptr::NonNull,
 };
 
@@ -34,7 +34,6 @@ use self::hidden::KvmCpuid2;
 use crate::slot::Slot;
 
 const KVMIO: u8 = 0xAE;
-pub const KVM_HC_MAP_GPA_RANGE: u64 = 12;
 const MAX_ENTRIES: usize = 256;
 
 pub struct KvmHandle {
@@ -1496,6 +1495,12 @@ impl SevHandle {
             .context("failed to open /dev/sev")?;
         let fd = OwnedFd::from(file);
         Ok(Self { fd })
+    }
+}
+
+impl AsRawFd for SevHandle {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
     }
 }
 

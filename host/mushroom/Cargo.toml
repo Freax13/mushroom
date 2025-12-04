@@ -21,6 +21,8 @@ bitflags = { version = "2.4.2", features = ["bytemuck"] }
 bytemuck = { version = "1.15.0", features = ["derive", "min_const_generics", "extern_crate_std"] }
 clap = { version = "4.5.2", features = ["derive", "env"], optional = true }
 constants = { workspace = true }
+kvm-bindings = "0.14.0"
+kvm-ioctls = "0.24.0"
 loader = { workspace = true }
 log-types = { workspace = true, features = ["std"] }
 mushroom-verify = { workspace = true, optional = true }

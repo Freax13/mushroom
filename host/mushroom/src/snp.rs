@@ -1,6 +1,7 @@
 use std::{
     iter::once,
-    os::unix::thread::JoinHandleExt,
+    os::{fd::AsRawFd, unix::thread::JoinHandleExt},
+    ptr::addr_of,
     sync::{
         Arc,
         atomic::{self, AtomicBool, Ordering},
@@ -11,11 +12,21 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use bit_field::BitField;
-use bytemuck::{bytes_of, pod_read_unaligned};
+use bytemuck::pod_read_unaligned;
 use constants::{
     FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
-    physical_address::{DYNAMIC_2MIB, kernel, supervisor},
+    physical_address::{DYNAMIC_2MIB, INPUT_FILE, kernel, supervisor},
 };
+use kvm_bindings::{
+    KVM_CAP_EXIT_HYPERCALL, KVM_CAP_X2APIC_API, KVM_CAP_X86_USER_SPACE_MSR, KVM_MAX_CPUID_ENTRIES,
+    KVM_MEM_GUEST_MEMFD, KVM_MEMORY_ATTRIBUTE_PRIVATE, KVM_MP_STATE_RUNNABLE,
+    KVM_MSR_EXIT_REASON_FILTER, KVM_MSR_EXIT_REASON_UNKNOWN, KVM_X86_SNP_VM, Msrs, kvm_enable_cap,
+    kvm_memory_attributes, kvm_msr_entry, kvm_sev_cmd, kvm_sev_init, kvm_sev_snp_launch_finish,
+    kvm_sev_snp_launch_start, kvm_sev_snp_launch_update, kvm_userspace_memory_region2,
+    sev_cmd_id_KVM_SEV_INIT2, sev_cmd_id_KVM_SEV_SNP_LAUNCH_FINISH,
+    sev_cmd_id_KVM_SEV_SNP_LAUNCH_START,
+};
+use kvm_ioctls::{HypercallExit, Kvm, VcpuExit, VcpuFd, VmFd};
 use loader::Input;
 use mushroom_verify::snp::{LaunchDigest, create_signature, id_block};
 use nix::{
@@ -23,8 +34,9 @@ use nix::{
     sys::{mman::madvise, pthread::pthread_kill},
 };
 pub use snp_types::guest_policy::GuestPolicy;
-use snp_types::id_block::{
-    EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey,
+use snp_types::{
+    id_block::{EcdsaP384PublicKey, EcdsaP384Sha384Signature, IdAuthInfo, KeyAlgo, PublicKey},
+    vmsa::SevFeatures,
 };
 use tracing::{debug, info};
 pub use vcek_kds::Vcek;
@@ -35,10 +47,7 @@ use x86_64::{
 
 use crate::{
     MushroomResult, OutputEvent, SIG_KICK, TSC_MHZ, find_slot, install_signal_handler,
-    kvm::{
-        KVM_HC_MAP_GPA_RANGE, KvmCap, KvmExit, KvmExitHypercall, KvmExitUnknown, KvmHandle,
-        KvmMemoryAttributes, MpState, Page, SevHandle, VcpuHandle, VmHandle,
-    },
+    kvm::{Page, SevHandle},
     logging::start_log_collection,
     profiler::{ProfileFolder, start_profile_collection},
     raise_file_no_limit,
@@ -47,7 +56,7 @@ use crate::{
 
 #[allow(clippy::too_many_arguments)]
 pub fn main(
-    kvm_handle: &KvmHandle,
+    kvm_handle: &Kvm,
     supervisor: &[u8],
     kernel: &[u8],
     init: &[u8],
@@ -128,7 +137,7 @@ pub fn main(
 }
 
 struct VmContext {
-    vm: Arc<VmHandle>,
+    vm: Arc<VmFd>,
     memory_slots: Vec<Slot>,
     dynamic_slot: Slot,
     start: Instant,
@@ -144,12 +153,13 @@ impl VmContext {
         inputs: &[Input<impl AsRef<[u8]>>],
         load_kasan_shadow_mappings: bool,
         policy: GuestPolicy,
-        kvm_handle: &KvmHandle,
+        kvm: &Kvm,
         sev_handle: &SevHandle,
         profiler_folder: Option<ProfileFolder>,
-    ) -> Result<(Self, Vec<VcpuHandle>)> {
-        let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
+    ) -> Result<(Self, Vec<VcpuFd>)> {
+        let mut cpuid_entries = kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?;
         let piafb = cpuid_entries
+            .as_mut_slice()
             .iter_mut()
             .find(|entry| entry.function == 1 && entry.index == 0)
             .context("failed to find 'processor info and feature bits' entry")?;
@@ -157,40 +167,86 @@ impl VmContext {
         piafb.ecx.set_bit(21, true);
         let cpuid_entries = Arc::from(cpuid_entries);
 
-        let vm = kvm_handle.create_snp_vm()?;
+        let vm = kvm
+            .create_vm_with_type(u64::from(KVM_X86_SNP_VM))
+            .context("failed to create SNP VM")?;
         let vm = Arc::new(vm);
 
-        vm.enable_capability(KvmCap::EXIT_HYPERCALL, 1 << KVM_HC_MAP_GPA_RANGE)?;
+        vm.enable_cap(&kvm_enable_cap {
+            cap: KVM_CAP_EXIT_HYPERCALL,
+            args: [1 << KVM_HC_MAP_GPA_RANGE, 0, 0, 0],
+            ..Default::default()
+        })
+        .context("failed to enable hypercall exits")?;
 
-        const KVM_MSR_EXIT_REASON_UNKNOWN: u64 = 1;
-        const KVM_MSR_EXIT_REASON_FILTER: u64 = 2;
-        vm.enable_capability(
-            KvmCap::X86_USER_SPACE_MSR,
-            KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
-        )?;
+        vm.enable_cap(&kvm_enable_cap {
+            cap: KVM_CAP_X86_USER_SPACE_MSR,
+            args: [
+                u64::from(KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER),
+                0,
+                0,
+                0,
+            ],
+            ..Default::default()
+        })
+        .context("failed to enable user space MSR handling")?;
 
-        vm.enable_capability(KvmCap::X2APIC_API, 0)?;
+        vm.enable_cap(&kvm_enable_cap {
+            cap: KVM_CAP_X2APIC_API,
+            ..Default::default()
+        })
+        .context("failed to enable x2APIC")?;
 
         vm.set_tsc_khz(TSC_MHZ * 1000)?;
 
-        vm.create_irqchip()?;
+        vm.create_irq_chip().context("failed to create IRQ chip")?;
 
-        vm.sev_snp_init()?;
+        let sev_init = kvm_sev_init {
+            vmsa_features: (SevFeatures::RESTRICTED_INJECTION | SevFeatures::VMSA_REG_PROT).bits(),
+            ghcb_version: 2,
+            ..Default::default()
+        };
+        vm.encrypt_op_sev(&mut kvm_sev_cmd {
+            id: sev_cmd_id_KVM_SEV_INIT2,
+            data: addr_of!(sev_init).addr() as u64,
+            ..Default::default()
+        })
+        .context("failed to initialize SNP")?;
 
-        vm.sev_snp_launch_start(policy, sev_handle)?;
+        let sev_snp_launch_start = kvm_sev_snp_launch_start {
+            policy: policy.bits(),
+            ..Default::default()
+        };
+        vm.encrypt_op_sev(&mut kvm_sev_cmd {
+            id: sev_cmd_id_KVM_SEV_SNP_LAUNCH_START,
+            data: addr_of!(sev_snp_launch_start).addr() as u64,
+            sev_fd: sev_handle.as_raw_fd() as u32,
+            ..Default::default()
+        })
+        .context("failed to start sev snp launch")?;
 
         let vcpus = (0..MAX_APS_COUNT)
             .map(|i| {
-                let vcpu = vm.create_vcpu(i32::from(i))?;
-                vcpu.set_cpuid(&cpuid_entries)?;
+                let vcpu = vm.create_vcpu(u64::from(i))?;
+
+                vcpu.set_cpuid2(&cpuid_entries)?;
 
                 // Allow the kernel to query it's processor id through TSC_AUX.
                 // This is needed on EPYC Milan, it's part of the VMSA on later
                 // generations.
                 const TSC_AUX: u32 = 0xc0000103;
-                vcpu.set_msr(TSC_AUX, u64::from(i)).unwrap();
+                let msrs = Msrs::from_entries(&[kvm_msr_entry {
+                    index: TSC_AUX,
+                    data: u64::from(i),
+                    ..Default::default()
+                }])
+                .unwrap();
+                vcpu.set_msrs(&msrs)?;
 
-                vcpu.set_mp_state(MpState::Runnable)?;
+                vcpu.set_mp_state(kvm_bindings::kvm_mp_state {
+                    mp_state: KVM_MP_STATE_RUNNABLE,
+                })?;
+
                 Result::Ok(vcpu)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -221,17 +277,32 @@ impl VmContext {
                 .count();
 
             // Create and map the slot.
-            let slot = Slot::new(
+            let slot = Slot::new2(
                 &vm,
                 gpa,
-                num_pages * 0x1000,
+                num_pages * Size4KiB::SIZE as usize,
                 first_load_command.shared,
                 first_load_command.private,
             )
             .context("failed to create slot")?;
             let slot_id = u16::try_from(memory_slots.len())?;
+
+            let mut memory_region = kvm_userspace_memory_region2 {
+                slot: u32::from(slot_id),
+                guest_phys_addr: gpa.start_address().as_u64(),
+                memory_size: num_pages as u64 * Size4KiB::SIZE,
+                ..Default::default()
+            };
+            if let Some(shared_mapping) = slot.shared_mapping() {
+                memory_region.userspace_addr = shared_mapping.as_ptr().as_ptr().addr() as u64;
+            }
+            if let Some(restricted_fd) = slot.restricted_fd() {
+                memory_region.flags |= KVM_MEM_GUEST_MEMFD;
+                memory_region.guest_memfd = restricted_fd.as_raw_fd() as u32;
+            }
             unsafe {
-                vm.map_encrypted_memory(slot_id, &slot)?;
+                vm.set_user_memory_region2(memory_region)
+                    .context("failed to add memory region")?;
             }
 
             // Populate the slot's content.
@@ -243,21 +314,32 @@ impl VmContext {
                 if let Some(page_type) = command.payload.page_type() {
                     // Private memory is added with LAUNCH_UPDATE.
 
-                    vm.set_memory_attributes(
-                        command.physical_address.start_address().as_u64(),
-                        0x1000,
-                        KvmMemoryAttributes::PRIVATE,
-                    )?;
+                    vm.set_memory_attributes(kvm_memory_attributes {
+                        address: command.physical_address.start_address().as_u64(),
+                        size: Size4KiB::SIZE,
+                        attributes: u64::from(KVM_MEMORY_ATTRIBUTE_PRIVATE),
+                        ..Default::default()
+                    })?;
 
-                    vm.sev_snp_launch_update(
-                        command.physical_address.start_address().as_u64(),
-                        bytes.as_ptr() as u64,
-                        0x1000,
-                        page_type,
-                        command.vcpu_id,
-                        command.vmpl1_perms,
-                        sev_handle,
-                    )?;
+                    let launch_update = kvm_sev_snp_launch_update_vmpls {
+                        lu: kvm_sev_snp_launch_update {
+                            gfn_start: command.physical_address.start_address().as_u64() >> 12,
+                            uaddr: bytes.as_ptr() as u64,
+                            len: Size4KiB::SIZE,
+                            type_: page_type as u8,
+                            pad1: command.vcpu_id,
+                            ..Default::default()
+                        },
+                        vmpl1_perms: command.vmpl1_perms.bits(),
+                        ..Default::default()
+                    };
+                    vm.encrypt_op_sev(&mut kvm_sev_cmd {
+                        id: sev_cmd_id_KVM_SEV_SNP_LAUNCH_UPDATE_VMPLS,
+                        data: addr_of!(launch_update).addr() as u64,
+                        sev_fd: sev_handle.as_raw_fd() as u32,
+                        ..Default::default()
+                    })
+                    .context("failed to update launch measurement")?;
 
                     launch_digest.add(&command);
                 } else {
@@ -284,15 +366,41 @@ impl VmContext {
             PublicKey::default(),
         );
 
-        vm.sev_snp_launch_finish(sev_handle, host_data, Some((&id_block, &id_auth_info)))?;
+        let launch_finish = kvm_sev_snp_launch_finish {
+            id_block_uaddr: addr_of!(id_block).addr() as u64,
+            id_auth_uaddr: addr_of!(id_auth_info).addr() as u64,
+            id_block_en: u8::from(true),
+            auth_key_en: u8::from(false),
+            vcek_disabled: u8::from(false),
+            host_data,
+            ..Default::default()
+        };
+        vm.encrypt_op_sev(&mut kvm_sev_cmd {
+            id: sev_cmd_id_KVM_SEV_SNP_LAUNCH_FINISH,
+            data: addr_of!(launch_finish).addr() as u64,
+            sev_fd: sev_handle.as_raw_fd() as u32,
+            ..Default::default()
+        })
+        .context("failed to finish launch")?;
 
         let len =
             DYNAMIC_2MIB.end.start_address().as_u64() - DYNAMIC_2MIB.start.start_address().as_u64();
-        let len = usize::try_from(len)?;
-        let dynamic_slot = Slot::new(&vm, DYNAMIC_2MIB.start, len, false, true)?;
+        let dynamic_slot = Slot::new2(&vm, DYNAMIC_2MIB.start, usize::try_from(len)?, true, true)?;
         let slot_id = u16::try_from(memory_slots.len())?;
+        let mut memory_region = kvm_userspace_memory_region2 {
+            slot: u32::from(slot_id),
+            flags: KVM_MEM_GUEST_MEMFD,
+            guest_phys_addr: dynamic_slot.gpa().start_address().as_u64(),
+            memory_size: len,
+            ..Default::default()
+        };
+        let shared_mapping = dynamic_slot.shared_mapping().unwrap();
+        memory_region.userspace_addr = shared_mapping.as_ptr().as_ptr().addr() as u64;
+        let restricted_fd = dynamic_slot.restricted_fd().unwrap();
+        memory_region.guest_memfd = restricted_fd.as_raw_fd() as u32;
         unsafe {
-            vm.map_encrypted_memory(slot_id, &dynamic_slot)?;
+            vm.set_user_memory_region2(memory_region)
+                .context("failed to add memory region")?;
         }
 
         info!("launched");
@@ -320,32 +428,37 @@ impl VmContext {
 
     pub fn run_vcpu(
         &self,
-        vcpu: VcpuHandle,
+        mut vcpu: VcpuFd,
         done: Arc<AtomicBool>,
         sender: &Sender<OutputEvent>,
     ) -> Result<()> {
-        let kvm_run = vcpu.get_kvm_run_block()?;
-        let kvm_run = kvm_run.as_ptr();
-
         while !done.load(Ordering::Relaxed) {
-            let exit = kvm_run.read().exit();
+            match vcpu.run()? {
+                VcpuExit::Unknown => {}
+                VcpuExit::Hypercall(HypercallExit {
+                    nr: KVM_HC_MAP_GPA_RANGE,
+                    args: [address, num_pages, attrs, ..],
+                    ret,
+                    ..
+                }) => {
+                    assert!(INPUT_FILE.start.start_address().as_u64() <= address);
+                    assert!(
+                        address + num_pages * Size4KiB::SIZE
+                            < (INPUT_FILE.end + 1).start_address().as_u64()
+                    );
 
-            match exit {
-                KvmExit::Unknown(KvmExitUnknown {
-                    hardware_exit_reason: 0,
-                }) => {}
-                KvmExit::Hypercall(
-                    mut hypercall @ KvmExitHypercall {
-                        nr: KVM_HC_MAP_GPA_RANGE,
-                        args: [address, num_pages, attrs, ..],
-                        ..
-                    },
-                ) => {
-                    let mut attributes = KvmMemoryAttributes::empty();
                     let private = attrs.get_bit(4);
-                    attributes.set(KvmMemoryAttributes::PRIVATE, private);
-                    self.vm
-                        .set_memory_attributes(address, num_pages * 0x1000, attributes)?;
+                    let attributes = if private {
+                        KVM_MEMORY_ATTRIBUTE_PRIVATE
+                    } else {
+                        0
+                    };
+                    self.vm.set_memory_attributes(kvm_memory_attributes {
+                        address,
+                        size: num_pages * Size4KiB::SIZE,
+                        attributes: u64::from(attributes),
+                        ..Default::default()
+                    })?;
 
                     if private {
                         // Invalidate shared mapping.
@@ -367,22 +480,12 @@ impl VmContext {
                         unimplemented!()
                     }
 
-                    kvm_run.update(|mut run| {
-                        hypercall.ret = 0;
-                        run.set_exit(KvmExit::Hypercall(hypercall));
-                        run
-                    });
+                    *ret = 0;
                 }
-                KvmExit::Io(io) => {
-                    assert_eq!(io.size, 4, "accesses to the ports should have size 4");
-
-                    let raw_kvm_run = kvm_run.read();
-                    let raw_kvm_run = bytes_of(&raw_kvm_run);
-                    let value = pod_read_unaligned::<u32>(
-                        &raw_kvm_run[io.data_offset as usize..][..usize::from(io.size)],
-                    );
-
-                    match io.port {
+                VcpuExit::IoOut(port, value) => {
+                    assert_eq!(value.len(), 4, "accesses to the ports should have size 4");
+                    let value = pod_read_unaligned::<u32>(value);
+                    match port {
                         MEMORY_PORT => {
                             let slot_id = value.get_bits(0..15) as u16;
                             let enabled = value.get_bit(15);
@@ -390,13 +493,17 @@ impl VmContext {
                             debug!(slot_id, enabled, gpa = %format_args!("{gpa:?}"), "updating slot status");
 
                             let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
-                            let mut attributes = KvmMemoryAttributes::empty();
-                            attributes.set(KvmMemoryAttributes::PRIVATE, enabled);
-                            self.vm.set_memory_attributes(
-                                gfn.start_address().as_u64(),
-                                Size2MiB::SIZE,
-                                attributes,
-                            )?;
+                            let attributes = if enabled {
+                                KVM_MEMORY_ATTRIBUTE_PRIVATE
+                            } else {
+                                0
+                            };
+                            self.vm.set_memory_attributes(kvm_memory_attributes {
+                                address: gfn.start_address().as_u64(),
+                                size: Size2MiB::SIZE,
+                                attributes: u64::from(attributes),
+                                ..Default::default()
+                            })?;
 
                             // Remove the backing memory when memory is disabled.
                             if !enabled {
@@ -413,11 +520,8 @@ impl VmContext {
                         other => unimplemented!("unimplemented io port: {other}"),
                     }
                 }
-                KvmExit::Shutdown | KvmExit::SystemEvent(_) => bail!("no output was produced"),
-                KvmExit::MemoryFault(fault) => {
-                    dbg!(fault);
-                }
-                KvmExit::WrMsr(msr) => match msr.index {
+                VcpuExit::Shutdown | VcpuExit::SystemEvent(..) => bail!("no output was produced"),
+                VcpuExit::X86Wrmsr(msr) => match msr.index {
                     UPDATE_OUTPUT_MSR => {
                         let gfn =
                             PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(msr.data));
@@ -449,19 +553,27 @@ impl VmContext {
                     }
                     index => unimplemented!("unsupported MSR: {index:#08x}"),
                 },
-                KvmExit::Other { exit_reason } => {
-                    unimplemented!("exit with type: {exit_reason}");
-                }
-                KvmExit::Hlt => std::thread::park(),
-                KvmExit::Interrupted => {}
-                exit => {
-                    panic!("unexpected exit: {exit:?}");
-                }
+                VcpuExit::Hlt => std::thread::park(),
+                VcpuExit::Intr => {}
+                exit => panic!("unexpected exit: {exit:?}"),
             }
-
-            vcpu.run()?;
         }
 
         Ok(())
     }
 }
+
+const KVM_HC_MAP_GPA_RANGE: u64 = 12;
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+struct kvm_sev_snp_launch_update_vmpls {
+    lu: kvm_sev_snp_launch_update,
+    vmpl3_perms: u8,
+    vmpl2_perms: u8,
+    vmpl1_perms: u8,
+}
+
+#[expect(non_upper_case_globals)]
+const sev_cmd_id_KVM_SEV_SNP_LAUNCH_UPDATE_VMPLS: u32 = 103;

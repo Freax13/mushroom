@@ -68,6 +68,10 @@ impl GuestPolicy {
         policy.set_bit(17, only);
         Self { policy }
     }
+
+    pub fn bits(self) -> u64 {
+        self.policy
+    }
 }
 
 unsafe impl CheckedBitPattern for GuestPolicy {

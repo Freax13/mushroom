@@ -125,7 +125,7 @@ pub fn main(
         KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
     )?;
 
-    vm.set_tsc_khz(TSC_MHZ * 1000)?;
+    vm.set_tsc_khz(u64::from(TSC_MHZ) * 1000)?;
 
     if KVM_XSAVE_SIZE.get().is_none() {
         let xsave_size = kvm_handle.check_extension(KvmCap::XSAVE2)?;
@@ -446,7 +446,7 @@ fn run_kernel_vcpu(
             KvmExit::RdMsr(ref mut msr) => {
                 const GUEST_TSC_FREQ: u32 = 0xC001_0134;
                 match msr.index {
-                    GUEST_TSC_FREQ => msr.data = TSC_MHZ,
+                    GUEST_TSC_FREQ => msr.data = u64::from(TSC_MHZ),
                     _ => todo!(),
                 }
 

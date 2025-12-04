@@ -2,13 +2,14 @@ use std::{
     ffi::c_void,
     mem::size_of,
     num::NonZeroUsize,
-    os::fd::{AsFd, BorrowedFd, OwnedFd},
+    os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd},
     ptr::{NonNull, copy_nonoverlapping},
     sync::Arc,
 };
 
 use anyhow::{Context, Result, ensure};
 use bytemuck::{CheckedBitPattern, Pod};
+use kvm_ioctls::VmFd;
 use nix::sys::mman::{MapFlags, ProtFlags, mmap_anonymous, munmap};
 use volatile::VolatilePtr;
 use x86_64::{
@@ -42,6 +43,37 @@ impl Slot {
             .then(|| {
                 vm.create_guest_memfd(len_u64, KvmGuestMemFdFlags::empty())
                     .context("failed to create guest memfd")
+            })
+            .transpose()?;
+
+        Ok(Self {
+            gpa: PhysFrame::from_start_address(gpa.start_address()).unwrap(),
+            len,
+            shared_mapping,
+            restricted_fd,
+        })
+    }
+
+    pub fn new2(
+        vm: &VmFd,
+        gpa: PhysFrame<impl PageSize>,
+        len: usize,
+        shared: bool,
+        private: bool,
+    ) -> Result<Self> {
+        let shared_mapping = shared
+            .then(|| AnonymousPrivateMapping::new(len).map(Arc::new))
+            .transpose()?;
+
+        let len_u64 = u64::try_from(len)?;
+        let restricted_fd = private
+            .then(|| {
+                vm.create_guest_memfd(kvm_bindings::kvm_create_guest_memfd {
+                    size: len_u64,
+                    ..Default::default()
+                })
+                .context("failed to create guest memfd")
+                .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
             })
             .transpose()?;
 

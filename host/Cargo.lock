@@ -96,6 +96,12 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 
 [[package]]
 name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
@@ -749,6 +755,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kvm-bindings"
+version = "0.14.0"
+source = "git+https://github.com/Freax13/kvm-ioctls.git?rev=c4d7a84#c4d7a84604632aa0cfd9a3feeb927d7f99c01ac4"
+dependencies = [
+ "vmm-sys-util",
+]
+
+[[package]]
+name = "kvm-ioctls"
+version = "0.24.0"
+source = "git+https://github.com/Freax13/kvm-ioctls.git?rev=c4d7a84#c4d7a84604632aa0cfd9a3feeb927d7f99c01ac4"
+dependencies = [
+ "bitflags 2.10.0",
+ "kvm-bindings",
+ "libc",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -837,10 +862,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bit_field",
- "bitflags",
+ "bitflags 2.10.0",
  "bytemuck",
  "clap",
  "constants",
+ "kvm-bindings",
+ "kvm-ioctls",
  "loader",
  "log-types",
  "mushroom-verify",
@@ -884,7 +911,7 @@ version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
 dependencies = [
- "bitflags",
+ "bitflags 2.10.0",
  "cfg-if",
  "cfg_aliases",
  "libc",
@@ -1229,7 +1256,7 @@ version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
 dependencies = [
- "bitflags",
+ "bitflags 2.10.0",
 ]
 
 [[package]]
@@ -1509,7 +1536,7 @@ name = "snp-types"
 version = "0.1.0"
 dependencies = [
  "bit_field",
- "bitflags",
+ "bitflags 2.10.0",
  "bytemuck",
  "p384",
  "paste",
@@ -1601,7 +1628,7 @@ name = "tdx-types"
 version = "0.1.0"
 dependencies = [
  "bit_field",
- "bitflags",
+ "bitflags 2.10.0",
  "bytemuck",
  "p256",
  "serde",
@@ -1744,7 +1771,7 @@ version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adc82fd73de2a9722ac5da747f12383d2bfdb93591ee6c58486e0097890f05f2"
 dependencies = [
- "bitflags",
+ "bitflags 2.10.0",
  "bytes",
  "futures-util",
  "http",
@@ -1910,6 +1937,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vmm-sys-util"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "506c62fdf617a5176827c2f9afbcf1be155b03a9b4bf9617a60dbc07e3a1642f"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+]
 
 [[package]]
 name = "volatile"
@@ -2236,7 +2273,7 @@ version = "0.15.2"
 source = "git+https://github.com/rust-osdev/x86_64.git?rev=7ae7da5#7ae7da5f0ef1b2a927a687538095163f32d72c85"
 dependencies = [
  "bit_field",
- "bitflags",
+ "bitflags 2.10.0",
  "const_fn",
  "rustversion",
  "volatile 0.4.6",

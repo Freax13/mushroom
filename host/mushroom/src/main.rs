@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use bytemuck::checked::try_pod_read_unaligned;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use kvm_ioctls::Kvm;
 use loader::{HashType, Input};
 use mushroom::{KvmHandle, MushroomResult, Tee, profiler::ProfileFolder};
 use mushroom_verify::{Configuration, HashedInput, InputHash, OutputHash};
@@ -258,6 +259,8 @@ async fn run(run: RunCommand) -> Result<()> {
     let result: MushroomResult = match tee {
         #[cfg(feature = "snp")]
         Tee::Snp => {
+            let kvm = Kvm::new()?;
+
             let supervisor_snp_path = run
                 .config
                 .supervisor_snp
@@ -281,7 +284,7 @@ async fn run(run: RunCommand) -> Result<()> {
             };
 
             mushroom::snp::main(
-                &kvm_handle,
+                &kvm,
                 &supervisor_snp,
                 &kernel,
                 &init,

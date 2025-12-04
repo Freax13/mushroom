@@ -177,7 +177,7 @@ impl VmContext {
             KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER,
         )?;
 
-        vm.set_tsc_khz(TSC_MHZ * 1000)?;
+        vm.set_tsc_khz(u64::from(TSC_MHZ) * 1000)?;
 
         let (mut load_commands, host_data) = loader::generate_load_commands(
             Some(supervisor),
