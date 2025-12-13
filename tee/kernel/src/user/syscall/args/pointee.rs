@@ -18,7 +18,7 @@ use usize_conversions::{FromUsize, usize_from};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::{Error, Result, bail, ensure},
+    error::{Error, Result, bail, ensure, err},
     fs::{
         StatFs,
         node::{OffsetDirEntry, OldDirEntry},
@@ -28,12 +28,13 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                CmsgHdr, ControlMode, Domain, FdNum, Flock, FlockType, FlockWhence, ITimerspec,
-                ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr,
-                MsgHdr, Offset, OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit,
-                Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
-                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
-                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                CmsgHdr, ControlMode, Domain, FdNum, FileMode, Flock, FlockType, FlockWhence,
+                ITimerspec, ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode,
+                LongOffset, MMsgHdr, MsgHdr, Offset, OpenFlags, OpenHow, OutputMode,
+                PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit, ResolveFlags, Rusage,
+                SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat,
+                SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserCapData,
+                UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -3048,5 +3049,32 @@ impl From<PktInfo6> for RawPktInfo6 {
             spec_dst: value.spec_dst.octets(),
             ifindex: value.ifindex,
         }
+    }
+}
+
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawOpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+impl Pointee for OpenHow {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for OpenHow {
+    type I386 = RawOpenHow;
+    type Amd64 = RawOpenHow;
+}
+
+impl TryFrom<RawOpenHow> for OpenHow {
+    type Error = Error;
+
+    fn try_from(value: RawOpenHow) -> Result<Self> {
+        Ok(Self {
+            flags: OpenFlags::from_bits(value.flags).ok_or(err!(Inval))?,
+            mode: FileMode::from_bits_truncate(value.mode),
+            resolve: ResolveFlags::from_bits(value.resolve).ok_or(err!(Inval))?,
+        })
     }
 }

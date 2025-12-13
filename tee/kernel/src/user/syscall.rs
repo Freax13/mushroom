@@ -316,6 +316,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetrandom);
     handlers.register(SysMemfdCreate);
     handlers.register(SysCopyFileRange);
+    handlers.register(SysOpenat2);
     handlers.register(SysFchmodat2);
 
     handlers
@@ -5921,6 +5922,35 @@ fn copy_file_range(
     }
 
     Ok(u64::from_usize(len))
+}
+
+#[syscall(i386 = 437, amd64 = 437, interruptable, restartable)]
+async fn openat2(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    #[state] no_file_limit: CurrentNoFileLimit,
+    dfd: FdNum,
+    filename: Pointer<Path>,
+    how: Pointer<OpenHow>,
+    size: u64,
+) -> SyscallResult {
+    let how = virtual_memory.read_with_abi(how, abi)?;
+
+    openat(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        no_file_limit,
+        dfd,
+        filename,
+        how.flags,
+        how.mode.bits(),
+    )
+    .await
 }
 
 #[syscall(i386 = 452, amd64 = 452)]
