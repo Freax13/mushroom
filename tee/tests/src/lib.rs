@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 mod epoll;
+mod fs;
 mod net;
 mod ready;
 mod unix;

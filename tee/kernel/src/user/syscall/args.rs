@@ -2551,3 +2551,15 @@ impl From<SigInfo> for SignalfdSiginfo {
         }
     }
 }
+
+pub struct OpenHow {
+    pub flags: OpenFlags,
+    pub mode: FileMode,
+    pub resolve: ResolveFlags,
+}
+
+bitflags! {
+    pub struct ResolveFlags {
+        const IN_ROOT = 1 << 4;
+    }
+}
