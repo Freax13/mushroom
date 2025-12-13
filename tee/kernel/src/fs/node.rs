@@ -360,6 +360,10 @@ impl LinkLocation {
         }
     }
 
+    pub fn is_root(&self) -> bool {
+        self.0.is_none()
+    }
+
     pub fn path(&self) -> Result<Path> {
         if let Some(loc) = self.0.as_ref() {
             let guard = loc.read();
@@ -429,9 +433,20 @@ pub struct FileAccessContext {
     symlink_recursion_limit: u16,
     filesystem_user_id_override: Option<Uid>,
     filesystem_group_id_override: Option<Gid>,
+    root_override: Option<Link>,
 }
 
 impl FileAccessContext {
+    pub fn root() -> Self {
+        Self {
+            thread: None,
+            symlink_recursion_limit: 16,
+            filesystem_user_id_override: None,
+            filesystem_group_id_override: None,
+            root_override: None,
+        }
+    }
+
     /// Record that a symlink was followed and return an error if the recursion
     /// limit was exceeded.
     pub fn follow_symlink(&mut self) -> Result<()> {
@@ -547,13 +562,21 @@ impl FileAccessContext {
         })
     }
 
-    pub fn root() -> Self {
-        Self {
-            thread: None,
-            symlink_recursion_limit: 16,
-            filesystem_user_id_override: None,
-            filesystem_group_id_override: None,
+    pub fn set_root_override(&mut self, link: Link) {
+        self.root_override = Some(link);
+    }
+
+    pub fn root_link(&self) -> Link {
+        self.root_override.clone().unwrap_or_else(Link::root)
+    }
+
+    pub fn is_root_link(&self, link: &Link) -> bool {
+        if let Some(root) = self.root_override.as_ref()
+            && Arc::ptr_eq(&root.node, &link.node)
+        {
+            return true;
         }
+        link.location.is_root()
     }
 }
 
@@ -571,6 +594,7 @@ impl ExtractableThreadState for FileAccessContext {
             symlink_recursion_limit: 16,
             filesystem_user_id_override: None,
             filesystem_group_id_override: None,
+            root_override: None,
         }
     }
 }
@@ -625,9 +649,16 @@ pub fn lookup_link(start_dir: Link, path: &Path, ctx: &mut FileAccessContext) ->
             }
 
             match segment {
-                PathSegment::Root => Ok(Link::root()),
+                PathSegment::Root => Ok(ctx.root_link()),
                 PathSegment::Empty | PathSegment::Dot => Ok(start_dir),
-                PathSegment::DotDot => Ok(start_dir.parent()),
+                PathSegment::DotDot => {
+                    if ctx.is_root_link(&start_dir) {
+                        // Root links are their own parent.
+                        Ok(start_dir)
+                    } else {
+                        Ok(start_dir.parent())
+                    }
+                }
                 PathSegment::FileName(file_name) => start_dir.node.get_node(&file_name, ctx),
             }
         })
@@ -659,9 +690,16 @@ fn find_parent<'a>(
             }
 
             let dir = match segment {
-                PathSegment::Root => Link::root(),
+                PathSegment::Root => ctx.root_link(),
                 PathSegment::Empty | PathSegment::Dot => dir,
-                PathSegment::DotDot => dir.parent(),
+                PathSegment::DotDot => {
+                    if ctx.is_root_link(&dir) {
+                        // Root links are their own parent.
+                        dir
+                    } else {
+                        dir.parent()
+                    }
+                }
                 PathSegment::FileName(ref file_name) => {
                     let node = dir.node.get_node(file_name, ctx)?;
                     resolve_link(node, ctx)?

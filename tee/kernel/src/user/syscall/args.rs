@@ -2559,5 +2559,7 @@ pub struct OpenHow {
 }
 
 bitflags! {
-    pub struct ResolveFlags {}
+    pub struct ResolveFlags {
+        const IN_ROOT = 1 << 4;
+    }
 }

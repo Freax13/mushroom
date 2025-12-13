@@ -4430,6 +4430,23 @@ fn inotify_rm_watch(
     Ok(0)
 }
 
+/// Find the start directory for path resolving.
+fn start_dir(
+    thread: &Thread,
+    fdtable: &FileDescriptorTable,
+    dfd: FdNum,
+    ctx: &mut FileAccessContext,
+) -> Result<Link> {
+    if dfd == FdNum::CWD {
+        let link = thread.process().cwd();
+        ensure!(!link.location.is_unlinked(), NoEnt);
+        Ok(link)
+    } else {
+        let fd = fdtable.get(dfd)?;
+        fd.as_dir(ctx)
+    }
+}
+
 /// Find the start directory for resolving `path`.
 fn start_dir_for_path(
     thread: &Thread,
@@ -4440,14 +4457,9 @@ fn start_dir_for_path(
 ) -> Result<Link> {
     if path.is_absolute() {
         // Completly ignore `dfd` if path is absolute.
-        Ok(Link::root())
-    } else if dfd == FdNum::CWD {
-        let link = thread.process().cwd();
-        ensure!(!link.location.is_unlinked(), NoEnt);
-        Ok(link)
+        Ok(ctx.root_link())
     } else {
-        let fd = fdtable.get(dfd)?;
-        fd.as_dir(ctx)
+        start_dir(thread, fdtable, dfd, ctx)
     }
 }
 
@@ -5938,6 +5950,11 @@ async fn openat2(
     size: u64,
 ) -> SyscallResult {
     let how = virtual_memory.read_with_abi(how, abi)?;
+
+    if how.resolve.contains(ResolveFlags::IN_ROOT) {
+        let root = start_dir(thread, &fdtable, dfd, &mut ctx)?;
+        ctx.set_root_override(root);
+    }
 
     openat(
         thread,
