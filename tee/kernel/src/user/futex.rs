@@ -30,7 +30,7 @@ impl Futexes {
     }
 
     pub fn wait(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         offset: usize,
         val: u32,
         scope: FutexScope,
@@ -62,7 +62,7 @@ impl Futexes {
         drop(guard);
 
         Ok(WaitFuture {
-            futexes: self.clone(),
+            futexes: self,
             offset,
             node,
             done: false,
