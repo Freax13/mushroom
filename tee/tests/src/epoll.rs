@@ -12,7 +12,8 @@ use nix::{
         epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags},
         eventfd::{EfdFlags, EventFd},
         socket::{
-            AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType, recv, send, socketpair,
+            AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType, UnixAddr, bind, connect,
+            getsockname, recv, send, sendto, socket, socketpair,
         },
         stat::Mode,
         time::TimeSpec,
@@ -22,7 +23,7 @@ use nix::{
     unistd::{mkfifo, pipe, pipe2, read, unlink, write},
 };
 
-use crate::mount_dev;
+use crate::{mount_dev, unix};
 
 struct TestFd {
     socket1: OwnedFd,
@@ -917,6 +918,318 @@ fn unix_dgram_edge_triggered() {
     );
 
     assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn unix_dgram_edge_triggered_disconnect() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let a = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let b = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    bind(a.as_raw_fd(), &UnixAddr::new_unnamed()).unwrap();
+    let addr_a = getsockname::<UnixAddr>(a.as_raw_fd()).unwrap();
+    bind(b.as_raw_fd(), &UnixAddr::new_unnamed()).unwrap();
+    let addr_b = getsockname::<UnixAddr>(b.as_raw_fd()).unwrap();
+
+    epoll
+        .add(
+            &a,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    sendto(b.as_raw_fd(), b"1234", &addr_a, MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(a.as_raw_fd(), unix::unspecified_addr()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(a.as_raw_fd(), &addr_b).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(b.as_raw_fd(), &addr_a).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(b.as_raw_fd(), unix::unspecified_addr()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn unix_dgram_edge_triggered_connected() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let a = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let b = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let c = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    bind(a.as_raw_fd(), &UnixAddr::new_unnamed()).unwrap();
+    let addr_a = getsockname::<UnixAddr>(a.as_raw_fd()).unwrap();
+    bind(b.as_raw_fd(), &UnixAddr::new_unnamed()).unwrap();
+    let addr_b = getsockname::<UnixAddr>(b.as_raw_fd()).unwrap();
+
+    epoll
+        .add(
+            &a,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(c.as_raw_fd(), &addr_b).unwrap();
+    send(c.as_raw_fd(), b"1234", MsgFlags::empty()).unwrap();
+
+    connect(a.as_raw_fd(), &addr_b).unwrap();
+    connect(b.as_raw_fd(), &addr_a).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(b.as_raw_fd(), b"5678", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(b.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"1234");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(a.as_raw_fd(), b"90ab", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(recv(b.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"90ab");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(
+        events[0],
+        EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, 1)
+    );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(recv(a.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"5678");
+
+    send(a.as_raw_fd(), b"cdef", MsgFlags::empty()).unwrap();
+    connect(a.as_raw_fd(), unix::unspecified_addr()).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(recv(b.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"cdef");
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn unix_dgram_edge_triggered_two_conns() {
+    let epoll_b = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    let epoll_c = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let a = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let b = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let c = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(bind(a.as_raw_fd(), &UnixAddr::new_unnamed()), Ok(()));
+    let addr = getsockname::<UnixAddr>(a.as_raw_fd()).unwrap();
+
+    assert_eq!(connect(b.as_raw_fd(), &addr), Ok(()));
+    assert_eq!(connect(c.as_raw_fd(), &addr), Ok(()));
+
+    epoll_b
+        .add(
+            &b,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+    epoll_c
+        .add(
+            &c,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(b.as_raw_fd(), b"1234", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(c.as_raw_fd(), b"5678", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(a.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"1234");
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(a.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"5678");
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    send(b.as_raw_fd(), b"90ab", MsgFlags::empty()).unwrap();
+    send(c.as_raw_fd(), b"cdef", MsgFlags::empty()).unwrap();
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(b.as_raw_fd(), unix::unspecified_addr()).unwrap();
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(a.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"90ab");
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    connect(c.as_raw_fd(), unix::unspecified_addr()).unwrap();
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let mut buf = [0; 16];
+    assert_eq!(recv(a.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
+    assert_eq!(buf[..4], *b"cdef");
+
+    assert_eq!(epoll_b.wait(&mut events, PollTimeout::ZERO), Ok(0));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLOUT, 1));
+    assert_eq!(epoll_c.wait(&mut events, PollTimeout::ZERO), Ok(0));
 }
 
 #[test]

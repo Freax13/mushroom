@@ -1477,7 +1477,15 @@ fn socket(
                 r#type,
                 no_file_limit,
             )?,
-            SocketType::Dgram | SocketType::Raw => bail!(NoSys),
+            SocketType::Dgram | SocketType::Raw => fdtable.insert(
+                DgramUnixSocket::new(
+                    r#type.flags,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
+                ),
+                r#type,
+                no_file_limit,
+            )?,
             SocketType::Seqpacket => todo!(),
         },
         Domain::Inet | Domain::Inet6 => {
