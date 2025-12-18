@@ -1,8 +1,18 @@
-use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
+use alloc::{
+    boxed::Box,
+    collections::{
+        VecDeque,
+        btree_map::{BTreeMap, Entry},
+    },
+    format,
+    sync::{Arc, Weak},
+    vec,
+    vec::Vec,
+};
 use core::cmp;
 
 use async_trait::async_trait;
-use futures::future;
+use usize_conversions::usize_from;
 
 use crate::{
     error::{Result, bail, ensure, err},
@@ -10,10 +20,10 @@ use crate::{
         FileSystem,
         fd::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
-            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
+            OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
-        node::{FileAccessContext, new_ino},
+        node::{FileAccessContext, lookup_and_resolve_link, new_ino},
         ownership::Ownership,
         path::Path,
     },
@@ -34,71 +44,99 @@ use crate::{
     },
 };
 
+static ABSTRACT_SOCKETS: Mutex<BTreeMap<Vec<u8>, Weak<OpenFileDescriptionData<DgramUnixSocket>>>> =
+    Mutex::new(BTreeMap::new());
+
 pub struct DgramUnixSocket {
+    this: Weak<OpenFileDescriptionData<Self>>,
     ino: u64,
+    addr: Arc<Mutex<Option<SocketAddrUnix>>>,
     internal: Mutex<DgramUnixSocketInternal>,
-    write_half: WriteHalf,
-    read_half: ReadHalf,
+    notify: Notify,
     bsd_file_lock: BsdFileLock,
 }
 
 struct DgramUnixSocketInternal {
     flags: OpenFlags,
     ownership: Ownership,
+    connection: Option<Connection>,
+    packets: VecDeque<Packet>,
+    read_counter: EventCounter,
+    write_counter: EventCounter,
 }
 
 impl DgramUnixSocket {
-    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
-        let buffer1 = Arc::new(Buffer::new());
-        let buffer2 = Arc::new(Buffer::new());
-
-        let read_half1 = ReadHalf {
-            buffer: buffer1.clone(),
-        };
-        let read_half2 = ReadHalf {
-            buffer: buffer2.clone(),
-        };
-
-        let write_half1 = WriteHalf { buffer: buffer2 };
-        let write_half2 = WriteHalf { buffer: buffer1 };
-
-        (
-            Self {
-                ino: new_ino(),
-                internal: Mutex::new(DgramUnixSocketInternal {
-                    flags,
-                    ownership: Ownership::new(
-                        FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        uid,
-                        gid,
-                    ),
-                }),
-                write_half: write_half1,
-                read_half: read_half1,
-                bsd_file_lock: BsdFileLock::anonymous(),
-            },
-            Self {
-                ino: new_ino(),
-                internal: Mutex::new(DgramUnixSocketInternal {
-                    flags,
-                    ownership: Ownership::new(
-                        FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        uid,
-                        gid,
-                    ),
-                }),
-                write_half: write_half2,
-                read_half: read_half2,
-                bsd_file_lock: BsdFileLock::anonymous(),
-            },
-        )
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(flags: OpenFlags, uid: Uid, gid: Gid) -> StrongFileDescriptor {
+        StrongFileDescriptor::new_cyclic(|this| Self {
+            this: this.clone(),
+            ino: new_ino(),
+            addr: Arc::new(Mutex::new(None)),
+            internal: Mutex::new(DgramUnixSocketInternal {
+                flags,
+                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                connection: None,
+                packets: VecDeque::new(),
+                read_counter: EventCounter::new(),
+                write_counter: EventCounter::new(),
+            }),
+            notify: Notify::new(),
+            bsd_file_lock: BsdFileLock::anonymous(),
+        })
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let data = self.read_half.read()?;
-        let len = cmp::min(data.len(), buf.buffer_len());
-        buf.write(0, &data[..len])?;
-        Ok(len)
+    pub fn new_pair(
+        flags: OpenFlags,
+        uid: Uid,
+        gid: Gid,
+    ) -> (StrongFileDescriptor, StrongFileDescriptor) {
+        // Create two sockets.
+        let (fd1, socket1) = StrongFileDescriptor::new_cyclic_with_data(|this| Self {
+            this: this.clone(),
+            ino: new_ino(),
+            addr: Arc::new(Mutex::new(None)),
+            internal: Mutex::new(DgramUnixSocketInternal {
+                flags,
+                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                connection: None,
+                packets: VecDeque::new(),
+                read_counter: EventCounter::new(),
+                write_counter: EventCounter::new(),
+            }),
+            notify: Notify::new(),
+            bsd_file_lock: BsdFileLock::anonymous(),
+        });
+        let (fd2, socket2) = StrongFileDescriptor::new_cyclic_with_data(|this| Self {
+            this: this.clone(),
+            ino: new_ino(),
+            addr: Arc::new(Mutex::new(None)),
+            internal: Mutex::new(DgramUnixSocketInternal {
+                flags,
+                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                connection: None,
+                packets: VecDeque::new(),
+                read_counter: EventCounter::new(),
+                write_counter: EventCounter::new(),
+            }),
+            notify: Notify::new(),
+            bsd_file_lock: BsdFileLock::anonymous(),
+        });
+
+        // Connect the two sockets.
+        let socket1_weak = Arc::downgrade(&socket1);
+        let socket2_weak = Arc::downgrade(&socket2);
+        socket1.internal.lock().connection = Some(Connection {
+            remote_addr: socket2.addr.clone(),
+            socket: socket2_weak,
+            reset: false,
+        });
+        socket2.internal.lock().connection = Some(Connection {
+            remote_addr: socket1.addr.clone(),
+            socket: socket1_weak,
+            reset: false,
+        });
+
+        (fd1, fd2)
     }
 }
 
@@ -123,8 +161,133 @@ impl OpenFileDescription for DgramUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
+    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+        let SocketAddr::Unix(addr) = addr else {
+            bail!(Inval);
+        };
+
+        let mut guard = self.addr.lock();
+        match addr {
+            SocketAddrUnix::Pathname(_) => todo!(),
+            SocketAddrUnix::Unnamed => {
+                if guard.is_none() {
+                    // Auto-bind. Pick a 5-hexdigit abstract name and bind it.
+
+                    const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
+                    let mut candidates = HEX_DIGITS.iter().flat_map(|&a| {
+                        HEX_DIGITS.iter().flat_map(move |&b| {
+                            HEX_DIGITS.iter().flat_map(move |&c| {
+                                HEX_DIGITS.iter().flat_map(move |&d| {
+                                    HEX_DIGITS.iter().map(move |&e| [a, b, c, d, e])
+                                })
+                            })
+                        })
+                    });
+
+                    let mut sockets_guard = ABSTRACT_SOCKETS.lock();
+                    let name = candidates
+                        .find(|name| !sockets_guard.contains_key(name.as_slice()))
+                        .ok_or(err!(AddrInUse))?;
+                    sockets_guard.insert(name.to_vec(), self.this.clone());
+                    drop(sockets_guard);
+
+                    let addr = SocketAddrUnix::Abstract(name.to_vec());
+                    *guard = Some(addr);
+                }
+            }
+            SocketAddrUnix::Abstract(name) => {
+                ensure!(guard.is_none(), Inval);
+
+                let mut sockets_guard = ABSTRACT_SOCKETS.lock();
+                let entry = sockets_guard.entry(name.clone());
+                match entry {
+                    Entry::Vacant(entry) => {
+                        entry.insert(self.this.clone());
+                    }
+                    Entry::Occupied(mut entry) => {
+                        ensure!(entry.get().strong_count() == 0, AddrInUse);
+                        entry.insert(self.this.clone());
+                    }
+                }
+                drop(sockets_guard);
+
+                let addr = SocketAddrUnix::Abstract(name);
+                *guard = Some(addr);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let old_connected_socket = guard.connection.as_ref().map(|conn| conn.socket.clone());
+        match addr {
+            SocketAddr::Unspecified => {
+                guard.connection.take();
+            }
+            SocketAddr::Unix(addr) => {
+                let new_socket = match addr {
+                    SocketAddrUnix::Pathname(path) => {
+                        let _link =
+                            lookup_and_resolve_link(ctx.process().unwrap().cwd(), &path, ctx)?;
+                        todo!("{path:?}")
+                    }
+                    SocketAddrUnix::Unnamed => todo!(),
+                    SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
+                        .lock()
+                        .get(&name)
+                        .and_then(Weak::upgrade)
+                        .ok_or(err!(ConnRefused))?,
+                };
+
+                // Don't do anything if the new socket matches an existing connection.
+                if guard.connection.as_ref().is_some_and(|conn| {
+                    core::ptr::addr_eq(conn.socket.as_ptr(), Arc::as_ptr(&new_socket))
+                }) {
+                    return Ok(());
+                }
+
+                let mut other_guard = new_socket.internal.lock();
+                if let Some(connection) = other_guard.connection.as_mut() {
+                    ensure!(Weak::ptr_eq(&self.this, &connection.socket), Perm);
+                    connection.reset = false;
+                }
+                drop(other_guard);
+
+                guard.connection = Some(Connection {
+                    remote_addr: new_socket.addr.clone(),
+                    socket: Arc::downgrade(&new_socket),
+                    reset: false,
+                });
+            }
+            _ => bail!(Inval),
+        }
+        let had_packets = !guard.packets.is_empty();
+        if old_connected_socket.is_some() {
+            guard.packets.clear();
+            guard.write_counter.inc();
+        }
+        drop(guard);
+
+        self.notify.notify();
+
+        if had_packets
+            && let Some(old_connection) = old_connected_socket.and_then(|weak| weak.upgrade())
+        {
+            let mut guard = old_connection.internal.lock();
+            if let Some(connection) = guard.connection.as_mut()
+                && Weak::ptr_eq(&self.this, &connection.socket)
+            {
+                connection.reset = true;
+            }
+        }
+
+        Ok(())
+    }
+
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read(buf)
+        self.recv_from(buf, RecvFromFlags::empty()).map(|(n, _)| n)
     }
 
     fn recv_from(
@@ -136,8 +299,25 @@ impl OpenFileDescription for DgramUnixSocket {
             todo!()
         }
 
-        let len = self.read(buf)?;
-        Ok((len, None))
+        let packet = self
+            .internal
+            .lock()
+            .packets
+            .pop_front()
+            .ok_or(err!(Again))?;
+        let len = cmp::min(packet.data.len(), buf.buffer_len());
+        buf.write(0, &packet.data[..len])?;
+
+        let addr = packet.sender_addr.lock().clone().map(SocketAddr::Unix);
+
+        if let Some(other) = packet.connection_end.upgrade() {
+            let mut guard = other.internal.lock();
+            guard.write_counter.inc();
+            drop(guard);
+            other.notify.notify();
+        }
+
+        Ok((len, addr))
     }
 
     fn recv_msg(
@@ -153,19 +333,23 @@ impl OpenFileDescription for DgramUnixSocket {
         ensure!(msg_hdr.flags == 0, Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = self.read(&mut vectored_buf)?;
+        let (n, addr) = self.recv_from(&mut vectored_buf, RecvFromFlags::empty())?;
+
+        if msg_hdr.namelen != 0 {
+            if let Some(addr) = addr {
+                msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
+            } else {
+                msg_hdr.namelen = 0;
+            }
+        }
 
         msg_hdr.controllen = 0;
 
-        Ok(len)
+        Ok(n)
     }
 
-    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        let len = buf.buffer_len();
-        let mut bytes = vec![0; len];
-        buf.read(0, &mut bytes)?;
-        self.write_half.write(Box::from(bytes));
-        Ok(len)
+    fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
+        self.send_to(buf, SentToFlags::empty(), None, ctx)
     }
 
     fn send_to(
@@ -173,15 +357,58 @@ impl OpenFileDescription for DgramUnixSocket {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
-        ctx: &FileAccessContext,
+        _: &FileAccessContext,
     ) -> Result<usize> {
-        ensure!(addr.is_none(), IsConn);
-
         if flags != SentToFlags::empty() {
             todo!()
         }
 
-        self.write(buf, ctx)
+        let len = buf.buffer_len();
+        let mut bytes = vec![0; len];
+        buf.read(0, &mut bytes)?;
+        let data = Box::from(bytes);
+
+        let mut packet = Packet {
+            data,
+            sender_addr: self.addr.clone(),
+            connection_end: Weak::new(),
+        };
+
+        let destination = if let Some(addr) = addr {
+            let SocketAddr::Unix(addr) = addr else {
+                bail!(Inval);
+            };
+            match addr {
+                SocketAddrUnix::Pathname(_) => todo!(),
+                SocketAddrUnix::Unnamed => bail!(Inval),
+                SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
+                    .lock()
+                    .get(&name)
+                    .and_then(Weak::upgrade)
+                    .ok_or(err!(ConnRefused))?,
+            }
+        } else {
+            let guard = self.internal.lock();
+            let connection = guard.connection.as_ref().ok_or(err!(NotConn))?;
+            ensure!(!connection.reset, ConnReset);
+            packet.connection_end = self.this.clone();
+            connection.socket.upgrade().ok_or(err!(ConnRefused))?
+        };
+
+        let mut guard = destination.internal.lock();
+        // If the other socket is connected, make sure it's connected to this socket.
+        if let Some(connection) = guard.connection.as_ref() {
+            ensure!(Weak::ptr_eq(&self.this, &connection.socket), Perm);
+        }
+
+        // Append the packet.
+        guard.packets.push_back(packet);
+        guard.read_counter.inc();
+        drop(guard);
+
+        destination.notify.notify();
+
+        Ok(len)
     }
 
     fn send_msg(
@@ -189,44 +416,45 @@ impl OpenFileDescription for DgramUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
-        _: SendMsgFlags,
+        flags: SendMsgFlags,
         _: &FileDescriptorTable,
         ctx: &FileAccessContext,
     ) -> Result<usize> {
-        ensure!(msg_hdr.name.is_null(), IsConn);
-        ensure!(msg_hdr.namelen == 0, IsConn);
-
-        ensure!(msg_hdr.control.is_null(), IsConn);
-        ensure!(msg_hdr.controllen == 0, IsConn);
-
-        if msg_hdr.flags != 0 {
+        if flags != SendMsgFlags::empty() {
             todo!()
         }
+        if msg_hdr.controllen != 0 {
+            todo!()
+        }
+        if msg_hdr.flags != 0 {
+            todo!();
+        }
+
+        let addr = if msg_hdr.namelen != 0 {
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
+        } else {
+            None
+        };
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.write(&vectored_buf, ctx)
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
         let mut ready_events = Events::empty();
-        ready_events.set(
-            Events::READ,
-            !self.read_half.buffer.internal.lock().packets.is_empty(),
-        );
+        ready_events.set(Events::READ, !self.internal.lock().packets.is_empty());
         ready_events.set(Events::WRITE, true);
         NonEmptyEvents::new(ready_events & events)
     }
 
     async fn ready(&self, events: Events, ctx: &FileAccessContext) -> NonEmptyEvents {
-        let mut read_wait = self.read_half.buffer.notify.wait();
-        let mut write_wait = self.write_half.buffer.notify.wait();
-        loop {
-            let events = self.poll_ready(events, ctx);
-            if let Some(events) = events {
-                return events;
-            }
-            future::select(read_wait.next(), write_wait.next()).await;
-        }
+        self.notify
+            .wait_until(|| self.poll_ready(events, ctx))
+            .await
     }
 
     fn epoll_ready(
@@ -237,11 +465,23 @@ impl OpenFileDescription for DgramUnixSocket {
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {
-        Ok(SocketAddr::Unix(SocketAddrUnix::Unnamed))
+        let addr = self.addr.lock().clone();
+        let addr = addr.unwrap_or(SocketAddrUnix::Unnamed);
+        Ok(SocketAddr::Unix(addr))
     }
 
     fn get_peer_name(&self) -> Result<SocketAddr> {
-        Ok(SocketAddr::Unix(SocketAddrUnix::Unnamed))
+        let addr = self
+            .internal
+            .lock()
+            .connection
+            .as_ref()
+            .ok_or(err!(NotConn))?
+            .remote_addr
+            .clone();
+        let addr = addr.lock().clone();
+        let addr = addr.unwrap_or(SocketAddrUnix::Unnamed);
+        Ok(SocketAddr::Unix(addr))
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
@@ -283,81 +523,32 @@ impl OpenFileDescription for DgramUnixSocket {
 #[async_trait]
 impl EpollReady for DgramUnixSocket {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        Notify::zip_epoll_loop(
-            req,
-            &self.read_half.buffer.notify,
-            || {
+        self.notify
+            .epoll_loop(req, || {
                 let mut result = EpollResult::new();
-                let guard = self.read_half.buffer.internal.lock();
+                let guard = self.internal.lock();
                 if !guard.packets.is_empty() {
                     result.set_ready(Events::READ);
                 }
-                result.add_counter(Events::READ, &guard.read_counter);
-                result
-            },
-            &self.write_half.buffer.notify,
-            || {
-                let mut result = EpollResult::new();
-                let guard = self.write_half.buffer.internal.lock();
                 result.set_ready(Events::WRITE);
+                result.add_counter(Events::READ, &guard.read_counter);
                 result.add_counter(Events::WRITE, &guard.write_counter);
-                drop(guard);
                 result
-            },
-        )
-        .await
+            })
+            .await
     }
 }
 
-struct Buffer {
-    internal: Mutex<BufferInternal>,
-    notify: Notify,
+struct Connection {
+    remote_addr: Arc<Mutex<Option<SocketAddrUnix>>>,
+    socket: Weak<OpenFileDescriptionData<DgramUnixSocket>>,
+    reset: bool,
 }
 
-struct BufferInternal {
-    packets: VecDeque<Box<[u8]>>,
-    read_counter: EventCounter,
-    write_counter: EventCounter,
-}
-
-impl Buffer {
-    fn new() -> Self {
-        Self {
-            internal: Mutex::new(BufferInternal {
-                packets: VecDeque::new(),
-                read_counter: EventCounter::new(),
-                write_counter: EventCounter::new(),
-            }),
-            notify: Notify::new(),
-        }
-    }
-}
-
-struct ReadHalf {
-    buffer: Arc<Buffer>,
-}
-
-impl ReadHalf {
-    fn read(&self) -> Result<Box<[u8]>> {
-        let mut guard = self.buffer.internal.lock();
-        let packet = guard.packets.pop_front().ok_or(err!(Again))?;
-        guard.write_counter.inc();
-        drop(guard);
-        self.buffer.notify.notify();
-        Ok(packet)
-    }
-}
-
-struct WriteHalf {
-    buffer: Arc<Buffer>,
-}
-
-impl WriteHalf {
-    fn write(&self, data: Box<[u8]>) {
-        let mut guard = self.buffer.internal.lock();
-        guard.packets.push_back(data);
-        guard.read_counter.inc();
-        drop(guard);
-        self.buffer.notify.notify();
-    }
+struct Packet {
+    data: Box<[u8]>,
+    sender_addr: Arc<Mutex<Option<SocketAddrUnix>>>,
+    /// A weak pointer to the socket that send the packet iff that socket was
+    /// connected to the receiver
+    connection_end: Weak<OpenFileDescriptionData<DgramUnixSocket>>,
 }
