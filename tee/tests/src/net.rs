@@ -22,6 +22,8 @@ use nix::{
     unistd::close,
 };
 
+mod multicast;
+
 fn bind(addr: Ipv4Addr, port: u16, reuse_addr: bool, reuse_port: bool) -> Result<OwnedFd> {
     let sock = socket::socket(
         AddressFamily::Inet,
