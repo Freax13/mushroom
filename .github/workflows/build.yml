@@ -185,6 +185,7 @@ jobs:
           - tinysparql
           - pulseaudio
           - ell
+          - gssdp
         tee:
           - snp
           - tdx
