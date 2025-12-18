@@ -43,6 +43,8 @@ struct SeqPacketUnixSocketInternal {
 
 impl SeqPacketUnixSocket {
     pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
+        let flags = flags | OpenFlags::RDWR;
+
         let state1 = Arc::new(Mutex::new(State::new()));
         let state2 = Arc::new(Mutex::new(State::new()));
 
