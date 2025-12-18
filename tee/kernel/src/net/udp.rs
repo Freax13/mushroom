@@ -39,9 +39,10 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, PktInfo, PktInfo6,
-                Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr,
-                SocketType, SocketTypeWithFlags, Stat, Timespec, pointee::SizedPointee,
+                CmsgHdr, FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr,
+                OpenFlags, PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
+                SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
+                pointee::SizedPointee,
             },
             traits::Abi,
         },
@@ -53,6 +54,8 @@ const MAX_BUFFER_SIZE: usize = 65507;
 
 // TODO: Periodically clean up closed UDP sockets.
 static PORTS: Mutex<BTreeMap<u16, PortData>> = Mutex::new(BTreeMap::new());
+static MULTICAST_GROUPS: Mutex<BTreeMap<IpAddr, Vec<Weak<OpenFileDescriptionData<UdpSocket>>>>> =
+    Mutex::new(BTreeMap::new());
 
 #[derive(Default)]
 struct PortData {
@@ -488,6 +491,23 @@ impl UdpSocket {
         drop(guard);
         self.rx_notify.notify();
     }
+
+    fn join_multicast_group(&self, group: IpAddr) -> Result<()> {
+        ensure!(group.is_multicast(), Inval);
+
+        let mut guard = MULTICAST_GROUPS.lock();
+        let sockets = guard.entry(group).or_default();
+        ensure!(
+            !sockets
+                .iter()
+                .any(|socket| Weak::ptr_eq(&self.this, socket)),
+            AddrInUse
+        );
+        sockets.push(self.this.clone());
+        drop(guard);
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -543,7 +563,6 @@ impl OpenFileDescription for UdpSocket {
         optval: Pointer<[u8]>,
         optlen: i32,
     ) -> Result<()> {
-        let mut guard = self.internal.lock();
         match (level, optname) {
             (0, 2) => Ok(()), // IP_TTL
             (0, 6) => Ok(()), // IP_RECVOPTS
@@ -551,6 +570,7 @@ impl OpenFileDescription for UdpSocket {
                 // IP_PKTINFO
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
                 guard.ipv4_pktinfo = optval;
                 Ok(())
             }
@@ -559,6 +579,7 @@ impl OpenFileDescription for UdpSocket {
                 // IP_RECVERR
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
                 guard.ip_recverr = optval;
                 Ok(())
             }
@@ -579,10 +600,28 @@ impl OpenFileDescription for UdpSocket {
             }
             (0, 33) => Ok(()), // IP_MULTICAST_TTL
             (0, 34) => Ok(()), // IP_MULTICAST_LOOP
+            (0, 35) => {
+                // IP_ADD_MEMBERSHIP
+                match optlen {
+                    8 => {
+                        let ip_mreqn =
+                            virtual_memory.read_with_abi::<IpMreq, _>(optval.cast(), abi)?;
+                        self.join_multicast_group(IpAddr::V4(ip_mreqn.multiaddr))?;
+                    }
+                    12 => {
+                        let ip_mreqn =
+                            virtual_memory.read_with_abi::<IpMreqn, _>(optval.cast(), abi)?;
+                        self.join_multicast_group(IpAddr::V4(ip_mreqn.multiaddr))?;
+                    }
+                    _ => bail!(Inval),
+                }
+                Ok(())
+            }
             (1, 2) => {
                 // SO_REUSEADDR
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
                 guard.reuse_addr = optval;
                 Ok(())
             }
@@ -593,6 +632,7 @@ impl OpenFileDescription for UdpSocket {
                 let optval = virtual_memory.read(optval.cast::<i32>())?;
                 let new_send_buffer_size = optval as usize * 2;
                 let new_send_buffer_size = cmp::max(new_send_buffer_size, 2048); // 2048 is the minimum
+                let mut guard = self.internal.lock();
                 guard.send_buffer_size = new_send_buffer_size;
                 Ok(())
             }
@@ -602,6 +642,7 @@ impl OpenFileDescription for UdpSocket {
                 let optval = virtual_memory.read(optval.cast::<i32>())?;
                 let new_receive_buffer_size = optval as usize * 2;
                 let new_receive_buffer_size = cmp::max(new_receive_buffer_size, 2048); // 2048 is the minimum
+                let mut guard = self.internal.lock();
                 guard.receive_buffer_size = new_receive_buffer_size;
                 Ok(())
             }
@@ -609,6 +650,7 @@ impl OpenFileDescription for UdpSocket {
                 // SO_REUSEPORT
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
                 guard.reuse_port = optval;
                 Ok(())
             }
@@ -616,11 +658,19 @@ impl OpenFileDescription for UdpSocket {
             (41, 17) => Ok(()), // IPV6_MULTICAST_IF
             (41, 18) => Ok(()), // IPV6_MULTICAST_HOPS
             (41, 19) => Ok(()), // IPV6_MULTICAST_LOOP
+            (41, 20) => {
+                // IPV6_ADD_MEMBERSHIP
+                ensure!(optlen == 20, Inval);
+                let ip_mreqn = virtual_memory.read_with_abi::<Ipv6Mreq, _>(optval.cast(), abi)?;
+                self.join_multicast_group(IpAddr::V6(ip_mreqn.multiaddr))?;
+                Ok(())
+            }
             (41, 26) => {
                 // IPV6_V6ONLY
                 ensure!(optlen == 4, Inval);
                 ensure!(self.ip_version == IpVersion::V6, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
                 guard.v6only = optval;
                 Ok(())
             }
@@ -628,6 +678,7 @@ impl OpenFileDescription for UdpSocket {
                 // IPV6_RECVPKTINFO
                 ensure!(optlen == 4, Inval);
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
                 guard.ipv6_pktinfo = optval;
                 Ok(())
             }

@@ -29,12 +29,12 @@ use crate::{
         syscall::{
             args::{
                 CmsgHdr, ControlMode, Domain, FdNum, FileMode, Flock, FlockType, FlockWhence,
-                ITimerspec, ITimerval, InputMode, Iovec, Linger, LinuxDirent64, LocalMode,
-                LongOffset, MMsgHdr, MsgHdr, Offset, OpenFlags, OpenHow, OutputMode,
-                PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit, ResolveFlags, Rusage,
-                SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat,
-                SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserCapData,
-                UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                ITimerspec, ITimerval, InputMode, Iovec, IpMreq, IpMreqn, Ipv6Mreq, Linger,
+                LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OpenFlags, OpenHow,
+                OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit, ResolveFlags,
+                Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
+                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
+                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -3076,5 +3076,76 @@ impl TryFrom<RawOpenHow> for OpenHow {
             mode: FileMode::from_bits_truncate(value.mode),
             resolve: ResolveFlags::from_bits(value.resolve).ok_or(err!(Inval))?,
         })
+    }
+}
+
+impl Pointee for IpMreq {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for IpMreq {
+    type I386 = RawIpMreq;
+    type Amd64 = RawIpMreq;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawIpMreq {
+    multiaddr: RawIpv4Addr,
+    address: RawIpv4Addr,
+}
+
+impl From<RawIpMreq> for IpMreq {
+    fn from(value: RawIpMreq) -> Self {
+        Self {
+            multiaddr: Ipv4Addr::from(value.multiaddr),
+            address: Ipv4Addr::from(value.address),
+        }
+    }
+}
+
+impl Pointee for IpMreqn {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for IpMreqn {
+    type I386 = RawIpMreqn;
+    type Amd64 = RawIpMreqn;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawIpMreqn {
+    multiaddr: RawIpv4Addr,
+    address: RawIpv4Addr,
+    ifindex: i32,
+}
+
+impl From<RawIpMreqn> for IpMreqn {
+    fn from(value: RawIpMreqn) -> Self {
+        Self {
+            multiaddr: Ipv4Addr::from(value.multiaddr),
+            address: Ipv4Addr::from(value.address),
+            ifindex: value.ifindex,
+        }
+    }
+}
+
+impl Pointee for Ipv6Mreq {}
+// TODO: Not actually abi dependent
+impl AbiDependentPointee for Ipv6Mreq {
+    type I386 = RawIpv6Mreq;
+    type Amd64 = RawIpv6Mreq;
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawIpv6Mreq {
+    multiaddr: [u8; 16],
+    ifindex: i32,
+}
+
+impl From<RawIpv6Mreq> for Ipv6Mreq {
+    fn from(value: RawIpv6Mreq) -> Self {
+        Self {
+            multiaddr: Ipv6Addr::from_bits(u128::from_be_bytes(value.multiaddr)),
+            ifindex: value.ifindex,
+        }
     }
 }

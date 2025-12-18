@@ -2563,3 +2563,26 @@ bitflags! {
         const IN_ROOT = 1 << 4;
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct IpMreq {
+    pub multiaddr: Ipv4Addr,
+    #[expect(dead_code)]
+    pub address: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IpMreqn {
+    pub multiaddr: Ipv4Addr,
+    #[expect(dead_code)]
+    pub address: Ipv4Addr,
+    #[expect(dead_code)]
+    pub ifindex: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Ipv6Mreq {
+    pub multiaddr: Ipv6Addr,
+    #[expect(dead_code)]
+    pub ifindex: i32,
+}
