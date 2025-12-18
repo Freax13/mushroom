@@ -99,8 +99,8 @@ impl SeqPacketUnixSocket {
         )
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let Some(data) = self.read_half.read()? else {
+    fn read(&self, buf: &mut dyn ReadBuf, peek: bool) -> Result<usize> {
+        let Some(data) = self.read_half.read(peek)? else {
             return Ok(0);
         };
         let len = cmp::min(data.len(), buf.buffer_len());
@@ -131,7 +131,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read(buf)
+        self.read(buf, false)
     }
 
     fn recv_from(
@@ -139,11 +139,12 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) || flags.contains(RecvFromFlags::WAITALL) {
+        if flags.contains(RecvFromFlags::WAITALL) {
             todo!()
         }
 
-        let len = self.read(buf)?;
+        let peek = flags.contains(RecvFromFlags::PEEK);
+        let len = self.read(buf, peek)?;
         Ok((len, None))
     }
 
@@ -291,9 +292,14 @@ struct ReadHalf {
 }
 
 impl ReadHalf {
-    fn read(&self) -> Result<Option<Box<[u8]>>> {
+    fn read(&self, peek: bool) -> Result<Option<Box<[u8]>>> {
         let mut guard = self.state.lock();
-        if let Some(packet) = guard.packets.pop_front() {
+        let packet = if peek {
+            guard.packets.front().cloned()
+        } else {
+            guard.packets.pop_front()
+        };
+        if let Some(packet) = packet {
             guard.write_counter.inc();
             self.notify.notify();
             return Ok(Some(packet));
