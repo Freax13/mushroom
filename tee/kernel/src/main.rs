@@ -8,21 +8,17 @@
     btree_cursors,
     cfg_sanitize,
     core_intrinsics,
-    drain_keep_rest,
     generic_const_exprs,
-    int_roundings,
     ip_as_octets,
     linked_list_cursors,
     maybe_uninit_array_assume_init,
     maybe_uninit_as_bytes,
-    maybe_uninit_slice,
     maybe_uninit_uninit_array_transpose,
     pointer_is_aligned_to,
     ptr_metadata,
     slice_ptr_get,
     step_trait,
     sync_unsafe_cell,
-    try_trait_v2,
     vec_split_at_spare
 )]
 #![forbid(unsafe_op_in_unsafe_fn)]
