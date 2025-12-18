@@ -3,14 +3,15 @@ use core::cmp;
 
 use async_trait::async_trait;
 use futures::future;
+use usize_conversions::usize_from;
 
 use crate::{
     error::{Result, bail, ensure},
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
-            ReadBuf, WriteBuf,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
@@ -20,9 +21,13 @@ use crate::{
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::{
-        syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SentToFlags, SocketAddr,
-            Stat, Timespec,
+        memory::VirtualMemory,
+        syscall::{
+            args::{
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
@@ -172,6 +177,39 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         }
 
         self.write(buf, ctx)
+    }
+
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        flags: SendMsgFlags,
+        _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
+        if flags != SendMsgFlags::empty() {
+            todo!()
+        }
+        if msg_hdr.controllen != 0 {
+            todo!()
+        }
+        if msg_hdr.flags != 0 {
+            todo!();
+        }
+
+        let addr = if msg_hdr.namelen != 0 {
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
+        } else {
+            None
+        };
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
