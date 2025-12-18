@@ -10,7 +10,7 @@ use nix::{
     cmsg_space,
     errno::Errno,
     fcntl::OFlag,
-    libc::{AF_UNSPEC, sockaddr},
+    libc::{__c_anonymous_ifr_ifru, AF_UNSPEC, Ioctl, SIOCGIFINDEX, ifreq, ioctl, sockaddr},
     sys::{
         eventfd::EventFd,
         socket::{
@@ -2288,4 +2288,51 @@ fn dgram_bind_bind_connect_sendto_sendto_recv_recv() {
     assert_eq!(buf[..4], *b"1234");
     assert_eq!(recv(b.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(4));
     assert_eq!(buf[..4], *b"5678");
+}
+
+#[test]
+fn dgram_ifindex_lo() {
+    let a = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    let mut ifreq = ifreq {
+        ifr_name: [0; _],
+        ifr_ifru: __c_anonymous_ifr_ifru { ifru_ifindex: 0 },
+    };
+    for (val, dest) in b"lo".iter().copied().zip(ifreq.ifr_name.iter_mut()) {
+        *dest = val as i8;
+    }
+    let res = unsafe { ioctl(a.as_raw_fd(), SIOCGIFINDEX as Ioctl, &mut ifreq) };
+    assert_eq!(Errno::result(res), Ok(0));
+    assert_eq!(unsafe { ifreq.ifr_ifru.ifru_ifindex }, 1);
+}
+
+#[test]
+fn dgram_ifindex_unknown() {
+    let a = socket(
+        AddressFamily::Unix,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    let mut ifreq = ifreq {
+        ifr_name: [0; _],
+        ifr_ifru: __c_anonymous_ifr_ifru { ifru_ifindex: 0 },
+    };
+    for (val, dest) in b"unknown-iface"
+        .iter()
+        .copied()
+        .zip(ifreq.ifr_name.iter_mut())
+    {
+        *dest = val as i8;
+    }
+    let res = unsafe { ioctl(a.as_raw_fd(), SIOCGIFINDEX as Ioctl, &mut ifreq) };
+    assert_eq!(Errno::result(res), Err(Errno::ENODEV));
 }
