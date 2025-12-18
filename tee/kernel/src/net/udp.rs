@@ -341,7 +341,35 @@ impl UdpSocket {
         ensure!(len <= MAX_BUFFER_SIZE, MsgSize);
         let mut bytes = vec![0; len];
         buf.read(0, &mut bytes)?;
-        let bytes = Box::<[u8]>::from(bytes);
+        let bytes = Arc::<[u8]>::from(bytes);
+
+        if peername.ip().is_multicast() {
+            let mut guard = MULTICAST_GROUPS.lock();
+            if let Some(sockets) = guard.get_mut(&peername.ip()) {
+                sockets.retain(|socket| socket.strong_count() > 0);
+                for socket in sockets.iter().filter_map(Weak::upgrade) {
+                    let mut socket_guard = socket.internal.lock();
+                    // Skip all sockets bound to different ports.
+                    if socket_guard
+                        .socketname
+                        .is_none_or(|addr| addr.port() != peername.port())
+                    {
+                        continue;
+                    }
+
+                    // Queue a packet.
+                    socket_guard.rx.push_back(Packet {
+                        bytes: bytes.clone(),
+                        source,
+                        destination: canonical_peer_ip,
+                    });
+                    socket_guard.read_event_counter.inc();
+                    drop(socket_guard);
+
+                    socket.rx_notify.notify();
+                }
+            }
+        }
 
         let mut guard = PORTS.lock();
         let Some(data) = guard.get_mut(&peername.port()) else {
@@ -1033,7 +1061,7 @@ impl EpollReady for UdpSocket {
 }
 
 struct Packet {
-    bytes: Box<[u8]>,
+    bytes: Arc<[u8]>,
     source: net::SocketAddr,
     destination: IpAddr,
 }
