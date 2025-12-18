@@ -194,6 +194,7 @@ jobs:
           - release
     name: "External Test"
     runs-on: ${{ matrix.tee }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: "Run external tests"
