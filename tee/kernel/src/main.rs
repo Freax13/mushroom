@@ -15,7 +15,6 @@
     linked_list_cursors,
     maybe_uninit_array_assume_init,
     maybe_uninit_as_bytes,
-    maybe_uninit_slice,
     maybe_uninit_uninit_array_transpose,
     pointer_is_aligned_to,
     ptr_metadata,
