@@ -190,7 +190,9 @@ impl UdpSocket {
         // We only support binding to localhost -> make sure that the
         // address is a loopback address.
         ensure!(
-            socket_addr.ip().is_unspecified() || socket_addr.ip().is_loopback(),
+            socket_addr.ip().is_unspecified()
+                || socket_addr.ip().is_loopback()
+                || socket_addr.ip().is_multicast(),
             AddrNotAvail
         );
 
