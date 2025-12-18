@@ -484,13 +484,9 @@ impl OpenFileDescription for StreamUnixSocket {
                 let name = candidates
                     .find(|name| !guard.contains_key(name.as_slice()))
                     .ok_or(err!(AddrInUse))?;
-                let entry = guard.entry(name.to_vec());
-                let Entry::Vacant(entry) = entry else {
-                    bail!(AddrInUse);
-                };
                 let addr = SocketAddrUnix::Abstract(name.to_vec());
                 let weak = self.bind(addr)?;
-                entry.insert(weak);
+                guard.insert(name.to_vec(), weak);
                 Ok(())
             }
             SocketAddrUnix::Abstract(ref name) => {

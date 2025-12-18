@@ -3,14 +3,15 @@ use core::cmp;
 
 use async_trait::async_trait;
 use futures::future;
+use usize_conversions::usize_from;
 
 use crate::{
     error::{Result, bail, ensure},
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
-            ReadBuf, WriteBuf,
+            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, new_ino},
@@ -20,9 +21,13 @@ use crate::{
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::{
-        syscall::args::{
-            FileMode, FileType, FileTypeAndMode, OpenFlags, RecvFromFlags, SentToFlags, SocketAddr,
-            Stat, Timespec,
+        memory::VirtualMemory,
+        syscall::{
+            args::{
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+            },
+            traits::Abi,
         },
         thread::{Gid, Uid},
     },
@@ -43,6 +48,8 @@ struct SeqPacketUnixSocketInternal {
 
 impl SeqPacketUnixSocket {
     pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
+        let flags = flags | OpenFlags::RDWR;
+
         let state1 = Arc::new(Mutex::new(State::new()));
         let state2 = Arc::new(Mutex::new(State::new()));
 
@@ -99,8 +106,8 @@ impl SeqPacketUnixSocket {
         )
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf) -> Result<usize> {
-        let Some(data) = self.read_half.read()? else {
+    fn read(&self, buf: &mut dyn ReadBuf, peek: bool) -> Result<usize> {
+        let Some(data) = self.read_half.read(peek)? else {
             return Ok(0);
         };
         let len = cmp::min(data.len(), buf.buffer_len());
@@ -131,7 +138,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read(buf)
+        self.read(buf, false)
     }
 
     fn recv_from(
@@ -139,11 +146,12 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         buf: &mut dyn ReadBuf,
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) || flags.contains(RecvFromFlags::WAITALL) {
+        if flags.contains(RecvFromFlags::WAITALL) {
             todo!()
         }
 
-        let len = self.read(buf)?;
+        let peek = flags.contains(RecvFromFlags::PEEK);
+        let len = self.read(buf, peek)?;
         Ok((len, None))
     }
 
@@ -169,6 +177,39 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         }
 
         self.write(buf, ctx)
+    }
+
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        flags: SendMsgFlags,
+        _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
+        if flags != SendMsgFlags::empty() {
+            todo!()
+        }
+        if msg_hdr.controllen != 0 {
+            todo!()
+        }
+        if msg_hdr.flags != 0 {
+            todo!();
+        }
+
+        let addr = if msg_hdr.namelen != 0 {
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
+        } else {
+            None
+        };
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
@@ -291,9 +332,14 @@ struct ReadHalf {
 }
 
 impl ReadHalf {
-    fn read(&self) -> Result<Option<Box<[u8]>>> {
+    fn read(&self, peek: bool) -> Result<Option<Box<[u8]>>> {
         let mut guard = self.state.lock();
-        if let Some(packet) = guard.packets.pop_front() {
+        let packet = if peek {
+            guard.packets.front().cloned()
+        } else {
+            guard.packets.pop_front()
+        };
+        if let Some(packet) = packet {
             guard.write_counter.inc();
             self.notify.notify();
             return Ok(Some(packet));

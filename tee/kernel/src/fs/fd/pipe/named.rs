@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures::future;
 
 use crate::{
-    error::{Result, ensure},
+    error::{Result, bail, ensure},
     fs::{
         FileSystem,
         fd::{
@@ -247,6 +247,10 @@ impl OpenFileDescription for ReadHalf {
         self.read_half.read(buf, false, false)
     }
 
+    fn write(&self, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(BadF)
+    }
+
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
         self.link.node.chmod(mode, ctx)
     }
@@ -325,6 +329,10 @@ impl OpenFileDescription for WriteHalf {
 
     fn path(&self) -> Result<Path> {
         self.link.location.path()
+    }
+
+    fn read(&self, _: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(BadF)
     }
 
     fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {

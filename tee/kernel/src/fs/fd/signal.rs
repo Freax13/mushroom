@@ -105,11 +105,6 @@ impl OpenFileDescription for SignalFd {
         let thread = ctx.thread()?;
         let mut ready_events = Events::empty();
         let mask = self.internal.lock().mask;
-        log::debug!(
-            "thread.pending_signals()={:?} mask={:?}",
-            thread.pending_signals(),
-            mask
-        );
         ready_events.set(
             Events::READ,
             !((thread.pending_signals() | thread.process().pending_signals()) & mask).is_empty(),

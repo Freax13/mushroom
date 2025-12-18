@@ -3,7 +3,7 @@ use alloc::{boxed::Box, format, sync::Arc};
 use async_trait::async_trait;
 
 use crate::{
-    error::Result,
+    error::{Result, bail},
     fs::{
         FileSystem, StatFs,
         fd::{
@@ -86,6 +86,10 @@ impl OpenFileDescription for ReadHalf {
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         self.stream_buffer.read(buf, false, false)
+    }
+
+    fn write(&self, _: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(BadF)
     }
 
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
@@ -182,6 +186,10 @@ impl OpenFileDescription for WriteHalf {
 
     fn path(&self) -> Result<Path> {
         path(self.ino)
+    }
+
+    fn read(&self, _: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(BadF)
     }
 
     fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
