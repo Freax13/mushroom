@@ -9,7 +9,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::cmp;
+use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use usize_conversions::usize_from;
@@ -21,6 +21,7 @@ use crate::{
         fd::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
+            common_ioctl,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
         },
         node::{FileAccessContext, lookup_and_resolve_link, new_ino},
@@ -34,13 +35,13 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
                 RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat,
                 Timespec,
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 
@@ -482,6 +483,30 @@ impl OpenFileDescription for DgramUnixSocket {
         let addr = addr.lock().clone();
         let addr = addr.unwrap_or(SocketAddrUnix::Unnamed);
         Ok(SocketAddr::Unix(addr))
+    }
+
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
+        match cmd {
+            0x8933 => {
+                // SIOCGIFINDEX
+                let virtual_memory = thread.virtual_memory();
+                const IFNAMSIZ: usize = 16;
+                let ifname = virtual_memory.read(arg.cast::<[u8; IFNAMSIZ]>())?;
+                let index = match ifname {
+                    [b'l', b'o', 0, ..] => 1,
+                    _ => bail!(NoDev),
+                };
+                virtual_memory.write(arg.bytes_offset(IFNAMSIZ).cast(), index)?;
+                Ok(0)
+            }
+            _ => common_ioctl(self, thread, cmd, arg, abi),
+        }
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
