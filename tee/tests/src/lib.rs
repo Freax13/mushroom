@@ -2,6 +2,7 @@
 
 mod epoll;
 mod fs;
+mod memfd;
 mod net;
 mod pty;
 mod ready;
