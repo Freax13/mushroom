@@ -2410,6 +2410,15 @@ async fn fcntl(
             warn!("{cmd} not implemented");
             Ok(0)
         }
+        FcntlCmd::AddSeals => {
+            let seals = Seals::from_bits(arg).ok_or(err!(Inval))?;
+            fd.add_seals(seals)?;
+            Ok(0)
+        }
+        FcntlCmd::GetSeals => {
+            let seals = fd.get_seals().ok_or(err!(Inval))?;
+            Ok(seals.bits())
+        }
     }
 }
 

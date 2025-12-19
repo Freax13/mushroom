@@ -51,8 +51,9 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
-                InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
-                SentToFlags, SetTimeFlags, ShutdownHow, SocketAddr, Stat, Timespec, Whence,
+                InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, Seals,
+                SendMsgFlags, SentToFlags, SetTimeFlags, ShutdownHow, SocketAddr, Stat, Timespec,
+                Whence,
             },
             traits::Abi,
         },
@@ -1101,6 +1102,15 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(Inval)
     }
 
+    fn add_seals(&self, seals: Seals) -> Result<()> {
+        let _ = seals;
+        bail!(Inval)
+    }
+
+    fn get_seals(&self) -> Option<Seals> {
+        None
+    }
+
     fn ioctl(
         &self,
         thread: &mut ThreadGuard,
@@ -1705,4 +1715,31 @@ impl UnixLockOwner {
 pub enum UnixLockType {
     Read,
     Write,
+}
+
+pub struct SealSet {
+    seals: Seals,
+}
+
+impl SealSet {
+    pub fn new() -> Self {
+        Self {
+            seals: Seals::empty(),
+        }
+    }
+
+    pub fn add(&mut self, seals: Seals) -> Result<()> {
+        self.check_not_sealed(Seals::SEAL)?;
+        self.seals |= seals;
+        Ok(())
+    }
+
+    pub fn check_not_sealed(&self, seals: Seals) -> Result<()> {
+        ensure!(!self.seals.contains(seals), Perm);
+        Ok(())
+    }
+
+    pub fn get(&self) -> Seals {
+        self.seals
+    }
 }

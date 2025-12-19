@@ -1,4 +1,5 @@
 use alloc::{boxed::Box, ffi::CString, sync::Arc, vec::Vec};
+use core::cmp::Ordering;
 
 use async_trait::async_trait;
 use x86_64::structures::paging::{PageSize, Size4KiB};
@@ -7,7 +8,7 @@ use crate::{
     error::Result,
     fs::{
         FileSystem,
-        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription},
+        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, SealSet},
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -17,7 +18,7 @@ use crate::{
     user::{
         futex::Futexes,
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, MemfdCreateFlags, OpenFlags, Stat, Timespec,
+            FileMode, FileType, FileTypeAndMode, MemfdCreateFlags, OpenFlags, Seals, Stat, Timespec,
         },
         thread::{Gid, Uid},
     },
@@ -33,10 +34,16 @@ pub struct MemFd {
 struct InternalMemFd {
     ownership: Ownership,
     buffer: Buffer,
+    seals: SealSet,
 }
 
 impl MemFd {
-    pub fn new(name: CString, _: MemfdCreateFlags, ctx: &FileAccessContext) -> Self {
+    pub fn new(name: CString, flags: MemfdCreateFlags, ctx: &FileAccessContext) -> Self {
+        let mut seals = SealSet::new();
+        if !flags.contains(MemfdCreateFlags::ALLOW_SEALING) {
+            seals.add(Seals::SEAL).unwrap();
+        }
+
         Self {
             ino: new_ino(),
             name,
@@ -47,6 +54,7 @@ impl MemFd {
                     ctx.filesystem_group_id(),
                 ),
                 buffer: Buffer::new(),
+                seals,
             }),
             futexes: Arc::new(Futexes::new()),
         }
@@ -97,6 +105,13 @@ impl OpenFileDescription for MemFd {
 
     fn truncate(&self, length: usize, _: &FileAccessContext) -> Result<()> {
         let mut guard = self.internal.lock();
+
+        match length.cmp(&guard.buffer.len()) {
+            Ordering::Less => guard.seals.check_not_sealed(Seals::SHRINK)?,
+            Ordering::Equal => {}
+            Ordering::Greater => guard.seals.check_not_sealed(Seals::GROW)?,
+        }
+
         guard.buffer.truncate(length)
     }
 
@@ -107,6 +122,16 @@ impl OpenFileDescription for MemFd {
 
     fn futexes(&self) -> Option<Arc<Futexes>> {
         Some(self.futexes.clone())
+    }
+
+    fn add_seals(&self, seals: Seals) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard.seals.add(seals)
+    }
+
+    fn get_seals(&self) -> Option<Seals> {
+        let guard = self.internal.lock();
+        Some(guard.seals.get())
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
