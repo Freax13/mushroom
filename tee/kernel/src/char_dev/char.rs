@@ -464,6 +464,45 @@ impl OpenFileDescription for Pty {
                 self.data.internal.lock().termios = termios;
                 Ok(0)
             }
+            0x540b => {
+                // TCFLSH
+                let (flush_relative_input, flush_relative_output) = match arg.get().as_u64() {
+                    0 => {
+                        // TCIFLUSH
+                        (true, false)
+                    }
+                    1 => {
+                        // TCOFLUSH
+                        (false, true)
+                    }
+                    2 => {
+                        // TCIOFLUSH
+                        (true, true)
+                    }
+                    _ => bail!(Inval),
+                };
+                let flush_input_buffer = if self.master {
+                    flush_relative_output
+                } else {
+                    flush_relative_input
+                };
+                let flush_output_buffer = if self.master {
+                    flush_relative_input
+                } else {
+                    flush_relative_output
+                };
+
+                let mut guard = self.data.internal.lock();
+                if flush_input_buffer {
+                    guard.input_buffer.clear();
+                }
+                if flush_output_buffer {
+                    guard.output_buffer.clear();
+                }
+                drop(guard);
+
+                Ok(0)
+            }
             0x540e => {
                 // TIOCSCTTY
 
