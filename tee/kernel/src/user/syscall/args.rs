@@ -86,6 +86,7 @@ impl<'a> ThreadArg<'a> for &'a Arc<Thread> {
 macro_rules! bitflags {
     (pub struct $strukt:ident {
         $(
+            $(#[$inner:ident $($args:tt)*])*
             const $constant:ident = $expr:expr;
         )*
     }) => {
@@ -93,6 +94,7 @@ macro_rules! bitflags {
             #[derive(Debug, Clone, Copy, PartialEq, Eq)]
             pub struct $strukt: u64 {
                 $(
+                    $(#[$inner $($args)*])*
                     const $constant = $expr;
                 )*
             }
@@ -574,6 +576,8 @@ enum_arg! {
         OfdSetLk = 37,
         OfdSetLkW = 38,
         DupFdCloExec = 1030,
+        AddSeals = 1033,
+        GetSeals = 1034,
     }
 }
 
@@ -2405,7 +2409,7 @@ impl From<&FileAccessContext> for Ucred {
 bitflags! {
     pub struct MemfdCreateFlags {
         const CLOEXEC = 1 << 0;
-        // const ALLOW_SEALING = 1 << 1;
+        const ALLOW_SEALING = 1 << 1;
         // const HUGETLB = 1 << 2;
         // const NOEXEC_SEAL = 1 << 3;
         // const EXEC = 1 << 4;
@@ -2585,4 +2589,15 @@ pub struct Ipv6Mreq {
     pub multiaddr: Ipv6Addr,
     #[expect(dead_code)]
     pub ifindex: i32,
+}
+
+bitflags! {
+    pub struct Seals {
+        /// Prevent further seals from being set
+        const SEAL = 0x0001;
+        /// Prevent file from shrinking
+        const SHRINK = 0x0002;
+        /// Prevent file from growing
+        const GROW = 0x0004;
+    }
 }
