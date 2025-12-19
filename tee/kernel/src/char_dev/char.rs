@@ -96,6 +96,8 @@ impl CharDev for Ptmx {
                         master_closed: false,
                         slave_connected: false,
                         num_slaves: 0,
+                        master_exclusive_mode: false,
+                        slave_exclusive_mode: false,
                         termios: Termios::default(),
                         input_buffer: ArrayVec::new(),
                         output_buffer: ArrayVec::new(),
@@ -149,6 +151,9 @@ struct PtyDataInternal {
     slave_connected: bool,
     num_slaves: usize,
 
+    master_exclusive_mode: bool,
+    slave_exclusive_mode: bool,
+
     termios: Termios,
     input_buffer: ArrayVec<u8, 4095>,
     output_buffer: ArrayVec<u8, 4096>,
@@ -167,6 +172,7 @@ impl Pty {
         // Increment the reference count for the slave.
         let mut guard = data.internal.lock();
         ensure!(!guard.locked, Io);
+        ensure!(!guard.slave_exclusive_mode, Busy);
         guard.slave_connected = true;
         guard.num_slaves += 1;
         drop(guard);
@@ -503,6 +509,30 @@ impl OpenFileDescription for Pty {
 
                 Ok(0)
             }
+            0x540c => {
+                // TIOCEXCL
+                let mut guard = self.data.internal.lock();
+                if self.master {
+                    guard.master_exclusive_mode = true;
+                } else {
+                    guard.slave_exclusive_mode = true;
+                }
+                drop(guard);
+
+                Ok(0)
+            }
+            0x540d => {
+                // TIOCNXCL
+                let mut guard = self.data.internal.lock();
+                if self.master {
+                    guard.master_exclusive_mode = false;
+                } else {
+                    guard.slave_exclusive_mode = false;
+                }
+                drop(guard);
+
+                Ok(0)
+            }
             0x540e => {
                 // TIOCSCTTY
 
@@ -543,6 +573,22 @@ impl OpenFileDescription for Pty {
                     no_file_limit,
                 )?;
                 Ok(fd.get() as u64)
+            }
+            0x80045440 => {
+                // TIOCGEXCL
+                let guard = self.data.internal.lock();
+                let enabled = if self.master {
+                    guard.master_exclusive_mode
+                } else {
+                    guard.slave_exclusive_mode
+                };
+                drop(guard);
+
+                thread
+                    .virtual_memory()
+                    .write(arg.cast(), u32::from(enabled))?;
+
+                Ok(0)
             }
             _ => common_ioctl(self, thread, cmd, arg, abi),
         }
