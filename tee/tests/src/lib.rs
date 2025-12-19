@@ -3,6 +3,7 @@
 mod epoll;
 mod fs;
 mod net;
+mod pty;
 mod ready;
 mod unix;
 

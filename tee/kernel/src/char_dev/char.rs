@@ -96,6 +96,8 @@ impl CharDev for Ptmx {
                         master_closed: false,
                         slave_connected: false,
                         num_slaves: 0,
+                        master_exclusive_mode: false,
+                        slave_exclusive_mode: false,
                         termios: Termios::default(),
                         input_buffer: ArrayVec::new(),
                         output_buffer: ArrayVec::new(),
@@ -149,6 +151,9 @@ struct PtyDataInternal {
     slave_connected: bool,
     num_slaves: usize,
 
+    master_exclusive_mode: bool,
+    slave_exclusive_mode: bool,
+
     termios: Termios,
     input_buffer: ArrayVec<u8, 4095>,
     output_buffer: ArrayVec<u8, 4096>,
@@ -167,6 +172,7 @@ impl Pty {
         // Increment the reference count for the slave.
         let mut guard = data.internal.lock();
         ensure!(!guard.locked, Io);
+        ensure!(!guard.slave_exclusive_mode, Busy);
         guard.slave_connected = true;
         guard.num_slaves += 1;
         drop(guard);
@@ -242,15 +248,16 @@ impl OpenFileDescription for Pty {
                         .all(|c| !guard.is_line_end(c)),
             );
         } else {
-            ready_events.set(
-                Events::READ,
+            let input_available = if guard.termios.local_modes.contains(LocalMode::ICANON) {
                 guard
                     .input_buffer
                     .iter()
                     .copied()
                     .any(|c| guard.is_line_end(c))
-                    || guard.master_closed,
-            );
+            } else {
+                !guard.input_buffer.is_empty()
+            };
+            ready_events.set(Events::READ, input_available || guard.master_closed);
             ready_events.set(
                 Events::WRITE,
                 guard.output_buffer.len() < guard.output_buffer.capacity() - 1
@@ -464,6 +471,69 @@ impl OpenFileDescription for Pty {
                 self.data.internal.lock().termios = termios;
                 Ok(0)
             }
+            0x540b => {
+                // TCFLSH
+                let (flush_relative_input, flush_relative_output) = match arg.get().as_u64() {
+                    0 => {
+                        // TCIFLUSH
+                        (true, false)
+                    }
+                    1 => {
+                        // TCOFLUSH
+                        (false, true)
+                    }
+                    2 => {
+                        // TCIOFLUSH
+                        (true, true)
+                    }
+                    _ => bail!(Inval),
+                };
+                let flush_input_buffer = if self.master {
+                    flush_relative_output
+                } else {
+                    flush_relative_input
+                };
+                let flush_output_buffer = if self.master {
+                    flush_relative_input
+                } else {
+                    flush_relative_output
+                };
+
+                let mut guard = self.data.internal.lock();
+                if flush_input_buffer {
+                    guard.input_buffer.clear();
+                }
+                if flush_output_buffer {
+                    guard.output_buffer.clear();
+                }
+                drop(guard);
+
+                Ok(0)
+            }
+            0x540c => {
+                // TIOCEXCL
+                let mut guard = self.data.internal.lock();
+                if self.master {
+                    guard.master_exclusive_mode = true;
+                } else {
+                    guard.slave_exclusive_mode = true;
+                }
+                drop(guard);
+
+                Ok(0)
+            }
+            0x540d => {
+                // TIOCNXCL
+                let mut guard = self.data.internal.lock();
+                if self.master {
+                    guard.master_exclusive_mode = false;
+                } else {
+                    guard.slave_exclusive_mode = false;
+                }
+                drop(guard);
+
+                Ok(0)
+            }
             0x540e => {
                 // TIOCSCTTY
 
@@ -505,6 +575,22 @@ impl OpenFileDescription for Pty {
                 )?;
                 Ok(fd.get() as u64)
             }
+            0x80045440 => {
+                // TIOCGEXCL
+                let guard = self.data.internal.lock();
+                let enabled = if self.master {
+                    guard.master_exclusive_mode
+                } else {
+                    guard.slave_exclusive_mode
+                };
+                drop(guard);
+
+                thread
+                    .virtual_memory()
+                    .write(arg.cast(), u32::from(enabled))?;
+
+                Ok(0)
+            }
             _ => common_ioctl(self, thread, cmd, arg, abi),
         }
     }
@@ -541,13 +627,16 @@ impl EpollReady for Pty {
                         result.add_counter(Events::WRITE, &guard.master_write_counter);
                     }
                 } else {
-                    if guard
-                        .input_buffer
-                        .iter()
-                        .copied()
-                        .any(|c| guard.is_line_end(c))
-                        || guard.master_closed
-                    {
+                    let input_available = if guard.termios.local_modes.contains(LocalMode::ICANON) {
+                        guard
+                            .input_buffer
+                            .iter()
+                            .copied()
+                            .any(|c| guard.is_line_end(c))
+                    } else {
+                        !guard.input_buffer.is_empty()
+                    };
+                    if input_available || guard.master_closed {
                         result.set_ready(Events::READ);
                         result.add_counter(Events::READ, &guard.slave_read_counter);
                     }
