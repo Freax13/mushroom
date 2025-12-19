@@ -248,15 +248,16 @@ impl OpenFileDescription for Pty {
                         .all(|c| !guard.is_line_end(c)),
             );
         } else {
-            ready_events.set(
-                Events::READ,
+            let input_available = if guard.termios.local_modes.contains(LocalMode::ICANON) {
                 guard
                     .input_buffer
                     .iter()
                     .copied()
                     .any(|c| guard.is_line_end(c))
-                    || guard.master_closed,
-            );
+            } else {
+                !guard.input_buffer.is_empty()
+            };
+            ready_events.set(Events::READ, input_available || guard.master_closed);
             ready_events.set(
                 Events::WRITE,
                 guard.output_buffer.len() < guard.output_buffer.capacity() - 1
@@ -626,13 +627,16 @@ impl EpollReady for Pty {
                         result.add_counter(Events::WRITE, &guard.master_write_counter);
                     }
                 } else {
-                    if guard
-                        .input_buffer
-                        .iter()
-                        .copied()
-                        .any(|c| guard.is_line_end(c))
-                        || guard.master_closed
-                    {
+                    let input_available = if guard.termios.local_modes.contains(LocalMode::ICANON) {
+                        guard
+                            .input_buffer
+                            .iter()
+                            .copied()
+                            .any(|c| guard.is_line_end(c))
+                    } else {
+                        !guard.input_buffer.is_empty()
+                    };
+                    if input_available || guard.master_closed {
                         result.set_ready(Events::READ);
                         result.add_counter(Events::READ, &guard.slave_read_counter);
                     }
