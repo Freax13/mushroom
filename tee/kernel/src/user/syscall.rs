@@ -188,6 +188,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFdatasync);
     handlers.register(SysTruncate);
     handlers.register(SysFtruncate);
+    handlers.register(SysFtruncate64);
     handlers.register(SysGetdents);
     handlers.register(SysGetcwd);
     handlers.register(SysChdir);
@@ -2526,6 +2527,19 @@ fn ftruncate(
     fd.truncate(usize_from(length), &ctx)
         .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
+}
+
+#[syscall(i386 = 194)]
+fn ftruncate64(
+    thread: &Thread,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    length_low: u64,
+    length_high: u64,
+) -> SyscallResult {
+    let length = length_low | (length_high << 32);
+    ftruncate(thread, fdtable, ctx, fd, length)
 }
 
 #[syscall(i386 = 141, amd64 = 78)]
