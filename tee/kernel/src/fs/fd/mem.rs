@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, ffi::CString, sync::Arc, vec::Vec};
 
 use async_trait::async_trait;
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::{
     error::Result,
@@ -11,8 +12,10 @@ use crate::{
         ownership::Ownership,
         path::Path,
     },
+    memory::page::{Buffer, KernelPage},
     spin::mutex::Mutex,
     user::{
+        futex::Futexes,
         syscall::args::{
             FileMode, FileType, FileTypeAndMode, MemfdCreateFlags, OpenFlags, Stat, Timespec,
         },
@@ -24,10 +27,12 @@ pub struct MemFd {
     ino: u64,
     name: CString,
     internal: Mutex<InternalMemFd>,
+    futexes: Arc<Futexes>,
 }
 
 struct InternalMemFd {
     ownership: Ownership,
+    buffer: Buffer,
 }
 
 impl MemFd {
@@ -41,7 +46,9 @@ impl MemFd {
                     ctx.filesystem_user_id(),
                     ctx.filesystem_group_id(),
                 ),
+                buffer: Buffer::new(),
             }),
+            futexes: Arc::new(Futexes::new()),
         }
     }
 }
@@ -79,13 +86,27 @@ impl OpenFileDescription for MemFd {
             uid: guard.ownership.uid(),
             gid: guard.ownership.gid(),
             rdev: 0,
-            size: 0,
-            blksize: 0,
+            size: guard.buffer.len() as i64,
+            blksize: Size4KiB::SIZE as i64,
             blocks: 0,
             atime: Timespec::ZERO,
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn truncate(&self, length: usize, _: &FileAccessContext) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard.buffer.truncate(length)
+    }
+
+    fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {
+        let mut guard = self.internal.lock();
+        guard.buffer.get_page(page_idx, shared)
+    }
+
+    fn futexes(&self) -> Option<Arc<Futexes>> {
+        Some(self.futexes.clone())
     }
 
     fn fs(&self) -> Result<Arc<dyn FileSystem>> {
