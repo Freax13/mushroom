@@ -400,7 +400,10 @@ impl VirtualMemory {
                 .as_u64();
             let permissions = mapping.permissions;
             let offset = mapping.page_offset;
-            let (major, minor, ino, path) = mapping.backing.location();
+            let (major, minor, ino, path) = mapping
+                .backing
+                .as_deref()
+                .map_or((0, 0, 0, None), Backing::location);
             write!(maps,"{start:08x}-{end:08x} {permissions}p {offset:05x}000 {major:02x}:{minor:02x} {ino} ").unwrap();
             if let Some((path, deleted)) = path {
                 maps.extend_from_slice(path.as_bytes());
@@ -534,7 +537,11 @@ impl VirtualMemoryWriteGuard<'_> {
                 let mapping = mapping.get_mut();
 
                 // Check if the flush operation targeted this mapping.
-                if mapping.backing.ino() != op.ino {
+                if mapping
+                    .backing
+                    .as_ref()
+                    .is_none_or(|backing| backing.ino() != op.ino)
+                {
                     continue;
                 }
 
@@ -569,7 +576,7 @@ impl VirtualMemoryWriteGuard<'_> {
         bias: Bias,
         len: u64,
         permissions: MemoryPermissions,
-        backing: impl Backing,
+        backing: Option<Arc<dyn Backing>>,
         page_offset: u64,
         shared: bool,
         futexes: Arc<Futexes>,
@@ -593,11 +600,13 @@ impl VirtualMemoryWriteGuard<'_> {
         self.unmap(addr, len);
 
         let pages = SparseSplitVec::new(size);
-        backing.register(&self.virtual_memory.mapping_ctrl);
+        if let Some(backing) = backing.as_ref() {
+            backing.register(&self.virtual_memory.mapping_ctrl);
+        }
         self.guard.mappings.insert(
             start_page,
             Mutex::new(Mapping {
-                backing: Arc::new(backing),
+                backing,
                 page_offset,
                 permissions,
                 pages,
@@ -617,27 +626,11 @@ impl VirtualMemoryWriteGuard<'_> {
         permissions: MemoryPermissions,
         as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
-        struct ZeroBacking;
-
-        impl Backing for ZeroBacking {
-            fn get_initial_page(&self, _offset: u64) -> Result<KernelPage> {
-                Ok(KernelPage::zeroed())
-            }
-
-            fn ino(&self) -> u64 {
-                0
-            }
-
-            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
-                (0, 0, 0, None)
-            }
-        }
-
         self.mmap(
             bias,
             len,
             permissions,
-            ZeroBacking,
+            None,
             0,
             false,
             Arc::new(Futexes::new()),
@@ -680,6 +673,7 @@ impl VirtualMemoryWriteGuard<'_> {
                     .collect(),
             ),
         };
+        let backing = Some(Arc::new(backing) as _);
 
         self.mmap(
             bias,
@@ -812,13 +806,13 @@ impl VirtualMemoryWriteGuard<'_> {
             bias,
             mem_sz,
             permissions,
-            FileBacking {
+            Some(Arc::new(FileBacking {
                 file,
                 zero_offset: offset + file_sz,
                 stat,
                 shared,
                 zero_pad,
-            },
+            })),
             page_offset,
             shared,
             futexes,
@@ -891,7 +885,7 @@ impl VirtualMemoryWriteGuard<'_> {
             Bias::Fixed(VirtAddr::new(SIGRETURN_TRAMPOLINE_PAGE)),
             4096,
             MemoryPermissions::READ | MemoryPermissions::EXECUTE,
-            TrampolineCode,
+            Some(Arc::new(TrampolineCode)),
             0,
             false,
             Arc::new(Futexes::new()),
@@ -1246,7 +1240,7 @@ impl From<PageFaultError> for Error {
 }
 
 pub struct Mapping {
-    backing: Arc<dyn Backing>,
+    backing: Option<Arc<dyn Backing>>,
     page_offset: u64,
     permissions: MemoryPermissions,
     shared: bool,
@@ -1267,13 +1261,14 @@ impl Mapping {
             .ok_or(PageFaultError::Unmapped(err!(Fault)))?;
 
         if page.is_none() {
-            let user_page = UserPage::new(
-                self.backing
+            let kernel_page = if let Some(backing) = self.backing.as_ref() {
+                backing
                     .get_initial_page(self.page_offset + page_offset)
-                    .map_err(PageFaultError::Other)?,
-                self.permissions,
-                self.shared,
-            );
+                    .map_err(PageFaultError::Other)?
+            } else {
+                KernelPage::zeroed()
+            };
+            let user_page = UserPage::new(kernel_page, self.permissions, self.shared);
             *page = Some(user_page);
 
             usage.record_major_page_fault();
@@ -1287,7 +1282,9 @@ impl Mapping {
         let pages = self.pages.split_off(usize_from(offset));
 
         let mapping_ctrl = self.mapping_ctrl.clone();
-        self.backing.register(&mapping_ctrl);
+        if let Some(backing) = self.backing.as_ref() {
+            backing.register(&mapping_ctrl);
+        }
 
         Self {
             backing: self.backing.clone(),
@@ -1312,7 +1309,9 @@ impl Mapping {
             Arc::new(Futexes::new())
         };
 
-        self.backing.register(&mapping_ctrl);
+        if let Some(backing) = self.backing.as_ref() {
+            backing.register(&mapping_ctrl);
+        }
 
         Ok(Self {
             backing: self.backing.clone(),
@@ -1346,7 +1345,9 @@ impl Mapping {
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        self.backing.unregister(&self.mapping_ctrl);
+        if let Some(backing) = self.backing.as_ref() {
+            backing.unregister(&self.mapping_ctrl);
+        }
     }
 }
 
