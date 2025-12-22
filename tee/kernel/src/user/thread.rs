@@ -21,7 +21,10 @@ use constants::{ApBitmap, AtomicApBitmap};
 use crossbeam_utils::atomic::AtomicCell;
 use futures::{FutureExt, select_biased};
 use pin_project::pin_project;
-use x86_64::VirtAddr;
+use x86_64::{
+    VirtAddr,
+    structures::paging::{PageSize, Size4KiB},
+};
 
 use self::running_state::{ExitAction, ThreadRunningState};
 use crate::{
@@ -1079,6 +1082,20 @@ impl ThreadGuard<'_> {
             buffer,
             "Ppid:\t{}",
             self.tracer.upgrade().map_or(0, |thread| thread.tid())
+        )
+        .unwrap();
+
+        let usage = self.virtual_memory.usage();
+        writeln!(
+            buffer,
+            "VmPeak:\t{} kB",
+            (usage.vmpeak() * Size4KiB::SIZE) / 1024
+        )
+        .unwrap();
+        writeln!(
+            buffer,
+            "VmSize:\t{} kB",
+            (usage.vmsize() * Size4KiB::SIZE) / 1024
         )
         .unwrap();
 
