@@ -118,8 +118,7 @@ jobs:
             host
             tee
       - name: "Test"
-        run: cargo test -p tests
-        working-directory: tee
+        run: make test-on-host
 
   test:
     strategy:
