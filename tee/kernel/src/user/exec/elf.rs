@@ -15,6 +15,7 @@ use crate::{
     },
     user::{
         memory::{Bias, MemoryPermissions, VirtualMemoryWriteGuard},
+        process::limits::CurrentAsLimit,
         syscall::traits::Abi,
     },
 };
@@ -183,6 +184,7 @@ where
                     permissions,
                     false,
                     true,
+                    CurrentAsLimit::INFINITE,
                 )?;
 
                 if (p_offset..p_offset + p_filesz).contains(&e_phoff) {

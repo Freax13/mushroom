@@ -43,7 +43,7 @@ use crate::{
     },
     user::{
         futex::{FutexScope, Futexes, WaitFuture},
-        process::usage::MemoryUsage,
+        process::{limits::CurrentAsLimit, usage::MemoryUsage},
         syscall::{
             args::{
                 OpenFlags, Pointer, ProtFlags, Stat,
@@ -573,7 +573,8 @@ impl VirtualMemoryWriteGuard<'_> {
         page_offset: u64,
         shared: bool,
         futexes: Arc<Futexes>,
-    ) -> VirtAddr {
+        as_limit: CurrentAsLimit,
+    ) -> Result<VirtAddr> {
         assert_ne!(len, 0);
 
         let addr = match bias {
@@ -586,9 +587,11 @@ impl VirtualMemoryWriteGuard<'_> {
         let start_page = Page::containing_address(start);
         let end_page = Page::containing_address(end - 1);
 
+        let size = usize_from(end_page - start_page) + 1;
+        self.virtual_memory.usage.increase_vmsize(size, as_limit)?;
+
         self.unmap(addr, len);
 
-        let size = usize_from(end_page - start_page) + 1;
         let pages = SparseSplitVec::new(size);
         backing.register(&self.virtual_memory.mapping_ctrl);
         self.guard.mappings.insert(
@@ -604,7 +607,7 @@ impl VirtualMemoryWriteGuard<'_> {
             }),
         );
 
-        addr
+        Ok(addr)
     }
 
     pub fn mmap_private_zero(
@@ -612,7 +615,8 @@ impl VirtualMemoryWriteGuard<'_> {
         bias: Bias,
         len: u64,
         permissions: MemoryPermissions,
-    ) -> VirtAddr {
+        as_limit: CurrentAsLimit,
+    ) -> Result<VirtAddr> {
         struct ZeroBacking;
 
         impl Backing for ZeroBacking {
@@ -637,6 +641,7 @@ impl VirtualMemoryWriteGuard<'_> {
             0,
             false,
             Arc::new(Futexes::new()),
+            as_limit,
         )
     }
 
@@ -645,7 +650,8 @@ impl VirtualMemoryWriteGuard<'_> {
         bias: Bias,
         len: u64,
         permissions: MemoryPermissions,
-    ) -> VirtAddr {
+        as_limit: CurrentAsLimit,
+    ) -> Result<VirtAddr> {
         struct ZeroBacking {
             pages: Mutex<Vec<KernelPage>>,
         }
@@ -683,9 +689,11 @@ impl VirtualMemoryWriteGuard<'_> {
             0,
             true,
             Arc::new(Futexes::new()),
+            as_limit,
         )
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn mmap_file(
         &mut self,
         bias: Bias,
@@ -694,6 +702,7 @@ impl VirtualMemoryWriteGuard<'_> {
         offset: u64,
         permissions: MemoryPermissions,
         shared: bool,
+        as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
         self.mmap_file_with_zeros(
             bias,
@@ -704,6 +713,7 @@ impl VirtualMemoryWriteGuard<'_> {
             permissions,
             shared,
             false,
+            as_limit,
         )
     }
 
@@ -718,6 +728,7 @@ impl VirtualMemoryWriteGuard<'_> {
         permissions: MemoryPermissions,
         shared: bool,
         zero_pad: bool,
+        as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
         ensure!(offset % 0x1000 == u64::from(bias.page_offset()), Inval);
         let page_offset = offset / 0x1000;
@@ -797,7 +808,7 @@ impl VirtualMemoryWriteGuard<'_> {
         } else {
             Arc::new(Futexes::new())
         };
-        let addr = self.mmap(
+        self.mmap(
             bias,
             mem_sz,
             permissions,
@@ -811,15 +822,21 @@ impl VirtualMemoryWriteGuard<'_> {
             page_offset,
             shared,
             futexes,
-        );
-        Ok(addr)
+            as_limit,
+        )
     }
 
-    pub fn allocate_stack(&mut self, bias: Bias, len: u64) -> VirtAddr {
+    pub fn allocate_stack(
+        &mut self,
+        bias: Bias,
+        len: u64,
+        as_limit: CurrentAsLimit,
+    ) -> Result<VirtAddr> {
         self.mmap_private_zero(
             bias,
             len,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
+            as_limit,
         )
     }
 
@@ -878,7 +895,9 @@ impl VirtualMemoryWriteGuard<'_> {
             0,
             false,
             Arc::new(Futexes::new()),
-        );
+            CurrentAsLimit::INFINITE,
+        )
+        .unwrap();
     }
 
     pub fn mprotect(
@@ -1060,7 +1079,7 @@ impl VirtualMemoryWriteGuard<'_> {
         start_page >= mapping_end
     }
 
-    pub fn set_brk_end(&mut self, brk_end: VirtAddr) -> Result<()> {
+    pub fn set_brk_end(&mut self, brk_end: VirtAddr, as_limit: CurrentAsLimit) -> Result<()> {
         let old_brk_end = core::mem::replace(&mut self.guard.brk_end, brk_end);
 
         match old_brk_end.cmp(&brk_end) {
@@ -1076,7 +1095,8 @@ impl VirtualMemoryWriteGuard<'_> {
                     Bias::Fixed(old_brk_end),
                     brk_end - old_brk_end,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
-                );
+                    as_limit,
+                )?;
             }
             Ordering::Equal => {}
             Ordering::Greater => {
@@ -1320,6 +1340,7 @@ impl Mapping {
     pub fn record_unmapping(mut self, usage: &MemoryUsage) {
         let delta = self.pages.iter_mut().count();
         usage.decrease_rss(delta);
+        usage.decrease_vmsize(self.pages.len());
     }
 }
 

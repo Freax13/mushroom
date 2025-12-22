@@ -68,7 +68,7 @@ use crate::{
         memory::{Bias, MemoryPermissions, VirtualMemory},
         process::{
             Process, WaitFilter, WaitResult,
-            limits::{CurrentNoFileLimit, CurrentStackLimit},
+            limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
         thread::{
             Capability, Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill,
@@ -696,6 +696,7 @@ fn mmap(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] as_limit: CurrentAsLimit,
     addr: Pointer<c_void>,
     length: u64,
     prot: ProtFlags,
@@ -728,25 +729,37 @@ fn mmap(
         if flags.contains(MmapFlags::ANONYMOUS) {
             virtual_memory
                 .modify()
-                .mmap_shared_zero(bias, length, permissions)
+                .mmap_shared_zero(bias, length, permissions, as_limit)?
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
-            virtual_memory
-                .modify()
-                .mmap_file(bias, length, fd, offset, permissions, true)?
+            virtual_memory.modify().mmap_file(
+                bias,
+                length,
+                fd,
+                offset,
+                permissions,
+                true,
+                as_limit,
+            )?
         }
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::ANONYMOUS) {
             virtual_memory
                 .modify()
-                .mmap_private_zero(bias, length, permissions)
+                .mmap_private_zero(bias, length, permissions, as_limit)?
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
-            virtual_memory
-                .modify()
-                .mmap_file(bias, length, fd, offset, permissions, false)?
+            virtual_memory.modify().mmap_file(
+                bias,
+                length,
+                fd,
+                offset,
+                permissions,
+                false,
+                as_limit,
+            )?
         }
     } else {
         bail!(Inval)
@@ -759,6 +772,7 @@ fn mmap2(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] as_limit: CurrentAsLimit,
     addr: Pointer<c_void>,
     length: u64,
     prot: ProtFlags,
@@ -770,6 +784,7 @@ fn mmap2(
         abi,
         virtual_memory,
         fdtable,
+        as_limit,
         addr,
         length,
         prot,
@@ -805,13 +820,17 @@ fn munmap(
 }
 
 #[syscall(i386 = 45, amd64 = 12)]
-fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallResult {
+fn brk(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] as_limit: CurrentAsLimit,
+    brk_value: u64,
+) -> SyscallResult {
     ensure!(brk_value.is_multiple_of(0x1000), Inval);
 
     if brk_value != 0
         && let Ok(brk_value) = VirtAddr::try_new(brk_value)
     {
-        let _ = virtual_memory.modify().set_brk_end(brk_value);
+        let _ = virtual_memory.modify().set_brk_end(brk_value, as_limit);
     }
 
     Ok(virtual_memory.brk_end().as_u64())

@@ -20,7 +20,7 @@ use crate::{
     spin::lazy::Lazy,
     user::{
         memory::{Bias, MemoryPermissions, VirtualMemory},
-        process::limits::CurrentStackLimit,
+        process::limits::{CurrentAsLimit, CurrentStackLimit},
         syscall::{
             args::{FileMode, OpenFlags},
             cpu_state::CpuState,
@@ -133,7 +133,10 @@ impl VirtualMemory {
             abi: E::ABI,
             map_32bit: false,
         };
-        let stack = self.modify().allocate_stack(bias, len) + len;
+        let stack = self
+            .modify()
+            .allocate_stack(bias, len, CurrentAsLimit::INFINITE)?
+            + len;
 
         // Sum up the number of pointer-sized values that need to be placed in
         // a contigous chunk of memory.
@@ -180,7 +183,8 @@ impl VirtualMemory {
                     Bias::Fixed(addr),
                     0x1000,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
-                );
+                    CurrentAsLimit::INFINITE,
+                )?;
             }
 
             let addr = *str_addr;
