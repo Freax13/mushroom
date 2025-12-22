@@ -9,7 +9,7 @@ use core::{
     cell::SyncUnsafeCell,
     cmp::{self, Ordering},
     fmt::{self, Display, Write},
-    iter::repeat_with,
+    iter::{Step, repeat_with},
     mem::{MaybeUninit, needs_drop},
     num::{NonZeroU32, NonZeroUsize},
     ops::{Bound, Range, RangeBounds},
@@ -936,6 +936,56 @@ impl VirtualMemoryWriteGuard<'_> {
         .unwrap();
     }
 
+    /// If any mapping contains `page`, split the mapping at `page`.
+    fn shatter_mapping_at(&mut self, page: Page) {
+        let mut cursor = self.guard.mappings.upper_bound_mut(Bound::Included(&page));
+        let Some((&mapping_start, mapping)) = cursor.peek_prev() else {
+            return;
+        };
+        let mapping = mapping.get_mut();
+        let mapping_end = mapping_start + u64::from_usize(mapping.pages.len());
+
+        // If the mapping doesn't contain `page`, nothing needs to be done.
+        if mapping_end < page {
+            return;
+        }
+
+        // If the mapping starts at `page`, nothing needs to be done.
+        if mapping_start == page {
+            return;
+        }
+
+        // If the mapping ends at `page`, nothing needs to be done.
+        if mapping_end == page {
+            return;
+        }
+
+        // Otherwise, the mapping contains `page` and we need to split it.
+        let offset = page - mapping_start;
+        let new_mapping = mapping.split_off(offset);
+        self.guard.mappings.insert(page, Mutex::new(new_mapping));
+    }
+
+    /// Checks if the given range is contigously mapped.
+    fn check_contigously_mapped(&mut self, address: Page, size: u64) -> Result<()> {
+        let mut iter = self.guard.mappings.range_mut(..address + size);
+
+        let (&first_mapping_start, first_mapping) = iter.next_back().ok_or(err!(Fault))?;
+        let first_mapping = first_mapping.get_mut();
+        let first_mapping_end = first_mapping_start + u64::from_usize(first_mapping.pages.len());
+        ensure!(first_mapping_end >= address + size, Fault);
+
+        let mut end = first_mapping_start;
+        while end > address {
+            let (&mapping_start, mapping) = iter.next_back().ok_or(err!(Fault))?;
+            let mapping = mapping.get_mut();
+            let mapping_end = mapping_start + u64::from_usize(mapping.pages.len());
+            ensure!(mapping_end == end, Fault);
+            end = mapping_start;
+        }
+        Ok(())
+    }
+
     pub fn mprotect(
         &mut self,
         addr: VirtAddr,
@@ -947,49 +997,26 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         let start_page = Page::from_start_address(addr).map_err(|_| err!(Inval))?;
-        let end_page = Page::containing_address(addr + (len - 1));
+        let inclusive_end_page = Page::containing_address(addr + (len - 1));
+
+        self.check_contigously_mapped(start_page, inclusive_end_page - start_page + 1)?;
 
         // Flush all pages in the range.
         self.virtual_memory
             .pagetables
-            .try_unmap_user_pages(start_page..=end_page);
+            .try_unmap_user_pages(start_page..=inclusive_end_page);
 
-        let mut cursor = self
+        self.shatter_mapping_at(start_page);
+        if let Some(end_page) = Step::forward_checked(inclusive_end_page, 1) {
+            self.shatter_mapping_at(end_page);
+        }
+
+        for (_, mapping) in self
             .guard
             .mappings
-            .upper_bound_mut(Bound::Included(&start_page));
-        cursor.prev();
-        while let Some((&page, mapping)) = cursor.next() {
-            let mapping = mapping.get_mut();
-
-            let mapping_end = page + u64::from_usize(mapping.pages.len()) - 1;
-            if page < start_page {
-                ensure!(mapping_end >= start_page, Fault);
-
-                let offset = start_page - page;
-                let new_mapping = mapping.split_off(offset);
-                cursor
-                    .insert_after(start_page, Mutex::new(new_mapping))
-                    .unwrap();
-                continue;
-            } else {
-                if page > end_page {
-                    break;
-                }
-
-                if end_page >= mapping_end {
-                    mapping.set_perms(permissions);
-                    continue;
-                }
-
-                let offset = (end_page - page) + 1;
-                let new_mapping = mapping.split_off(offset);
-                mapping.set_perms(permissions);
-                cursor
-                    .insert_before(end_page + 1, Mutex::new(new_mapping))
-                    .unwrap();
-                break;
-            }
+            .range_mut(start_page..=inclusive_end_page)
+        {
+            mapping.get_mut().set_perms(permissions);
         }
 
         Ok(())
@@ -1003,59 +1030,26 @@ impl VirtualMemoryWriteGuard<'_> {
         let start = addr;
         let end = addr + (len - 1);
         let start_page = Page::containing_address(start);
-        let end_page = Page::containing_address(end);
+        let inclusive_end_page = Page::containing_address(end);
 
         // Flush all pages in the range.
         self.virtual_memory
             .pagetables
-            .try_unmap_user_pages(start_page..=end_page);
+            .try_unmap_user_pages(start_page..=inclusive_end_page);
 
-        let mut cursor = self
+        self.shatter_mapping_at(start_page);
+        if let Some(end_page) = Step::forward_checked(inclusive_end_page, 1) {
+            self.shatter_mapping_at(end_page);
+        }
+
+        for (_, mapping) in self
             .guard
             .mappings
-            .upper_bound_mut(Bound::Included(&start_page));
-        cursor.prev();
-        while let Some((&page, mapping)) = cursor.next() {
-            let mapping = mapping.get_mut();
-
-            let mapping_end = page + u64::from_usize(mapping.pages.len() - 1);
-            if page < start_page {
-                if mapping_end < start_page {
-                    break;
-                }
-
-                let offset = start_page - page;
-                let new_mapping = mapping.split_off(offset);
-                cursor
-                    .insert_after(start_page, Mutex::new(new_mapping))
-                    .unwrap();
-                continue;
-            } else {
-                if page > end_page {
-                    break;
-                }
-
-                if end_page >= mapping_end {
-                    if let Some((_, mapping)) = cursor.remove_prev() {
-                        mapping
-                            .into_inner()
-                            .record_unmapping(&self.virtual_memory.usage)
-                    }
-                    continue;
-                }
-
-                let offset = (end_page - page) + 1;
-                let new_mapping = mapping.split_off(offset);
-                if let Some((_, mapping)) = cursor.remove_prev() {
-                    mapping
-                        .into_inner()
-                        .record_unmapping(&self.virtual_memory.usage)
-                }
-                cursor
-                    .insert_before(end_page + 1, Mutex::new(new_mapping))
-                    .unwrap();
-                break;
-            }
+            .extract_if(start_page..=inclusive_end_page, |_, _| true)
+        {
+            mapping
+                .into_inner()
+                .record_unmapping(&self.virtual_memory.usage);
         }
     }
 
