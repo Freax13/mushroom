@@ -151,21 +151,13 @@ impl VirtualMemory {
         };
         // Calculate the first address where we can place other values (mostly
         // strings) that don't need to be in a contigous chunk.
-        let start_str_addr = stack + align_up(u64::from_usize(num_values) * pointer_size, 0x1000);
+        let start_str_addr = stack;
 
-        let mut addr = stack;
+        let stack_base = stack - align_up(u64::from_usize(num_values) * pointer_size, 0x10);
+        let mut addr = stack_base;
         let mut write = |value: u64| {
             // Double-check that the contigous values don't overlap with the string values.
             debug_assert!(addr < start_str_addr);
-
-            // Map more memory for each new page we write to.
-            if addr.is_aligned(0x1000u64) {
-                self.modify().mmap_private_zero(
-                    Bias::Fixed(addr),
-                    0x1000,
-                    MemoryPermissions::WRITE | MemoryPermissions::READ,
-                );
-            }
 
             match E::ABI {
                 Abi::I386 => {
@@ -261,7 +253,7 @@ impl VirtualMemory {
             Abi::I386 => 0x1b,
             Abi::Amd64 => 0x2b,
         };
-        let cpu_state = CpuState::new(cs, entrypoint, stack.as_u64());
+        let cpu_state = CpuState::new(cs, entrypoint, stack_base.as_u64());
         Ok(ExecResult {
             cpu_state,
             exe: link,
