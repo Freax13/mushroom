@@ -179,10 +179,11 @@ impl VirtualMemory {
                 .take(value.len())
                 .filter(|addr| addr.is_aligned(0x1000u64))
             {
-                self.modify().mmap_private_zero(
+                self.modify().mmap_private_zero_special(
                     Bias::Fixed(addr),
                     0x1000,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
+                    "stack",
                     CurrentAsLimit::INFINITE,
                 )?;
             }

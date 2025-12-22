@@ -638,6 +638,47 @@ impl VirtualMemoryWriteGuard<'_> {
         )
     }
 
+    pub fn mmap_private_zero_special(
+        &mut self,
+        bias: Bias,
+        len: u64,
+        permissions: MemoryPermissions,
+        name: &'static str,
+        as_limit: CurrentAsLimit,
+    ) -> Result<VirtAddr> {
+        struct ZeroBacking {
+            path: Path,
+        }
+
+        impl Backing for ZeroBacking {
+            fn get_initial_page(&self, _offset: u64) -> Result<KernelPage> {
+                Ok(KernelPage::zeroed())
+            }
+
+            fn ino(&self) -> u64 {
+                0
+            }
+
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
+                (0, 0, 0, Some((self.path.clone(), false)))
+            }
+        }
+
+        let path = alloc::format!("[{name}]");
+        let path = Path::new(path.into_bytes()).unwrap();
+
+        self.mmap(
+            bias,
+            len,
+            permissions,
+            Some(Arc::new(ZeroBacking { path })),
+            0,
+            false,
+            Arc::new(Futexes::new()),
+            as_limit,
+        )
+    }
+
     pub fn mmap_shared_zero(
         &mut self,
         bias: Bias,
@@ -826,10 +867,11 @@ impl VirtualMemoryWriteGuard<'_> {
         len: u64,
         as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
-        self.mmap_private_zero(
+        self.mmap_private_zero_special(
             bias,
             len,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
+            "stack",
             as_limit,
         )
     }
@@ -1085,10 +1127,11 @@ impl VirtualMemoryWriteGuard<'_> {
                     bail!(NoMem)
                 }
 
-                self.mmap_private_zero(
+                self.mmap_private_zero_special(
                     Bias::Fixed(old_brk_end),
                     brk_end - old_brk_end,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
+                    "heap",
                     as_limit,
                 )?;
             }
