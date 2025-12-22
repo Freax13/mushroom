@@ -586,7 +586,9 @@ impl VirtualMemoryWriteGuard<'_> {
 
         let addr = match bias {
             Bias::Fixed(bias) => bias,
-            Bias::Dynamic { abi, map_32bit } => self.guard.find_free_address(len, abi, map_32bit),
+            Bias::Dynamic { abi, map_32bit } => {
+                self.guard.find_free_address(len, abi, map_32bit)?
+            }
         };
 
         let start = addr;
@@ -1154,7 +1156,7 @@ impl VirtualMemoryState {
         }
     }
 
-    fn find_free_address(&mut self, size: u64, abi: Abi, map_32: bool) -> VirtAddr {
+    fn find_free_address(&mut self, size: u64, abi: Abi, map_32: bool) -> Result<VirtAddr> {
         assert_ne!(size, 0);
         assert!(
             size < (1 << 47),
@@ -1201,8 +1203,10 @@ impl VirtualMemoryState {
             last_address = page.start_address();
         }
 
+        ensure!(last_address.as_u64() >= size, NoMem);
+
         // Add one to skip the guard page at the start.
-        last_address - size + Size4KiB::SIZE
+        Ok(last_address - size + Size4KiB::SIZE)
     }
 }
 
