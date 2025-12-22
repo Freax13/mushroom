@@ -695,7 +695,7 @@ impl VirtualMemoryWriteGuard<'_> {
         impl Backing for ZeroBacking {
             fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
                 let mut pages = self.pages.lock();
-                let page = &mut pages[usize_from(offset)];
+                let page = pages.get_mut(usize_from(offset)).ok_or(err!(Acces))?;
                 page.make_mut(true)?;
                 page.clone()
             }
@@ -988,6 +988,51 @@ impl VirtualMemoryWriteGuard<'_> {
         Ok(())
     }
 
+    /// Checks if the given range is contigously mapped by a single logical
+    /// mapping. This method considers several contigous private anonymous
+    /// mappings a single logical mapping. This doesn't apply to shared
+    /// mappings or non-private mappings.
+    ///
+    /// Returns a tuple of the base address of the first and last mappings that
+    /// make up the range.
+    /// Returns an error if the pages are not logically contigous.
+    fn check_contigously_mapped_by_single_type(
+        &mut self,
+        address: Page,
+        size: u64,
+    ) -> Result<(Page, Page)> {
+        let mut iter = self.guard.mappings.range_mut(..address + size);
+
+        let (&first_mapping_start, first_mapping) = iter.next_back().ok_or(err!(Fault))?;
+        let first_mapping = first_mapping.get_mut();
+        let first_mapping_end = first_mapping_start + u64::from_usize(first_mapping.pages.len());
+        ensure!(first_mapping_end >= address + size, Fault);
+
+        if first_mapping.backing.is_none() {
+            // Several contigous anonymous private are treated as a single
+            // mapping.
+            // The first mapping is anonymous and private, make sure that the
+            // others in the range are as well and make sure that the mappings
+            // are contigous.
+            let mut end = first_mapping_start;
+            while end > address {
+                let (&mapping_start, mapping) = iter.next_back().ok_or(err!(Fault))?;
+                let mapping = mapping.get_mut();
+                ensure!(mapping.backing.is_none(), Fault);
+                // Check that all the pages have the same protection flags.
+                ensure!(mapping.permissions == first_mapping.permissions, Fault);
+                let mapping_end = mapping_start + u64::from_usize(mapping.pages.len());
+                ensure!(mapping_end == end, Fault);
+                end = mapping_start;
+            }
+            Ok((end, first_mapping_start))
+        } else {
+            // Make sure that the whole range is covered by the mapping.
+            ensure!(first_mapping_start >= address, Fault);
+            Ok((first_mapping_start, first_mapping_start))
+        }
+    }
+
     pub fn mprotect(
         &mut self,
         addr: VirtAddr,
@@ -1053,6 +1098,188 @@ impl VirtualMemoryWriteGuard<'_> {
                 .into_inner()
                 .record_unmapping(&self.virtual_memory.usage);
         }
+    }
+
+    pub fn shrink(&mut self, old_address: Page, old_size: u64, delta: u64) -> Result<()> {
+        self.check_contigously_mapped_by_single_type(old_address, old_size)?;
+
+        // Unmap the later pages.
+        self.unmap(
+            (old_address + (old_size - delta)).start_address(),
+            delta * Size4KiB::SIZE,
+        );
+
+        Ok(())
+    }
+
+    pub fn grow_in_place(
+        &mut self,
+        old_address: Page,
+        old_size: u64,
+        delta: u64,
+        as_limit: CurrentAsLimit,
+    ) -> Result<()> {
+        let (_, last_mapping_start) =
+            self.check_contigously_mapped_by_single_type(old_address, old_size)?;
+
+        // Check that there are no mappings starting immediately after the last
+        // mapping in the range.
+        let old_end_address =
+            Step::forward_checked(old_address, usize_from(old_size)).ok_or(err!(Inval))?;
+        let new_end_address =
+            Step::forward_checked(old_end_address, usize_from(delta)).ok_or(err!(Inval))?;
+        ensure!(
+            self.guard
+                .mappings
+                .range(old_end_address..new_end_address)
+                .next()
+                .is_none(),
+            NoMem
+        );
+
+        let last_mapping = self.guard.mappings.get_mut(&last_mapping_start).unwrap();
+        let last_mapping = last_mapping.get_mut();
+        // Make sure that the last mapping ends at `old_address+old_size`.
+        ensure!(
+            last_mapping_start + u64::from_usize(last_mapping.pages.len()) == old_end_address,
+            NoMem
+        );
+
+        let delta = usize_from(delta);
+        self.virtual_memory.usage.increase_vmsize(delta, as_limit)?;
+
+        // Extend the mapping.
+        last_mapping.pages.grow(delta);
+
+        Ok(())
+    }
+
+    pub fn remap_somewhere_else(
+        &mut self,
+        abi: Abi,
+        old_address: Page,
+        old_size: u64,
+        new_size: u64,
+        as_limit: CurrentAsLimit,
+    ) -> Result<Page> {
+        let new_address = self
+            .guard
+            .find_free_address(new_size * Size4KiB::SIZE, abi, false)?;
+        let new_address = Page::from_start_address(new_address).unwrap();
+        self.remap_to(old_address, old_size, new_address, new_size, as_limit)?;
+        Ok(new_address)
+    }
+
+    pub fn remap_to(
+        &mut self,
+        old_address: Page,
+        old_size: u64,
+        new_address: Page,
+        new_size: u64,
+        as_limit: CurrentAsLimit,
+    ) -> Result<()> {
+        // Make sure the ranges don't overlap.
+        ensure!(
+            new_address + new_size <= old_address || old_address + old_size <= new_address,
+            Inval
+        );
+
+        self.check_contigously_mapped_by_single_type(old_address, old_size)?;
+
+        match old_size.cmp(&new_size) {
+            Ordering::Less => self
+                .virtual_memory
+                .usage
+                .increase_vmsize(usize_from(new_size - old_size), as_limit)?,
+            Ordering::Equal => {}
+            Ordering::Greater => self
+                .virtual_memory
+                .usage
+                .decrease_vmsize(usize_from(old_size - new_size)),
+        }
+
+        let old_end_address = old_address + old_size;
+        let new_end_address = new_address + new_size;
+
+        // Remove the pages from the page tables.
+        self.virtual_memory
+            .pagetables
+            .try_unmap_user_pages(old_address..old_end_address);
+
+        // Remove any other mappings in the new range.
+        self.unmap(new_address.start_address(), new_size * Size4KiB::SIZE);
+
+        self.shatter_mapping_at(old_address);
+        self.shatter_mapping_at(old_end_address);
+        if new_size < old_size {
+            self.shatter_mapping_at(old_address + new_size);
+        }
+
+        // Move the mappings to the new address.
+        let mut addr = old_address;
+        while addr < old_end_address {
+            let mapping = self.guard.mappings.remove(&addr).unwrap();
+            let mut mapping = mapping.into_inner();
+            let new_mapping_address = new_address + (addr - old_address);
+            addr += u64::from_usize(mapping.pages.len());
+
+            // If the remap operation was also asking for the mapping to be
+            // grown, grow the last mapping.
+            if addr == old_end_address && old_size < new_size {
+                mapping.pages.grow(usize_from(new_size - old_size));
+            }
+
+            // Insert the mapping, if it doesn't exceed the size of the new
+            // mapping.
+            if new_mapping_address < new_end_address {
+                self.guard
+                    .mappings
+                    .insert(new_mapping_address, Mutex::new(mapping));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn map_copy(
+        &mut self,
+        abi: Abi,
+        old_address: Page,
+        new_size: u64,
+        new_address: Option<Page>,
+        as_limit: CurrentAsLimit,
+    ) -> Result<Page> {
+        let new_address = if let Some(new_address) = new_address {
+            new_address
+        } else {
+            let addr = self.guard.find_free_address(new_size, abi, false)?;
+            Page::from_start_address(addr).unwrap()
+        };
+
+        let mut cursor = self
+            .guard
+            .mappings
+            .upper_bound_mut(Bound::Included(&old_address));
+
+        let (&mapping_start, mapping) = cursor.peek_prev().ok_or(err!(Fault))?;
+        let mapping = mapping.get_mut();
+        // Make sure that the mapping contains `old_address`.
+        let mapping_end = mapping_start + u64::from_usize(mapping.pages.len() - 1);
+        ensure!(old_address <= mapping_end, Fault);
+
+        ensure!(mapping.shared, Inval);
+        self.virtual_memory
+            .usage
+            .increase_vmsize(usize_from(new_size), as_limit)?;
+
+        let offset = old_address - mapping_start;
+        let mapping = mapping.recreate(offset, new_size);
+
+        self.unmap(new_address.start_address(), new_size * Size4KiB::SIZE);
+
+        self.guard.mappings.insert(new_address, Mutex::new(mapping));
+
+        Ok(new_address)
     }
 
     pub fn discard_pages(&mut self, address: VirtAddr, len: u64) -> Result<()> {
@@ -1211,7 +1438,7 @@ impl VirtualMemoryState {
 }
 
 bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(PartialEq, Eq, Clone, Copy)]
     pub struct MemoryPermissions: u8 {
         const EXECUTE = 1 << 0;
         const WRITE = 1 << 1;
@@ -1365,6 +1592,24 @@ impl Mapping {
         })
     }
 
+    fn recreate(&mut self, offset: u64, new_size: u64) -> Self {
+        debug_assert!(self.shared);
+        let backing = self
+            .backing
+            .as_ref()
+            .expect("shared mappings must have a backing");
+        backing.register(&self.mapping_ctrl);
+        Self {
+            backing: self.backing.clone(),
+            page_offset: self.page_offset + offset,
+            permissions: self.permissions,
+            pages: SparseSplitVec::new(usize_from(new_size)),
+            shared: self.shared,
+            futexes: self.futexes.clone(),
+            mapping_ctrl: self.mapping_ctrl.clone(),
+        }
+    }
+
     fn set_perms(&mut self, permissions: MemoryPermissions) {
         self.permissions = permissions;
         for (_, page) in self.pages.iter_mut() {
@@ -1465,6 +1710,37 @@ impl<T> SplitVec<T> {
         };
         self.len = at;
         new
+    }
+
+    pub fn grow(&mut self, additional: usize)
+    where
+        T: Default,
+    {
+        if additional == 0 {
+            return;
+        }
+
+        let new_len = self.len + additional;
+        let mut entries = Arc::new_uninit_slice(new_len);
+        let mut_entries = Arc::get_mut(&mut entries).unwrap();
+
+        // Move the old entries to the new allocation.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                self.entries.as_ptr().add(self.offset),
+                mut_entries.as_mut_ptr(),
+                self.len,
+            );
+        }
+
+        // Default initialize the new entries.
+        for entry in mut_entries[self.len..].iter_mut() {
+            entry.write(SyncUnsafeCell::new(T::default()));
+        }
+
+        self.entries = entries;
+        self.len = new_len;
+        self.offset = 0;
     }
 }
 
@@ -1621,6 +1897,13 @@ impl<T> SparseSplitVec<T> {
 
                 new
             }
+        }
+    }
+
+    pub fn grow(&mut self, additional: usize) {
+        match self {
+            Self::Dense(split_vec) => split_vec.grow(additional),
+            Self::Sparse { len, .. } => *len += additional,
         }
     }
 }
