@@ -1328,7 +1328,7 @@ impl BsdFileLock {
     }
 
     pub async fn lock_shared(&self, non_blocking: bool) -> Result<()> {
-        let mut wait = non_blocking.then(|| self.record.notify.wait());
+        let mut wait = non_blocking.not().then(|| self.record.notify.wait());
         loop {
             let mut guard = self.state.lock();
             self.unlock_internal(&mut guard);
