@@ -920,11 +920,11 @@ impl Directory for DevPtsDirectory {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {

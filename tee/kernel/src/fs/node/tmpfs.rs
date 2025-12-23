@@ -1100,11 +1100,17 @@ impl INode for TmpFsFile {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.write().ownership.chmod(mode, ctx)
+        let mut guard = self.internal.write();
+        guard.ownership.chmod(mode, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.write().ownership.chown(uid, gid, ctx)
+        let mut guard = self.internal.write();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -1480,8 +1486,8 @@ impl INode for TmpFsSymlink {
             gid: guard.ownership.gid(),
             rdev: 0,
             size: self.target.as_bytes().len() as i64,
-            blksize: 0,
-            blocks: 0,
+            blksize: 0x1000,
+            blocks: 1,
             atime: guard.atime,
             mtime: guard.mtime,
             ctime: guard.ctime,
@@ -1501,12 +1507,15 @@ impl INode for TmpFsSymlink {
         bail!(Loop)
     }
 
-    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(OpNotSupp)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chown(uid, gid, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
@@ -1518,9 +1527,12 @@ impl INode for TmpFsSymlink {
         start_dir: Link,
         _location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
-        lookup_link(start_dir, &self.target, ctx).map(Some)
+        Ok(Some((
+            Ok(self.target.clone()),
+            lookup_link(start_dir, &self.target, ctx),
+        )))
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {
@@ -1559,10 +1571,15 @@ pub struct TmpFsCharDev {
 
 struct TmpFsCharDevInternal {
     ownership: Ownership,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl TmpFsCharDev {
     pub fn new(fs: Arc<TmpFs>, major: u16, minor: u8, mode: FileMode, uid: Uid, gid: Gid) -> Self {
+        let now = now(ClockId::Realtime);
+
         Self {
             fs,
             ino: new_ino(),
@@ -1570,6 +1587,9 @@ impl TmpFsCharDev {
             minor,
             internal: Mutex::new(TmpFsCharDevInternal {
                 ownership: Ownership::new(mode, uid, gid),
+                atime: now,
+                mtime: now,
+                ctime: now,
             }),
             bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
             watchers: Watchers::new(),
@@ -1591,9 +1611,9 @@ impl INode for TmpFsCharDev {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         })
     }
 
@@ -1611,11 +1631,17 @@ impl INode for TmpFsCharDev {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chmod(mode, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chown(uid, gid, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
@@ -1644,15 +1670,23 @@ pub struct TmpFsFifo {
 
 struct TmpFsFifoInternal {
     ownership: Ownership,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl TmpFsFifo {
     pub fn new(fs: Arc<TmpFs>, mode: FileMode, uid: Uid, gid: Gid) -> Self {
+        let now = now(ClockId::Realtime);
+
         Self {
             fs,
             ino: new_ino(),
             internal: Mutex::new(TmpFsFifoInternal {
                 ownership: Ownership::new(mode, uid, gid),
+                atime: now,
+                mtime: now,
+                ctime: now,
             }),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
@@ -1676,9 +1710,9 @@ impl INode for TmpFsFifo {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         })
     }
 
@@ -1709,11 +1743,17 @@ impl INode for TmpFsFifo {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chmod(mode, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chown(uid, gid, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
@@ -1742,6 +1782,9 @@ pub struct TmpFsSocket {
 
 struct TmpFsSocketInternal {
     ownership: Ownership,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
 }
 
 impl TmpFsSocket {
@@ -1752,11 +1795,16 @@ impl TmpFsSocket {
         gid: Gid,
         socket: Weak<OpenFileDescriptionData<StreamUnixSocket>>,
     ) -> Self {
+        let now = now(ClockId::Realtime);
+
         Self {
             fs,
             ino: new_ino(),
             internal: Mutex::new(TmpFsSocketInternal {
                 ownership: Ownership::new(mode, uid, gid),
+                atime: now,
+                mtime: now,
+                ctime: now,
             }),
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
@@ -1780,9 +1828,9 @@ impl INode for TmpFsSocket {
             size: 0,
             blksize: 0,
             blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
         })
     }
 
@@ -1800,11 +1848,17 @@ impl INode for TmpFsSocket {
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chmod(mode, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chown(uid, gid, ctx)
+        let mut guard = self.internal.lock();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}

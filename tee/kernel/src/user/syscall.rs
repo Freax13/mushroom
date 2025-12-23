@@ -2619,7 +2619,7 @@ fn getdents(
     Ok(len)
 }
 
-#[syscall(i386 = 17, amd64 = 79)]
+#[syscall(i386 = 183, amd64 = 79)]
 fn getcwd(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,

@@ -12,15 +12,14 @@ mod unix;
 use std::{
     alloc::{Layout, alloc, dealloc},
     arch::asm,
-    ffi::{OsStr, c_void},
-    fs::create_dir,
+    env::{current_dir, set_current_dir},
+    ffi::c_void,
+    fs::{create_dir, create_dir_all, remove_dir_all},
     mem::size_of,
+    panic::Location,
     path::{Path, PathBuf},
     ptr::{NonNull, null_mut},
-    sync::{
-        Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
 };
 
 use nix::{
@@ -73,16 +72,8 @@ fn vfork_exit() {
     }
 }
 
-// A look to take before changing signal handlers to prevent race-conditions
-// between tests.
-static SIGNAL_HANDLER_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn signal_handling() {
-    let _guard = SIGNAL_HANDLER_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
     // Some memory for us to mess with.
     #[repr(align(4096))]
     struct Memory {
@@ -142,10 +133,6 @@ fn signal_handling() {
 
 #[test]
 fn stack_switch() {
-    let _guard = SIGNAL_HANDLER_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
     // Allocate an alternate stack.
     static ALTERNATE_STACK: AtomicPtr<u8> = AtomicPtr::new(null_mut());
     const STACK_SIZE: usize = 0x10000;
@@ -247,102 +234,114 @@ fn stack_switch() {
     }
 }
 
-// Return a path for use in a test.
-fn get_temp_dir(test_name: &'static str) -> PathBuf {
-    //  Get the directory meant to be used by tests (found in
-    // CARGO_TARGET_TMPDIR). This environment variable won't be set in mushroom
-    // so we'll default to a different directory if the variable is not set.
-    let var = std::env::var_os("CARGO_TARGET_TMPDIR");
-    let base_path = var
-        .as_deref()
-        .unwrap_or_else(|| OsStr::new("/tmp/mushroom-tests"));
-    let base_path: &Path = base_path.as_ref();
+struct TmpDirGuard {
+    path: PathBuf,
+    old_cwd: PathBuf,
+}
 
-    // Create a path for the test.
-    let path = base_path.join(test_name);
+impl TmpDirGuard {
+    #[track_caller]
+    pub fn new() -> Self {
+        let old_cwd = current_dir().unwrap();
 
-    // Reset the directory.
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).unwrap();
+        let base_path: &Path = "/tmp/mushroom-tests".as_ref();
+        let test_name = format!("{}", Location::caller());
+        let test_name = test_name
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect::<String>();
+        let path = base_path.join(test_name);
 
-    path
+        let _ = remove_dir_all(&path);
+        create_dir_all(&path).unwrap();
+        set_current_dir(&path).unwrap();
+
+        Self { path, old_cwd }
+    }
+}
+
+impl Drop for TmpDirGuard {
+    fn drop(&mut self) {
+        set_current_dir(&self.old_cwd).unwrap();
+        remove_dir_all(&self.path).unwrap();
+    }
 }
 
 #[test]
 fn rename() {
-    let base = get_temp_dir("rename");
+    let _guard = TmpDirGuard::new();
 
     // Rename a directory.
-    let src = &base.join("src-1");
-    let dst = &base.join("dst-1");
+    let src = "src-1";
+    let dst = "dst-1";
     create_dir(src).unwrap();
     std::fs::rename(src, dst).unwrap();
 
     // Rename a directory (source with trailing slash).
-    let src = &base.join("src-2");
-    let dst = &base.join("dst-2");
+    let src = "src-2";
+    let dst = "dst-2";
     create_dir(src).unwrap();
-    std::fs::rename(src.join(""), dst).unwrap();
+    std::fs::rename(format!("{src}/"), dst).unwrap();
 
     // Rename a directory (destination with trailing slash).
-    let src = &base.join("src-3");
-    let dst = &base.join("dst-3");
+    let src = "src-3";
+    let dst = "dst-3";
     create_dir(src).unwrap();
-    std::fs::rename(src, dst.join("")).unwrap();
+    std::fs::rename(src, format!("{dst}/")).unwrap();
 
     // Rename a directory (source and destination with trailing slash).
-    let src = &base.join("src-4");
-    let dst = &base.join("dst-4");
+    let src = "src-4";
+    let dst = "dst-4";
     create_dir(src).unwrap();
-    std::fs::rename(src.join(""), dst.join("")).unwrap();
+    std::fs::rename(format!("{src}/"), format!("{dst}/")).unwrap();
 
     // Rename a file.
-    let src = &base.join("src-5");
-    let dst = &base.join("dst-5");
+    let src = "src-5";
+    let dst = "dst-5";
     std::fs::write(src, "").unwrap();
     std::fs::rename(src, dst).unwrap();
 
     // Fail to rename a file if the source or destination have a trailing
     // slash.
-    let src = &base.join("src-6");
-    let dst = &base.join("dst-6");
+    let src = "src-6";
+    let dst = "dst-6";
     std::fs::write(src, "").unwrap();
-    std::fs::rename(src.join(""), dst).unwrap_err();
-    std::fs::rename(src, dst.join("")).unwrap_err();
-    std::fs::rename(src.join(""), dst.join("")).unwrap_err();
+    std::fs::rename(format!("{src}/"), dst).unwrap_err();
+    std::fs::rename(src, format!("{dst}/")).unwrap_err();
+    std::fs::rename(format!("{src}/"), format!("{dst}/")).unwrap_err();
 
     // Rename a dir to an existing empty dir.
-    let src = &base.join("src-7");
-    let dst = &base.join("dst-7");
+    let src = "src-7";
+    let dst = "dst-7";
     create_dir(src).unwrap();
     create_dir(dst).unwrap();
     std::fs::rename(src, dst).unwrap();
 
     // Fail to rename a dir to an existing non-empty dir.
-    let src = &base.join("src-8");
-    let dst = &base.join("dst-8");
+    let src = "src-8";
+    let dst = "dst-8";
     create_dir(src).unwrap();
     create_dir(dst).unwrap();
-    std::fs::write(dst.join("file"), "").unwrap();
+    std::fs::write(format!("{dst}/file"), "").unwrap();
     std::fs::rename(src, dst).unwrap_err();
 
     // Fail to rename a dir to an existing file.
-    let src = &base.join("src-9");
-    let dst = &base.join("dst-9");
+    let src = "src-9";
+    let dst = "dst-9";
     create_dir(src).unwrap();
     std::fs::write(dst, "").unwrap();
     std::fs::rename(src, dst).unwrap_err();
 
     // Fail to rename a file to an existing dir.
-    let src = &base.join("src-10");
-    let dst = &base.join("dst-10");
+    let src = "src-10";
+    let dst = "dst-10";
     std::fs::write(src, "").unwrap();
     create_dir(dst).unwrap();
     std::fs::rename(src, dst).unwrap_err();
 
     // Rename a file to an existing file.
-    let src = &base.join("src-11");
-    let dst = &base.join("dst-11");
+    let src = "src-11";
+    let dst = "dst-11";
     std::fs::write(src, "").unwrap();
     std::fs::write(dst, "").unwrap();
     std::fs::rename(src, dst).unwrap();
@@ -350,15 +349,13 @@ fn rename() {
 
 #[test]
 fn mkdir() {
-    let base = get_temp_dir("mkdir");
+    let _guard = TmpDirGuard::new();
 
     // Create directory.
-    let src = &base.join("dir-1");
-    create_dir(src).unwrap();
+    create_dir("dir-1").unwrap();
 
     // Create directory with trailing slash.
-    let src = &base.join("dir-2");
-    create_dir(src.join("")).unwrap();
+    create_dir("dir-2/").unwrap();
 }
 
 #[test]

@@ -20,10 +20,10 @@ use nix::{
         timer::{Expiration, TimerSetTimeFlags},
         timerfd::{TimerFd, TimerFlags},
     },
-    unistd::{mkfifo, pipe, pipe2, read, unlink, write},
+    unistd::{mkfifo, pipe, pipe2, read, write},
 };
 
-use crate::unix;
+use crate::{TmpDirGuard, unix};
 
 struct TestFd {
     socket1: OwnedFd,
@@ -213,7 +213,8 @@ fn maxevents() {
 
 #[test]
 fn fifo() {
-    let _ = unlink("test.epoll.fifo");
+    let _guard = TmpDirGuard::new();
+
     mkfifo("test.epoll.fifo", Mode::S_IRWXU).unwrap();
 
     let fd1 = open("test.epoll.fifo", OFlag::O_RDWR, Mode::empty()).unwrap();

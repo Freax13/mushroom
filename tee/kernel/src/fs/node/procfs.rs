@@ -5,7 +5,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{cmp, mem::MaybeUninit};
+use core::{arch::x86_64::__cpuid, cmp, mem::MaybeUninit};
 
 use async_trait::async_trait;
 use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
@@ -240,11 +240,11 @@ impl Directory for ProcFsRoot {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
@@ -533,8 +533,16 @@ impl CpuinfoFile {
             "rdpid",
         ];
 
+        let leaf = unsafe { __cpuid(0) };
+        let mut vendor_id = [0; 12];
+        vendor_id[0..4].copy_from_slice(&leaf.ebx.to_ne_bytes());
+        vendor_id[4..8].copy_from_slice(&leaf.edx.to_ne_bytes());
+        vendor_id[8..12].copy_from_slice(&leaf.ecx.to_ne_bytes());
+        let vendor_id = core::str::from_utf8(&vendor_id).unwrap();
+
         for i in 0..MAX_APS_COUNT {
             writeln!(buffer, "processor\t: {i}").unwrap();
+            writeln!(buffer, "vendor_id\t: {vendor_id}").unwrap();
             writeln!(buffer, "physical id\t: 0").unwrap();
             writeln!(buffer, "siblings\t: {MAX_APS_COUNT}").unwrap();
             writeln!(buffer, "core id\t\t: {i}").unwrap();
@@ -884,11 +892,11 @@ impl Directory for NetDir {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
@@ -1229,17 +1237,20 @@ impl INode for SelfLink {
         _start_dir: Link,
         _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
         let process = ctx.process().ok_or(err!(Srch))?;
-        let file_name = FileName::new(process.pid().to_string().as_bytes())
-            .unwrap()
-            .into_owned();
+        let pid = process.pid().to_string();
+        let file_name = FileName::new(pid.as_bytes()).unwrap().into_owned();
+        let path = Path::new(pid.into_bytes()).unwrap();
         let location = LinkLocation::new(self.parent.upgrade().unwrap(), file_name.clone());
-        Ok(Some(Link {
-            location: location.clone(),
-            node: ProcessDir::new(location, self.fs.clone(), Arc::downgrade(process)),
-        }))
+        Ok(Some((
+            Ok(path),
+            Ok(Link {
+                location: location.clone(),
+                node: ProcessDir::new(location, self.fs.clone(), Arc::downgrade(process)),
+            }),
+        )))
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
@@ -1515,11 +1526,11 @@ impl Directory for ProcessDir {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
@@ -1959,11 +1970,11 @@ impl Directory for FdDir {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
@@ -2181,21 +2192,24 @@ impl INode for FdINode {
         _start_dir: Link,
         location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
         let location = if let Some(link) = self.fd.path_fd_link() {
             link.location.clone()
         } else {
             location
         };
-        Ok(Some(Link {
-            location,
-            node: Arc::new(FollowedFdINode {
-                fd: self.fd.clone(),
-                bsd_file_lock_record: self.bsd_file_lock_record.clone(),
-                watchers: self.watchers.clone(),
+        Ok(Some((
+            self.fd.path(),
+            Ok(Link {
+                location,
+                node: Arc::new(FollowedFdINode {
+                    fd: self.fd.clone(),
+                    bsd_file_lock_record: self.bsd_file_lock_record.clone(),
+                    watchers: self.watchers.clone(),
+                }),
             }),
-        }))
+        )))
     }
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
@@ -2434,11 +2448,11 @@ impl Directory for FdInfoDir {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
@@ -2789,10 +2803,11 @@ impl INode for ExeLink {
         _start_dir: Link,
         _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        Ok(Some(process.exe()))
+        let exe = process.exe();
+        Ok(Some((exe.location.path(), Ok(exe))))
     }
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
@@ -3301,9 +3316,9 @@ impl INode for RootLink {
         _start_dir: Link,
         _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
-        Ok(Some(Link::root()))
+        Ok(Some((Ok(Path::root()), Ok(Link::root()))))
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
@@ -3687,11 +3702,11 @@ impl Directory for ProcessTaskDir {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {
@@ -3942,11 +3957,11 @@ impl Directory for TaskDir {
 
     fn create_file(
         &self,
-        _: FileName<'static>,
+        file_name: FileName<'static>,
         _: FileMode,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<Result<Link, Link>> {
-        bail!(NoEnt)
+        Directory::get_node(self, &file_name, ctx).map(Err)
     }
 
     fn create_tmp_file(&self, _: FileMode, _: &FileAccessContext) -> Result<Link> {

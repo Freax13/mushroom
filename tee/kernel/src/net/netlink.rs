@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
+use alloc::{boxed::Box, format, sync::Arc, vec, vec::Vec};
 use core::cmp;
 
 use async_trait::async_trait;
@@ -271,7 +271,7 @@ impl OpenFileDescription for NetlinkSocket {
     }
 
     fn path(&self) -> Result<Path> {
-        todo!()
+        Path::new(format!("socket:[{}]", self.ino).into_bytes())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
