@@ -19,10 +19,7 @@ use std::{
     panic::Location,
     path::{Path, PathBuf},
     ptr::{NonNull, null_mut},
-    sync::{
-        Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering},
 };
 
 use nix::{
@@ -75,16 +72,8 @@ fn vfork_exit() {
     }
 }
 
-// A look to take before changing signal handlers to prevent race-conditions
-// between tests.
-static SIGNAL_HANDLER_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn signal_handling() {
-    let _guard = SIGNAL_HANDLER_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
     // Some memory for us to mess with.
     #[repr(align(4096))]
     struct Memory {
@@ -144,10 +133,6 @@ fn signal_handling() {
 
 #[test]
 fn stack_switch() {
-    let _guard = SIGNAL_HANDLER_LOCK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-
     // Allocate an alternate stack.
     static ALTERNATE_STACK: AtomicPtr<u8> = AtomicPtr::new(null_mut());
     const STACK_SIZE: usize = 0x10000;
