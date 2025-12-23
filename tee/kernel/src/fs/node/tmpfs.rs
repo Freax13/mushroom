@@ -1518,9 +1518,12 @@ impl INode for TmpFsSymlink {
         start_dir: Link,
         _location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
-        lookup_link(start_dir, &self.target, ctx).map(Some)
+        Ok(Some((
+            Ok(self.target.clone()),
+            lookup_link(start_dir, &self.target, ctx),
+        )))
     }
 
     fn update_times(&self, ctime: Timespec, atime: Option<Timespec>, mtime: Option<Timespec>) {

@@ -284,7 +284,7 @@ pub trait INode: Any + Send + Sync + 'static {
         start_dir: Link,
         location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         let _ = start_dir;
         let _ = location;
         let _ = ctx;
@@ -418,11 +418,11 @@ struct LinkLocationInternal {
 
 /// Repeatedly follow symlinks until the end.
 fn resolve_link(mut link: Link, ctx: &mut FileAccessContext) -> Result<Link> {
-    while let Some(next) = link
-        .node
-        .try_resolve_link(link.parent(), link.location.clone(), ctx)?
+    while let Some((_, res)) =
+        link.node
+            .try_resolve_link(link.parent(), link.location.clone(), ctx)?
     {
-        link = next;
+        link = res?;
     }
     Ok(link)
 }
@@ -727,7 +727,7 @@ pub fn create_file(
     flags: OpenFlags,
     ctx: &mut FileAccessContext,
 ) -> Result<Link> {
-    loop {
+    'outer: loop {
         let (parent, last, trailing_slash) = find_parent(start_dir, &path, ctx)?;
         let PathSegment::FileName(file_name) = last else {
             bail!(IsDir);
@@ -736,23 +736,32 @@ pub fn create_file(
 
         match parent.node.create_file(file_name.into_owned(), mode, ctx)? {
             Ok(link) => return Ok(link),
-            Err(existing) => {
-                let stat = existing.node.stat()?;
+            Err(mut existing) => {
+                ensure!(!flags.contains(OpenFlags::EXCL), Exist);
 
-                // If the node is a symlink start over with the destination
-                // path.
-                if stat.mode.ty() == FileType::Link {
-                    ensure!(!flags.contains(OpenFlags::EXCL), Exist);
+                while let Some((path_res, link_res)) = existing.node.try_resolve_link(
+                    parent.clone(),
+                    existing.location.clone(),
+                    ctx,
+                )? {
                     ensure!(!flags.contains(OpenFlags::NOFOLLOW), Loop);
 
-                    path = existing.node.read_link(ctx)?;
-                    ctx.follow_symlink()?;
+                    // If the symlink can be resolved to an actual node, that's
+                    // great, that's the file we want to open.
+                    if let Ok(link) = link_res {
+                        existing = link;
+                        continue;
+                    }
+
+                    // If the file can't be opened (e.g. because it doesn't
+                    // exist), try to create it.
+                    path = path_res?;
                     start_dir = parent;
-                    continue;
+                    continue 'outer;
                 }
 
+                let stat = existing.node.stat()?;
                 ensure!(stat.mode.ty() != FileType::Dir, IsDir);
-                ensure!(!flags.contains(OpenFlags::EXCL), Exist);
 
                 // Check that the existing file can be opened.
                 if flags.contains(OpenFlags::WRONLY) {

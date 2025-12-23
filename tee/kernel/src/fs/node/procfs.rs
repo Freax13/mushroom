@@ -1229,17 +1229,20 @@ impl INode for SelfLink {
         _start_dir: Link,
         _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
         let process = ctx.process().ok_or(err!(Srch))?;
-        let file_name = FileName::new(process.pid().to_string().as_bytes())
-            .unwrap()
-            .into_owned();
+        let pid = process.pid().to_string();
+        let file_name = FileName::new(pid.as_bytes()).unwrap().into_owned();
+        let path = Path::new(pid.into_bytes()).unwrap();
         let location = LinkLocation::new(self.parent.upgrade().unwrap(), file_name.clone());
-        Ok(Some(Link {
-            location: location.clone(),
-            node: ProcessDir::new(location, self.fs.clone(), Arc::downgrade(process)),
-        }))
+        Ok(Some((
+            Ok(path),
+            Ok(Link {
+                location: location.clone(),
+                node: ProcessDir::new(location, self.fs.clone(), Arc::downgrade(process)),
+            }),
+        )))
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
@@ -2181,21 +2184,24 @@ impl INode for FdINode {
         _start_dir: Link,
         location: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
         let location = if let Some(link) = self.fd.path_fd_link() {
             link.location.clone()
         } else {
             location
         };
-        Ok(Some(Link {
-            location,
-            node: Arc::new(FollowedFdINode {
-                fd: self.fd.clone(),
-                bsd_file_lock_record: self.bsd_file_lock_record.clone(),
-                watchers: self.watchers.clone(),
+        Ok(Some((
+            self.fd.path(),
+            Ok(Link {
+                location,
+                node: Arc::new(FollowedFdINode {
+                    fd: self.fd.clone(),
+                    bsd_file_lock_record: self.bsd_file_lock_record.clone(),
+                    watchers: self.watchers.clone(),
+                }),
             }),
-        }))
+        )))
     }
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
@@ -2789,10 +2795,11 @@ impl INode for ExeLink {
         _start_dir: Link,
         _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
         let process = self.process.upgrade().ok_or(err!(Srch))?;
-        Ok(Some(process.exe()))
+        let exe = process.exe();
+        Ok(Some((exe.location.path(), Ok(exe))))
     }
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
@@ -3301,9 +3308,9 @@ impl INode for RootLink {
         _start_dir: Link,
         _: LinkLocation,
         ctx: &mut FileAccessContext,
-    ) -> Result<Option<Link>> {
+    ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
-        Ok(Some(Link::root()))
+        Ok(Some((Ok(Path::root()), Ok(Link::root()))))
     }
 
     fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
