@@ -158,7 +158,7 @@ impl OpenFileDescription for SignalFd {
     }
 
     fn path(&self) -> Result<Path> {
-        todo!()
+        Ok(Path::new(b"anon_inode:[signalfd]".to_vec()).unwrap())
     }
 
     fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
