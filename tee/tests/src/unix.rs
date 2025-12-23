@@ -24,8 +24,12 @@ use nix::{
     unistd::{pipe2, read, unlink, write},
 };
 
+use crate::TmpDirGuard;
+
 #[test]
 fn path_server_stat() {
+    let _guard = TmpDirGuard::new();
+
     let socket = socket(
         AddressFamily::Unix,
         SockType::Stream,
@@ -41,12 +45,12 @@ fn path_server_stat() {
     let bound_stat = fstat(&socket).unwrap();
 
     assert_eq!(unbound_stat, bound_stat);
-
-    unlink(path).unwrap();
 }
 
 #[test]
 fn path_double_bind() {
+    let _guard = TmpDirGuard::new();
+
     let sock = socket(
         AddressFamily::Unix,
         SockType::Stream,
@@ -103,8 +107,6 @@ fn path_double_bind() {
         bind(sock2.as_raw_fd(), &UnixAddr::new(path).unwrap()),
         Err(Errno::EADDRINUSE)
     );
-
-    unlink(path).unwrap();
 }
 
 #[test]
@@ -456,6 +458,8 @@ fn shutdown_read_write() {
 
 #[test]
 fn connect_to_file() {
+    let _guard = TmpDirGuard::new();
+
     let client = socket(
         AddressFamily::Unix,
         SockType::Stream,
@@ -501,8 +505,6 @@ fn connect_to_file() {
     // Connecting to a closed socket should fail.
     drop(server);
     assert_eq!(connect(client.as_raw_fd(), &addr), Err(Errno::ECONNREFUSED));
-
-    unlink(path).unwrap();
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, remove_dir_all},
+    fs::File,
     io::Read,
     os::fd::{FromRawFd, IntoRawFd, OwnedFd},
     path::Path,
@@ -11,8 +11,12 @@ use nix::{
     unistd::{mkdir, symlinkat, write},
 };
 
+use crate::TmpDirGuard;
+
 #[test]
 fn resolve_in_root() {
+    let _guard = TmpDirGuard::new();
+
     let dir = <_ as AsRef<Path>>::as_ref("fake-root");
     mkdir(dir, Mode::from_bits_retain(0o777)).unwrap();
 
@@ -93,7 +97,4 @@ fn resolve_in_root() {
     assert_eq!(openat2_and_read(&dfd, "/symlink3", open_how), Ok("file2"));
     assert_eq!(openat2_and_read(&dfd, "symlink3", open_how), Ok("file2"));
     assert_eq!(openat2_and_read(&dfd, "../symlink3", open_how), Ok("file2"));
-
-    // Clean up.
-    remove_dir_all(dir).unwrap();
 }
