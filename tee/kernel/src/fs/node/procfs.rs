@@ -5,7 +5,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{cmp, mem::MaybeUninit};
+use core::{arch::x86_64::__cpuid, cmp, mem::MaybeUninit};
 
 use async_trait::async_trait;
 use constants::{MAX_APS_COUNT, physical_address::DYNAMIC};
@@ -533,8 +533,16 @@ impl CpuinfoFile {
             "rdpid",
         ];
 
+        let leaf = unsafe { __cpuid(0) };
+        let mut vendor_id = [0; 12];
+        vendor_id[0..4].copy_from_slice(&leaf.ebx.to_ne_bytes());
+        vendor_id[4..8].copy_from_slice(&leaf.edx.to_ne_bytes());
+        vendor_id[8..12].copy_from_slice(&leaf.ecx.to_ne_bytes());
+        let vendor_id = core::str::from_utf8(&vendor_id).unwrap();
+
         for i in 0..MAX_APS_COUNT {
             writeln!(buffer, "processor\t: {i}").unwrap();
+            writeln!(buffer, "vendor_id\t: {vendor_id}").unwrap();
             writeln!(buffer, "physical id\t: 0").unwrap();
             writeln!(buffer, "siblings\t: {MAX_APS_COUNT}").unwrap();
             writeln!(buffer, "core id\t\t: {i}").unwrap();
