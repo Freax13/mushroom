@@ -1,13 +1,14 @@
 use std::{
-    fs::File,
+    fs::{File, exists},
     io::Read,
     os::fd::{FromRawFd, IntoRawFd, OwnedFd},
     path::Path,
 };
 
 use nix::{
-    fcntl::{OFlag, OpenHow, ResolveFlag, open, openat, openat2},
-    sys::stat::Mode,
+    errno::Errno,
+    fcntl::{AT_FDCWD, OFlag, OpenHow, ResolveFlag, open, openat, openat2},
+    sys::stat::{Mode, fstat},
     unistd::{mkdir, symlinkat, write},
 };
 
@@ -97,4 +98,104 @@ fn resolve_in_root() {
     assert_eq!(openat2_and_read(&dfd, "/symlink3", open_how), Ok("file2"));
     assert_eq!(openat2_and_read(&dfd, "symlink3", open_how), Ok("file2"));
     assert_eq!(openat2_and_read(&dfd, "../symlink3", open_how), Ok("file2"));
+}
+
+#[test]
+fn create_through_symlink() {
+    let _guard = TmpDirGuard::new();
+
+    symlinkat("normal-file", AT_FDCWD, "symlink-src-1").unwrap();
+
+    open(
+        "symlink-src-1",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+    assert!(exists("normal-file").unwrap());
+}
+
+#[test]
+fn create_existing_through_symlink() {
+    let _guard = TmpDirGuard::new();
+
+    symlinkat("normal-file", AT_FDCWD, "symlink-src-1").unwrap();
+
+    let f1 = open(
+        "normal-file",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    let f2 = open(
+        "symlink-src-1",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    let stat1 = fstat(&f1).unwrap();
+    let stat2 = fstat(&f2).unwrap();
+    assert_eq!(stat1.st_ino, stat2.st_ino);
+}
+
+#[test]
+fn create_through_two_symlinks() {
+    let _guard = TmpDirGuard::new();
+
+    symlinkat("normal-file", AT_FDCWD, "symlink-src-1").unwrap();
+    symlinkat("symlink-src-1", AT_FDCWD, "symlink-src-2").unwrap();
+
+    open(
+        "symlink-src-2",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+    assert!(exists("normal-file").unwrap());
+}
+
+#[test]
+fn create_existing_through_two_symlinks() {
+    let _guard = TmpDirGuard::new();
+
+    symlinkat("normal-file", AT_FDCWD, "symlink-src-1").unwrap();
+    symlinkat("symlink-src-1", AT_FDCWD, "symlink-src-2").unwrap();
+
+    let f1 = open(
+        "normal-file",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    let f2 = open(
+        "symlink-src-2",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    let stat1 = fstat(&f1).unwrap();
+    let stat2 = fstat(&f2).unwrap();
+    assert_eq!(stat1.st_ino, stat2.st_ino);
+}
+
+#[test]
+fn create_exclusive_through_symlink() {
+    let _guard = TmpDirGuard::new();
+
+    symlinkat("normal-file", AT_FDCWD, "symlink-src-1").unwrap();
+
+    assert_eq!(
+        open(
+            "symlink-src-1",
+            OFlag::O_CREAT | OFlag::O_EXCL,
+            Mode::from_bits(0o644).unwrap(),
+        )
+        .unwrap_err(),
+        Errno::EEXIST
+    );
+    assert!(!exists("normal-file").unwrap());
 }
