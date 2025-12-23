@@ -17,7 +17,6 @@ use core::{
 };
 
 use bitflags::bitflags;
-use either::Either;
 use log::debug;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::{
@@ -579,6 +578,7 @@ impl VirtualMemoryWriteGuard<'_> {
         backing: Option<Arc<dyn Backing>>,
         page_offset: u64,
         shared: bool,
+        stack_optimization: bool,
         futexes: Arc<Futexes>,
         as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
@@ -601,7 +601,7 @@ impl VirtualMemoryWriteGuard<'_> {
 
         self.unmap(addr, len);
 
-        let pages = SparseSplitVec::new(size);
+        let pages = SparseSplitVec::new(size, stack_optimization);
         if let Some(backing) = backing.as_ref() {
             backing.register(&self.virtual_memory.mapping_ctrl);
         }
@@ -635,6 +635,7 @@ impl VirtualMemoryWriteGuard<'_> {
             None,
             0,
             false,
+            false,
             Arc::new(Futexes::new()),
             as_limit,
         )
@@ -646,6 +647,7 @@ impl VirtualMemoryWriteGuard<'_> {
         len: u64,
         permissions: MemoryPermissions,
         name: &'static str,
+        stack_optimization: bool,
         as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
         struct ZeroBacking {
@@ -676,6 +678,7 @@ impl VirtualMemoryWriteGuard<'_> {
             Some(Arc::new(ZeroBacking { path })),
             0,
             false,
+            stack_optimization,
             Arc::new(Futexes::new()),
             as_limit,
         )
@@ -725,6 +728,7 @@ impl VirtualMemoryWriteGuard<'_> {
             backing,
             0,
             true,
+            false,
             Arc::new(Futexes::new()),
             as_limit,
         )
@@ -858,6 +862,7 @@ impl VirtualMemoryWriteGuard<'_> {
             })),
             page_offset,
             shared,
+            false,
             futexes,
             as_limit,
         )
@@ -874,6 +879,7 @@ impl VirtualMemoryWriteGuard<'_> {
             len,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
             "stack",
+            true,
             as_limit,
         )
     }
@@ -931,6 +937,7 @@ impl VirtualMemoryWriteGuard<'_> {
             MemoryPermissions::READ | MemoryPermissions::EXECUTE,
             Some(Arc::new(TrampolineCode)),
             0,
+            false,
             false,
             Arc::new(Futexes::new()),
             CurrentAsLimit::INFINITE,
@@ -1355,6 +1362,7 @@ impl VirtualMemoryWriteGuard<'_> {
                     brk_end - old_brk_end,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
                     "heap",
+                    false,
                     as_limit,
                 )?;
             }
@@ -1566,7 +1574,7 @@ impl Mapping {
     }
 
     fn clone(&mut self, mapping_ctrl: MappingCtrl) -> Result<Self> {
-        let mut pages = SparseSplitVec::new(self.pages.len());
+        let mut pages = SparseSplitVec::new(self.pages.len(), self.pages.is_stack_optimized());
         for (i, page) in self.pages.iter_mut() {
             *pages.get_mut(i).unwrap() = Some(page.clone()?);
         }
@@ -1603,7 +1611,7 @@ impl Mapping {
             backing: self.backing.clone(),
             page_offset: self.page_offset + offset,
             permissions: self.permissions,
-            pages: SparseSplitVec::new(usize_from(new_size)),
+            pages: SparseSplitVec::new(usize_from(new_size), self.pages.is_stack_optimized()),
             shared: self.shared,
             futexes: self.futexes.clone(),
             mapping_ctrl: self.mapping_ctrl.clone(),
@@ -1672,6 +1680,23 @@ impl<T> SplitVec<T> {
             entries,
             offset: 0,
             len,
+        }
+    }
+
+    fn from_vec(entries: Vec<T>) -> Self {
+        let (ptr, length, capacity) = entries.into_raw_parts();
+        let ptr = ptr.cast::<MaybeUninit<SyncUnsafeCell<T>>>();
+        let vec = unsafe {
+            // SAFETY: `T` and `MaybeUninit<SyncUnsafeCell<T>>` have the same
+            // layout.
+            Vec::from_raw_parts(ptr, length, capacity)
+        };
+
+        let entries = Arc::from(vec);
+        Self {
+            entries,
+            offset: 0,
+            len: length,
         }
     }
 
@@ -1756,6 +1781,51 @@ impl<T> Drop for SplitVec<T> {
     }
 }
 
+struct StackOptimizedSplitVec<T> {
+    entries: Vec<T>,
+    len: usize,
+}
+
+impl<T> StackOptimizedSplitVec<T> {
+    pub const fn new(len: usize) -> Self {
+        Self {
+            entries: Vec::new(),
+            len,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &'_ mut T)> + '_ {
+        (0..self.len).rev().zip(self.entries.iter_mut()).rev()
+    }
+
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut T>
+    where
+        T: Default,
+    {
+        let idx = self.len.checked_sub(idx)?.checked_sub(1)?;
+        if idx >= self.entries.len() {
+            self.entries.resize_with(idx + 1, T::default);
+        }
+        Some(&mut self.entries[idx])
+    }
+}
+
+impl<T> From<StackOptimizedSplitVec<T>> for SplitVec<T>
+where
+    T: Default,
+{
+    fn from(mut value: StackOptimizedSplitVec<T>) -> Self {
+        value.entries.reserve_exact(value.entries.len() - value.len);
+        value.entries.resize_with(value.len, T::default);
+        value.entries.reverse();
+        Self::from_vec(value.entries)
+    }
+}
+
 /// SparseSplitVec's exceeding this threshold store entries in a BTreeMap
 /// instead of a contiguous array. Excessively large mappings can create large
 /// arrays, but most entries will always be empty. This wastes a lot of memory.
@@ -1763,6 +1833,7 @@ impl<T> Drop for SplitVec<T> {
 const SPARSE_THRESHOLD: usize = 8192;
 
 enum SparseSplitVec<T> {
+    StackOptimized(StackOptimizedSplitVec<Option<T>>),
     Dense(SplitVec<Option<T>>),
     Sparse {
         entries: BTreeMap<usize, Option<T>>,
@@ -1772,8 +1843,10 @@ enum SparseSplitVec<T> {
 }
 
 impl<T> SparseSplitVec<T> {
-    pub fn new(len: usize) -> Self {
-        if len < SPARSE_THRESHOLD {
+    pub fn new(len: usize, stack_optimization: bool) -> Self {
+        if stack_optimization {
+            Self::StackOptimized(StackOptimizedSplitVec::new(len))
+        } else if len < SPARSE_THRESHOLD {
             Self::Dense(SplitVec::new(len))
         } else {
             Self::Sparse {
@@ -1786,24 +1859,34 @@ impl<T> SparseSplitVec<T> {
 
     pub fn len(&self) -> usize {
         match *self {
-            SparseSplitVec::Dense(ref split_vec) => split_vec.len(),
-            SparseSplitVec::Sparse { len, .. } => len,
+            Self::StackOptimized(ref stack_optimized) => stack_optimized.len(),
+            Self::Dense(ref split_vec) => split_vec.len(),
+            Self::Sparse { len, .. } => len,
         }
+    }
+
+    pub fn is_stack_optimized(&self) -> bool {
+        matches!(self, Self::StackOptimized(..))
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &'_ mut T)> + '_ {
         match *self {
-            SparseSplitVec::Dense(ref mut split_vec) => Either::Left(
+            Self::StackOptimized(ref mut stack_optimized) => OneOfThree::U(
+                stack_optimized
+                    .iter_mut()
+                    .filter_map(|(i, entry)| entry.as_mut().map(|entry| (i, entry))),
+            ),
+            Self::Dense(ref mut split_vec) => OneOfThree::T(
                 split_vec
                     .iter_mut()
                     .enumerate()
                     .filter_map(|(i, entry)| entry.as_mut().map(|entry| (i, entry))),
             ),
-            SparseSplitVec::Sparse {
+            Self::Sparse {
                 ref mut entries,
                 offset,
                 ..
-            } => Either::Right(
+            } => OneOfThree::V(
                 entries
                     .iter_mut()
                     .filter_map(|(i, entry)| entry.as_mut().map(|entry| (i, entry)))
@@ -1814,8 +1897,9 @@ impl<T> SparseSplitVec<T> {
 
     pub fn get_mut(&mut self, idx: usize) -> Option<&mut Option<T>> {
         match *self {
-            SparseSplitVec::Dense(ref mut split_vec) => split_vec.get_mut(idx),
-            SparseSplitVec::Sparse {
+            Self::StackOptimized(ref mut split_vec) => split_vec.get_mut(idx),
+            Self::Dense(ref mut split_vec) => split_vec.get_mut(idx),
+            Self::Sparse {
                 ref mut entries,
                 offset,
                 len,
@@ -1832,13 +1916,14 @@ impl<T> SparseSplitVec<T> {
     /// Removes entries in the given range. Returns the number of removed entries.
     pub fn remove_range(&mut self, range: Range<usize>) -> usize {
         match *self {
-            SparseSplitVec::Dense(ref mut split_vec) => split_vec
+            Self::StackOptimized(_) => unimplemented!(),
+            Self::Dense(ref mut split_vec) => split_vec
                 .iter_mut()
                 .take(range.end)
                 .skip(range.start)
                 .filter_map(Option::take)
                 .count(),
-            SparseSplitVec::Sparse {
+            Self::Sparse {
                 ref mut entries,
                 offset,
                 ..
@@ -1856,10 +1941,23 @@ impl<T> SparseSplitVec<T> {
         }
     }
 
+    fn deoptimize_stacks(&mut self) {
+        let Self::StackOptimized(stack_optimized) = self else {
+            return;
+        };
+
+        let stack_optimized = core::mem::replace(stack_optimized, StackOptimizedSplitVec::new(0));
+        let split_vec = SplitVec::from(stack_optimized);
+        *self = Self::Dense(split_vec);
+    }
+
     pub fn split_off(&mut self, at: usize) -> Self {
+        self.deoptimize_stacks();
+
         match self {
-            SparseSplitVec::Dense(split_vec) => Self::Dense(split_vec.split_off(at)),
-            SparseSplitVec::Sparse {
+            Self::StackOptimized(..) => unreachable!(),
+            Self::Dense(split_vec) => Self::Dense(split_vec.split_off(at)),
+            Self::Sparse {
                 entries,
                 offset,
                 len,
@@ -1881,7 +1979,7 @@ impl<T> SparseSplitVec<T> {
                 // that's the case, recreate the instance. This gives the
                 // halves another chance of being dense instead of sparse.
                 if entries.is_empty() {
-                    *self = Self::new(*len);
+                    *self = Self::new(*len, false);
                 }
                 let Self::Sparse {
                     entries: ref new_entries,
@@ -1892,7 +1990,7 @@ impl<T> SparseSplitVec<T> {
                     unreachable!();
                 };
                 if new_entries.is_empty() {
-                    new = Self::new(new_len);
+                    new = Self::new(new_len, false);
                 }
 
                 new
@@ -1901,9 +1999,54 @@ impl<T> SparseSplitVec<T> {
     }
 
     pub fn grow(&mut self, additional: usize) {
+        self.deoptimize_stacks();
+
         match self {
+            Self::StackOptimized(..) => unreachable!(),
             Self::Dense(split_vec) => split_vec.grow(additional),
             Self::Sparse { len, .. } => *len += additional,
+        }
+    }
+}
+
+enum OneOfThree<T, U, V> {
+    T(T),
+    U(U),
+    V(V),
+}
+
+impl<T, U, V> Iterator for OneOfThree<T, U, V>
+where
+    T: Iterator,
+    U: Iterator<Item = T::Item>,
+    V: Iterator<Item = T::Item>,
+{
+    type Item = T::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::T(iter) => iter.next(),
+            Self::U(iter) => iter.next(),
+            Self::V(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::T(iter) => iter.size_hint(),
+            Self::U(iter) => iter.size_hint(),
+            Self::V(iter) => iter.size_hint(),
+        }
+    }
+
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        match self {
+            Self::T(iter) => iter.count(),
+            Self::U(iter) => iter.count(),
+            Self::V(iter) => iter.count(),
         }
     }
 }

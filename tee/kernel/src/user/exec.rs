@@ -184,6 +184,7 @@ impl VirtualMemory {
                     0x1000,
                     MemoryPermissions::WRITE | MemoryPermissions::READ,
                     "stack",
+                    false,
                     CurrentAsLimit::INFINITE,
                 )?;
             }
