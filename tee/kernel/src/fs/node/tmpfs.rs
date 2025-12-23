@@ -1501,8 +1501,8 @@ impl INode for TmpFsSymlink {
         bail!(Loop)
     }
 
-    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
-        self.internal.lock().ownership.chmod(mode, ctx)
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(OpNotSupp)
     }
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {

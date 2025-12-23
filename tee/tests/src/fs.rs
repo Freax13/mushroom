@@ -8,7 +8,7 @@ use std::{
 use nix::{
     errno::Errno,
     fcntl::{AT_FDCWD, OFlag, OpenHow, ResolveFlag, open, openat, openat2},
-    sys::stat::{Mode, fstat},
+    sys::stat::{FchmodatFlags, Mode, fchmodat, fstat},
     unistd::{mkdir, symlinkat, write},
 };
 
@@ -198,4 +198,79 @@ fn create_exclusive_through_symlink() {
         Errno::EEXIST
     );
     assert!(!exists("normal-file").unwrap());
+}
+
+#[test]
+fn chmod_symlink() {
+    let _guard = TmpDirGuard::new();
+
+    open(
+        "normal-file",
+        OFlag::O_CREAT,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(symlinkat("normal-file", AT_FDCWD, "symlink"), Ok(()));
+
+    assert_eq!(
+        fchmodat(
+            AT_FDCWD,
+            "symlink",
+            Mode::empty(),
+            FchmodatFlags::FollowSymlink,
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn chmod_symlink_noent() {
+    let _guard = TmpDirGuard::new();
+
+    assert_eq!(symlinkat("normal-file", AT_FDCWD, "symlink"), Ok(()));
+
+    assert_eq!(
+        fchmodat(
+            AT_FDCWD,
+            "symlink",
+            Mode::empty(),
+            FchmodatFlags::FollowSymlink,
+        ),
+        Err(Errno::ENOENT)
+    );
+}
+
+#[test]
+fn chmod_symlink_nofollow() {
+    let _guard = TmpDirGuard::new();
+
+    assert_eq!(symlinkat("normal-file", AT_FDCWD, "symlink"), Ok(()));
+
+    assert_eq!(
+        fchmodat(
+            AT_FDCWD,
+            "symlink",
+            Mode::empty(),
+            FchmodatFlags::NoFollowSymlink,
+        ),
+        Err(Errno::EOPNOTSUPP)
+    );
+}
+
+#[test]
+fn chmod_symlink_nofollow_777() {
+    let _guard = TmpDirGuard::new();
+
+    assert_eq!(symlinkat("normal-file", AT_FDCWD, "symlink"), Ok(()));
+
+    assert_eq!(
+        fchmodat(
+            AT_FDCWD,
+            "symlink",
+            Mode::from_bits_retain(0o777),
+            FchmodatFlags::NoFollowSymlink,
+        ),
+        Err(Errno::EOPNOTSUPP)
+    );
 }
