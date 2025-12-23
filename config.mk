@@ -43,6 +43,8 @@ CLI_kasan       = $(CLI_development)
 CLI_profiling   = $(CLI_release)
 CLI = $(mkfile_dir)/$(CLI_$(PROFILE))
 
+TEST_RUNNER_INIT = tee/target/x86_64-unknown-linux-musl/release/test-runner-init
+
 TIME_BACKEND ?= fake
 
 # Make sure that the requested time backend is supported.

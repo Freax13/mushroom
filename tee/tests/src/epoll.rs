@@ -23,7 +23,7 @@ use nix::{
     unistd::{mkfifo, pipe, pipe2, read, unlink, write},
 };
 
-use crate::{mount_dev, unix};
+use crate::unix;
 
 struct TestFd {
     socket1: OwnedFd,
@@ -455,8 +455,6 @@ fn recursive_edge() {
 
 #[test]
 fn pty_edge() {
-    mount_dev();
-
     let master = open("/dev/ptmx", OFlag::O_RDWR, Mode::empty()).unwrap();
 
     let mut idx = 0u32;

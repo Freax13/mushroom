@@ -1,7 +1,7 @@
 cargo-features = ["panic-immediate-abort", "profile-rustflags"]
 
 [workspace]
-members = ["example", "external-tests", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "tests"]
+members = ["example", "external-tests", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "test-runner-init", "tests"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -17,6 +17,9 @@ supervisor-services = { path = "../common/supervisor-services" }
 
 [workspace.package]
 edition = "2024"
+
+[profile.test]
+panic = "abort"
 
 [profile.kernel]
 inherits = "kernel-release"

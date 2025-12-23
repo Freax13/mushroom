@@ -26,7 +26,7 @@ use futures::{
 use kernel_macros::syscall;
 use log::warn;
 use usize_conversions::{FromUsize, usize_from};
-use x86_64::{VirtAddr, align_up};
+use x86_64::{VirtAddr, structures::paging::Page};
 
 use self::{
     args::*,
@@ -68,7 +68,7 @@ use crate::{
         memory::{Bias, MemoryPermissions, VirtualMemory},
         process::{
             Process, WaitFilter, WaitResult,
-            limits::{CurrentNoFileLimit, CurrentStackLimit},
+            limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
         thread::{
             Capability, Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill,
@@ -696,6 +696,7 @@ fn mmap(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] as_limit: CurrentAsLimit,
     addr: Pointer<c_void>,
     length: u64,
     prot: ProtFlags,
@@ -728,25 +729,37 @@ fn mmap(
         if flags.contains(MmapFlags::ANONYMOUS) {
             virtual_memory
                 .modify()
-                .mmap_shared_zero(bias, length, permissions)
+                .mmap_shared_zero(bias, length, permissions, as_limit)?
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
-            virtual_memory
-                .modify()
-                .mmap_file(bias, length, fd, offset, permissions, true)?
+            virtual_memory.modify().mmap_file(
+                bias,
+                length,
+                fd,
+                offset,
+                permissions,
+                true,
+                as_limit,
+            )?
         }
     } else if flags.contains(MmapFlags::PRIVATE) {
         if flags.contains(MmapFlags::ANONYMOUS) {
             virtual_memory
                 .modify()
-                .mmap_private_zero(bias, length, permissions)
+                .mmap_private_zero(bias, length, permissions, as_limit)?
         } else {
             let fd = FdNum::parse(fd, abi)?;
             let fd = fdtable.get(fd)?;
-            virtual_memory
-                .modify()
-                .mmap_file(bias, length, fd, offset, permissions, false)?
+            virtual_memory.modify().mmap_file(
+                bias,
+                length,
+                fd,
+                offset,
+                permissions,
+                false,
+                as_limit,
+            )?
         }
     } else {
         bail!(Inval)
@@ -759,6 +772,7 @@ fn mmap2(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] as_limit: CurrentAsLimit,
     addr: Pointer<c_void>,
     length: u64,
     prot: ProtFlags,
@@ -770,6 +784,7 @@ fn mmap2(
         abi,
         virtual_memory,
         fdtable,
+        as_limit,
         addr,
         length,
         prot,
@@ -805,13 +820,17 @@ fn munmap(
 }
 
 #[syscall(i386 = 45, amd64 = 12)]
-fn brk(#[state] virtual_memory: Arc<VirtualMemory>, brk_value: u64) -> SyscallResult {
+fn brk(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] as_limit: CurrentAsLimit,
+    brk_value: u64,
+) -> SyscallResult {
     ensure!(brk_value.is_multiple_of(0x1000), Inval);
 
     if brk_value != 0
         && let Ok(brk_value) = VirtAddr::try_new(brk_value)
     {
-        let _ = virtual_memory.modify().set_brk_end(brk_value);
+        let _ = virtual_memory.modify().set_brk_end(brk_value, as_limit);
     }
 
     Ok(virtual_memory.brk_end().as_u64())
@@ -1223,18 +1242,56 @@ async fn sched_yield() -> SyscallResult {
 
 #[syscall(i386 = 163, amd64 = 25)]
 fn mremap(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] as_limit: CurrentAsLimit,
     old_address: Pointer<c_void>,
     old_size: u64,
     new_size: u64,
     flags: MremapFlags,
     new_address: Pointer<c_void>,
 ) -> SyscallResult {
-    if align_up(old_size, 0x1000) == align_up(new_size, 0x1000) {
-        return Ok(old_address.get().as_u64());
-    }
+    let old_address = Page::from_start_address(old_address.get()).map_err(|_| err!(Inval))?;
+    let old_size = old_size.div_ceil(0x1000);
+    let new_size = new_size.div_ceil(0x1000);
 
-    // TODO: Implement this.
-    bail!(NoSys)
+    let mut guard = virtual_memory.modify();
+    let new_addr = if old_size == 0 {
+        ensure!(flags.contains(MremapFlags::MAYMOVE), Inval);
+        let new_address = if flags.contains(MremapFlags::FIXED) {
+            Some(Page::from_start_address(new_address.get()).map_err(|_| err!(Inval))?)
+        } else {
+            None
+        };
+        guard.map_copy(abi, old_address, new_size, new_address, as_limit)?
+    } else if flags.contains(MremapFlags::FIXED) {
+        ensure!(flags.contains(MremapFlags::MAYMOVE), Inval);
+        let new_address = Page::from_start_address(new_address.get()).map_err(|_| err!(Inval))?;
+        guard.remap_to(old_address, old_size, new_address, new_size, as_limit)?;
+        new_address
+    } else {
+        match old_size.cmp(&new_size) {
+            cmp::Ordering::Less => {
+                if guard
+                    .grow_in_place(old_address, old_size, new_size - old_size, as_limit)
+                    .is_ok()
+                {
+                    old_address
+                } else {
+                    ensure!(flags.contains(MremapFlags::MAYMOVE), NoMem);
+                    guard.remap_somewhere_else(abi, old_address, old_size, new_size, as_limit)?
+                }
+            }
+            cmp::Ordering::Equal => old_address,
+            cmp::Ordering::Greater => {
+                guard.shrink(old_address, old_size, old_size - new_size)?;
+                old_address
+            }
+        }
+    };
+    drop(guard);
+
+    Ok(new_addr.start_address().as_u64())
 }
 
 #[syscall(i386 = 144, amd64 = 26)]

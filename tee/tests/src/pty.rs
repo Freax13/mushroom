@@ -12,12 +12,8 @@ use nix::{
     unistd::{read, write},
 };
 
-use crate::mount_dev;
-
 // Returns a tuple of (pty master, pty slave)
 fn make_pty_pair() -> (OwnedFd, OwnedFd) {
-    mount_dev();
-
     let master = open("/dev/ptmx", OFlag::O_RDWR, Mode::empty()).unwrap();
 
     let idx = tiocgptn(&master);

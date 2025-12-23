@@ -1,22 +1,17 @@
 include ../../config.mk
 
-ifeq ($(TEE),insecure)
-RUNNER = $(CLI) run --input /dev/null --output /dev/null --tee insecure --init
-else
-RUNNER = $(CLI) run --input /dev/null --output /dev/null --tee $(TEE) --attestation-report /dev/null --init
-endif
-
-ifeq ($(TEST_TARGET),amd64)
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER = $(RUNNER)
-else ifeq ($(TEST_TARGET),i386)
-export CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER = $(RUNNER)
-endif
+RUNNER = $(CLI) run --init ../../$(TEST_RUNNER_INIT) --output /dev/null --tee $(TEE) --attestation-report /dev/null --input
 
 CARGO_TARGET_amd64 = x86_64-unknown-linux-musl
 CARGO_TARGET_i386  = i686-unknown-linux-musl
 CARGO_TARGET = $(CARGO_TARGET_$(TEST_TARGET))
 
 test:
-	cargo test --target $(CARGO_TARGET)
+	CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER="$(RUNNER)" \
+	CARGO_TARGET_I686_UNKNOWN_LINUX_MUSL_RUNNER="$(RUNNER)"   \
+	cargo test -Zpanic-abort-tests --target $(CARGO_TARGET)
+
+test-on-host:
+	cargo test -Zpanic-abort-tests --target $(CARGO_TARGET)
 
 .PHONY: test

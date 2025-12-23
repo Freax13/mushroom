@@ -1,10 +1,15 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use usize_conversions::FromUsize;
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::{
+    error::{Result, err},
     time::default_backend_offset,
-    user::syscall::args::{Rusage, Timespec, Timeval},
+    user::{
+        process::limits::CurrentAsLimit,
+        syscall::args::{Rusage, Timespec, Timeval},
+    },
 };
 
 #[derive(Default)]
@@ -13,16 +18,21 @@ pub struct MemoryUsage {
     minflt: AtomicU64,
     majflt: AtomicU64,
     rss: AtomicU64,
+    vmsize: AtomicU64,
+    vmpeak: AtomicU64,
 }
 
 impl MemoryUsage {
     pub fn fork(&self) -> Self {
         let rss = self.rss.load(Ordering::Relaxed);
+        let vmsize = self.vmsize.load(Ordering::Relaxed);
         Self {
             maxrss: AtomicU64::new(rss),
             minflt: AtomicU64::new(0),
             majflt: AtomicU64::new(0),
             rss: AtomicU64::new(rss),
+            vmsize: AtomicU64::new(vmsize),
+            vmpeak: AtomicU64::new(vmsize),
         }
     }
 
@@ -40,12 +50,43 @@ impl MemoryUsage {
     }
 
     pub fn decrease_rss(&self, delta: usize) {
-        self.rss
-            .fetch_sub(u64::from_usize(delta), Ordering::Relaxed);
+        let delta = u64::from_usize(delta);
+        let prev = self.rss.fetch_sub(delta, Ordering::Relaxed);
+        debug_assert!(prev >= delta);
     }
 
     pub fn rss(&self) -> u64 {
         self.rss.load(Ordering::Relaxed)
+    }
+
+    pub fn increase_vmsize(&self, delta: usize, as_limit: CurrentAsLimit) -> Result<()> {
+        let delta = u64::from_usize(delta);
+        let prev = self
+            .vmsize
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                let new_value = value.checked_add(delta)?;
+                if new_value.saturating_mul(Size4KiB::SIZE) >= as_limit.get() {
+                    return None;
+                }
+                Some(new_value)
+            })
+            .map_err(|_| err!(NoMem))?;
+        self.vmpeak.fetch_max(prev + delta, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn decrease_vmsize(&self, delta: usize) {
+        let delta = u64::from_usize(delta);
+        let prev = self.vmsize.fetch_sub(delta, Ordering::Relaxed);
+        debug_assert!(prev >= delta);
+    }
+
+    pub fn vmsize(&self) -> u64 {
+        self.vmsize.load(Ordering::Relaxed)
+    }
+
+    pub fn vmpeak(&self) -> u64 {
+        self.vmpeak.load(Ordering::Relaxed)
     }
 }
 

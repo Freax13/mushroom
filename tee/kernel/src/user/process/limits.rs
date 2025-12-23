@@ -31,8 +31,8 @@ impl Limits {
                 rlim_max: RLimit::INFINITY,
             }),
             stack: AtomicRLimit::new(RLimit {
-                rlim_cur: 0x80_0000,
-                rlim_max: 0x80_0000,
+                rlim_cur: 64 * 1024 * 1024,
+                rlim_max: RLimit::INFINITY,
             }),
             core: AtomicRLimit::new(RLimit {
                 rlim_cur: RLimit::INFINITY,
@@ -143,6 +143,8 @@ impl Clone for AtomicRLimit {
 pub struct CurrentLimit<R>(u64, PhantomData<fn(R)>);
 
 impl<R> CurrentLimit<R> {
+    pub const INFINITE: Self = Self::new(u64::MAX);
+
     pub const fn new(value: u64) -> Self {
         Self(value, PhantomData)
     }
@@ -174,6 +176,7 @@ impl<R: ConstResource> Default for CurrentLimit<R> {
 
 pub type CurrentStackLimit = CurrentLimit<Stack>;
 pub type CurrentNoFileLimit = CurrentLimit<NoFile>;
+pub type CurrentAsLimit = CurrentLimit<As>;
 
 pub trait ConstResource {
     const RESOURCE: Resource;
@@ -189,4 +192,10 @@ pub struct NoFile;
 
 impl ConstResource for NoFile {
     const RESOURCE: Resource = Resource::NoFile;
+}
+
+pub struct As;
+
+impl ConstResource for As {
+    const RESOURCE: Resource = Resource::As;
 }

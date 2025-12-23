@@ -14,8 +14,14 @@ supervisor-tdx:
 cli:
 	$(MAKE) -C host/mushroom
 
-test: all
+test-runner-init: all
+	$(MAKE) -C tee/test-runner-init
+
+test: all test-runner-init
 	$(MAKE) -C tee/tests
+
+test-on-host: 
+	$(MAKE) -C tee/tests test-on-host
 
 run: all
 	$(CLI) run --input $(INPUT) --output $(OUTPUT) --tee $(TEE) --attestation-report $(ATTESTATION_REPORT)
@@ -39,4 +45,4 @@ clean:
 	$(MAKE) -C host   clean
 	$(MAKE) -C tee    clean
 
-.PHONY: all kernel supervisor-snp supervisor-tdx cli test run verify run-example clippy clean
+.PHONY: all kernel supervisor-snp supervisor-tdx cli test-runner-init test test-on-host run verify run-example clippy clean
