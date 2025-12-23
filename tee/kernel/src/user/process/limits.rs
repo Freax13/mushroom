@@ -31,8 +31,8 @@ impl Limits {
                 rlim_max: RLimit::INFINITY,
             }),
             stack: AtomicRLimit::new(RLimit {
-                rlim_cur: 0x80_0000,
-                rlim_max: 0x80_0000,
+                rlim_cur: 64 * 1024 * 1024,
+                rlim_max: RLimit::INFINITY,
             }),
             core: AtomicRLimit::new(RLimit {
                 rlim_cur: RLimit::INFINITY,
