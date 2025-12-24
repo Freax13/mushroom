@@ -71,8 +71,9 @@ use crate::{
             limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
         thread::{
-            Capability, Gid, NewTls, PtraceState, SigFields, SigInfo, SigInfoCode, SigKill,
-            Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
+            Capability, Gid, NewTls, PtraceState, SchedulingSettings, SigFields, SigInfo,
+            SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid,
+            new_tid,
         },
     },
 };
@@ -237,6 +238,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysCapget);
     handlers.register(SysCapset);
     handlers.register(SysRtSigpending);
+    handlers.register(SysRtSigtimedwait);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -244,6 +246,12 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFstatfs);
     handlers.register(SysGetpriority);
     handlers.register(SysSetpriority);
+    handlers.register(SysSchedSetparam);
+    handlers.register(SysSchedGetparam);
+    handlers.register(SysSchedSetscheduler);
+    handlers.register(SysSchedGetscheduler);
+    handlers.register(SysSchedGetPriorityMax);
+    handlers.register(SysSchedGetPriorityMin);
     handlers.register(SysMlock);
     handlers.register(SysMunlock);
     handlers.register(SysPrctl);
@@ -291,6 +299,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFaccessat);
     handlers.register(SysPselect6);
     handlers.register(SysPpoll);
+    handlers.register(SysUnshare);
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
@@ -2306,13 +2315,17 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         ..-1 => {
-            let target = process
-                .process_group()
-                .find_process(-pid as u32)
-                .ok_or(err!(Srch))?;
+            let pgid = -pid as u32;
+            let mut processes = Process::all().filter(|p| p.pgid() == pgid).peekable();
+            processes.peek().ok_or(err!(Srch))?;
             if let Some(sig_info) = sig_info {
-                ensure!(process.can_send_signal(&target, sig_info.signal), Perm);
-                target.queue_signal(sig_info);
+                let mut processes = processes
+                    .filter(|target| process.can_send_signal(target, sig_info.signal))
+                    .peekable();
+                processes.peek().ok_or(err!(Perm))?;
+                for target in processes {
+                    target.queue_signal(sig_info);
+                }
             }
         }
     }
@@ -3633,6 +3646,58 @@ fn rt_sigpending(
     Ok(0)
 }
 
+#[syscall(i386 = 177, amd64 = 128)]
+async fn rt_sigtimedwait(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    mask: Pointer<Sigset>,
+    info: Pointer<SigInfo>,
+    timeout: Pointer<Timespec>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let mask = virtual_memory.read_with_abi(mask, abi)?;
+    let deadline = if !timeout.is_null() {
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        let deadline = now(ClockId::Monotonic).saturating_add(timeout);
+        Some(deadline)
+    } else {
+        None
+    };
+
+    let sig_info_future = async move {
+        let mut thread_wait = thread.signal_notify.wait();
+        let mut process_wait = thread.process().signals_notify.wait();
+        loop {
+            if let Some(sig_info) = thread.lock().get_signal(!mask) {
+                break sig_info;
+            }
+            future::select(thread_wait.next(), process_wait.next()).await;
+        }
+    };
+    let timeout_future = match deadline {
+        Some(deadline) => sleep_until(deadline, ClockId::Monotonic).fuse(),
+        None => Fuse::terminated(),
+    };
+    let interrupted_future = thread.wait_for_signal();
+
+    let sig_info_future = pin!(sig_info_future);
+    let mut timeout_future = pin!(timeout_future);
+    let interrupted_future = pin!(interrupted_future);
+
+    let sig_info = select_biased! {
+        sig_info = sig_info_future.fuse() => sig_info,
+        _ = timeout_future => bail!(Again),
+        _ = interrupted_future.fuse() => bail!(Intr),
+    };
+
+    if !info.is_null() {
+        virtual_memory.write_with_abi(info, sig_info, abi)?;
+    }
+
+    Ok(u64::from_usize(sig_info.signal.get()))
+}
+
 #[syscall(i386 = 179, amd64 = 130)]
 async fn rt_sigsuspend(
     thread: &Thread,
@@ -3805,6 +3870,87 @@ fn setpriority(thread: &Thread, which: Which, who: u32, prio: Nice) -> SyscallRe
         thread.nice.store(prio);
     }
     Ok(0)
+}
+
+fn get_sched_target(thread: &Arc<Thread>, pid: u32) -> Result<Arc<Thread>> {
+    let target = if pid == 0 {
+        thread.clone()
+    } else {
+        Thread::find_by_tid(pid).ok_or(err!(Srch))?
+    };
+
+    // Check if the caller is allowed to access the scheduling configuration of
+    // the target.
+    let guard = thread.process().credentials.read();
+    let own_uid = guard.effective_user_id;
+    drop(guard);
+    if own_uid != Uid::SUPER_USER {
+        let guard = target.process().credentials.read();
+        ensure!(
+            own_uid == guard.effective_user_id || own_uid == guard.real_user_id,
+            Perm
+        );
+        drop(guard);
+    }
+
+    Ok(target)
+}
+
+#[syscall(i386 = 154, amd64 = 142)]
+fn sched_setparam(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: u32,
+    param: Pointer<SchedParam>,
+) -> SyscallResult {
+    let target = get_sched_target(thread, pid)?;
+    let value = virtual_memory.read(param)?;
+    target.lock().scheduling_settings.set_param(value)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 155, amd64 = 143)]
+fn sched_getparam(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: u32,
+    param: Pointer<SchedParam>,
+) -> SyscallResult {
+    let target = get_sched_target(thread, pid)?;
+    let value = target.lock().scheduling_settings.param();
+    virtual_memory.write(param, value)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 156, amd64 = 144)]
+fn sched_setscheduler(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    pid: u32,
+    policy: SchedulingPolicy,
+    param: Pointer<SchedParam>,
+) -> SyscallResult {
+    let target = get_sched_target(thread, pid)?;
+    let param = virtual_memory.read(param)?;
+    target.lock().scheduling_settings = SchedulingSettings::new(policy, param)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 157, amd64 = 145)]
+fn sched_getscheduler(thread: &Arc<Thread>, pid: u32) -> SyscallResult {
+    let target = get_sched_target(thread, pid)?;
+    let policy = target.lock().scheduling_settings.policy();
+    Ok(policy as u64)
+}
+
+#[syscall(i386 = 159, amd64 = 146)]
+fn sched_get_priority_max(policy: SchedulingPolicy) -> SyscallResult {
+    Ok(*policy.priority_range().end() as u64)
+}
+
+#[syscall(i386 = 160, amd64 = 147)]
+fn sched_get_priority_min(policy: SchedulingPolicy) -> SyscallResult {
+    Ok(*policy.priority_range().start() as u64)
 }
 
 #[syscall(i386 = 150, amd64 = 149)]
@@ -5156,6 +5302,11 @@ async fn ppoll(
     }
 
     res
+}
+
+#[syscall(i386 = 310, amd64 = 272)]
+fn unshare(flags: u64) -> SyscallResult {
+    bail!(Perm)
 }
 
 #[syscall(i386 = 313, amd64 = 275)]

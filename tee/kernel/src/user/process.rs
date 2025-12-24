@@ -808,14 +808,6 @@ impl ProcessGroup {
             .filter_map(Weak::upgrade)
             .collect::<Vec<_>>()
     }
-
-    pub fn find_process(&self, pid: u32) -> Option<Arc<Process>> {
-        self.processes
-            .lock()
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|p| p.pid == pid)
-    }
 }
 
 pub struct Session {

@@ -5,7 +5,7 @@ use core::{
     fmt::{self, Display},
     marker::PhantomData,
     net::{self, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
-    ops::Add,
+    ops::{Add, RangeInclusive},
 };
 
 use bit_field::BitField;
@@ -2601,4 +2601,32 @@ bitflags! {
         /// Prevent file from growing
         const GROW = 0x0004;
     }
+}
+
+enum_arg! {
+    pub enum SchedulingPolicy {
+        Normal = 0,
+        Fifo = 1,
+        Rr = 2,
+        Batch = 3,
+        Idle = 5,
+    }
+}
+
+impl SchedulingPolicy {
+    pub fn priority_range(self) -> RangeInclusive<i32> {
+        match self {
+            Self::Normal => 0..=0,
+            Self::Fifo => 1..=99,
+            Self::Rr => 1..=99,
+            Self::Batch => 0..=0,
+            Self::Idle => 0..=0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct SchedParam {
+    pub sched_priority: i32,
 }
