@@ -238,6 +238,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysCapget);
     handlers.register(SysCapset);
     handlers.register(SysRtSigpending);
+    handlers.register(SysRtSigtimedwait);
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
@@ -3643,6 +3644,58 @@ fn rt_sigpending(
     let pending_signals = thread.pending_signals() | thread.process().pending_signals();
     virtual_memory.write_with_abi(uset, pending_signals, abi)?;
     Ok(0)
+}
+
+#[syscall(i386 = 177, amd64 = 128)]
+async fn rt_sigtimedwait(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    mask: Pointer<Sigset>,
+    info: Pointer<SigInfo>,
+    timeout: Pointer<Timespec>,
+    sigsetsize: u64,
+) -> SyscallResult {
+    let mask = virtual_memory.read_with_abi(mask, abi)?;
+    let deadline = if !timeout.is_null() {
+        let timeout = virtual_memory.read_with_abi(timeout, abi)?;
+        let deadline = now(ClockId::Monotonic).saturating_add(timeout);
+        Some(deadline)
+    } else {
+        None
+    };
+
+    let sig_info_future = async move {
+        let mut thread_wait = thread.signal_notify.wait();
+        let mut process_wait = thread.process().signals_notify.wait();
+        loop {
+            if let Some(sig_info) = thread.lock().get_signal(!mask) {
+                break sig_info;
+            }
+            future::select(thread_wait.next(), process_wait.next()).await;
+        }
+    };
+    let timeout_future = match deadline {
+        Some(deadline) => sleep_until(deadline, ClockId::Monotonic).fuse(),
+        None => Fuse::terminated(),
+    };
+    let interrupted_future = thread.wait_for_signal();
+
+    let sig_info_future = pin!(sig_info_future);
+    let mut timeout_future = pin!(timeout_future);
+    let interrupted_future = pin!(interrupted_future);
+
+    let sig_info = select_biased! {
+        sig_info = sig_info_future.fuse() => sig_info,
+        _ = timeout_future => bail!(Again),
+        _ = interrupted_future.fuse() => bail!(Intr),
+    };
+
+    if !info.is_null() {
+        virtual_memory.write_with_abi(info, sig_info, abi)?;
+    }
+
+    Ok(u64::from_usize(sig_info.signal.get()))
 }
 
 #[syscall(i386 = 179, amd64 = 130)]
