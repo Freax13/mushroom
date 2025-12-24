@@ -47,8 +47,8 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Pointer, PtraceEvent, Rusage, Signal, TimerId, Timespec, UserDesc,
-                WStatus,
+                FileMode, Nice, Pointer, PtraceEvent, Rusage, SchedParam, SchedulingPolicy, Signal,
+                TimerId, Timespec, UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -109,6 +109,7 @@ pub struct ThreadState {
     pub tracees: Vec<Weak<Thread>>,
 
     pub capabilities: Capabilities,
+    pub scheduling_settings: SchedulingSettings,
 }
 
 impl Thread {
@@ -125,6 +126,7 @@ impl Thread {
         affinity: ApBitmap,
         nice: Nice,
         capabilities: Capabilities,
+        scheduling_settings: SchedulingSettings,
     ) -> Arc<Self> {
         let thread = Self {
             tid,
@@ -147,6 +149,7 @@ impl Thread {
                 ptrace_state: PtraceState::default(),
                 tracees: Vec::new(),
                 capabilities,
+                scheduling_settings,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -229,6 +232,7 @@ impl Thread {
             ApBitmap::all(),
             Nice::DEFAULT,
             Capabilities::new(),
+            SchedulingSettings::default(),
         )
     }
 
@@ -758,6 +762,7 @@ impl ThreadGuard<'_> {
             self.thread.affinity.get_all(),
             self.thread.nice.load(),
             self.capabilities,
+            self.scheduling_settings,
         );
 
         let mut guard = thread.lock();
@@ -1967,6 +1972,49 @@ impl PtraceState {
         match self {
             PtraceState::Running | PtraceState::SignalRestart { .. } => false,
             PtraceState::Signal { .. } | PtraceState::Exit { .. } => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SchedulingSettings {
+    policy: SchedulingPolicy,
+    priority: i32,
+}
+
+impl SchedulingSettings {
+    pub fn new(policy: SchedulingPolicy, param: SchedParam) -> Result<Self> {
+        ensure!(
+            policy.priority_range().contains(&param.sched_priority),
+            Inval
+        );
+        Ok(Self {
+            policy,
+            priority: param.sched_priority,
+        })
+    }
+
+    pub fn policy(&self) -> SchedulingPolicy {
+        self.policy
+    }
+
+    pub fn param(&self) -> SchedParam {
+        SchedParam {
+            sched_priority: self.priority,
+        }
+    }
+
+    pub fn set_param(&mut self, param: SchedParam) -> Result<()> {
+        *self = Self::new(self.policy, param)?;
+        Ok(())
+    }
+}
+
+impl Default for SchedulingSettings {
+    fn default() -> Self {
+        Self {
+            policy: SchedulingPolicy::Normal,
+            priority: 0,
         }
     }
 }

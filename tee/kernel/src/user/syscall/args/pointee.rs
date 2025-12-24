@@ -32,9 +32,9 @@ use crate::{
                 ITimerspec, ITimerval, InputMode, Iovec, IpMreq, IpMreqn, Ipv6Mreq, Linger,
                 LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OpenFlags, OpenHow,
                 OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit, ResolveFlags,
-                Rusage, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
-                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
-                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                Rusage, SchedParam, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink,
+                SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone,
+                Ucred, UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -3149,3 +3149,6 @@ impl From<RawIpv6Mreq> for Ipv6Mreq {
         }
     }
 }
+
+impl Pointee for SchedParam {}
+impl PrimitivePointee for SchedParam {}
