@@ -16,12 +16,12 @@ use nix::{
         socket::{
             AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, Shutdown,
             SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrLike, SockaddrStorage, UnixAddr,
-            bind, connect, getpeername, getsockname, listen, recv, recvfrom, recvmsg, send,
+            accept, bind, connect, getpeername, getsockname, listen, recv, recvfrom, recvmsg, send,
             sendmsg, sendto, shutdown, socket, socketpair,
         },
         stat::fstat,
     },
-    unistd::{pipe2, read, unlink, write},
+    unistd::{close, pipe2, read, unlink, write},
 };
 
 use crate::TmpDirGuard;
@@ -2337,4 +2337,186 @@ fn dgram_ifindex_unknown() {
     }
     let res = unsafe { ioctl(a.as_raw_fd(), SIOCGIFINDEX as Ioctl, &mut ifreq) };
     assert_eq!(Errno::result(res), Err(Errno::ENODEV));
+}
+
+#[test]
+fn stream_server_shutdown_read() {
+    let server = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client2 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(bind(server.as_raw_fd(), &UnixAddr::new_unnamed()), Ok(()));
+    let addr = getsockname::<UnixAddr>(server.as_raw_fd()).unwrap();
+
+    // Can't connect when the socket is not yet listening.
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    assert_eq!(listen(&server, Backlog::MAXCONN), Ok(()));
+
+    // Connecting now works.
+    assert_eq!(connect(client1.as_raw_fd(), &addr), Ok(()));
+
+    assert_eq!(shutdown(server.as_raw_fd(), Shutdown::Read), Ok(()));
+
+    // Connecting doesn't work after the socket has been shut down.
+    assert_eq!(
+        connect(client2.as_raw_fd(), &addr),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    // The first socket that connected before the server was shut down can
+    // still be accepted.
+    let fd = accept(server.as_raw_fd()).unwrap();
+    close(fd).unwrap();
+
+    // But the second connection attempt can't be accepted.
+    assert_eq!(accept(server.as_raw_fd()), Err(Errno::EAGAIN));
+}
+
+#[test]
+fn stream_server_shutdown_write() {
+    let server = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client2 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(bind(server.as_raw_fd(), &UnixAddr::new_unnamed()), Ok(()));
+    let addr = getsockname::<UnixAddr>(server.as_raw_fd()).unwrap();
+
+    // Can't connect when the socket is not yet listening.
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    assert_eq!(listen(&server, Backlog::MAXCONN), Ok(()));
+
+    // Connecting now works.
+    assert_eq!(connect(client1.as_raw_fd(), &addr), Ok(()));
+
+    assert_eq!(shutdown(server.as_raw_fd(), Shutdown::Write), Ok(()));
+
+    // Connecting still works because the read half hasn't been shut down.
+    assert_eq!(connect(client2.as_raw_fd(), &addr), Ok(()));
+
+    // The first socket that connected before the server was shut down can
+    // still be accepted.
+    let fd = accept(server.as_raw_fd()).unwrap();
+    close(fd).unwrap();
+
+    // Accepting the second socket works as well.
+    let fd = accept(server.as_raw_fd()).unwrap();
+    close(fd).unwrap();
+}
+
+#[test]
+fn stream_server_shutdown_both() {
+    let server = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client2 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(bind(server.as_raw_fd(), &UnixAddr::new_unnamed()), Ok(()));
+    let addr = getsockname::<UnixAddr>(server.as_raw_fd()).unwrap();
+
+    // Can't connect when the socket is not yet listening.
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    assert_eq!(listen(&server, Backlog::MAXCONN), Ok(()));
+
+    // Connecting now works.
+    assert_eq!(connect(client1.as_raw_fd(), &addr), Ok(()));
+
+    assert_eq!(shutdown(server.as_raw_fd(), Shutdown::Both), Ok(()));
+
+    // Connecting doesn't work after the socket has been shut down.
+    assert_eq!(
+        connect(client2.as_raw_fd(), &addr),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    // The first socket that connected before the server was shut down can
+    // still be accepted.
+    let fd = accept(server.as_raw_fd()).unwrap();
+    close(fd).unwrap();
+
+    // But the second connection attempt can't be accepted.
+    assert_eq!(accept(server.as_raw_fd()), Err(Errno::EAGAIN));
+}
+
+#[test]
+fn stream_server_shutdown_read_blocking() {
+    let server = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(bind(server.as_raw_fd(), &UnixAddr::new_unnamed()), Ok(()));
+
+    assert_eq!(listen(&server, Backlog::MAXCONN), Ok(()));
+
+    assert_eq!(shutdown(server.as_raw_fd(), Shutdown::Read), Ok(()));
+
+    assert_eq!(accept(server.as_raw_fd()), Err(Errno::EINVAL));
 }
