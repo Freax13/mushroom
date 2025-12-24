@@ -550,6 +550,7 @@ impl OpenFileDescription for StreamUnixSocket {
     ) -> Result<()> {
         match (level, optname) {
             (1, 2) => Ok(()), // SO_REUSEADDR
+            (1, 9) => Ok(()), // SO_KEEPALIVE
             _ => bail!(OpNotSupp),
         }
     }
