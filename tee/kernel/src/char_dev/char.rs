@@ -537,8 +537,6 @@ impl OpenFileDescription for Pty {
             0x540e => {
                 // TIOCSCTTY
 
-                ensure!(arg.is_null(), Perm);
-
                 // Check that the process is the group leader.
                 let session = thread.process().process_group().session();
                 ensure!(thread.process().pid() == session.sid(), Perm);
