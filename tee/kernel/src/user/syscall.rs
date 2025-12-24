@@ -298,6 +298,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFaccessat);
     handlers.register(SysPselect6);
     handlers.register(SysPpoll);
+    handlers.register(SysUnshare);
     handlers.register(SysSplice);
     handlers.register(SysUtimensat);
     handlers.register(SysEpollPwait);
@@ -5248,6 +5249,11 @@ async fn ppoll(
     }
 
     res
+}
+
+#[syscall(i386 = 310, amd64 = 272)]
+fn unshare(flags: u64) -> SyscallResult {
+    bail!(Perm)
 }
 
 #[syscall(i386 = 313, amd64 = 275)]
