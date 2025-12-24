@@ -1796,6 +1796,7 @@ bitflags! {
 
 bitflags! {
     pub struct SendMsgFlags {
+        const DONTWAIT = 1 << 6;
         const NOSIGNAL = 0x4000;
         const FASTOPEN = 0x20000000;
     }
