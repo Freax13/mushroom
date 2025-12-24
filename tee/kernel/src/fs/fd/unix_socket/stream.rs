@@ -428,20 +428,29 @@ impl OpenFileDescription for StreamUnixSocket {
 
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
         let mode = self.mode.get().ok_or(err!(NotConn))?;
-        let Mode::Active(active) = mode else {
-            bail!(NotConn);
-        };
-        match how {
-            ShutdownHow::Rd => {
-                active.read_half.lock().shutdown();
-            }
-            ShutdownHow::Wr => {
-                active.write_half.lock().shutdown();
-            }
-            ShutdownHow::RdWr => {
-                active.read_half.lock().shutdown();
-                active.write_half.lock().shutdown();
-            }
+        match mode {
+            Mode::Active(active) => match how {
+                ShutdownHow::Rd => {
+                    active.read_half.lock().shutdown();
+                }
+                ShutdownHow::Wr => {
+                    active.write_half.lock().shutdown();
+                }
+                ShutdownHow::RdWr => {
+                    active.read_half.lock().shutdown();
+                    active.write_half.lock().shutdown();
+                }
+            },
+            Mode::Passive(passive) => match how {
+                ShutdownHow::Rd | ShutdownHow::RdWr => {
+                    let mut guard = passive.internal.lock();
+                    guard.shutdown = true;
+                    guard.read_event_counter.inc();
+                    drop(guard);
+                    passive.connect_notify.notify();
+                }
+                ShutdownHow::Wr => {}
+            },
         }
         Ok(())
     }
@@ -541,6 +550,7 @@ impl OpenFileDescription for StreamUnixSocket {
     ) -> Result<()> {
         match (level, optname) {
             (1, 2) => Ok(()), // SO_REUSEADDR
+            (1, 9) => Ok(()), // SO_KEEPALIVE
             _ => bail!(OpNotSupp),
         }
     }
@@ -567,6 +577,7 @@ impl OpenFileDescription for StreamUnixSocket {
                     queue: VecDeque::new(),
                     read_event_counter: EventCounter::new(),
                     backlog: 0,
+                    shutdown: false,
                 }),
                 localcred: Ucred::from(ctx),
             })
@@ -598,7 +609,14 @@ impl OpenFileDescription for StreamUnixSocket {
             bail!(Inval)
         };
         let mut guard = passive.internal.lock();
-        let active = guard.queue.pop_front().ok_or(err!(Again))?;
+        let Some(active) = guard.queue.pop_front() else {
+            let shutdown = guard.shutdown;
+            drop(guard);
+
+            ensure!(shutdown, Again);
+            let nonblock = self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
+            if nonblock { bail!(Again) } else { bail!(Inval) }
+        };
         passive.connect_notify.notify();
         drop(guard);
 
@@ -646,6 +664,9 @@ impl OpenFileDescription for StreamUnixSocket {
             .connect_notify
             .wait_until(|| {
                 let mut guard = passive.internal.lock();
+                if guard.shutdown {
+                    return Some(Err(err!(ConnRefused)));
+                }
                 if guard.backlog <= guard.queue.len() {
                     return None;
                 }
@@ -697,7 +718,7 @@ impl OpenFileDescription for StreamUnixSocket {
             Mode::Passive(passive) => {
                 let guard = passive.internal.lock();
                 let mut ready_events = Events::empty();
-                ready_events.set(Events::READ, !guard.queue.is_empty());
+                ready_events.set(Events::READ, !guard.queue.is_empty() || guard.shutdown);
                 NonEmptyEvents::new(ready_events & events)
             }
         }
@@ -723,7 +744,7 @@ impl OpenFileDescription for StreamUnixSocket {
                     .wait_until(|| {
                         let guard = passive.internal.lock();
                         let mut ready_events = Events::empty();
-                        ready_events.set(Events::READ, !guard.queue.is_empty());
+                        ready_events.set(Events::READ, !guard.queue.is_empty() || guard.shutdown);
                         ready_events &= events;
                         NonEmptyEvents::new(ready_events)
                     })
@@ -808,7 +829,7 @@ impl EpollReady for StreamUnixSocket {
                     .epoll_loop(req, || {
                         let mut result = EpollResult::new();
                         let guard = passive.internal.lock();
-                        if !guard.queue.is_empty() {
+                        if !guard.queue.is_empty() || guard.shutdown {
                             result.set_ready(Events::READ);
                         }
                         result.add_counter(Events::READ, &guard.read_event_counter);
@@ -1193,4 +1214,5 @@ struct PassiveInternal {
     queue: VecDeque<Active>,
     read_event_counter: EventCounter,
     backlog: usize,
+    shutdown: bool,
 }

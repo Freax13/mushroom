@@ -12,15 +12,16 @@ use nix::{
         epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags},
         eventfd::{EfdFlags, EventFd},
         socket::{
-            AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType, UnixAddr, bind, connect,
-            getsockname, recv, send, sendto, socket, socketpair,
+            AddressFamily, Backlog, MsgFlags, Shutdown, SockFlag, SockProtocol, SockType, UnixAddr,
+            accept, bind, connect, getsockname, listen, recv, send, sendto, shutdown, socket,
+            socketpair,
         },
         stat::Mode,
         time::TimeSpec,
         timer::{Expiration, TimerSetTimeFlags},
         timerfd::{TimerFd, TimerFlags},
     },
-    unistd::{mkfifo, pipe, pipe2, read, write},
+    unistd::{close, mkfifo, pipe, pipe2, read, write},
 };
 
 use crate::{TmpDirGuard, unix};
@@ -829,6 +830,75 @@ fn unix_stream_edge_triggered() {
             1
         )
     );
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+}
+
+#[test]
+fn unix_stream_server_edge_triggered() {
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+
+    let server = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client2 = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    epoll
+        .add(
+            &server,
+            EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLET, 1),
+        )
+        .unwrap();
+
+    assert_eq!(bind(server.as_raw_fd(), &UnixAddr::new_unnamed()), Ok(()));
+    let addr = getsockname::<UnixAddr>(server.as_raw_fd()).unwrap();
+    assert_eq!(listen(&server, Backlog::MAXCONN), Ok(()));
+
+    let mut events = [EpollEvent::empty()];
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr), Ok(()));
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLIN, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    assert_eq!(connect(client2.as_raw_fd(), &addr), Ok(()));
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLIN, 1));
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let fd = accept(server.as_raw_fd()).unwrap();
+    close(fd).unwrap();
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
+
+    let fd = accept(server.as_raw_fd()).unwrap();
+    close(fd).unwrap();
+
+    assert_eq!(accept(server.as_raw_fd()), Err(Errno::EAGAIN));
+
+    assert_eq!(shutdown(server.as_raw_fd(), Shutdown::Read), Ok(()));
+
+    assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(1));
+    assert_eq!(events[0], EpollEvent::new(EpollFlags::EPOLLIN, 1));
     assert_eq!(epoll.wait(&mut events, PollTimeout::ZERO), Ok(0));
 }
 

@@ -1748,7 +1748,19 @@ async fn recvmsg(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
-    let len = do_edge_triggered_io(&fd, Events::READ, &ctx, || {
+    let len = if !flags.contains(RecvMsgFlags::DONTWAIT) {
+        do_edge_triggered_io(&fd, Events::READ, &ctx, || {
+            fd.recv_msg(
+                &virtual_memory,
+                abi,
+                &mut msg_hdr,
+                flags,
+                &fdtable,
+                no_file_limit,
+            )
+        })
+        .await?
+    } else {
         fd.recv_msg(
             &virtual_memory,
             abi,
@@ -1756,9 +1768,8 @@ async fn recvmsg(
             flags,
             &fdtable,
             no_file_limit,
-        )
-    })
-    .await?;
+        )?
+    };
     virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
     Ok(u64::from_usize(len))
 }

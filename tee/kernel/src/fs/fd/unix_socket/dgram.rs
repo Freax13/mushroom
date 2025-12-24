@@ -358,7 +358,7 @@ impl OpenFileDescription for DgramUnixSocket {
         buf: &dyn WriteBuf,
         flags: SentToFlags,
         addr: Option<SocketAddr>,
-        _: &FileAccessContext,
+        ctx: &FileAccessContext,
     ) -> Result<usize> {
         if flags != SentToFlags::empty() {
             todo!()
@@ -380,7 +380,12 @@ impl OpenFileDescription for DgramUnixSocket {
                 bail!(Inval);
             };
             match addr {
-                SocketAddrUnix::Pathname(_) => todo!(),
+                SocketAddrUnix::Pathname(path) => {
+                    let mut ctx = ctx.clone();
+                    let _link =
+                        lookup_and_resolve_link(ctx.process().unwrap().cwd(), &path, &mut ctx)?;
+                    todo!()
+                }
                 SocketAddrUnix::Unnamed => bail!(Inval),
                 SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
                     .lock()
@@ -421,8 +426,8 @@ impl OpenFileDescription for DgramUnixSocket {
         _: &FileDescriptorTable,
         ctx: &FileAccessContext,
     ) -> Result<usize> {
-        if flags != SendMsgFlags::empty() {
-            todo!()
+        if (flags & !SendMsgFlags::NOSIGNAL) != SendMsgFlags::empty() {
+            todo!("{flags:?}")
         }
         if msg_hdr.controllen != 0 {
             todo!()
