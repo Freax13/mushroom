@@ -426,8 +426,8 @@ impl OpenFileDescription for DgramUnixSocket {
         _: &FileDescriptorTable,
         ctx: &FileAccessContext,
     ) -> Result<usize> {
-        if flags != SendMsgFlags::empty() {
-            todo!()
+        if (flags & !SendMsgFlags::NOSIGNAL) != SendMsgFlags::empty() {
+            todo!("{flags:?}")
         }
         if msg_hdr.controllen != 0 {
             todo!()
