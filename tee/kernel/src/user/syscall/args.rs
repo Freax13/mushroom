@@ -928,6 +928,7 @@ enum_arg! {
         Realtime = 0,
         Monotonic = 1,
         MonotonicRaw = 4,
+        BootTime = 7,
     }
 }
 
@@ -1263,6 +1264,7 @@ impl From<EpollCreate1Flags> for FdFlags {
 
 bitflags! {
     pub struct EventFdFlags {
+        const SEMAPHORE = 0x1;
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
     }
@@ -1272,6 +1274,15 @@ impl From<EventFdFlags> for FdFlags {
     fn from(value: EventFdFlags) -> Self {
         let mut flags = Self::empty();
         flags.set(Self::CLOEXEC, value.contains(EventFdFlags::CLOEXEC));
+        flags
+    }
+}
+
+impl From<EventFdFlags> for OpenFlags {
+    fn from(value: EventFdFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(EventFdFlags::CLOEXEC));
+        flags.set(Self::NONBLOCK, value.contains(EventFdFlags::NON_BLOCK));
         flags
     }
 }

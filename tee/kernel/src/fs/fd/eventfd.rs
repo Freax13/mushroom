@@ -19,13 +19,16 @@ use crate::{
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
+        syscall::args::{
+            EventFdFlags, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
 };
 
 pub struct EventFd {
     ino: u64,
+    semaphore: bool,
     internal: Mutex<EventFdInternal>,
     notify: Notify,
     counter: AtomicU64,
@@ -35,14 +38,18 @@ pub struct EventFd {
 }
 
 struct EventFdInternal {
+    flags: OpenFlags,
     ownership: Ownership,
 }
 
 impl EventFd {
-    pub fn new(initval: u32, uid: Uid, gid: Gid) -> Self {
+    pub fn new(initval: u32, flags: EventFdFlags, uid: Uid, gid: Gid) -> Self {
+        let semaphore = flags.contains(EventFdFlags::SEMAPHORE);
         Self {
             ino: new_ino(),
+            semaphore,
             internal: Mutex::new(EventFdInternal {
+                flags: flags.into(),
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
             notify: Notify::new(),
@@ -57,7 +64,18 @@ impl EventFd {
 #[async_trait]
 impl OpenFileDescription for EventFd {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        self.internal.lock().flags
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.internal.lock().flags.update(flags);
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
     fn path(&self) -> Result<Path> {
@@ -67,8 +85,18 @@ impl OpenFileDescription for EventFd {
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
 
-        let value = self.counter.swap(0, Ordering::SeqCst);
-        ensure!(value != 0, Again);
+        let value = if !self.semaphore {
+            let value = self.counter.swap(0, Ordering::SeqCst);
+            ensure!(value != 0, Again);
+            value
+        } else {
+            self.counter
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                    value.checked_sub(1)
+                })
+                .map_err(|_| err!(Again))?;
+            1
+        };
         buf.write(0, &value.to_ne_bytes())?;
 
         self.write_event_counter.inc();
