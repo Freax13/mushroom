@@ -2313,13 +2313,17 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
             }
         }
         ..-1 => {
-            let target = process
-                .process_group()
-                .find_process(-pid as u32)
-                .ok_or(err!(Srch))?;
+            let pgid = -pid as u32;
+            let mut processes = Process::all().filter(|p| p.pgid() == pgid).peekable();
+            processes.peek().ok_or(err!(Srch))?;
             if let Some(sig_info) = sig_info {
-                ensure!(process.can_send_signal(&target, sig_info.signal), Perm);
-                target.queue_signal(sig_info);
+                let mut processes = processes
+                    .filter(|target| process.can_send_signal(target, sig_info.signal))
+                    .peekable();
+                processes.peek().ok_or(err!(Perm))?;
+                for target in processes {
+                    target.queue_signal(sig_info);
+                }
             }
         }
     }
