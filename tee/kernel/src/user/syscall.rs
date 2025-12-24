@@ -5698,7 +5698,12 @@ fn eventfd2(
     flags: EventFdFlags,
 ) -> SyscallResult {
     let fd_num = fdtable.insert(
-        EventFd::new(initval, ctx.filesystem_user_id(), ctx.filesystem_group_id()),
+        EventFd::new(
+            initval,
+            flags,
+            ctx.filesystem_user_id(),
+            ctx.filesystem_group_id(),
+        ),
         flags,
         no_file_limit,
     )?;

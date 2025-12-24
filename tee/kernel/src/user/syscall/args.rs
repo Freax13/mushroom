@@ -1277,6 +1277,15 @@ impl From<EventFdFlags> for FdFlags {
     }
 }
 
+impl From<EventFdFlags> for OpenFlags {
+    fn from(value: EventFdFlags) -> Self {
+        let mut flags = Self::empty();
+        flags.set(Self::CLOEXEC, value.contains(EventFdFlags::CLOEXEC));
+        flags.set(Self::NONBLOCK, value.contains(EventFdFlags::NON_BLOCK));
+        flags
+    }
+}
+
 #[derive(Debug, Clone, Copy, CheckedBitPattern, NoUninit)]
 #[repr(C)]
 pub struct UserDesc {

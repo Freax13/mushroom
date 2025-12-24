@@ -19,7 +19,9 @@ use crate::{
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
+        syscall::args::{
+            EventFdFlags, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
 };
@@ -35,14 +37,16 @@ pub struct EventFd {
 }
 
 struct EventFdInternal {
+    flags: OpenFlags,
     ownership: Ownership,
 }
 
 impl EventFd {
-    pub fn new(initval: u32, uid: Uid, gid: Gid) -> Self {
+    pub fn new(initval: u32, flags: EventFdFlags, uid: Uid, gid: Gid) -> Self {
         Self {
             ino: new_ino(),
             internal: Mutex::new(EventFdInternal {
+                flags: flags.into(),
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
             }),
             notify: Notify::new(),
@@ -57,7 +61,18 @@ impl EventFd {
 #[async_trait]
 impl OpenFileDescription for EventFd {
     fn flags(&self) -> OpenFlags {
-        OpenFlags::empty()
+        self.internal.lock().flags
+    }
+
+    fn set_flags(&self, flags: OpenFlags) {
+        self.internal.lock().flags.update(flags);
+    }
+
+    fn set_non_blocking(&self, non_blocking: bool) {
+        self.internal
+            .lock()
+            .flags
+            .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
     fn path(&self) -> Result<Path> {
