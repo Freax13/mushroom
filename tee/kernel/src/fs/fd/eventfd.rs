@@ -28,6 +28,7 @@ use crate::{
 
 pub struct EventFd {
     ino: u64,
+    semaphore: bool,
     internal: Mutex<EventFdInternal>,
     notify: Notify,
     counter: AtomicU64,
@@ -43,8 +44,10 @@ struct EventFdInternal {
 
 impl EventFd {
     pub fn new(initval: u32, flags: EventFdFlags, uid: Uid, gid: Gid) -> Self {
+        let semaphore = flags.contains(EventFdFlags::SEMAPHORE);
         Self {
             ino: new_ino(),
+            semaphore,
             internal: Mutex::new(EventFdInternal {
                 flags: flags.into(),
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
@@ -82,8 +85,18 @@ impl OpenFileDescription for EventFd {
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
         ensure!(buf.buffer_len() >= 8, Inval);
 
-        let value = self.counter.swap(0, Ordering::SeqCst);
-        ensure!(value != 0, Again);
+        let value = if !self.semaphore {
+            let value = self.counter.swap(0, Ordering::SeqCst);
+            ensure!(value != 0, Again);
+            value
+        } else {
+            self.counter
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                    value.checked_sub(1)
+                })
+                .map_err(|_| err!(Again))?;
+            1
+        };
         buf.write(0, &value.to_ne_bytes())?;
 
         self.write_event_counter.inc();

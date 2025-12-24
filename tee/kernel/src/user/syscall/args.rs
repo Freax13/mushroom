@@ -1264,6 +1264,7 @@ impl From<EpollCreate1Flags> for FdFlags {
 
 bitflags! {
     pub struct EventFdFlags {
+        const SEMAPHORE = 0x1;
         const NON_BLOCK = 0x800;
         const CLOEXEC = 0x8_0000;
     }
