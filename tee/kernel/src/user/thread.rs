@@ -492,6 +492,7 @@ impl Thread {
                         | Signal::SEGV
                         | Signal::USR2
                         | Signal::PIPE
+                        | Signal::ALRM
                         | Signal::TERM),
                     )
                     | (_, signal @ Signal::KILL) => {
@@ -916,6 +917,7 @@ impl ThreadGuard<'_> {
                     | Signal::SEGV
                     | Signal::USR2
                     | Signal::PIPE
+                    | Signal::ALRM
                     | Signal::TERM,
                 ) => false,
                 (_, Signal::STOP) => true,
