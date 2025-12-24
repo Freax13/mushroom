@@ -279,41 +279,33 @@ impl VirtualMemory {
         cwd: Link,
         stack_limit: CurrentStackLimit,
     ) -> Result<ExecResult> {
-        let mut bytes = [0; 128];
+        let mut bytes = [0; 256];
         let len = file.pread(0, &mut KernelReadBuf::new(&mut bytes), ctx)?;
+        let bytes = &bytes[..len];
+
+        // Truncate at the first newline or nul byte.
+        let len = bytes
+            .iter()
+            .position(|&b| matches!(b, b'\n' | b'\0'))
+            .unwrap_or(len);
         let bytes = &bytes[..len];
 
         // Strip shebang.
         let bytes = bytes.strip_prefix(b"#!").ok_or(err!(Inval))?;
 
-        // Strip leading whitespaces.
-        let mut bytes = bytes;
-        while let Some(bs) = bytes.strip_prefix(b" ") {
-            bytes = bs;
-        }
+        // Strip whitespaces.
+        let bytes = bytes.trim_prefix(b" ").trim_suffix(b" ");
 
-        let mut bytes = Some(bytes);
-        let mut args = from_fn(|| {
-            let bs = bytes.as_mut()?;
+        // Split into interpreter and argv[1] (if present).
+        let (interpreter, argv1) = bytes
+            .split_once(|&b| b == b' ')
+            .map_or((bytes, None), |(first, second)| {
+                (first, Some(second.trim_prefix(b" ")))
+            });
 
-            let position_res = bs.iter().position(|&b| matches!(b, b' ' | b'\n'));
-            let Some(position) = position_res else {
-                return Some(Err(err!(Inval)));
-            };
-            let delimiter = bs[position];
+        ensure!(!interpreter.is_empty(), NoExec);
 
-            let arg = &bs[..position];
-            let arg = CString::new(arg.to_vec()).unwrap();
-
-            *bs = &bs[position + 1..];
-            if delimiter == b'\n' {
-                bytes = None;
-            }
-
-            Some(Ok(arg))
-        });
-
-        let interpreter_path_str = args.next().ok_or(err!(Inval))??;
+        let interpreter_path_str = CString::new(interpreter.to_vec()).unwrap();
         let interpreter_path = Path::new(interpreter_path_str.as_bytes().to_vec())?;
         let interpreter_link = lookup_and_resolve_link(cwd.clone(), &interpreter_path, ctx)?;
         ensure!(
@@ -330,8 +322,8 @@ impl VirtualMemory {
         )?;
 
         let mut new_argv = vec![interpreter_path_str];
-        for arg in args {
-            new_argv.push(arg?);
+        if let Some(argv1) = argv1 {
+            new_argv.push(CString::new(argv1.to_vec()).unwrap());
         }
         new_argv.push(CString::new(path.as_bytes()).map_err(|_| err!(Inval))?);
         new_argv.extend(argv.iter().skip(1).map(AsRef::as_ref).map(CStr::to_owned));
