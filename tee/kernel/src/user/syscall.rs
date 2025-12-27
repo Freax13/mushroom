@@ -250,6 +250,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysMadvise);
     handlers.register(SysDup);
     handlers.register(SysDup2);
+    handlers.register(SysPause);
     handlers.register(SysNanosleep);
     handlers.register(SysGetitimer);
     handlers.register(SysAlarm);
@@ -1456,6 +1457,11 @@ fn dup2(
     }
 
     Ok(newfd.get() as u64)
+}
+
+#[syscall(i386 = 29, amd64 = 34, interruptable)]
+async fn pause() -> SyscallResult {
+    pending().await
 }
 
 #[syscall(i386 = 162, amd64 = 35)]
