@@ -5,6 +5,7 @@ mod fs;
 mod memfd;
 mod mmap;
 mod net;
+mod ptrace;
 mod pty;
 mod ready;
 mod unix;

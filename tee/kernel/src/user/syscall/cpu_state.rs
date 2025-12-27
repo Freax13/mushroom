@@ -217,19 +217,23 @@ impl CpuState {
         }
     }
 
-    pub fn set_syscall_result(&mut self, result: SyscallResult) -> Result<()> {
-        if core::mem::take(&mut self.ignore_syscall_result) {
-            return Ok(());
-        }
-
-        let result = match result {
+    pub fn syscall_result_value(result: SyscallResult) -> Result<u64> {
+        Ok(match result {
             Ok(result) => {
                 let is_error = (-4095..=-1).contains(&(result as i64));
                 ensure!(!is_error, Inval);
                 result
             }
             Err(err) => (-(err.kind() as i64)) as u64,
-        };
+        })
+    }
+
+    pub fn set_syscall_result(&mut self, result: SyscallResult) -> Result<()> {
+        if core::mem::take(&mut self.ignore_syscall_result) {
+            return Ok(());
+        }
+
+        let result = Self::syscall_result_value(result)?;
         self.registers.rax = result;
         Ok(())
     }

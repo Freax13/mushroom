@@ -47,8 +47,8 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Pointer, PtraceEvent, Rusage, SchedParam, SchedulingPolicy, Signal,
-                TimerId, Timespec, UserDesc, WStatus,
+                FileMode, Nice, Pointer, PtraceEvent, PtraceOptions, PtraceSyscallInfo, Rusage,
+                SchedParam, SchedulingPolicy, Signal, TimerId, Timespec, UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -105,6 +105,10 @@ pub struct ThreadState {
     /// The thread that traces this thread.
     pub tracer: Weak<Thread>,
     pub ptrace_state: PtraceState,
+    pub ptrace_options: PtraceOptions,
+    pub ptrace_seized: bool,
+    pub ptrace_trap_syscall: bool,
+    pub ptrace_interrupted: bool,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
 
@@ -147,6 +151,10 @@ impl Thread {
                 no_new_privs: false,
                 tracer: Weak::new(),
                 ptrace_state: PtraceState::default(),
+                ptrace_options: PtraceOptions::empty(),
+                ptrace_seized: false,
+                ptrace_trap_syscall: false,
+                ptrace_interrupted: false,
                 tracees: Vec::new(),
                 capabilities,
                 scheduling_settings,
@@ -440,7 +448,10 @@ impl Thread {
 
             let mut state = self.lock();
             loop {
-                let (sig_info, bypass_ptrace) = if let Some(sig_info) = state.pop_signal() {
+                let (sig_info, bypass_ptrace) = if core::mem::take(&mut state.ptrace_interrupted) {
+                    state.send_ptrace_event(|_| PtraceState::Interrupted { reported: false });
+                    continue;
+                } else if let Some(sig_info) = state.pop_signal() {
                     (sig_info, false)
                 } else if let PtraceState::SignalRestart(sig_info) = state.ptrace_state {
                     state.ptrace_state = PtraceState::Running;
@@ -451,18 +462,11 @@ impl Thread {
 
                 if !bypass_ptrace
                     && sig_info.signal != Signal::KILL
-                    && let Some(tracer) = state.tracer.upgrade()
-                {
-                    state.ptrace_state = PtraceState::Signal {
+                    && state.send_ptrace_event(|_| PtraceState::Signal {
                         sig_info,
                         reported: false,
-                    };
-                    drop(state);
-
-                    tracer.ptrace_tracer_notify.notify();
-                    drop(tracer);
-
-                    state = self.lock();
+                    })
+                {
                     continue;
                 }
 
@@ -569,6 +573,11 @@ impl Thread {
             if let Some(restartable) = guard.get_pending_signal() {
                 return restartable;
             }
+            // PTRACE_INTERRUPT doesn't quite work like a signal, but it's
+            // close enough.
+            if guard.ptrace_interrupted {
+                return true;
+            }
             drop(guard);
             select_biased! {
                 () = thread_notify_wait.next().fuse() => {}
@@ -670,7 +679,9 @@ impl Thread {
         children
             .find_map(|(tracee, mut guard)| {
                 let wstatus = match guard.ptrace_state {
-                    PtraceState::Running | PtraceState::SignalRestart { .. } => return None,
+                    PtraceState::Running
+                    | PtraceState::Listening
+                    | PtraceState::SignalRestart { .. } => return None,
                     PtraceState::Signal {
                         sig_info,
                         ref mut reported,
@@ -688,6 +699,24 @@ impl Thread {
                         *reported = true;
                         WStatus::ptrace_event(PtraceEvent::Exit)
                     }
+                    PtraceState::Syscall {
+                        ref mut reported, ..
+                    } => {
+                        if *reported {
+                            return None;
+                        }
+                        *reported = true;
+                        WStatus::stopped(Signal::PTRACE_SYSCALL)
+                    }
+                    PtraceState::Interrupted {
+                        ref mut reported, ..
+                    } => {
+                        if *reported {
+                            return None;
+                        }
+                        *reported = true;
+                        WStatus::ptrace_event(PtraceEvent::Stop)
+                    }
                 };
                 Some(WaitResult::Ready {
                     pid: tracee.tid(),
@@ -698,10 +727,14 @@ impl Thread {
             .unwrap_or(WaitResult::NotReady)
     }
 
-    pub fn set_tracer(self: &Arc<Self>, tracer: Weak<Thread>, stop: bool) -> Result<()> {
-        if core::ptr::eq(Arc::as_ptr(self), tracer.as_ptr()) {
-            todo!()
-        }
+    pub fn set_tracer(
+        self: &Arc<Self>,
+        tracer: Weak<Thread>,
+        stop: bool,
+        seize: bool,
+        options: Option<PtraceOptions>,
+    ) -> Result<()> {
+        ensure!(!core::ptr::eq(Arc::as_ptr(self), tracer.as_ptr()), Perm);
 
         if let Some(tracer) = tracer.upgrade() {
             let mut guard = tracer.lock();
@@ -711,6 +744,8 @@ impl Thread {
         let mut guard = self.lock();
         ensure!(guard.tracer.strong_count() == 0, Perm);
         guard.tracer = tracer;
+        guard.ptrace_options = options.unwrap_or_else(PtraceOptions::empty);
+        guard.ptrace_seized = seize;
 
         if stop {
             guard.queue_signal(SigInfo {
@@ -1132,8 +1167,18 @@ impl ThreadGuard<'_> {
     /// Returns true if the signal was not already queued.
     pub fn queue_signal(&mut self, sig_info: SigInfo) -> bool {
         match sig_info.signal {
-            Signal::CONT | Signal::KILL => self.process().stop_state.cont(),
-            Signal::STOP => self.process().stop_state.stop(),
+            Signal::KILL => {
+                self.process()
+                    .clone()
+                    .exit_group_async(WStatus::signaled(sig_info.signal));
+            }
+            Signal::CONT => self.process().stop_state.cont(),
+            Signal::STOP => {
+                self.process().stop_state.stop();
+                if let Some(parent) = self.process().parent() {
+                    parent.child_death_notify.notify();
+                }
+            }
             _ => {}
         }
 
@@ -1142,6 +1187,46 @@ impl ThreadGuard<'_> {
             self.thread.signal_notify.notify();
         }
         added
+    }
+
+    /// Update the ptrace state, stop the thread, and notify the tracer.
+    ///
+    /// Returns `false` if the thread is not traced.
+    pub fn send_ptrace_event(&mut self, create_state: impl FnOnce(&Self) -> PtraceState) -> bool {
+        // If there's tracer, send a exit event.
+        let Some(tracer) = self.tracer.upgrade() else {
+            return false;
+        };
+
+        let state = create_state(self);
+        assert!(state.is_stopped());
+        self.ptrace_state = state;
+
+        tracer.ptrace_tracer_notify.notify();
+        drop(tracer);
+
+        true
+    }
+
+    /// Update the ptrace state, stop the thread, notify the tracer, and
+    /// wait until the tracer has continued the thread (or detached).
+    pub async fn send_ptrace_event_and_wait(
+        mut self,
+        create_state: impl FnOnce(&Self) -> PtraceState,
+    ) {
+        if !self.send_ptrace_event(create_state) {
+            return;
+        }
+
+        let thread = self.thread;
+        drop(self);
+        thread
+            .ptrace_tracee_notify
+            .wait_until(|| {
+                let guard = thread.lock();
+                guard.ptrace_state.is_stopped().not().then_some(())
+            })
+            .await;
     }
 }
 
@@ -1959,6 +2044,8 @@ pub enum PtraceState {
     /// The thread is running.
     #[default]
     Running,
+    /// The thread has been restarted with PRACE_LISTEN.
+    Listening,
     /// The thread was just restarted with a signal, but hasn't started running
     /// yet. It will start running after the signal has been queued.
     SignalRestart(SigInfo),
@@ -1967,13 +2054,24 @@ pub enum PtraceState {
     /// The thread exited. Either explicitly via exit(2) or implicitely via
     /// exit_group(2) or execve(2).
     Exit { reported: bool },
+    /// The thread has entered or exited a syscall.
+    Syscall {
+        info: PtraceSyscallInfo,
+        reported: bool,
+    },
+    /// The thread was interrupted with PTRACE_INTERRUPT.
+    Interrupted { reported: bool },
 }
 
 impl PtraceState {
     pub fn is_stopped(&self) -> bool {
         match self {
-            PtraceState::Running | PtraceState::SignalRestart { .. } => false,
-            PtraceState::Signal { .. } | PtraceState::Exit { .. } => true,
+            Self::Running | Self::SignalRestart { .. } => false,
+            Self::Listening
+            | Self::Signal { .. }
+            | Self::Exit { .. }
+            | Self::Syscall { .. }
+            | Self::Interrupted { .. } => true,
         }
     }
 }

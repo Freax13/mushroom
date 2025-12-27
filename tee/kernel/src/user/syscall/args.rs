@@ -909,6 +909,7 @@ impl WStatus {
 #[derive(Clone, Copy)]
 pub enum PtraceEvent {
     Exit = 6,
+    Stop = 128,
 }
 
 bitflags! {
@@ -1439,6 +1440,7 @@ impl Signal {
     pub const CONT: Self = Self(18);
     pub const STOP: Self = Self(19);
     pub const XFSZ: Self = Self(25);
+    pub const PTRACE_SYSCALL: Self = Self(Self::TRAP.0 | 0x80);
 
     pub fn new(value: u8) -> Result<Self> {
         ensure!((1..=64).contains(&value), Inval);
@@ -2342,7 +2344,13 @@ enum_arg! {
         // SetFpxregs = 19,
         Attach = 16,
         Detach = 17,
-        // Syscall = 24,
+        Syscall = 24,
+        SetOptions = 0x4200,
+        GetSiginfo = 0x4202,
+        Seize = 0x4206,
+        Interrupt = 0x4207,
+        Listen = 0x4208,
+        GetSyscallInfo = 0x420e,
     }
 }
 
@@ -2640,4 +2648,42 @@ impl SchedulingPolicy {
 #[repr(C)]
 pub struct SchedParam {
     pub sched_priority: i32,
+}
+
+bitflags! {
+    pub struct PtraceOptions {
+        const TRACESYSGOOD = 0x00000001;
+        // const TRACEFORK = 0x00000002;
+        // const TRACEVFORK = 0x00000004;
+        // const TRACECLONE = 0x00000008;
+        const TRACEEXEC = 0x00000010;
+        // const TRACEVFORKDONE = 0x00000020;
+        const TRACEEXIT = 0x00000040;
+        // const TRACESECCOMP = 0x00000080;
+        // const EXITKILL = 0x00100000;
+        // const SUSPEND_SECCOMP = 0x00200000;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PtraceSyscallInfo {
+    pub arch: AuditArch,
+    pub instruction_pointer: u64,
+    pub stack_pointer: u64,
+    pub value: PtraceSyscallInfoValue,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u32)]
+pub enum AuditArch {
+    I386 = 0x4000_0003,
+    X86_64 = 0xc000_003e,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum PtraceSyscallInfoValue {
+    None = 0,
+    Entry { nr: u64, args: [u64; 6] } = 1,
+    Exit { rval: i64, is_error: bool } = 2,
 }
