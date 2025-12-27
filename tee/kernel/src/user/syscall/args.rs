@@ -909,6 +909,7 @@ impl WStatus {
 #[derive(Clone, Copy)]
 pub enum PtraceEvent {
     Exit = 6,
+    Stop = 128,
 }
 
 bitflags! {
@@ -2346,6 +2347,8 @@ enum_arg! {
         SetOptions = 0x4200,
         GetSiginfo = 0x4202,
         Seize = 0x4206,
+        Interrupt = 0x4207,
+        Listen = 0x4208,
     }
 }
 

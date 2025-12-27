@@ -3242,12 +3242,50 @@ fn ptrace(
 
             let sig_info = match guard.ptrace_state {
                 PtraceState::Running => unreachable!(),
+                PtraceState::Listening => todo!(),
                 PtraceState::SignalRestart(..) => todo!(),
                 PtraceState::Signal { sig_info, .. } => sig_info,
                 PtraceState::Exit { .. } => todo!(),
+                PtraceState::Interrupted { .. } => todo!(),
             };
 
             virtual_memory.write_with_abi(data.cast(), sig_info, abi)?;
+
+            Ok(0)
+        }
+        PtraceOp::Interrupt => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let mut guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            if !guard.ptrace_seized {
+                todo!();
+            }
+            guard.ptrace_interrupted = true;
+            tracee.ptrace_tracee_notify.notify();
+
+            Ok(0)
+        }
+        PtraceOp::Listen => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let mut guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            if !guard.ptrace_seized {
+                todo!();
+            }
+            guard.ptrace_state = PtraceState::Listening;
+            tracee.ptrace_tracee_notify.notify();
 
             Ok(0)
         }
