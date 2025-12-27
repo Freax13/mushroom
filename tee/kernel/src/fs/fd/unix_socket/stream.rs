@@ -519,6 +519,11 @@ impl OpenFileDescription for StreamUnixSocket {
                 Ok(ty.to_le_bytes().to_vec())
             }
             (1, 4) => Ok(0u32.to_ne_bytes().to_vec()), // SO_ERROR
+            (1, 7) => {
+                // SO_SNDBUF
+                let val = 0x1000u32;
+                Ok(val.to_ne_bytes().to_vec())
+            }
             (1, 9) => Ok(0u32.to_ne_bytes().to_vec()), // SO_KEEPALIVE
             (1, 16) => Ok(0u32.to_ne_bytes().to_vec()), // SO_PASSCRED
             (1, 17) => {
