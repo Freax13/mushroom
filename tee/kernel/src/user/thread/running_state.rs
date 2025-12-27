@@ -1,5 +1,4 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::ops::Not;
 
 use futures::{FutureExt, select_biased};
 
@@ -82,23 +81,11 @@ impl Thread {
                 drop(guard);
 
                 // If there's tracer, send a exit event.
-                let mut guard = self.lock();
-                if let Some(tracer) = guard.tracer.upgrade() {
-                    guard.ptrace_state = PtraceState::Exit { reported: false };
-                    drop(guard);
-                    tracer.ptrace_tracer_notify.notify();
-                    drop(tracer);
-
-                    guard = self
-                        .ptrace_tracee_notify
-                        .wait_until(|| {
-                            let guard = self.lock();
-                            guard.ptrace_state.is_stopped().not().then_some(guard)
-                        })
-                        .await;
-                }
+                let guard = self.lock();
                 let rusage = guard.get_rusage();
-                drop(guard);
+                guard
+                    .send_ptrace_event_and_wait(|_| PtraceState::Exit { reported: false })
+                    .await;
 
                 Box::pin(self.process.exit(exit_status, rusage)).await;
 

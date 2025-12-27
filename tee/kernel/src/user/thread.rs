@@ -455,18 +455,11 @@ impl Thread {
 
                 if !bypass_ptrace
                     && sig_info.signal != Signal::KILL
-                    && let Some(tracer) = state.tracer.upgrade()
-                {
-                    state.ptrace_state = PtraceState::Signal {
+                    && state.send_ptrace_event(|_| PtraceState::Signal {
                         sig_info,
                         reported: false,
-                    };
-                    drop(state);
-
-                    tracer.ptrace_tracer_notify.notify();
-                    drop(tracer);
-
-                    state = self.lock();
+                    })
+                {
                     continue;
                 }
 
@@ -1152,6 +1145,46 @@ impl ThreadGuard<'_> {
             self.thread.signal_notify.notify();
         }
         added
+    }
+
+    /// Update the ptrace state, stop the thread, and notify the tracer.
+    ///
+    /// Returns `false` if the thread is not traced.
+    pub fn send_ptrace_event(&mut self, create_state: impl FnOnce(&Self) -> PtraceState) -> bool {
+        // If there's tracer, send a exit event.
+        let Some(tracer) = self.tracer.upgrade() else {
+            return false;
+        };
+
+        let state = create_state(self);
+        assert!(state.is_stopped());
+        self.ptrace_state = state;
+
+        tracer.ptrace_tracer_notify.notify();
+        drop(tracer);
+
+        true
+    }
+
+    /// Update the ptrace state, stop the thread, notify the tracer, and
+    /// wait until the tracer has continued the thread (or detached).
+    pub async fn send_ptrace_event_and_wait(
+        mut self,
+        create_state: impl FnOnce(&Self) -> PtraceState,
+    ) {
+        if !self.send_ptrace_event(create_state) {
+            return;
+        }
+
+        let thread = self.thread;
+        drop(self);
+        thread
+            .ptrace_tracee_notify
+            .wait_until(|| {
+                let guard = thread.lock();
+                guard.ptrace_state.is_stopped().not().then_some(())
+            })
+            .await;
     }
 }
 
