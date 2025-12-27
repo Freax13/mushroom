@@ -1173,7 +1173,12 @@ impl ThreadGuard<'_> {
                     .exit_group_async(WStatus::signaled(sig_info.signal));
             }
             Signal::CONT => self.process().stop_state.cont(),
-            Signal::STOP => self.process().stop_state.stop(),
+            Signal::STOP => {
+                self.process().stop_state.stop();
+                if let Some(parent) = self.process().parent() {
+                    parent.child_death_notify.notify();
+                }
+            }
             _ => {}
         }
 

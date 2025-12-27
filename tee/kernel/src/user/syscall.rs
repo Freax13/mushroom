@@ -2332,9 +2332,12 @@ async fn wait4(
     let mut wait_child = process.child_death_notify.wait();
     let mut wait_ptrace = thread.ptrace_tracer_notify.wait();
     loop {
-        let res = process
+        let mut res = process
             .poll_child_death(filter)
             .or_else(|| thread.poll_wait_for_tracee(filter));
+        if options.contains(WaitOptions::UNTRACED) {
+            res = res.or_else(|| process.poll_stopped_child(filter));
+        }
         match res {
             WaitResult::Ready {
                 pid,

@@ -409,6 +409,35 @@ impl Process {
         }
     }
 
+    pub fn poll_stopped_child(&self, filter: WaitFilter) -> WaitResult {
+        let guard = self.children.lock();
+        let mut children = guard
+            .iter()
+            .filter(|child| match filter {
+                WaitFilter::Any => true,
+                WaitFilter::ExactPid(pid) => child.pid() == pid,
+                WaitFilter::ExactPgid(pgid) => child.process_group.lock().pgid() == pgid,
+            })
+            .peekable();
+
+        if children.peek().is_none() {
+            return WaitResult::NoChild;
+        }
+
+        let Some(child) = children.find(|child| child.stop_state.stopped()) else {
+            return WaitResult::NotReady;
+        };
+
+        let rusage = *child.self_usage.lock();
+
+        let wstatus = WStatus::stopped(Signal::STOP);
+        WaitResult::Ready {
+            pid: child.pid,
+            wstatus,
+            rusage,
+        }
+    }
+
     pub fn pending_signals(&self) -> Sigset {
         self.pending_signals.lock().pending_signals()
     }
@@ -425,7 +454,12 @@ impl Process {
                     .exit_group_async(WStatus::signaled(sig_info.signal));
             }
             Signal::CONT => self.stop_state.cont(),
-            Signal::STOP => self.stop_state.stop(),
+            Signal::STOP => {
+                self.stop_state.stop();
+                if let Some(parent) = self.parent() {
+                    parent.child_death_notify.notify();
+                }
+            }
             _ => {}
         }
 
@@ -749,8 +783,12 @@ pub struct StopState {
 impl StopState {
     async fn wait(&self) {
         self.notify
-            .wait_until(|| self.stopped.load(Ordering::Relaxed).not().then_some(()))
+            .wait_until(|| self.stopped().not().then_some(()))
             .await;
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed)
     }
 
     pub fn stop(&self) {
