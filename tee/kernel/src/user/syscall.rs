@@ -1994,36 +1994,32 @@ fn socketpair(
     let res2;
 
     match domain {
-        Domain::Unix => {
-            ensure!(protocol == 0, Inval);
-
-            match r#type.socket_type {
-                SocketType::Stream => {
-                    let (half1, half2) = StreamUnixSocket::new_pair(r#type.flags, &ctx);
-                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-                }
-                SocketType::Seqpacket => {
-                    let (half1, half2) = SeqPacketUnixSocket::new_pair(
-                        r#type.flags,
-                        ctx.filesystem_user_id(),
-                        ctx.filesystem_group_id(),
-                    );
-                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-                }
-                SocketType::Dgram => {
-                    let (half1, half2) = DgramUnixSocket::new_pair(
-                        r#type.flags,
-                        ctx.filesystem_user_id(),
-                        ctx.filesystem_group_id(),
-                    );
-                    res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
-                    res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
-                }
-                _ => bail!(Inval),
+        Domain::Unix => match r#type.socket_type {
+            SocketType::Stream => {
+                let (half1, half2) = StreamUnixSocket::new_pair(r#type.flags, &ctx);
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }
-        }
+            SocketType::Seqpacket => {
+                let (half1, half2) = SeqPacketUnixSocket::new_pair(
+                    r#type.flags,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
+                );
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+            }
+            SocketType::Dgram => {
+                let (half1, half2) = DgramUnixSocket::new_pair(
+                    r#type.flags,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
+                );
+                res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
+                res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
+            }
+            _ => bail!(Inval),
+        },
         Domain::Unspec | Domain::Inet | Domain::Inet6 | Domain::Netlink => bail!(OpNotSupp),
     }
 
