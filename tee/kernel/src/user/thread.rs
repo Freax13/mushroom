@@ -106,6 +106,7 @@ pub struct ThreadState {
     pub tracer: Weak<Thread>,
     pub ptrace_state: PtraceState,
     pub ptrace_options: PtraceOptions,
+    pub ptrace_seized: bool,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
 
@@ -149,6 +150,7 @@ impl Thread {
                 tracer: Weak::new(),
                 ptrace_state: PtraceState::default(),
                 ptrace_options: PtraceOptions::empty(),
+                ptrace_seized: false,
                 tracees: Vec::new(),
                 capabilities,
                 scheduling_settings,
@@ -700,7 +702,13 @@ impl Thread {
             .unwrap_or(WaitResult::NotReady)
     }
 
-    pub fn set_tracer(self: &Arc<Self>, tracer: Weak<Thread>, stop: bool) -> Result<()> {
+    pub fn set_tracer(
+        self: &Arc<Self>,
+        tracer: Weak<Thread>,
+        stop: bool,
+        seize: bool,
+        options: Option<PtraceOptions>,
+    ) -> Result<()> {
         if core::ptr::eq(Arc::as_ptr(self), tracer.as_ptr()) {
             todo!()
         }
@@ -713,6 +721,8 @@ impl Thread {
         let mut guard = self.lock();
         ensure!(guard.tracer.strong_count() == 0, Perm);
         guard.tracer = tracer;
+        guard.ptrace_options = options.unwrap_or_else(PtraceOptions::empty);
+        guard.ptrace_seized = seize;
 
         if stop {
             guard.queue_signal(SigInfo {

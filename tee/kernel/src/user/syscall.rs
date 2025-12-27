@@ -3057,7 +3057,7 @@ fn ptrace(
                 .parent()
                 .expect("TODO")
                 .thread_group_leader();
-            thread.set_tracer(parent, false)?;
+            thread.set_tracer(parent, false, false, None)?;
             Ok(0)
         }
         PtraceOp::PeekText | PtraceOp::PeekData => {
@@ -3177,9 +3177,15 @@ fn ptrace(
 
             Ok(0)
         }
-        PtraceOp::Attach => {
+        PtraceOp::Attach | PtraceOp::Seize => {
+            let (stop, seize, options) = if request == PtraceOp::Attach {
+                (true, false, None)
+            } else {
+                let options = PtraceOptions::from_bits(data.raw()).ok_or(err!(Inval))?;
+                (false, true, Some(options))
+            };
             let tracee = Thread::find_by_tid(pid).ok_or(err!(Srch))?;
-            tracee.set_tracer(Arc::downgrade(thread), true)?;
+            tracee.set_tracer(Arc::downgrade(thread), stop, seize, options)?;
 
             Ok(0)
         }

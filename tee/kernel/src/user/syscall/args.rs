@@ -2345,6 +2345,7 @@ enum_arg! {
         // Syscall = 24,
         SetOptions = 0x4200,
         GetSiginfo = 0x4202,
+        Seize = 0x4206,
     }
 }
 
