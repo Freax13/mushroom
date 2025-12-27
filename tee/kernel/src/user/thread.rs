@@ -1167,7 +1167,12 @@ impl ThreadGuard<'_> {
     /// Returns true if the signal was not already queued.
     pub fn queue_signal(&mut self, sig_info: SigInfo) -> bool {
         match sig_info.signal {
-            Signal::CONT | Signal::KILL => self.process().stop_state.cont(),
+            Signal::KILL => {
+                self.process()
+                    .clone()
+                    .exit_group_async(WStatus::signaled(sig_info.signal));
+            }
+            Signal::CONT => self.process().stop_state.cont(),
             Signal::STOP => self.process().stop_state.stop(),
             _ => {}
         }

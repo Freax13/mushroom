@@ -355,6 +355,13 @@ impl Process {
         init_process.child_death_notify.notify();
     }
 
+    /// Call [`Self::exit_group`] on a newly spawned task.
+    pub fn exit_group_async(self: Arc<Self>, exit_status: WStatus) {
+        spawn(async move {
+            self.exit_group(exit_status).await;
+        });
+    }
+
     pub fn thread_group_leader(&self) -> Weak<Thread> {
         self.threads.lock().first().cloned().unwrap_or_default()
     }
@@ -411,9 +418,13 @@ impl Process {
         (guard.pending_signals(), guard.queue_counter())
     }
 
-    pub fn queue_signal(&self, sig_info: SigInfo) -> bool {
+    pub fn queue_signal(self: &Arc<Self>, sig_info: SigInfo) -> bool {
         match sig_info.signal {
-            Signal::CONT | Signal::KILL => self.stop_state.cont(),
+            Signal::KILL => {
+                self.clone()
+                    .exit_group_async(WStatus::signaled(sig_info.signal));
+            }
+            Signal::CONT => self.stop_state.cont(),
             Signal::STOP => self.stop_state.stop(),
             _ => {}
         }
@@ -642,7 +653,7 @@ impl Process {
         self.parent_death_signal.store(Some(signal));
     }
 
-    pub fn queue_parent_death_signal(&self) {
+    pub fn queue_parent_death_signal(self: &Arc<Self>) {
         let Some(signal) = self.parent_death_signal.load() else {
             return;
         };
