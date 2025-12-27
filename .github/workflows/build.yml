@@ -185,6 +185,7 @@ jobs:
           - pulseaudio
           - ell
           - gssdp
+          - libeatmydata
         tee:
           - snp
           - tdx
