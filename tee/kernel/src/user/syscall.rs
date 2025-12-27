@@ -3205,6 +3205,23 @@ fn ptrace(
 
             Ok(0)
         }
+        PtraceOp::SetOptions => {
+            let options = PtraceOptions::from_bits(data.raw()).ok_or(err!(Inval))?;
+
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let mut guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+            guard.ptrace_options = options;
+
+            Ok(0)
+        }
     }
 }
 

@@ -47,8 +47,8 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Pointer, PtraceEvent, Rusage, SchedParam, SchedulingPolicy, Signal,
-                TimerId, Timespec, UserDesc, WStatus,
+                FileMode, Nice, Pointer, PtraceEvent, PtraceOptions, Rusage, SchedParam,
+                SchedulingPolicy, Signal, TimerId, Timespec, UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -105,6 +105,7 @@ pub struct ThreadState {
     /// The thread that traces this thread.
     pub tracer: Weak<Thread>,
     pub ptrace_state: PtraceState,
+    pub ptrace_options: PtraceOptions,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
 
@@ -147,6 +148,7 @@ impl Thread {
                 no_new_privs: false,
                 tracer: Weak::new(),
                 ptrace_state: PtraceState::default(),
+                ptrace_options: PtraceOptions::empty(),
                 tracees: Vec::new(),
                 capabilities,
                 scheduling_settings,

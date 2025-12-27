@@ -2343,6 +2343,7 @@ enum_arg! {
         Attach = 16,
         Detach = 17,
         // Syscall = 24,
+        SetOptions = 0x4200,
     }
 }
 
@@ -2640,4 +2641,19 @@ impl SchedulingPolicy {
 #[repr(C)]
 pub struct SchedParam {
     pub sched_priority: i32,
+}
+
+bitflags! {
+    pub struct PtraceOptions {
+        const TRACESYSGOOD = 0x00000001;
+        // const TRACEFORK = 0x00000002;
+        // const TRACEVFORK = 0x00000004;
+        // const TRACECLONE = 0x00000008;
+        const TRACEEXEC = 0x00000010;
+        // const TRACEVFORKDONE = 0x00000020;
+        const TRACEEXIT = 0x00000040;
+        // const TRACESECCOMP = 0x00000080;
+        // const EXITKILL = 0x00100000;
+        // const SUSPEND_SECCOMP = 0x00200000;
+    }
 }
