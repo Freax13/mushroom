@@ -9,7 +9,7 @@ use core::{
     ffi::c_void,
     fmt,
     future::pending,
-    mem::size_of,
+    mem::{offset_of, size_of},
     num::{NonZeroU32, NonZeroUsize},
     pin::pin,
 };
@@ -70,6 +70,7 @@ use crate::{
             Process, WaitFilter, WaitResult,
             limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
+        syscall::{args::pointee::RawPtraceSyscallInfo, cpu_state::CpuState},
         thread::{
             Capability, Gid, NewTls, PtraceState, SchedulingSettings, SigFields, SigInfo,
             SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid,
@@ -87,6 +88,8 @@ pub use cpu_state::init;
 impl Thread {
     /// Returns true if the thread should continue to run.
     pub async fn execute_syscall(self: &Arc<Self>, args: SyscallArgs) {
+        self.ptrace_syscall_trap_enter(args).await;
+
         let result = SYSCALL_HANDLERS.execute(self, args).await;
 
         let mut guard = self.cpu_state.lock();
@@ -94,6 +97,101 @@ impl Thread {
         if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
             guard.restart_syscall(args.no);
         }
+        drop(guard);
+
+        self.ptrace_syscall_trap_exit(args.abi, result).await;
+    }
+
+    async fn ptrace_syscall_trap_enter(&self, args: SyscallArgs) {
+        let guard = self.lock();
+        if !guard.ptrace_trap_syscall {
+            return;
+        }
+
+        guard
+            .send_ptrace_event_and_wait(|guard| {
+                let cpu_guard = self.cpu_state.lock();
+                let instruction_pointer = cpu_guard.registers.rip;
+                let stack_pointer = cpu_guard.registers.rsp;
+                drop(cpu_guard);
+
+                if guard.ptrace_options.contains(PtraceOptions::TRACESYSGOOD) {
+                    PtraceState::Syscall {
+                        info: PtraceSyscallInfo {
+                            arch: match args.abi {
+                                Abi::I386 => AuditArch::I386,
+                                Abi::Amd64 => AuditArch::X86_64,
+                            },
+                            instruction_pointer,
+                            stack_pointer,
+                            value: PtraceSyscallInfoValue::Entry {
+                                nr: args.no,
+                                args: args.args,
+                            },
+                        },
+                        reported: false,
+                    }
+                } else {
+                    PtraceState::Signal {
+                        sig_info: SigInfo {
+                            signal: Signal::TRAP,
+                            code: SigInfoCode::KERNEL,
+                            fields: SigFields::None,
+                        },
+                        reported: false,
+                    }
+                }
+            })
+            .await
+    }
+
+    async fn ptrace_syscall_trap_exit(&self, abi: Abi, result: SyscallResult) {
+        let mut guard = self.lock();
+        if core::mem::take(&mut guard.ptrace_interrupted) {
+            return guard
+                .send_ptrace_event_and_wait(|_| PtraceState::Interrupted { reported: false })
+                .await;
+        }
+
+        if !core::mem::take(&mut guard.ptrace_interrupted) && !guard.ptrace_trap_syscall {
+            return;
+        }
+
+        guard
+            .send_ptrace_event_and_wait(|guard| {
+                let cpu_guard = self.cpu_state.lock();
+                let instruction_pointer = cpu_guard.registers.rip;
+                let stack_pointer = cpu_guard.registers.rsp;
+                drop(cpu_guard);
+
+                if guard.ptrace_options.contains(PtraceOptions::TRACESYSGOOD) {
+                    PtraceState::Syscall {
+                        info: PtraceSyscallInfo {
+                            arch: match abi {
+                                Abi::I386 => AuditArch::I386,
+                                Abi::Amd64 => AuditArch::X86_64,
+                            },
+                            instruction_pointer,
+                            stack_pointer,
+                            value: PtraceSyscallInfoValue::Exit {
+                                rval: CpuState::syscall_result_value(result).unwrap() as i64,
+                                is_error: result.is_err(),
+                            },
+                        },
+                        reported: false,
+                    }
+                } else {
+                    PtraceState::Signal {
+                        sig_info: SigInfo {
+                            signal: Signal::TRAP,
+                            code: SigInfoCode::KERNEL,
+                            fields: SigFields::None,
+                        },
+                        reported: false,
+                    }
+                }
+            })
+            .await;
     }
 }
 
@@ -3080,7 +3178,7 @@ fn ptrace(
             virtual_memory.write_with_abi(data.cast(), word, abi)?;
             Ok(0)
         }
-        PtraceOp::Cont => {
+        PtraceOp::Cont | PtraceOp::Syscall => {
             let tracee = thread
                 .lock()
                 .tracees
@@ -3101,7 +3199,10 @@ fn ptrace(
             } else {
                 guard.ptrace_state = PtraceState::Running;
             }
+            guard.ptrace_trap_syscall = request == PtraceOp::Syscall;
             tracee.ptrace_tracee_notify.notify();
+
+            tracee.process().stop_state.cont();
 
             Ok(0)
         }
@@ -3246,6 +3347,7 @@ fn ptrace(
                 PtraceState::SignalRestart(..) => todo!(),
                 PtraceState::Signal { sig_info, .. } => sig_info,
                 PtraceState::Exit { .. } => todo!(),
+                PtraceState::Syscall { .. } => todo!(),
                 PtraceState::Interrupted { .. } => todo!(),
             };
 
@@ -3288,6 +3390,51 @@ fn ptrace(
             tracee.ptrace_tracee_notify.notify();
 
             Ok(0)
+        }
+        PtraceOp::GetSyscallInfo => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let (info, max_len) = match guard.ptrace_state {
+                PtraceState::Syscall { info, .. } => (info, size_of::<RawPtraceSyscallInfo>()),
+                _ => {
+                    let guard = thread.cpu_state.lock();
+                    let arch = match guard.registers.cs {
+                        0x1b => AuditArch::I386,
+                        0x2b => AuditArch::X86_64,
+                        _ => unimplemented!(),
+                    };
+                    let instruction_pointer = guard.registers.rip;
+                    let stack_pointer = guard.registers.rsp;
+                    drop(guard);
+
+                    let info = PtraceSyscallInfo {
+                        arch,
+                        instruction_pointer,
+                        stack_pointer,
+                        value: PtraceSyscallInfoValue::None,
+                    };
+                    (info, offset_of!(RawPtraceSyscallInfo, values))
+                }
+            };
+            let info = RawPtraceSyscallInfo::from(info);
+            let bytes = bytes_of(&info);
+
+            let len = cmp::min(bytes.len(), usize_from(addr.raw()));
+            let len = cmp::min(len, max_len);
+            let bytes = &bytes[..len];
+
+            virtual_memory.write_bytes(data.get(), bytes)?;
+
+            Ok(u64::from_usize(len))
         }
     }
 }

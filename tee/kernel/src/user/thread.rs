@@ -47,8 +47,8 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Pointer, PtraceEvent, PtraceOptions, Rusage, SchedParam,
-                SchedulingPolicy, Signal, TimerId, Timespec, UserDesc, WStatus,
+                FileMode, Nice, Pointer, PtraceEvent, PtraceOptions, PtraceSyscallInfo, Rusage,
+                SchedParam, SchedulingPolicy, Signal, TimerId, Timespec, UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -107,6 +107,7 @@ pub struct ThreadState {
     pub ptrace_state: PtraceState,
     pub ptrace_options: PtraceOptions,
     pub ptrace_seized: bool,
+    pub ptrace_trap_syscall: bool,
     pub ptrace_interrupted: bool,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
@@ -152,6 +153,7 @@ impl Thread {
                 ptrace_state: PtraceState::default(),
                 ptrace_options: PtraceOptions::empty(),
                 ptrace_seized: false,
+                ptrace_trap_syscall: false,
                 ptrace_interrupted: false,
                 tracees: Vec::new(),
                 capabilities,
@@ -696,6 +698,15 @@ impl Thread {
                         }
                         *reported = true;
                         WStatus::ptrace_event(PtraceEvent::Exit)
+                    }
+                    PtraceState::Syscall {
+                        ref mut reported, ..
+                    } => {
+                        if *reported {
+                            return None;
+                        }
+                        *reported = true;
+                        WStatus::stopped(Signal::PTRACE_SYSCALL)
                     }
                     PtraceState::Interrupted {
                         ref mut reported, ..
@@ -2033,6 +2044,11 @@ pub enum PtraceState {
     /// The thread exited. Either explicitly via exit(2) or implicitely via
     /// exit_group(2) or execve(2).
     Exit { reported: bool },
+    /// The thread has entered or exited a syscall.
+    Syscall {
+        info: PtraceSyscallInfo,
+        reported: bool,
+    },
     /// The thread was interrupted with PTRACE_INTERRUPT.
     Interrupted { reported: bool },
 }
@@ -2044,6 +2060,7 @@ impl PtraceState {
             Self::Listening
             | Self::Signal { .. }
             | Self::Exit { .. }
+            | Self::Syscall { .. }
             | Self::Interrupted { .. } => true,
         }
     }

@@ -31,10 +31,11 @@ use crate::{
                 CmsgHdr, ControlMode, Domain, FdNum, FileMode, Flock, FlockType, FlockWhence,
                 ITimerspec, ITimerval, InputMode, Iovec, IpMreq, IpMreqn, Ipv6Mreq, Linger,
                 LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OpenFlags, OpenHow,
-                OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, RLimit, ResolveFlags,
-                Rusage, SchedParam, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink,
-                SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone,
-                Ucred, UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, PtraceSyscallInfo,
+                PtraceSyscallInfoValue, RLimit, ResolveFlags, Rusage, SchedParam, SigEvent,
+                SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo,
+                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserCapData,
+                UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -3152,3 +3153,43 @@ impl From<RawIpv6Mreq> for Ipv6Mreq {
 
 impl Pointee for SchedParam {}
 impl PrimitivePointee for SchedParam {}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct RawPtraceSyscallInfo {
+    pub op: u8,
+    pub pad: [u8; 3],
+    pub arch: u32,
+    pub instruction_pointer: u64,
+    pub stack_pointer: u64,
+    pub values: [u64; 8],
+}
+
+impl From<PtraceSyscallInfo> for RawPtraceSyscallInfo {
+    fn from(value: PtraceSyscallInfo) -> Self {
+        let (op, values) = match value.value {
+            PtraceSyscallInfoValue::None => (0, [0; 8]),
+            PtraceSyscallInfoValue::Entry { nr, args } => {
+                let mut values = [0; 8];
+                values[0] = nr;
+                values[1..7].copy_from_slice(&args);
+                (1, values)
+            }
+            PtraceSyscallInfoValue::Exit { rval, is_error } => {
+                let mut values = [0; 8];
+                values[0] = rval as u64;
+                values[1] = u64::from(is_error);
+                (2, values)
+            }
+        };
+
+        Self {
+            op,
+            pad: [0; 3],
+            arch: value.arch as u32,
+            instruction_pointer: value.instruction_pointer,
+            stack_pointer: value.stack_pointer,
+            values,
+        }
+    }
+}
