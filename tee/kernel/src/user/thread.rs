@@ -709,9 +709,7 @@ impl Thread {
         seize: bool,
         options: Option<PtraceOptions>,
     ) -> Result<()> {
-        if core::ptr::eq(Arc::as_ptr(self), tracer.as_ptr()) {
-            todo!()
-        }
+        ensure!(!core::ptr::eq(Arc::as_ptr(self), tracer.as_ptr()), Perm);
 
         if let Some(tracer) = tracer.upgrade() {
             let mut guard = tracer.lock();
