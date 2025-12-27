@@ -1461,6 +1461,7 @@ fn dup2(
 #[syscall(i386 = 162, amd64 = 35)]
 async fn nanosleep(
     abi: Abi,
+    thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     rqtp: Pointer<Timespec>,
     rmtp: Pointer<Timespec>,
@@ -1469,8 +1470,30 @@ async fn nanosleep(
 
     let now = time::now(ClockId::Monotonic);
     let deadline = now + rqtp;
-    sleep_until(deadline, ClockId::Monotonic).await;
-    Ok(0)
+
+    let sleep_future = sleep_until(deadline, ClockId::Monotonic);
+    let interrupted_future = thread.wait_for_signal();
+
+    let sleep_future = pin!(sleep_future);
+    let interrupted_future = pin!(interrupted_future);
+    let res = future::select(sleep_future, interrupted_future).await;
+    match res {
+        Either::Left(_) => Ok(0),
+        Either::Right(_) => {
+            let now = time::now(ClockId::Monotonic);
+            if let Some(remaining) = deadline
+                .checked_sub(now)
+                .filter(|&remaining| remaining > Timespec::ZERO)
+            {
+                if !rmtp.is_null() {
+                    virtual_memory.write_with_abi(rmtp, remaining, abi)?;
+                }
+                bail!(Intr)
+            } else {
+                Ok(0)
+            }
+        }
+    }
 }
 
 #[syscall(i386 = 105, amd64 = 36)]
