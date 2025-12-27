@@ -2344,6 +2344,7 @@ enum_arg! {
         Detach = 17,
         // Syscall = 24,
         SetOptions = 0x4200,
+        GetSiginfo = 0x4202,
     }
 }
 

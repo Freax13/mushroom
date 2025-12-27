@@ -3222,6 +3222,29 @@ fn ptrace(
 
             Ok(0)
         }
+        PtraceOp::GetSiginfo => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let sig_info = match guard.ptrace_state {
+                PtraceState::Running => unreachable!(),
+                PtraceState::SignalRestart(..) => todo!(),
+                PtraceState::Signal { sig_info, .. } => sig_info,
+                PtraceState::Exit { .. } => todo!(),
+            };
+
+            virtual_memory.write_with_abi(data.cast(), sig_info, abi)?;
+
+            Ok(0)
+        }
     }
 }
 
