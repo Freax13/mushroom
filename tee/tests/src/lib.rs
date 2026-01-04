@@ -9,6 +9,7 @@ mod ptrace;
 mod pty;
 mod ready;
 mod rlimit;
+mod timer;
 mod uname;
 mod unix;
 mod unix_file_lock;
