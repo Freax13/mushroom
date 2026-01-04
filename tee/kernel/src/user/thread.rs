@@ -496,6 +496,7 @@ impl Thread {
                         | Signal::ILL
                         | Signal::TRAP
                         | Signal::ABRT
+                        | Signal::BUS
                         | Signal::USR1
                         | Signal::SEGV
                         | Signal::USR2
@@ -963,6 +964,7 @@ impl ThreadGuard<'_> {
                     | Signal::ILL
                     | Signal::TRAP
                     | Signal::ABRT
+                    | Signal::BUS
                     | Signal::USR1
                     | Signal::SEGV
                     | Signal::USR2
