@@ -1,4 +1,5 @@
 use alloc::{
+    boxed::Box,
     ffi::CString,
     sync::{Arc, Weak},
     vec,
@@ -259,6 +260,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysSocketcall);
     handlers.register(SysSocket);
     handlers.register(SysConnect);
     handlers.register(SysAccept);
@@ -1671,6 +1673,63 @@ async fn sendfile64(
         count,
     )
     .await
+}
+
+#[syscall(i386 = 102)]
+async fn socketcall(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    call: SocketCall,
+    args: Pointer<[u32; 6]>,
+) -> SyscallResult {
+    // Implement socketcall by decoding the syscall arguments and invoking the
+    // regular syscall handler.
+
+    let args = virtual_memory.read(args)?;
+    let mut args = args.map(u64::from);
+
+    let no = match call {
+        SocketCall::Socket => SysSocket::NO_I386,
+        SocketCall::Bind => SysBind::NO_I386,
+        SocketCall::Connect => SysConnect::NO_I386,
+        SocketCall::Listen => SysListen::NO_I386,
+        SocketCall::Accept => SysAccept::NO_I386,
+        SocketCall::Getsockname => SysGetsockname::NO_I386,
+        SocketCall::Getpeername => SysGetpeername::NO_I386,
+        SocketCall::Socketpair => SysSocketpair::NO_I386,
+        SocketCall::Send => {
+            // There's no send syscall, so forward to sendto instead.
+            // Set dest_addr=NULL and addrlen=0.
+            args[4] = 0;
+            args[5] = 0;
+            SysSendto::NO_I386
+        }
+        SocketCall::Recv => {
+            // There's no recv syscall, so forward to recvfrom instead.
+            // Set src_addr=NULL and addrlen=0.
+            args[4] = 0;
+            args[5] = 0;
+            SysRecvFrom::NO_I386
+        }
+        SocketCall::Sendto => SysSendto::NO_I386,
+        SocketCall::Recvfrom => SysRecvFrom::NO_I386,
+        SocketCall::Shutdown => SysShutdown::NO_I386,
+        SocketCall::Setsockopt => SysSetsockopt::NO_I386,
+        SocketCall::Getsockopt => SysGetsockopt::NO_I386,
+        SocketCall::Sendmsg => SysSendmsg::NO_I386,
+        SocketCall::Recvmsg => SysRecvmsg::NO_I386,
+        SocketCall::Accept4 => SysAccept4::NO_I386,
+        SocketCall::Recvmmsg => SysRecvmmsg::NO_I386,
+        SocketCall::Sendmmsg => SysSendmmsg::NO_I386,
+    };
+    let no = u64::from_usize(no.unwrap());
+
+    let args = SyscallArgs {
+        abi: Abi::I386,
+        no,
+        args,
+    };
+    Box::pin(SYSCALL_HANDLERS.execute(thread, args)).await
 }
 
 #[syscall(i386 = 359, amd64 = 41)]

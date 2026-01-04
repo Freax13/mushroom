@@ -2687,3 +2687,28 @@ pub enum PtraceSyscallInfoValue {
     Entry { nr: u64, args: [u64; 6] } = 1,
     Exit { rval: i64, is_error: bool } = 2,
 }
+
+enum_arg! {
+    pub enum SocketCall {
+        Socket = 1,
+        Bind = 2,
+        Connect = 3,
+        Listen = 4,
+        Accept = 5,
+        Getsockname = 6,
+        Getpeername = 7,
+        Socketpair = 8,
+        Send = 9,
+        Recv = 10,
+        Sendto = 11,
+        Recvfrom = 12,
+        Shutdown = 13,
+        Setsockopt = 14,
+        Getsockopt = 15,
+        Sendmsg = 16,
+        Recvmsg = 17,
+        Accept4 = 18,
+        Recvmmsg = 19,
+        Sendmmsg = 20,
+    }
+}
