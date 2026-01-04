@@ -8,6 +8,7 @@ mod net;
 mod ptrace;
 mod pty;
 mod ready;
+mod uname;
 mod unix;
 mod unix_file_lock;
 
