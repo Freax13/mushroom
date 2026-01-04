@@ -53,7 +53,7 @@ use crate::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
                 InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, Seals,
                 SendMsgFlags, SentToFlags, SetTimeFlags, ShutdownHow, SocketAddr, Stat, Timespec,
-                Whence,
+                Timeval, Whence,
             },
             traits::Abi,
         },
@@ -941,6 +941,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
         let _ = how;
         bail!(NotSock)
+    }
+
+    fn get_receive_timeout(&self) -> Timeval {
+        Timeval::ZERO
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;

@@ -1072,6 +1072,11 @@ pub struct Timeval {
 }
 
 impl Timeval {
+    pub const ZERO: Self = Self {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+
     pub fn saturating_add(self, rhs: Self) -> Self {
         let tv_sec = self.tv_sec + rhs.tv_sec;
         let tv_usec = self.tv_usec + rhs.tv_usec;
