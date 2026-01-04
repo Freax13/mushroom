@@ -605,8 +605,10 @@ pub struct SigInfo64 {
     _sifields: [i32; 28],
 }
 
-impl From<SigInfo> for SigInfo64 {
-    fn from(value: SigInfo) -> Self {
+impl TryFrom<SigInfo> for SigInfo64 {
+    type Error = Error;
+
+    fn try_from(value: SigInfo) -> Result<Self> {
         let mut _sifields = [0; 28];
         let dst = bytes_of_mut(&mut _sifields);
         macro_rules! pack {
@@ -626,7 +628,7 @@ impl From<SigInfo> for SigInfo64 {
             }
             SigFields::Timer(sig_timer) => {
                 pack!(SigTimer64 {
-                    tid: sig_timer.tid.into(),
+                    tid: sig_timer.tid.try_into()?,
                     overrun: sig_timer.overrun,
                     sigval: sig_timer.sigval.into(),
                 })
@@ -646,13 +648,13 @@ impl From<SigInfo> for SigInfo64 {
                 })
             }
         }
-        Self {
+        Ok(Self {
             si_signo: value.signal.get() as i32,
             si_errno: 0,
             si_code: value.code.get(),
             _padding: 0,
             _sifields,
-        }
+        })
     }
 }
 
@@ -666,7 +668,7 @@ struct SigKill64 {
 #[derive(Clone, Copy, NoUninit)]
 #[repr(C, packed(4))]
 struct SigTimer64 {
-    tid: TimerId64,
+    tid: TimerId32, // yes, 32, not 64
     overrun: u32,
     sigval: Pointer64<c_void>,
 }
