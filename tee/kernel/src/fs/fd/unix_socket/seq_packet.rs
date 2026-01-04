@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
-use core::cmp;
+use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use futures::future;
@@ -13,6 +13,7 @@ use crate::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
+            socket_common_ioctl,
         },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
@@ -24,12 +25,12 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, RecvFromFlags,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
                 SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 
@@ -241,6 +242,16 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         _: &FileAccessContext,
     ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
+    }
+
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
+        socket_common_ioctl(self, thread, cmd, arg, abi)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

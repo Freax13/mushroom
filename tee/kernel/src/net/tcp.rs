@@ -24,11 +24,10 @@ use crate::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
             LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
             ReadBuf, StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf,
-            common_ioctl,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             file::{File, open_file},
             inotify::Watchers,
-            stream_buffer,
+            socket_common_ioctl, stream_buffer,
         },
         node::{FileAccessContext, INode, LinkLocation, new_ino, procfs::ProcFs},
         ownership::Ownership,
@@ -1082,7 +1081,7 @@ impl OpenFileDescription for TcpSocket {
                     .write(arg.cast(), u32::from(at_mark))?;
                 Ok(0)
             }
-            _ => common_ioctl(self, thread, cmd, arg, abi),
+            _ => socket_common_ioctl(self, thread, cmd, arg, abi),
         }
     }
 

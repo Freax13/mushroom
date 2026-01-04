@@ -9,7 +9,7 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
-use core::cmp;
+use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use bytemuck::bytes_of;
@@ -25,7 +25,7 @@ use crate::{
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
             WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
-            stream_buffer,
+            socket_common_ioctl, stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,
@@ -48,7 +48,7 @@ use crate::{
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 
@@ -775,6 +775,16 @@ impl OpenFileDescription for StreamUnixSocket {
         _: &FileAccessContext,
     ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
+    }
+
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
+        socket_common_ioctl(self, thread, cmd, arg, abi)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

@@ -21,8 +21,8 @@ use crate::{
         fd::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
-            common_ioctl,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
+            socket_common_ioctl,
         },
         node::{FileAccessContext, lookup_and_resolve_link, new_ino},
         ownership::Ownership,
@@ -497,21 +497,7 @@ impl OpenFileDescription for DgramUnixSocket {
         arg: Pointer<c_void>,
         abi: Abi,
     ) -> Result<u64> {
-        match cmd {
-            0x8933 => {
-                // SIOCGIFINDEX
-                let virtual_memory = thread.virtual_memory();
-                const IFNAMSIZ: usize = 16;
-                let ifname = virtual_memory.read(arg.cast::<[u8; IFNAMSIZ]>())?;
-                let index = match ifname {
-                    [b'l', b'o', 0, ..] => 1,
-                    _ => bail!(NoDev),
-                };
-                virtual_memory.write(arg.bytes_offset(IFNAMSIZ).cast(), index)?;
-                Ok(0)
-            }
-            _ => common_ioctl(self, thread, cmd, arg, abi),
-        }
+        socket_common_ioctl(self, thread, cmd, arg, abi)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
