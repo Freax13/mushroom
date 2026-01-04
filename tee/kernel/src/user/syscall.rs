@@ -240,6 +240,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysSigprocmask);
     handlers.register(SysRtSigreturn);
     handlers.register(SysIoctl);
     handlers.register(SysPread64);
@@ -1014,61 +1015,41 @@ fn rt_sigaction(
     Ok(0)
 }
 
-struct SysRtSigprocmask;
-
-impl Syscall for SysRtSigprocmask {
-    const NO_I386: Option<usize> = Some(175);
-    const NO_AMD64: Option<usize> = Some(14);
-
-    async fn execute(thread: &Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {
-        let how = <u64 as SyscallArg>::parse(syscall_args.args[0], syscall_args.abi)?;
-        let set = <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[1], syscall_args.abi)?;
-        let oldset =
-            <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[2], syscall_args.abi)?;
-
-        let mut thread = thread.lock();
-        let virtual_memory = thread.virtual_memory();
-
-        if !oldset.is_null() {
-            virtual_memory.write_bytes(oldset.get(), bytes_of(&thread.sigmask))?;
-        }
-
-        if !set.is_null() {
-            let mut set_value = Sigset::zeroed();
-            virtual_memory.read_bytes(set.get(), bytes_of_mut(&mut set_value))?;
-
-            let how = RtSigprocmaskHow::parse(how, syscall_args.abi)?;
-            match how {
-                RtSigprocmaskHow::Block => thread.sigmask |= set_value,
-                RtSigprocmaskHow::Unblock => thread.sigmask &= !set_value,
-                RtSigprocmaskHow::SetMask => thread.sigmask = set_value,
-            }
-        }
-
-        Ok(0)
+#[syscall(i386 = 175, amd64 = 14)]
+fn rt_sigprocmask(
+    mut thread: ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    how: RtSigprocmaskHow,
+    set: Pointer<Sigset>,
+    oldset: Pointer<Sigset>,
+) -> SyscallResult {
+    if !oldset.is_null() {
+        virtual_memory.write_bytes(oldset.get(), bytes_of(&thread.sigmask))?;
     }
 
-    fn display(
-        f: &mut dyn fmt::Write,
-        syscall_args: SyscallArgs,
-        thread: &ThreadGuard<'_>,
-    ) -> fmt::Result {
-        let how = syscall_args.args[0];
-        let set = syscall_args.args[1];
-        let oldset = syscall_args.args[2];
+    if !set.is_null() {
+        let mut set_value = Sigset::zeroed();
+        virtual_memory.read_bytes(set.get(), bytes_of_mut(&mut set_value))?;
 
-        write!(f, "rt_sigprocmask(set=")?;
-        if set == 0 {
-            write!(f, "ignored")?;
-        } else {
-            RtSigprocmaskHow::display(f, how, syscall_args.abi, thread)?;
+        match how {
+            RtSigprocmaskHow::Block => thread.sigmask |= set_value,
+            RtSigprocmaskHow::Unblock => thread.sigmask &= !set_value,
+            RtSigprocmaskHow::SetMask => thread.sigmask = set_value,
         }
-        write!(f, ", set=")?;
-        Pointer::<Sigset>::display(f, set, syscall_args.abi, thread)?;
-        write!(f, ", oldset=")?;
-        Pointer::<Sigset>::display(f, oldset, syscall_args.abi, thread)?;
-        write!(f, ")")
     }
+
+    Ok(0)
+}
+
+#[syscall(i386 = 126)]
+fn sigprocmask(
+    thread: ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    how: RtSigprocmaskHow,
+    set: Pointer<Sigset>,
+    oldset: Pointer<Sigset>,
+) -> SyscallResult {
+    rt_sigprocmask(thread, virtual_memory, how, set, oldset)
 }
 
 #[syscall(i386 = 173, amd64 = 15)]
