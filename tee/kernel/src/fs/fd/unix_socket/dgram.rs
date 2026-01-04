@@ -327,7 +327,7 @@ impl OpenFileDescription for DgramUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
-        _: RecvMsgFlags,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
@@ -335,6 +335,8 @@ impl OpenFileDescription for DgramUnixSocket {
         ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let mut recv_from_flags = RecvFromFlags::empty();
+        recv_from_flags.set(RecvFromFlags::PEEK, flags.contains(RecvMsgFlags::PEEK));
         let (n, addr) = self.recv_from(&mut vectored_buf, RecvFromFlags::empty())?;
 
         if msg_hdr.namelen != 0 {

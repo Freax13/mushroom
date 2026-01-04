@@ -239,11 +239,12 @@ impl OpenFileDescription for StreamUnixSocket {
         let waitall = flags.contains(RecvMsgFlags::WAITALL)
             && !flags.contains(RecvMsgFlags::DONTWAIT)
             && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
+        let peek = flags.contains(RecvMsgFlags::PEEK);
         let (len, ancillary_data) =
             active
                 .read_half
                 .lock()
-                .read(&mut vectored_buf, false, waitall)?;
+                .read(&mut vectored_buf, peek, waitall)?;
 
         let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         if let Some(ancillary_data) = ancillary_data

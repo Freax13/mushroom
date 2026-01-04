@@ -229,12 +229,17 @@ impl OpenFileDescription for NetlinkSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
-        _: RecvMsgFlags,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         let connection = self.connection.get().ok_or(err!(NotConn))?;
-        let buffer = connection.rx.try_recv().ok_or(err!(Again))?;
+        let buffer = if flags.contains(RecvMsgFlags::PEEK) {
+            connection.rx.peek()
+        } else {
+            connection.rx.try_recv()
+        };
+        let buffer = buffer.ok_or(err!(Again))?;
 
         if msg_hdr.namelen != 0 {
             let addr = SocketAddr::Netlink(SocketAddrNetlink::default());

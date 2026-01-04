@@ -78,6 +78,14 @@ impl<T> Receiver<T> {
         Some(value)
     }
 
+    pub fn peek(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        let guard = self.0.internal.lock();
+        guard.values.front().cloned()
+    }
+
     pub async fn recv(&self) -> T {
         self.0.notify.wait_until(|| self.try_recv()).await
     }
