@@ -515,10 +515,12 @@ impl CpuState {
         &mut self,
         vm: &VirtualMemory,
         abi: Abi,
+        rt: bool,
     ) -> Result<(Stack, Sigset)> {
         let ucontext_ptr: Pointer<UContext> = match abi {
             Abi::I386 => {
-                let ucontext_ptr_ptr = Pointer::new(self.registers.rsp + 8);
+                let offset = if rt { 8 } else { 4 };
+                let ucontext_ptr_ptr = Pointer::new(self.registers.rsp + offset);
                 vm.read_with_abi(ucontext_ptr_ptr, abi)?
             }
             Abi::Amd64 => Pointer::new(self.registers.rsp),

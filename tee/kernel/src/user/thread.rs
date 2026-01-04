@@ -47,8 +47,9 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Pointer, PtraceEvent, PtraceOptions, PtraceSyscallInfo, Rusage,
-                SchedParam, SchedulingPolicy, Signal, TimerId, Timespec, UserDesc, WStatus,
+                FileMode, Nice, Personality, Pointer, PtraceEvent, PtraceOptions,
+                PtraceSyscallInfo, Rusage, SchedParam, SchedulingPolicy, Signal, TimerId, Timespec,
+                UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -230,6 +231,7 @@ impl Thread {
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
                 VirtAddr::zero(),
                 VirtAddr::zero(),
+                Personality::Linux,
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
@@ -867,6 +869,15 @@ impl ThreadGuard<'_> {
             .iter_mut()
             .filter(|sa| !matches!(sa.sa_handler_or_sigaction, Sigaction::SIG_IGN))
             .for_each(|sa| *sa = Sigaction::DEFAULT);
+        // Reset the restorer.
+        signal_handler_table
+            .sigactions
+            .get_mut()
+            .iter_mut()
+            .for_each(|sa| {
+                sa.sa_flags.remove(SigactionFlags::RESTORER);
+                sa.sa_restorer = 0;
+            });
         self.sigaltstack = Stack::default();
 
         let mut guard = self.thread.process.credentials.write();

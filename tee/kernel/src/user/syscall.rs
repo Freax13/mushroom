@@ -1,4 +1,5 @@
 use alloc::{
+    boxed::Box,
     ffi::CString,
     sync::{Arc, Weak},
     vec,
@@ -6,7 +7,7 @@ use alloc::{
 };
 use core::{
     cmp,
-    ffi::c_void,
+    ffi::{CStr, c_void},
     fmt,
     future::pending,
     mem::{offset_of, size_of},
@@ -36,7 +37,7 @@ use crate::{
     char_dev::mem::random_bytes,
     error::{Error, ErrorKind, Result, bail, ensure, err},
     fs::{
-        StatFs,
+        StatFs, StatFs64,
         fd::{
             Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf, ReadBuf,
             StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
@@ -70,7 +71,10 @@ use crate::{
             Process, WaitFilter, WaitResult,
             limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
-        syscall::{args::pointee::RawPtraceSyscallInfo, cpu_state::CpuState},
+        syscall::{
+            args::pointee::{RawPtraceSyscallInfo, SizedPointee, WritablePointee},
+            cpu_state::CpuState,
+        },
         thread::{
             Capability, Gid, NewTls, PtraceState, SchedulingSettings, SigFields, SigInfo,
             SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid,
@@ -228,6 +232,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysLstat64);
     handlers.register(SysPoll);
     handlers.register(SysLseek);
+    handlers.register(SysLlseek);
     handlers.register(SysMmap);
     handlers.register(SysMmap2);
     handlers.register(SysMprotect);
@@ -235,7 +240,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysBrk);
     handlers.register(SysRtSigaction);
     handlers.register(SysRtSigprocmask);
+    handlers.register(SysSigprocmask);
     handlers.register(SysRtSigreturn);
+    handlers.register(SysSigreturn);
     handlers.register(SysIoctl);
     handlers.register(SysPread64);
     handlers.register(SysPwrite64);
@@ -258,6 +265,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetpid);
     handlers.register(SysSendfile);
     handlers.register(SysSendfile64);
+    handlers.register(SysSocketcall);
     handlers.register(SysSocket);
     handlers.register(SysConnect);
     handlers.register(SysAccept);
@@ -280,13 +288,16 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExit);
     handlers.register(SysWait4);
     handlers.register(SysKill);
+    handlers.register(SysNewuname);
     handlers.register(SysUname);
+    handlers.register(SysOlduname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysFlock);
     handlers.register(SysFsync);
     handlers.register(SysFdatasync);
     handlers.register(SysTruncate);
+    handlers.register(SysTruncate64);
     handlers.register(SysFtruncate);
     handlers.register(SysFtruncate64);
     handlers.register(SysGetdents);
@@ -309,6 +320,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUmask);
     handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
+    handlers.register(SysOldGetrlimit);
     handlers.register(SysGetrusage);
     handlers.register(SysSysinfo);
     handlers.register(SysPtrace);
@@ -341,8 +353,11 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
+    handlers.register(SysStatfs64);
     handlers.register(SysMknod);
+    handlers.register(SysPersonality);
     handlers.register(SysFstatfs);
+    handlers.register(SysFstatfs64);
     handlers.register(SysGetpriority);
     handlers.register(SysSetpriority);
     handlers.register(SysSchedSetparam);
@@ -373,9 +388,13 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysTimerGettime);
     handlers.register(SysTimerDelete);
     handlers.register(SysClockSettime);
+    handlers.register(SysClockSettime64);
     handlers.register(SysClockGettime);
+    handlers.register(SysClockGettime64);
     handlers.register(SysClockGetres);
+    handlers.register(SysClockGetresTime64);
     handlers.register(SysClockNanosleep);
+    handlers.register(SysClockNanosleepTime64);
     handlers.register(SysTgkill);
     handlers.register(SysInotifyInit);
     handlers.register(SysInotifyAddWatch);
@@ -389,6 +408,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchownat);
     handlers.register(SysFutimesat);
     handlers.register(SysNewfstatat);
+    handlers.register(SysFstatat64);
     handlers.register(SysUnlinkat);
     handlers.register(SysRenameat);
     handlers.register(SysLinkat);
@@ -799,6 +819,28 @@ fn lseek(
     Ok(offset)
 }
 
+#[syscall(i386 = 140)]
+fn llseek(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    fd: FdNum,
+    offset_high: u64,
+    offset_low: u64,
+    result: Pointer<LongOffset>,
+    whence: Whence,
+) -> SyscallResult {
+    let offset = (offset_high << 32) | offset_low;
+    let offset = usize_from(offset);
+
+    let fd = fdtable.get(fd)?;
+    let offset = fd.seek(offset, whence, &mut ctx)?;
+
+    virtual_memory.write(result, LongOffset(offset as i64))?;
+
+    Ok(0)
+}
+
 #[syscall(i386 = 90, amd64 = 9)]
 fn mmap(
     abi: Abi,
@@ -975,71 +1017,64 @@ fn rt_sigaction(
     Ok(0)
 }
 
-struct SysRtSigprocmask;
-
-impl Syscall for SysRtSigprocmask {
-    const NO_I386: Option<usize> = Some(175);
-    const NO_AMD64: Option<usize> = Some(14);
-
-    async fn execute(thread: &Arc<Thread>, syscall_args: SyscallArgs) -> SyscallResult {
-        let how = <u64 as SyscallArg>::parse(syscall_args.args[0], syscall_args.abi)?;
-        let set = <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[1], syscall_args.abi)?;
-        let oldset =
-            <Pointer<Sigset> as SyscallArg>::parse(syscall_args.args[2], syscall_args.abi)?;
-
-        let mut thread = thread.lock();
-        let virtual_memory = thread.virtual_memory();
-
-        if !oldset.is_null() {
-            virtual_memory.write_bytes(oldset.get(), bytes_of(&thread.sigmask))?;
-        }
-
-        if !set.is_null() {
-            let mut set_value = Sigset::zeroed();
-            virtual_memory.read_bytes(set.get(), bytes_of_mut(&mut set_value))?;
-
-            let how = RtSigprocmaskHow::parse(how, syscall_args.abi)?;
-            match how {
-                RtSigprocmaskHow::Block => thread.sigmask |= set_value,
-                RtSigprocmaskHow::Unblock => thread.sigmask &= !set_value,
-                RtSigprocmaskHow::SetMask => thread.sigmask = set_value,
-            }
-        }
-
-        Ok(0)
+#[syscall(i386 = 175, amd64 = 14)]
+fn rt_sigprocmask(
+    mut thread: ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    how: RtSigprocmaskHow,
+    set: Pointer<Sigset>,
+    oldset: Pointer<Sigset>,
+) -> SyscallResult {
+    if !oldset.is_null() {
+        virtual_memory.write_bytes(oldset.get(), bytes_of(&thread.sigmask))?;
     }
 
-    fn display(
-        f: &mut dyn fmt::Write,
-        syscall_args: SyscallArgs,
-        thread: &ThreadGuard<'_>,
-    ) -> fmt::Result {
-        let how = syscall_args.args[0];
-        let set = syscall_args.args[1];
-        let oldset = syscall_args.args[2];
+    if !set.is_null() {
+        let mut set_value = Sigset::zeroed();
+        virtual_memory.read_bytes(set.get(), bytes_of_mut(&mut set_value))?;
 
-        write!(f, "rt_sigprocmask(set=")?;
-        if set == 0 {
-            write!(f, "ignored")?;
-        } else {
-            RtSigprocmaskHow::display(f, how, syscall_args.abi, thread)?;
+        match how {
+            RtSigprocmaskHow::Block => thread.sigmask |= set_value,
+            RtSigprocmaskHow::Unblock => thread.sigmask &= !set_value,
+            RtSigprocmaskHow::SetMask => thread.sigmask = set_value,
         }
-        write!(f, ", set=")?;
-        Pointer::<Sigset>::display(f, set, syscall_args.abi, thread)?;
-        write!(f, ", oldset=")?;
-        Pointer::<Sigset>::display(f, oldset, syscall_args.abi, thread)?;
-        write!(f, ")")
     }
+
+    Ok(0)
+}
+
+#[syscall(i386 = 126)]
+fn sigprocmask(
+    thread: ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    how: RtSigprocmaskHow,
+    set: Pointer<Sigset>,
+    oldset: Pointer<Sigset>,
+) -> SyscallResult {
+    rt_sigprocmask(thread, virtual_memory, how, set, oldset)
 }
 
 #[syscall(i386 = 173, amd64 = 15)]
 fn rt_sigreturn(
+    abi: Abi,
+    mut thread: ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+) -> SyscallResult {
+    let mut cpu_state = thread.thread.cpu_state.lock();
+    (thread.sigaltstack, thread.sigmask) =
+        cpu_state.finish_signal_handler(&virtual_memory, abi, true)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 119)]
+fn sigreturn(
     mut thread: ThreadGuard,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
 ) -> SyscallResult {
     let mut cpu_state = thread.thread.cpu_state.lock();
-    (thread.sigaltstack, thread.sigmask) = cpu_state.finish_signal_handler(&virtual_memory, abi)?;
+    (thread.sigaltstack, thread.sigmask) =
+        cpu_state.finish_signal_handler(&virtual_memory, abi, false)?;
     Ok(0)
 }
 
@@ -1650,6 +1685,63 @@ async fn sendfile64(
     .await
 }
 
+#[syscall(i386 = 102)]
+async fn socketcall(
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    call: SocketCall,
+    args: Pointer<[u32; 6]>,
+) -> SyscallResult {
+    // Implement socketcall by decoding the syscall arguments and invoking the
+    // regular syscall handler.
+
+    let args = virtual_memory.read(args)?;
+    let mut args = args.map(u64::from);
+
+    let no = match call {
+        SocketCall::Socket => SysSocket::NO_I386,
+        SocketCall::Bind => SysBind::NO_I386,
+        SocketCall::Connect => SysConnect::NO_I386,
+        SocketCall::Listen => SysListen::NO_I386,
+        SocketCall::Accept => SysAccept::NO_I386,
+        SocketCall::Getsockname => SysGetsockname::NO_I386,
+        SocketCall::Getpeername => SysGetpeername::NO_I386,
+        SocketCall::Socketpair => SysSocketpair::NO_I386,
+        SocketCall::Send => {
+            // There's no send syscall, so forward to sendto instead.
+            // Set dest_addr=NULL and addrlen=0.
+            args[4] = 0;
+            args[5] = 0;
+            SysSendto::NO_I386
+        }
+        SocketCall::Recv => {
+            // There's no recv syscall, so forward to recvfrom instead.
+            // Set src_addr=NULL and addrlen=0.
+            args[4] = 0;
+            args[5] = 0;
+            SysRecvFrom::NO_I386
+        }
+        SocketCall::Sendto => SysSendto::NO_I386,
+        SocketCall::Recvfrom => SysRecvFrom::NO_I386,
+        SocketCall::Shutdown => SysShutdown::NO_I386,
+        SocketCall::Setsockopt => SysSetsockopt::NO_I386,
+        SocketCall::Getsockopt => SysGetsockopt::NO_I386,
+        SocketCall::Sendmsg => SysSendmsg::NO_I386,
+        SocketCall::Recvmsg => SysRecvmsg::NO_I386,
+        SocketCall::Accept4 => SysAccept4::NO_I386,
+        SocketCall::Recvmmsg => SysRecvmmsg::NO_I386,
+        SocketCall::Sendmmsg => SysSendmmsg::NO_I386,
+    };
+    let no = u64::from_usize(no.unwrap());
+
+    let args = SyscallArgs {
+        abi: Abi::I386,
+        no,
+        args,
+    };
+    Box::pin(SYSCALL_HANDLERS.execute(thread, args)).await
+}
+
 #[syscall(i386 = 359, amd64 = 41)]
 fn socket(
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -2127,6 +2219,7 @@ async fn clone(
             process.umask(),
             process.mm_arg_start(),
             process.mm_arg_end(),
+            process.personality(),
         ))
     };
 
@@ -2458,24 +2551,56 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
     Ok(0)
 }
 
-#[syscall(amd64 = 63)]
-fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult {
-    const SIZE: usize = 65;
-    virtual_memory.write_bytes(VirtAddr::new(fd), &[0; SIZE * 5])?;
-    for (i, bs) in [
-        b"Linux\0" as &[u8],
-        b"myhostname\0",
-        b"6.1.46\0",
-        b"mushroom\0",
-        b"x86_64\0",
-        b"(none)\0",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        virtual_memory.write_bytes(VirtAddr::new(fd + (i * SIZE) as u64), bs)?;
+const SYSNAME: &CStr = c"Linux";
+const NODENAME: &CStr = c"myhostname";
+const RELEASE: &CStr = c"6.1.46";
+const VERSION: &CStr = c"mushroom";
+const DOMAINNAME: &CStr = c"(none)";
+
+fn uname_impl(
+    virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+    values: &[&CStr],
+    capacity: usize,
+) -> SyscallResult {
+    virtual_memory.set_bytes(name.get(), values.len() * capacity, 0)?;
+    for (i, value) in values.iter().enumerate() {
+        virtual_memory.write_bytes(name.bytes_offset(i * capacity).get(), value.to_bytes())?;
     }
     Ok(0)
+}
+
+#[syscall(i386 = 122, amd64 = 63)]
+fn newuname(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+) -> SyscallResult {
+    let machine = thread.process().machine();
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine, DOMAINNAME];
+    uname_impl(virtual_memory, name, &values, 65)
+}
+
+#[syscall(i386 = 109)]
+fn uname(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+) -> SyscallResult {
+    let machine = thread.process().machine();
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine];
+    uname_impl(virtual_memory, name, &values, 65)
+}
+
+#[syscall(i386 = 59)]
+fn olduname(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+) -> SyscallResult {
+    let machine = thread.process().machine();
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine];
+    uname_impl(virtual_memory, name, &values, 9)
 }
 
 #[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
@@ -2513,10 +2638,18 @@ async fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
-        FcntlCmd::GetLk => {
+        FcntlCmd::GetLk | FcntlCmd::GetLk64 => {
             let record = fd.unix_file_lock_record()?;
-            let pointer = Pointer::<Flock>::new(arg);
-            let flock = virtual_memory.read_with_abi(pointer, abi)?;
+
+            let use_64bit = cmd == FcntlCmd::GetLk64;
+            let flock = if use_64bit {
+                ensure!(abi == Abi::I386, Inval);
+                let pointer = Pointer::<Flock64>::new(arg);
+                Flock::from(virtual_memory.read_with_abi(pointer, abi)?)
+            } else {
+                let pointer = Pointer::<Flock>::new(arg);
+                virtual_memory.read_with_abi(pointer, abi)?
+            };
 
             let start = match flock.whence {
                 FlockWhence::Set => flock.start,
@@ -2557,17 +2690,37 @@ async fn fcntl(
                 }
             };
 
-            virtual_memory.write_with_abi(pointer, flock, abi)?;
+            if use_64bit {
+                let pointer = Pointer::new(arg);
+                let flock = Flock64::from(flock);
+                virtual_memory.write_with_abi(pointer, flock, abi)?;
+            } else {
+                let pointer = Pointer::new(arg);
+                virtual_memory.write_with_abi(pointer, flock, abi)?;
+            }
 
             Ok(0)
         }
-        FcntlCmd::SetLk | FcntlCmd::OfdSetLk | FcntlCmd::SetLkW | FcntlCmd::OfdSetLkW => {
+        FcntlCmd::SetLk
+        | FcntlCmd::SetLk64
+        | FcntlCmd::OfdSetLk
+        | FcntlCmd::SetLkW
+        | FcntlCmd::SetLkW64
+        | FcntlCmd::OfdSetLkW => {
             let record = fd.unix_file_lock_record()?;
-            let pointer = Pointer::<Flock>::new(arg);
-            let flock = virtual_memory.read_with_abi(pointer, abi)?;
+
+            let use_64bit = matches!(cmd, FcntlCmd::SetLk64 | FcntlCmd::SetLkW64);
+            let flock = if use_64bit {
+                ensure!(abi == Abi::I386, Inval);
+                let pointer = Pointer::<Flock64>::new(arg);
+                Flock::from(virtual_memory.read_with_abi(pointer, abi)?)
+            } else {
+                let pointer = Pointer::<Flock>::new(arg);
+                virtual_memory.read_with_abi(pointer, abi)?
+            };
 
             let (owner, pid) = match cmd {
-                FcntlCmd::SetLk | FcntlCmd::SetLkW => (
+                FcntlCmd::SetLk | FcntlCmd::SetLk64 | FcntlCmd::SetLkW | FcntlCmd::SetLkW64 => (
                     UnixLockOwner::process(&fdtable),
                     Some(thread.process().pid()),
                 ),
@@ -2601,10 +2754,12 @@ async fn fcntl(
                 };
 
                 match cmd {
-                    FcntlCmd::SetLk | FcntlCmd::OfdSetLk => {
+                    FcntlCmd::SetLk | FcntlCmd::SetLk64 | FcntlCmd::OfdSetLk => {
                         record.lock(lock).map_err(|_| err!(Acces))?
                     }
-                    FcntlCmd::SetLkW | FcntlCmd::OfdSetLkW => record.lock_wait(lock).await,
+                    FcntlCmd::SetLkW | FcntlCmd::SetLkW64 | FcntlCmd::OfdSetLkW => {
+                        record.lock_wait(lock).await
+                    }
                     _ => unreachable!(),
                 }
             } else {
@@ -2632,6 +2787,7 @@ async fn fcntl(
 
 #[syscall(i386 = 221, interruptable, restartable)]
 async fn fcntl64(
+    abi: Abi,
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -2642,7 +2798,7 @@ async fn fcntl64(
     arg: u64,
 ) -> SyscallResult {
     fcntl(
-        Abi::Amd64,
+        abi,
         thread,
         virtual_memory,
         fdtable,
@@ -2720,6 +2876,19 @@ fn truncate(
         .send_event(InotifyMask::MODIFY, None, Some(file_name));
 
     Ok(0)
+}
+
+#[syscall(i386 = 193)]
+fn truncate64(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] ctx: FileAccessContext,
+    path: Pointer<Path>,
+    length_low: u64,
+    length_high: u64,
+) -> SyscallResult {
+    let length = length_low | (length_high << 32);
+    truncate(thread, virtual_memory, ctx, path, length)
 }
 
 #[syscall(i386 = 93, amd64 = 77)]
@@ -3096,7 +3265,7 @@ fn gettimeofday(
     Ok(0)
 }
 
-#[syscall(i386 = 76, amd64 = 97)]
+#[syscall(i386 = 191, amd64 = 97)]
 fn getrlimit(
     thread: &Thread,
     abi: Abi,
@@ -3106,6 +3275,19 @@ fn getrlimit(
 ) -> SyscallResult {
     let value = thread.process().limits[resource].load();
     virtual_memory.write_with_abi(rlim, value, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 76)]
+fn old_getrlimit(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    resource: Resource,
+    rlim: Pointer<RLimit32>,
+) -> SyscallResult {
+    let value = thread.process().limits[resource].load();
+    let value = RLimit32::from(value);
+    virtual_memory.write(rlim, value)?;
     Ok(0)
 }
 
@@ -3145,21 +3327,33 @@ fn sysinfo(
     sys_info: Pointer<SysInfo>,
 ) -> SyscallResult {
     // TODO: Properly fill in the values.
+    let totalram = 0x1000000000;
+    let freeram = 0xc00000000;
+    let sharedram = 0;
+    let bufferram = 0;
+    let totalswap = 0;
+    let freeswap = 0;
+
+    let mem_unit = match abi {
+        Abi::I386 => 0x1000,
+        Abi::Amd64 => 1,
+    };
+
     virtual_memory.write_with_abi(
         sys_info,
         SysInfo {
             uptime: 123,
             loads: [123, 123, 123],
-            totalram: 0x1000000000,
-            freeram: 0xc00000000,
-            sharedram: 0,
-            bufferram: 0,
-            totalswap: 0,
-            freeswap: 0,
+            totalram: totalram / u64::from(mem_unit),
+            freeram: freeram / u64::from(mem_unit),
+            sharedram: sharedram / u64::from(mem_unit),
+            bufferram: bufferram / u64::from(mem_unit),
+            totalswap: totalswap / u64::from(mem_unit),
+            freeswap: freeswap / u64::from(mem_unit),
             procs: Process::all().count() as u16,
             totalhigh: 0,
             freehigh: 0,
-            mem_unit: 1,
+            mem_unit,
         },
         abi,
     )?;
@@ -4032,6 +4226,17 @@ fn mknod(
     )
 }
 
+#[syscall(i386 = 136, amd64 = 135)]
+fn personality(thread: &Thread, persona: Personality) -> SyscallResult {
+    let process = thread.process();
+    let old = if persona == Personality::Invalid {
+        process.personality()
+    } else {
+        process.set_personality(persona)
+    };
+    Ok(old as u64)
+}
+
 #[syscall(i386 = 99, amd64 = 137)]
 fn statfs(
     abi: Abi,
@@ -4049,6 +4254,26 @@ fn statfs(
     Ok(0)
 }
 
+#[syscall(i386 = 268)]
+fn statfs64(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+    sz: u64,
+    buf: Pointer<StatFs64>,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(pathname)?;
+    let cwd = thread.process().cwd();
+    let link = lookup_and_resolve_link(cwd, &pathname, &mut ctx)?;
+    let statfs = link.node.fs()?.stat();
+    let statfs = StatFs64::from(statfs);
+    ensure!(u64::from_usize(statfs.size(abi)) == sz, Inval);
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
 #[syscall(i386 = 100, amd64 = 138)]
 fn fstatfs(
     abi: Abi,
@@ -4059,6 +4284,23 @@ fn fstatfs(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let statfs = fd.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 269)]
+fn fstatfs64(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    sz: u64,
+    buf: Pointer<StatFs64>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let statfs = fd.fs()?.stat();
+    let statfs = StatFs64::from(statfs);
+    ensure!(u64::from_usize(statfs.size(abi)) == sz, Inval);
     virtual_memory.write_with_abi(buf, statfs, abi)?;
     Ok(0)
 }
@@ -4704,6 +4946,15 @@ fn clock_settime(
     Ok(0)
 }
 
+#[syscall(i386 = 405)]
+fn clock_settime64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_settime(Abi::Amd64, virtual_memory, clock_id, tp)
+}
+
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     abi: Abi,
@@ -4735,7 +4986,17 @@ fn clock_gettime(
     Ok(0)
 }
 
-#[syscall(i386 = 406, amd64 = 229)]
+#[syscall(i386 = 403)]
+fn clock_gettime64(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ExtendedClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_gettime(Abi::Amd64, thread, virtual_memory, clock_id, tp)
+}
+
+#[syscall(i386 = 266, amd64 = 229)]
 fn clock_getres(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -4748,7 +5009,16 @@ fn clock_getres(
     Ok(0)
 }
 
-#[syscall(i386 = 407, amd64 = 230)]
+#[syscall(i386 = 406)]
+fn clock_getres_time64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ExtendedClockId,
+    res: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_getres(Abi::Amd64, virtual_memory, clock_id, res)
+}
+
+#[syscall(i386 = 267, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
     thread: &Thread,
@@ -4784,6 +5054,27 @@ async fn clock_nanosleep(
     res?;
 
     Ok(0)
+}
+
+#[syscall(i386 = 407)]
+async fn clock_nanosleep_time64(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    flags: ClockNanosleepFlags,
+    request: Pointer<Timespec>,
+    remain: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_nanosleep(
+        Abi::Amd64,
+        thread,
+        virtual_memory,
+        clock_id,
+        flags,
+        request,
+        remain,
+    )
+    .await
 }
 
 #[syscall(i386 = 252, amd64 = 231)]
@@ -5215,18 +5506,21 @@ fn futimesat(
     Ok(0)
 }
 
-#[syscall(amd64 = 262)]
-fn newfstatat(
+#[expect(clippy::too_many_arguments)]
+fn fstatat_impl<T, P>(
     thread: &Thread,
     abi: Abi,
-    #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] fdtable: Arc<FileDescriptorTable>,
-    #[state] mut ctx: FileAccessContext,
+    virtual_memory: Arc<VirtualMemory>,
+    fdtable: Arc<FileDescriptorTable>,
+    mut ctx: FileAccessContext,
     dfd: FdNum,
     pathname: Pointer<Path>,
-    statbuf: Pointer<Stat>,
+    statbuf: Pointer<T>,
     flags: AtFlags,
-) -> SyscallResult {
+) -> SyscallResult
+where
+    T: From<Stat> + WritablePointee<P>,
+{
     if flags.contains(AtFlags::AT_EMPTY_PATH) {
         // Check if the path is empty by checking if the first character is the
         // null-terminator.
@@ -5238,6 +5532,7 @@ fn newfstatat(
                 let fd = fdtable.get(dfd)?;
                 fd.stat()?
             };
+            let stat = T::from(stat);
 
             virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -5254,10 +5549,61 @@ fn newfstatat(
         lookup_and_resolve_link(start_dir, &pathname, &mut ctx)?
     };
     let stat = link.node.stat()?;
+    let stat = T::from(stat);
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
     Ok(0)
+}
+
+#[syscall(amd64 = 262)]
+fn newfstatat(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    statbuf: Pointer<Stat>,
+    flags: AtFlags,
+) -> SyscallResult {
+    fstatat_impl(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        ctx,
+        dfd,
+        pathname,
+        statbuf,
+        flags,
+    )
+}
+
+#[syscall(i386 = 300)]
+fn fstatat64(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    statbuf: Pointer<Stat64>,
+    flags: AtFlags,
+) -> SyscallResult {
+    fstatat_impl(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        ctx,
+        dfd,
+        pathname,
+        statbuf,
+        flags,
+    )
 }
 
 #[syscall(i386 = 301, amd64 = 263)]

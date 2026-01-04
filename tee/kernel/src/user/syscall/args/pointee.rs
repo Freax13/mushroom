@@ -605,8 +605,10 @@ pub struct SigInfo64 {
     _sifields: [i32; 28],
 }
 
-impl From<SigInfo> for SigInfo64 {
-    fn from(value: SigInfo) -> Self {
+impl TryFrom<SigInfo> for SigInfo64 {
+    type Error = Error;
+
+    fn try_from(value: SigInfo) -> Result<Self> {
         let mut _sifields = [0; 28];
         let dst = bytes_of_mut(&mut _sifields);
         macro_rules! pack {
@@ -626,7 +628,7 @@ impl From<SigInfo> for SigInfo64 {
             }
             SigFields::Timer(sig_timer) => {
                 pack!(SigTimer64 {
-                    tid: sig_timer.tid.into(),
+                    tid: sig_timer.tid.try_into()?,
                     overrun: sig_timer.overrun,
                     sigval: sig_timer.sigval.into(),
                 })
@@ -646,13 +648,13 @@ impl From<SigInfo> for SigInfo64 {
                 })
             }
         }
-        Self {
+        Ok(Self {
             si_signo: value.signal.get() as i32,
             si_errno: 0,
             si_code: value.code.get(),
             _padding: 0,
             _sifields,
-        }
+        })
     }
 }
 
@@ -666,7 +668,7 @@ struct SigKill64 {
 #[derive(Clone, Copy, NoUninit)]
 #[repr(C, packed(4))]
 struct SigTimer64 {
-    tid: TimerId64,
+    tid: TimerId32, // yes, 32, not 64
     overrun: u32,
     sigval: Pointer64<c_void>,
 }
@@ -1689,6 +1691,10 @@ impl Pointee for super::RLimit64 {}
 
 impl PrimitivePointee for super::RLimit64 {}
 
+impl Pointee for super::RLimit32 {}
+
+impl PrimitivePointee for super::RLimit32 {}
+
 impl Pointee for SysInfo {}
 
 impl AbiDependentPointee for SysInfo {
@@ -1896,6 +1902,9 @@ impl From<StatFs> for StatFs64 {
         }
     }
 }
+
+impl Pointee for crate::fs::StatFs64 {}
+impl PrimitivePointee for crate::fs::StatFs64 {}
 
 impl Pointee for Rusage {}
 impl AbiDependentPointee for Rusage {
@@ -2951,6 +2960,63 @@ impl From<Flock> for Flock64 {
             pid: value.pid,
             _padding2: 0,
         }
+    }
+}
+
+impl Pointee for super::Flock64 {}
+impl AbiDependentPointee for super::Flock64 {
+    type I386 = Flock64On32Bit;
+    type Amd64 = Flock64;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed(4))]
+pub struct Flock64On32Bit {
+    r#type: i16,
+    whence: i16,
+    start: u64,
+    len: u64,
+    pid: u32,
+}
+
+impl TryFrom<Flock64On32Bit> for super::Flock64 {
+    type Error = Error;
+
+    fn try_from(value: Flock64On32Bit) -> Result<Self> {
+        Ok(Self::from(Flock {
+            r#type: FlockType::try_from(value.r#type)?,
+            whence: FlockWhence::try_from(value.whence)?,
+            start: value.start,
+            len: value.len,
+            pid: value.pid,
+        }))
+    }
+}
+
+impl From<super::Flock64> for Flock64On32Bit {
+    fn from(value: super::Flock64) -> Self {
+        let value = Flock::from(value);
+        Self {
+            r#type: value.r#type as i16,
+            whence: value.whence as i16,
+            start: value.start,
+            len: value.len,
+            pid: value.pid,
+        }
+    }
+}
+
+impl TryFrom<Flock64> for super::Flock64 {
+    type Error = Error;
+
+    fn try_from(value: Flock64) -> Result<Self> {
+        Flock::try_from(value).map(Self::from)
+    }
+}
+
+impl From<super::Flock64> for Flock64 {
+    fn from(value: super::Flock64) -> Self {
+        Self::from(Flock::from(value))
     }
 }
 

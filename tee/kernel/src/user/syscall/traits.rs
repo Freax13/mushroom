@@ -32,7 +32,7 @@ pub struct SyscallArgs {
 }
 
 /// The ABI used during a syscall.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Abi {
     I386,
     Amd64,

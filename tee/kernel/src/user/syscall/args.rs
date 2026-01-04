@@ -137,6 +137,7 @@ macro_rules! enum_arg {
         )*
     }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[allow(clippy::enum_clike_unportable_variant)]
         pub enum $enuhm {
             $(
                 $variant = $expr,
@@ -571,6 +572,9 @@ enum_arg! {
         SetLkW = 7,
         SetOwn = 8,
         GetOwn = 9,
+        GetLk64 = 12,
+        SetLk64 = 13,
+        SetLkW64 = 14,
         SetOwnEx = 15,
         GetOwnEx = 16,
         OfdSetLk = 37,
@@ -1387,6 +1391,24 @@ impl From<RLimit64> for RLimit {
         Self {
             rlim_cur: value.rlim_cur,
             rlim_max: value.rlim_max,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct RLimit32 {
+    /// Soft limit
+    pub rlim_cur: u32,
+    /// Hard limit (ceiling for rlim_cur)
+    pub rlim_max: u32,
+}
+
+impl From<RLimit> for RLimit32 {
+    fn from(value: RLimit) -> Self {
+        Self {
+            rlim_cur: value.rlim_cur.clamp(0, 0x7fff_ffff) as u32,
+            rlim_max: value.rlim_max.clamp(0, 0x7fff_ffff) as u32,
         }
     }
 }
@@ -2467,6 +2489,21 @@ pub enum FlockWhence {
     End = 2,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Flock64(Flock);
+
+impl From<Flock64> for Flock {
+    fn from(value: Flock64) -> Self {
+        value.0
+    }
+}
+
+impl From<Flock> for Flock64 {
+    fn from(value: Flock) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct UserCapHeader {
@@ -2686,4 +2723,39 @@ pub enum PtraceSyscallInfoValue {
     None = 0,
     Entry { nr: u64, args: [u64; 6] } = 1,
     Exit { rval: i64, is_error: bool } = 2,
+}
+
+enum_arg! {
+    pub enum SocketCall {
+        Socket = 1,
+        Bind = 2,
+        Connect = 3,
+        Listen = 4,
+        Accept = 5,
+        Getsockname = 6,
+        Getpeername = 7,
+        Socketpair = 8,
+        Send = 9,
+        Recv = 10,
+        Sendto = 11,
+        Recvfrom = 12,
+        Shutdown = 13,
+        Setsockopt = 14,
+        Getsockopt = 15,
+        Sendmsg = 16,
+        Recvmsg = 17,
+        Accept4 = 18,
+        Recvmmsg = 19,
+        Sendmmsg = 20,
+    }
+}
+
+enum_arg! {
+    // TODO: Only the lower byte is an enum, the upper 3 bytes are a bitfield.
+    //       Add support for this.
+    pub enum Personality {
+        Linux = 0,
+        Linux32 = 8,
+        Invalid = 0xffff_ffff,
+    }
 }

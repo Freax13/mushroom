@@ -1,6 +1,8 @@
 use alloc::sync::Arc;
 use core::cmp;
 
+use bytemuck::{Pod, Zeroable};
+
 use self::{
     fd::{KernelWriteBuf, file::File},
     node::{INode, tmpfs::TmpFsFile},
@@ -117,6 +119,42 @@ pub struct StatFs {
     pub namelen: i64,
     pub frsize: i64,
     pub flags: i64,
+}
+
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C, packed(4))]
+pub struct StatFs64 {
+    ty: u32,
+    bsize: u32,
+    blocks: u64,
+    bfree: u64,
+    bavail: u64,
+    files: u64,
+    ffree: u64,
+    fsid: [i32; 2],
+    namelen: u32,
+    frsize: u32,
+    flags: u32,
+    spare: [u32; 4],
+}
+
+impl From<StatFs> for StatFs64 {
+    fn from(value: StatFs) -> Self {
+        Self {
+            ty: value.ty as u32,
+            bsize: value.bsize as u32,
+            blocks: value.blocks as u64,
+            bfree: value.bfree as u64,
+            bavail: value.bavail as u64,
+            files: value.files as u64,
+            ffree: value.ffree as u64,
+            fsid: value.fsid,
+            namelen: value.namelen as u32,
+            frsize: value.frsize as u32,
+            flags: value.flags as u32,
+            spare: [0; 4],
+        }
+    }
 }
 
 pub static ANON_INODE_FS: Lazy<Arc<AnonInodeFs>> = Lazy::new(|| Arc::new(AnonInodeFs));
