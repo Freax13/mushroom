@@ -205,20 +205,21 @@ impl VirtualMemory {
 
         // write argc + argv.
         write(u64::from_usize(argv.len())); // argc
+        let mm_arg_start = str_addr;
         for arg in argv {
             let arg = write_str(arg.as_ref(), &mut str_addr)?;
             write(arg.as_u64());
         }
+        let mm_arg_end = str_addr;
         write(0);
 
-        let mm_arg_start = start_str_addr;
-        let mm_arg_end = str_addr;
-
         // write enpv.
+        let mm_env_start = str_addr;
         for env in envp {
             let env = write_str(env.as_ref(), &mut str_addr)?;
             write(env.as_u64());
         }
+        let mm_env_end = str_addr;
         write(0);
 
         let platform = match E::ABI {
@@ -276,6 +277,8 @@ impl VirtualMemory {
             exe: link,
             mm_arg_start,
             mm_arg_end,
+            mm_env_start,
+            mm_env_end,
         })
     }
 
@@ -370,4 +373,6 @@ pub struct ExecResult {
     pub exe: Link,
     pub mm_arg_start: VirtAddr,
     pub mm_arg_end: VirtAddr,
+    pub mm_env_start: VirtAddr,
+    pub mm_env_end: VirtAddr,
 }

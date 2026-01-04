@@ -34,29 +34,24 @@ use crate::{
     },
 };
 
-pub struct KernelDir {
+pub struct VmDir {
     this: Weak<Self>,
     location: LinkLocation,
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
-    hostname_file: Arc<HostnameFile>,
-    overflowgid_file: Arc<OverflowgidFile>,
-    overflowuid_file: Arc<OverflowuidFile>,
+    overcommit_memory_file: Arc<OvercommitMemoryFile>,
 }
 
-impl KernelDir {
-    #[expect(clippy::too_many_arguments)]
+impl VmDir {
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
         ino: u64,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
-        hostname_file: Arc<HostnameFile>,
-        overflowgid_file: Arc<OverflowgidFile>,
-        overflowuid_file: Arc<OverflowuidFile>,
+        hostname_file: Arc<OvercommitMemoryFile>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -65,14 +60,12 @@ impl KernelDir {
             ino,
             bsd_file_lock_record,
             watchers,
-            hostname_file,
-            overflowuid_file,
-            overflowgid_file,
+            overcommit_memory_file: hostname_file,
         })
     }
 }
 
-impl INode for KernelDir {
+impl INode for VmDir {
     dir_impls!();
 
     fn stat(&self) -> Result<Stat> {
@@ -125,7 +118,7 @@ impl INode for KernelDir {
     }
 }
 
-impl Directory for KernelDir {
+impl Directory for VmDir {
     fn location(&self) -> &LinkLocation {
         &self.location
     }
@@ -211,19 +204,9 @@ impl Directory for KernelDir {
             });
         }
         entries.push(DirEntry {
-            ino: self.hostname_file.ino,
+            ino: self.overcommit_memory_file.ino,
             ty: FileType::File,
-            name: DirEntryName::FileName(FileName::new(b"hostname").unwrap()),
-        });
-        entries.push(DirEntry {
-            ino: self.overflowgid_file.ino,
-            ty: FileType::File,
-            name: DirEntryName::FileName(FileName::new(b"overflowgid").unwrap()),
-        });
-        entries.push(DirEntry {
-            ino: self.overflowuid_file.ino,
-            ty: FileType::File,
-            name: DirEntryName::FileName(FileName::new(b"overflowuid").unwrap()),
+            name: DirEntryName::FileName(FileName::new(b"overcommit_memory").unwrap()),
         });
         Ok(entries)
     }
@@ -232,9 +215,7 @@ impl Directory for KernelDir {
         let location =
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
-            b"hostname" => self.hostname_file.clone(),
-            b"overflowgid" => self.overflowgid_file.clone(),
-            b"overflowuid" => self.overflowuid_file.clone(),
+            b"overcommit_memory" => self.overcommit_memory_file.clone(),
             _ => bail!(NoEnt),
         };
         Ok(Link { location, node })
@@ -282,7 +263,7 @@ impl Directory for KernelDir {
     }
 }
 
-pub struct HostnameFile {
+pub struct OvercommitMemoryFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
     ino: u64,
@@ -291,7 +272,7 @@ pub struct HostnameFile {
     watchers: Watchers,
 }
 
-impl HostnameFile {
+impl OvercommitMemoryFile {
     pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -305,12 +286,12 @@ impl HostnameFile {
 
     fn content(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
-        buffer.extend_from_slice(b"myhostname\n");
+        buffer.extend_from_slice(b"0\n");
         buffer
     }
 }
 
-impl INode for HostnameFile {
+impl INode for OvercommitMemoryFile {
     fn stat(&self) -> Result<Stat> {
         Ok(Stat {
             dev: self.fs.dev,
@@ -365,259 +346,7 @@ impl INode for HostnameFile {
     }
 }
 
-impl File for HostnameFile {
-    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
-        bail!(NoDev)
-    }
-
-    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let content = self.content();
-        let offset = cmp::min(offset, content.len());
-        let content = &content[offset..];
-        let len = cmp::min(content.len(), buf.buffer_len());
-        buf.write(0, &content[..len])?;
-        Ok(len)
-    }
-
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self) -> Result<()> {
-        bail!(Acces)
-    }
-
-    fn allocate(
-        &self,
-        _mode: FallocateMode,
-        _offset: usize,
-        _len: usize,
-        _: &FileAccessContext,
-    ) -> Result<()> {
-        bail!(Acces)
-    }
-
-    fn deleted(&self) -> bool {
-        false
-    }
-
-    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
-        self.unix_file_lock_record.get()
-    }
-}
-
-pub struct OverflowgidFile {
-    this: Weak<Self>,
-    fs: Arc<ProcFs>,
-    ino: u64,
-    bsd_file_lock_record: LazyBsdFileLockRecord,
-    unix_file_lock_record: LazyUnixFileLockRecord,
-    watchers: Watchers,
-}
-
-impl OverflowgidFile {
-    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
-        Arc::new_cyclic(|this| Self {
-            this: this.clone(),
-            fs,
-            ino: new_ino(),
-            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
-            unix_file_lock_record: LazyUnixFileLockRecord::new(),
-            watchers: Watchers::new(),
-        })
-    }
-
-    fn content(&self) -> &'static [u8] {
-        b"65534\n"
-    }
-}
-
-impl INode for OverflowgidFile {
-    fn stat(&self) -> Result<Stat> {
-        Ok(Stat {
-            dev: self.fs.dev,
-            ino: self.ino,
-            nlink: 1,
-            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
-            uid: Uid::SUPER_USER,
-            gid: Gid::SUPER_USER,
-            rdev: 0,
-            size: 0,
-            blksize: 0,
-            blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
-        })
-    }
-
-    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        Ok(self.fs.clone())
-    }
-
-    fn open(
-        &self,
-        location: LinkLocation,
-        flags: OpenFlags,
-        _: &FileAccessContext,
-    ) -> Result<StrongFileDescriptor> {
-        open_file(self.this.upgrade().unwrap(), location, flags)
-    }
-
-    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
-        bail!(Perm)
-    }
-
-    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
-
-    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
-        bail!(Acces)
-    }
-
-    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
-        self.bsd_file_lock_record.get()
-    }
-
-    fn watchers(&self) -> &Watchers {
-        &self.watchers
-    }
-}
-
-impl File for OverflowgidFile {
-    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
-        bail!(NoDev)
-    }
-
-    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let content = self.content();
-        let offset = cmp::min(offset, content.len());
-        let content = &content[offset..];
-        let len = cmp::min(content.len(), buf.buffer_len());
-        buf.write(0, &content[..len])?;
-        Ok(len)
-    }
-
-    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        bail!(Acces)
-    }
-
-    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
-        bail!(Acces)
-    }
-
-    fn truncate(&self) -> Result<()> {
-        bail!(Acces)
-    }
-
-    fn allocate(
-        &self,
-        _mode: FallocateMode,
-        _offset: usize,
-        _len: usize,
-        _: &FileAccessContext,
-    ) -> Result<()> {
-        bail!(Acces)
-    }
-
-    fn deleted(&self) -> bool {
-        false
-    }
-
-    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
-        self.unix_file_lock_record.get()
-    }
-}
-
-pub struct OverflowuidFile {
-    this: Weak<Self>,
-    fs: Arc<ProcFs>,
-    ino: u64,
-    bsd_file_lock_record: LazyBsdFileLockRecord,
-    unix_file_lock_record: LazyUnixFileLockRecord,
-    watchers: Watchers,
-}
-
-impl OverflowuidFile {
-    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
-        Arc::new_cyclic(|this| Self {
-            this: this.clone(),
-            fs,
-            ino: new_ino(),
-            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
-            unix_file_lock_record: LazyUnixFileLockRecord::new(),
-            watchers: Watchers::new(),
-        })
-    }
-
-    fn content(&self) -> &'static [u8] {
-        b"65534\n"
-    }
-}
-
-impl INode for OverflowuidFile {
-    fn stat(&self) -> Result<Stat> {
-        Ok(Stat {
-            dev: self.fs.dev,
-            ino: self.ino,
-            nlink: 1,
-            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
-            uid: Uid::SUPER_USER,
-            gid: Gid::SUPER_USER,
-            rdev: 0,
-            size: 0,
-            blksize: 0,
-            blocks: 0,
-            atime: Timespec::ZERO,
-            mtime: Timespec::ZERO,
-            ctime: Timespec::ZERO,
-        })
-    }
-
-    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
-        Ok(self.fs.clone())
-    }
-
-    fn open(
-        &self,
-        location: LinkLocation,
-        flags: OpenFlags,
-        _: &FileAccessContext,
-    ) -> Result<StrongFileDescriptor> {
-        open_file(self.this.upgrade().unwrap(), location, flags)
-    }
-
-    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
-        bail!(Perm)
-    }
-
-    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
-
-    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
-        bail!(Acces)
-    }
-
-    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
-        self.bsd_file_lock_record.get()
-    }
-
-    fn watchers(&self) -> &Watchers {
-        &self.watchers
-    }
-}
-
-impl File for OverflowuidFile {
+impl File for OvercommitMemoryFile {
     fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
         bail!(NoDev)
     }

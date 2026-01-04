@@ -231,6 +231,8 @@ impl Thread {
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
                 VirtAddr::zero(),
                 VirtAddr::zero(),
+                VirtAddr::zero(),
+                VirtAddr::zero(),
                 Personality::Linux,
             ),
             Arc::new(SignalHandlerTable::new()),
@@ -494,6 +496,7 @@ impl Thread {
                         | Signal::ILL
                         | Signal::TRAP
                         | Signal::ABRT
+                        | Signal::BUS
                         | Signal::USR1
                         | Signal::SEGV
                         | Signal::USR2
@@ -919,6 +922,8 @@ impl ThreadGuard<'_> {
         *process.exe.write() = res.exe;
         process.set_mm_arg_start(res.mm_arg_start);
         process.set_mm_arg_end(res.mm_arg_end);
+        process.set_mm_env_start(res.mm_env_start);
+        process.set_mm_env_end(res.mm_env_end);
 
         Ok(())
     }
@@ -959,6 +964,7 @@ impl ThreadGuard<'_> {
                     | Signal::ILL
                     | Signal::TRAP
                     | Signal::ABRT
+                    | Signal::BUS
                     | Signal::USR1
                     | Signal::SEGV
                     | Signal::USR2
@@ -1062,7 +1068,7 @@ impl ThreadGuard<'_> {
         buffer.extend_from_slice(b" 18446744073709551615"); // rsslim
 
         buffer.extend_from_slice(b" 0"); // TODO: startcode
-        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: encode
+        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: endcode
 
         buffer.extend_from_slice(b" 0"); // TODO: startstack
         buffer.extend_from_slice(b" 0"); // TODO: kstkesp
@@ -1101,11 +1107,11 @@ impl ThreadGuard<'_> {
 
         buffer.extend_from_slice(b" 0"); // TODO: start_brk
 
-        buffer.extend_from_slice(b" 0"); // TODO: arg_start
-        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: arg_end
+        write!(buffer, " {}", self.process().mm_arg_start().as_u64()).unwrap();
+        write!(buffer, " {}", self.process().mm_arg_end().as_u64()).unwrap();
 
-        buffer.extend_from_slice(b" 0"); // TODO: env_start
-        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: env_end
+        write!(buffer, " {}", self.process().mm_env_start().as_u64()).unwrap();
+        write!(buffer, " {}", self.process().mm_env_end().as_u64()).unwrap();
 
         buffer.extend_from_slice(b" 0"); // TODO: exit_code
 
@@ -1123,6 +1129,8 @@ impl ThreadGuard<'_> {
 
         writeln!(buffer, "Umask:\t{0:4o}", self.process().umask()).unwrap();
 
+        buffer.extend_from_slice(b"State:\tR (running)\n");
+
         writeln!(buffer, "Tgid:\t{}", self.process().pid()).unwrap();
 
         writeln!(buffer, "Ngid:\t0").unwrap();
@@ -1133,10 +1141,31 @@ impl ThreadGuard<'_> {
 
         writeln!(
             buffer,
-            "Ppid:\t{}",
+            "TracerPid:\t{}",
             self.tracer.upgrade().map_or(0, |thread| thread.tid())
         )
         .unwrap();
+
+        let credentials_guard = self.process().credentials.read();
+        writeln!(
+            buffer,
+            "Uid:\t{}\t{}\t{}\t{}",
+            credentials_guard.real_user_id.get(),
+            credentials_guard.effective_user_id.get(),
+            credentials_guard.saved_set_user_id.get(),
+            credentials_guard.filesystem_user_id.get(),
+        )
+        .unwrap();
+        writeln!(
+            buffer,
+            "Gid:\t{}\t{}\t{}\t{}",
+            credentials_guard.real_group_id.get(),
+            credentials_guard.effective_group_id.get(),
+            credentials_guard.saved_set_group_id.get(),
+            credentials_guard.filesystem_group_id.get(),
+        )
+        .unwrap();
+        drop(credentials_guard);
 
         let usage = self.virtual_memory.usage();
         writeln!(
