@@ -3327,21 +3327,33 @@ fn sysinfo(
     sys_info: Pointer<SysInfo>,
 ) -> SyscallResult {
     // TODO: Properly fill in the values.
+    let totalram = 0x1000000000;
+    let freeram = 0xc00000000;
+    let sharedram = 0;
+    let bufferram = 0;
+    let totalswap = 0;
+    let freeswap = 0;
+
+    let mem_unit = match abi {
+        Abi::I386 => 0x1000,
+        Abi::Amd64 => 1,
+    };
+
     virtual_memory.write_with_abi(
         sys_info,
         SysInfo {
             uptime: 123,
             loads: [123, 123, 123],
-            totalram: 0x1000000000,
-            freeram: 0xc00000000,
-            sharedram: 0,
-            bufferram: 0,
-            totalswap: 0,
-            freeswap: 0,
+            totalram: totalram / u64::from(mem_unit),
+            freeram: freeram / u64::from(mem_unit),
+            sharedram: sharedram / u64::from(mem_unit),
+            bufferram: bufferram / u64::from(mem_unit),
+            totalswap: totalswap / u64::from(mem_unit),
+            freeswap: freeswap / u64::from(mem_unit),
             procs: Process::all().count() as u16,
             totalhigh: 0,
             freehigh: 0,
-            mem_unit: 1,
+            mem_unit,
         },
         abi,
     )?;
