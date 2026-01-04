@@ -290,6 +290,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFsync);
     handlers.register(SysFdatasync);
     handlers.register(SysTruncate);
+    handlers.register(SysTruncate64);
     handlers.register(SysFtruncate);
     handlers.register(SysFtruncate64);
     handlers.register(SysGetdents);
@@ -2802,6 +2803,19 @@ fn truncate(
         .send_event(InotifyMask::MODIFY, None, Some(file_name));
 
     Ok(0)
+}
+
+#[syscall(i386 = 193)]
+fn truncate64(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] ctx: FileAccessContext,
+    path: Pointer<Path>,
+    length_low: u64,
+    length_high: u64,
+) -> SyscallResult {
+    let length = length_low | (length_high << 32);
+    truncate(thread, virtual_memory, ctx, path, length)
 }
 
 #[syscall(i386 = 93, amd64 = 77)]
