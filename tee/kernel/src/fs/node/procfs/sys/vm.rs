@@ -3,74 +3,55 @@ use alloc::{
     vec,
     vec::Vec,
 };
+use core::cmp;
 
 use crate::{
     error::{Result, bail},
     fs::{
         FileSystem,
         fd::{
-            BsdFileLockRecord, StrongFileDescriptor, dir::open_dir, inotify::Watchers,
+            BsdFileLockRecord, LazyBsdFileLockRecord, LazyUnixFileLockRecord, ReadBuf,
+            StrongFileDescriptor, UnixFileLockRecord, WriteBuf,
+            dir::open_dir,
+            file::{File, open_file},
+            inotify::Watchers,
             unix_socket::StreamUnixSocket,
         },
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
             directory::{Directory, dir_impls},
-            procfs::{
-                ProcFs,
-                sys::{
-                    kernel::{HostnameFile, KernelDir, OverflowgidFile, OverflowuidFile},
-                    vm::{OvercommitMemoryFile, VmDir},
-                },
-            },
+            new_ino,
+            procfs::ProcFs,
         },
         path::{FileName, Path},
     },
+    memory::page::KernelPage,
     user::{
-        syscall::args::{FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec},
+        syscall::args::{
+            FallocateMode, FileMode, FileType, FileTypeAndMode, OpenFlags, Stat, Timespec,
+        },
         thread::{Gid, Uid},
     },
 };
 
-pub mod kernel;
-pub mod vm;
-
-pub struct SysDir {
+pub struct VmDir {
     this: Weak<Self>,
     location: LinkLocation,
     fs: Arc<ProcFs>,
     ino: u64,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
-    kernel_dir_ino: u64,
-    kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
-    kernel_dir_watchers: Arc<Watchers>,
-    kernel_hostname_file: Arc<HostnameFile>,
-    kernel_overflowgid_file: Arc<OverflowgidFile>,
-    kernel_overflowuid_file: Arc<OverflowuidFile>,
-    vm_dir_ino: u64,
-    vm_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
-    vm_dir_watchers: Arc<Watchers>,
-    vm_overcommit_memory_file: Arc<OvercommitMemoryFile>,
+    overcommit_memory_file: Arc<OvercommitMemoryFile>,
 }
 
-impl SysDir {
-    #[expect(clippy::too_many_arguments)]
+impl VmDir {
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
         ino: u64,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
-        kernel_dir_ino: u64,
-        kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
-        kernel_dir_watchers: Arc<Watchers>,
-        kernel_hostname_file: Arc<HostnameFile>,
-        kernel_overflowgid_file: Arc<OverflowgidFile>,
-        kernel_overflowuid_file: Arc<OverflowuidFile>,
-        vm_dir_ino: u64,
-        vm_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
-        vm_dir_watchers: Arc<Watchers>,
-        vm_overcommit_memory_file: Arc<OvercommitMemoryFile>,
+        hostname_file: Arc<OvercommitMemoryFile>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -79,21 +60,12 @@ impl SysDir {
             ino,
             bsd_file_lock_record,
             watchers,
-            kernel_dir_ino,
-            kernel_dir_bsd_file_lock_record,
-            kernel_dir_watchers,
-            kernel_hostname_file,
-            kernel_overflowgid_file,
-            kernel_overflowuid_file,
-            vm_dir_ino,
-            vm_dir_bsd_file_lock_record,
-            vm_dir_watchers,
-            vm_overcommit_memory_file,
+            overcommit_memory_file: hostname_file,
         })
     }
 }
 
-impl INode for SysDir {
+impl INode for VmDir {
     dir_impls!();
 
     fn stat(&self) -> Result<Stat> {
@@ -146,7 +118,7 @@ impl INode for SysDir {
     }
 }
 
-impl Directory for SysDir {
+impl Directory for VmDir {
     fn location(&self) -> &LinkLocation {
         &self.location
     }
@@ -232,14 +204,9 @@ impl Directory for SysDir {
             });
         }
         entries.push(DirEntry {
-            ino: self.kernel_dir_ino,
-            ty: FileType::Dir,
-            name: DirEntryName::FileName(FileName::new(b"kernel").unwrap()),
-        });
-        entries.push(DirEntry {
-            ino: self.vm_dir_ino,
-            ty: FileType::Dir,
-            name: DirEntryName::FileName(FileName::new(b"vm").unwrap()),
+            ino: self.overcommit_memory_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"overcommit_memory").unwrap()),
         });
         Ok(entries)
     }
@@ -248,24 +215,7 @@ impl Directory for SysDir {
         let location =
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
-            b"kernel" => KernelDir::new(
-                location.clone(),
-                self.fs.clone(),
-                self.kernel_dir_ino,
-                self.kernel_dir_bsd_file_lock_record.clone(),
-                self.kernel_dir_watchers.clone(),
-                self.kernel_hostname_file.clone(),
-                self.kernel_overflowgid_file.clone(),
-                self.kernel_overflowuid_file.clone(),
-            ),
-            b"vm" => VmDir::new(
-                location.clone(),
-                self.fs.clone(),
-                self.vm_dir_ino,
-                self.vm_dir_bsd_file_lock_record.clone(),
-                self.vm_dir_watchers.clone(),
-                self.vm_overcommit_memory_file.clone(),
-            ),
+            b"overcommit_memory" => self.overcommit_memory_file.clone(),
             _ => bail!(NoEnt),
         };
         Ok(Link { location, node })
@@ -310,5 +260,133 @@ impl Directory for SysDir {
         _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(Perm)
+    }
+}
+
+pub struct OvercommitMemoryFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
+    watchers: Watchers,
+}
+
+impl OvercommitMemoryFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            watchers: Watchers::new(),
+        })
+    }
+
+    fn content(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"0\n");
+        buffer
+    }
+}
+
+impl INode for OvercommitMemoryFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for OvercommitMemoryFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }
