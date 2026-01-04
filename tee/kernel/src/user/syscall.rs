@@ -382,9 +382,13 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysTimerGettime);
     handlers.register(SysTimerDelete);
     handlers.register(SysClockSettime);
+    handlers.register(SysClockSettime64);
     handlers.register(SysClockGettime);
+    handlers.register(SysClockGettime64);
     handlers.register(SysClockGetres);
+    handlers.register(SysClockGetresTime64);
     handlers.register(SysClockNanosleep);
+    handlers.register(SysClockNanosleepTime64);
     handlers.register(SysTgkill);
     handlers.register(SysInotifyInit);
     handlers.register(SysInotifyAddWatch);
@@ -4843,6 +4847,15 @@ fn clock_settime(
     Ok(0)
 }
 
+#[syscall(i386 = 405)]
+fn clock_settime64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_settime(Abi::Amd64, virtual_memory, clock_id, tp)
+}
+
 #[syscall(i386 = 265, amd64 = 228)]
 fn clock_gettime(
     abi: Abi,
@@ -4874,7 +4887,17 @@ fn clock_gettime(
     Ok(0)
 }
 
-#[syscall(i386 = 406, amd64 = 229)]
+#[syscall(i386 = 403)]
+fn clock_gettime64(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ExtendedClockId,
+    tp: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_gettime(Abi::Amd64, thread, virtual_memory, clock_id, tp)
+}
+
+#[syscall(i386 = 266, amd64 = 229)]
 fn clock_getres(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -4887,7 +4910,16 @@ fn clock_getres(
     Ok(0)
 }
 
-#[syscall(i386 = 407, amd64 = 230)]
+#[syscall(i386 = 406)]
+fn clock_getres_time64(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ExtendedClockId,
+    res: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_getres(Abi::Amd64, virtual_memory, clock_id, res)
+}
+
+#[syscall(i386 = 267, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
     thread: &Thread,
@@ -4923,6 +4955,27 @@ async fn clock_nanosleep(
     res?;
 
     Ok(0)
+}
+
+#[syscall(i386 = 407)]
+async fn clock_nanosleep_time64(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    flags: ClockNanosleepFlags,
+    request: Pointer<Timespec>,
+    remain: Pointer<Timespec>,
+) -> SyscallResult {
+    clock_nanosleep(
+        Abi::Amd64,
+        thread,
+        virtual_memory,
+        clock_id,
+        flags,
+        request,
+        remain,
+    )
+    .await
 }
 
 #[syscall(i386 = 252, amd64 = 231)]
