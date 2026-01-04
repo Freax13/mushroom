@@ -351,6 +351,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysStatfs64);
     handlers.register(SysMknod);
     handlers.register(SysFstatfs);
+    handlers.register(SysFstatfs64);
     handlers.register(SysGetpriority);
     handlers.register(SysSetpriority);
     handlers.register(SysSchedSetparam);
@@ -4179,6 +4180,23 @@ fn fstatfs(
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
     let statfs = fd.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 269)]
+fn fstatfs64(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    fd: FdNum,
+    sz: u64,
+    buf: Pointer<StatFs64>,
+) -> SyscallResult {
+    let fd = fdtable.get(fd)?;
+    let statfs = fd.fs()?.stat();
+    let statfs = StatFs64::from(statfs);
+    ensure!(u64::from_usize(statfs.size(abi)) == sz, Inval);
     virtual_memory.write_with_abi(buf, statfs, abi)?;
     Ok(0)
 }
