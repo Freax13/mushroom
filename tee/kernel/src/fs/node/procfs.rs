@@ -28,7 +28,10 @@ use crate::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
             directory::{Directory, dir_impls},
             new_dev, new_ino,
-            procfs::sys::{SysDir, kernel::HostnameFile},
+            procfs::sys::{
+                SysDir,
+                kernel::{HostnameFile, OverflowgidFile, OverflowuidFile},
+            },
         },
         path::{FileName, Path},
     },
@@ -109,6 +112,8 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         sys_kernel_dir_bsd_file_lock_record: Arc::new(BsdFileLockRecord::new()),
         sys_kernel_dir_watchers: Arc::new(Watchers::new()),
         sys_kernel_hostname_file: HostnameFile::new(fs.clone()),
+        sys_kernel_overflowgid_file: OverflowgidFile::new(fs.clone()),
+        sys_kernel_overflowuid_file: OverflowuidFile::new(fs.clone()),
         uptime_file: UptimeFile::new(fs),
     }))
 }
@@ -138,6 +143,8 @@ struct ProcFsRoot {
     sys_kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
     sys_kernel_dir_watchers: Arc<Watchers>,
     sys_kernel_hostname_file: Arc<HostnameFile>,
+    sys_kernel_overflowgid_file: Arc<OverflowgidFile>,
+    sys_kernel_overflowuid_file: Arc<OverflowuidFile>,
     uptime_file: Arc<UptimeFile>,
 }
 
@@ -228,6 +235,8 @@ impl Directory for ProcFsRoot {
                 self.sys_kernel_dir_bsd_file_lock_record.clone(),
                 self.sys_kernel_dir_watchers.clone(),
                 self.sys_kernel_hostname_file.clone(),
+                self.sys_kernel_overflowgid_file.clone(),
+                self.sys_kernel_overflowuid_file.clone(),
             ),
             b"uptime" => self.uptime_file.clone(),
             _ => {

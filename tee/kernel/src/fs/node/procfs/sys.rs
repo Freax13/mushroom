@@ -17,7 +17,7 @@ use crate::{
             directory::{Directory, dir_impls},
             procfs::{
                 ProcFs,
-                sys::kernel::{HostnameFile, KernelDir},
+                sys::kernel::{HostnameFile, KernelDir, OverflowgidFile, OverflowuidFile},
             },
         },
         path::{FileName, Path},
@@ -41,6 +41,8 @@ pub struct SysDir {
     kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
     kernel_dir_watchers: Arc<Watchers>,
     kernel_hostname_file: Arc<HostnameFile>,
+    kernel_overflowgid_file: Arc<OverflowgidFile>,
+    kernel_overflowuid_file: Arc<OverflowuidFile>,
 }
 
 impl SysDir {
@@ -55,6 +57,8 @@ impl SysDir {
         kernel_dir_bsd_file_lock_record: Arc<BsdFileLockRecord>,
         kernel_dir_watchers: Arc<Watchers>,
         kernel_hostname_file: Arc<HostnameFile>,
+        kernel_overflowgid_file: Arc<OverflowgidFile>,
+        kernel_overflowuid_file: Arc<OverflowuidFile>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
@@ -67,6 +71,8 @@ impl SysDir {
             kernel_dir_bsd_file_lock_record,
             kernel_dir_watchers,
             kernel_hostname_file,
+            kernel_overflowgid_file,
+            kernel_overflowuid_file,
         })
     }
 }
@@ -228,6 +234,8 @@ impl Directory for SysDir {
                 self.kernel_dir_bsd_file_lock_record.clone(),
                 self.kernel_dir_watchers.clone(),
                 self.kernel_hostname_file.clone(),
+                self.kernel_overflowgid_file.clone(),
+                self.kernel_overflowuid_file.clone(),
             ),
             _ => bail!(NoEnt),
         };
