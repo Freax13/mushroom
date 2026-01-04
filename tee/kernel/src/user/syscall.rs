@@ -242,6 +242,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigprocmask);
     handlers.register(SysSigprocmask);
     handlers.register(SysRtSigreturn);
+    handlers.register(SysSigreturn);
     handlers.register(SysIoctl);
     handlers.register(SysPread64);
     handlers.register(SysPwrite64);
@@ -1054,12 +1055,25 @@ fn sigprocmask(
 
 #[syscall(i386 = 173, amd64 = 15)]
 fn rt_sigreturn(
+    abi: Abi,
+    mut thread: ThreadGuard,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+) -> SyscallResult {
+    let mut cpu_state = thread.thread.cpu_state.lock();
+    (thread.sigaltstack, thread.sigmask) =
+        cpu_state.finish_signal_handler(&virtual_memory, abi, true)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 119)]
+fn sigreturn(
     mut thread: ThreadGuard,
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
 ) -> SyscallResult {
     let mut cpu_state = thread.thread.cpu_state.lock();
-    (thread.sigaltstack, thread.sigmask) = cpu_state.finish_signal_handler(&virtual_memory, abi)?;
+    (thread.sigaltstack, thread.sigmask) =
+        cpu_state.finish_signal_handler(&virtual_memory, abi, false)?;
     Ok(0)
 }
 
