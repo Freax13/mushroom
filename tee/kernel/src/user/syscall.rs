@@ -228,6 +228,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysLstat64);
     handlers.register(SysPoll);
     handlers.register(SysLseek);
+    handlers.register(SysLlseek);
     handlers.register(SysMmap);
     handlers.register(SysMmap2);
     handlers.register(SysMprotect);
@@ -797,6 +798,28 @@ fn lseek(
 
     let offset = u64::from_usize(offset);
     Ok(offset)
+}
+
+#[syscall(i386 = 140)]
+fn llseek(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] mut ctx: FileAccessContext,
+    fd: FdNum,
+    offset_high: u64,
+    offset_low: u64,
+    result: Pointer<LongOffset>,
+    whence: Whence,
+) -> SyscallResult {
+    let offset = (offset_high << 32) | offset_low;
+    let offset = usize_from(offset);
+
+    let fd = fdtable.get(fd)?;
+    let offset = fd.seek(offset, whence, &mut ctx)?;
+
+    virtual_memory.write(result, LongOffset(offset as i64))?;
+
+    Ok(0)
 }
 
 #[syscall(i386 = 90, amd64 = 9)]
