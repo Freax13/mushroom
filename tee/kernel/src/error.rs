@@ -114,6 +114,7 @@ pub enum ErrorKind {
     NotConn = 107,
     TimedOut = 110,
     ConnRefused = 111,
+    InProgress = 115,
     RestartNoIntr = 512,
 }
 

@@ -528,7 +528,10 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
-        let v6only = self.internal.lock().v6only;
+        let guard = self.internal.lock();
+        let v6only = guard.v6only;
+        let nonblock = guard.flags.contains(OpenFlags::NONBLOCK);
+        drop(guard);
 
         let bound = self.get_or_bind_ephemeral(ctx)?;
 
@@ -559,6 +562,7 @@ impl OpenFileDescription for TcpSocket {
                     // Bail out if there are no sockets.
                     ensure!(found_passive_socket, ConnRefused);
                     drop(guard);
+                    ensure!(!nonblock, Again);
                     wait.await;
                     continue 'outer;
                 }
@@ -694,6 +698,7 @@ impl OpenFileDescription for TcpSocket {
                 this_entry.local_ip = Some(local_ip);
                 this_entry.remote_addr = Some(remote_addr);
 
+                ensure!(!nonblock, InProgress);
                 return Ok(());
             }
         }
