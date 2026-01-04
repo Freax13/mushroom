@@ -2,7 +2,6 @@ use std::{
     io::{IoSlice, IoSliceMut},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
-    sync::atomic::{AtomicU16, Ordering},
     time::Duration,
 };
 
@@ -10,23 +9,30 @@ use nix::{
     Result,
     errno::Errno,
     fcntl::{FcntlArg, OFlag, fcntl},
-    libc::{Ioctl, in_addr, in_pktinfo, ioctl},
+    libc::{Ioctl, in_addr, in_pktinfo, ioctl, linger},
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::socket::{
         self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag,
-        SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrStorage, accept, connect,
-        getpeername, getsockname, listen, recv, recvmsg, send, sendmsg, setsockopt, shutdown,
-        socket,
-        sockopt::{Ipv4PacketInfo, Ipv6RecvPacketInfo, Ipv6V6Only, ReuseAddr, ReusePort},
+        SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrLike, SockaddrStorage, accept,
+        connect, getpeername, getsockname, listen, recv, recvmsg, send, sendmsg, setsockopt,
+        shutdown, socket,
+        sockopt::{Ipv4PacketInfo, Ipv6RecvPacketInfo, Ipv6V6Only, Linger, ReuseAddr, ReusePort},
     },
     unistd::close,
 };
 
 mod multicast;
 
-fn bind(addr: Ipv4Addr, port: u16, reuse_addr: bool, reuse_port: bool) -> Result<OwnedFd> {
+fn bind(
+    addr: IpAddr,
+    port: u16,
+    reuse_addr: bool,
+    reuse_port: bool,
+    v6only: Option<bool>,
+) -> Result<OwnedFd> {
+    let addr = SockaddrStorage::from(SocketAddr::new(addr, port));
     let sock = socket::socket(
-        AddressFamily::Inet,
+        addr.family().unwrap(),
         SockType::Stream,
         SockFlag::empty(),
         None,
@@ -34,66 +40,115 @@ fn bind(addr: Ipv4Addr, port: u16, reuse_addr: bool, reuse_port: bool) -> Result
     .unwrap();
     setsockopt(&sock, ReuseAddr, &reuse_addr).unwrap();
     setsockopt(&sock, ReusePort, &reuse_port).unwrap();
-    socket::bind(
-        sock.as_raw_fd(),
-        &SockaddrIn::new(
-            addr.octets()[0],
-            addr.octets()[1],
-            addr.octets()[2],
-            addr.octets()[3],
-            port,
-        ),
-    )?;
+    if let Some(v6only) = v6only {
+        setsockopt(&sock, Ipv6V6Only, &v6only).unwrap();
+    }
+    setsockopt(
+        &sock,
+        Linger,
+        &linger {
+            l_onoff: 1,
+            l_linger: 1,
+        },
+    )
+    .unwrap();
+    socket::bind(sock.as_raw_fd(), &addr)?;
+
     Ok(sock)
 }
 
 fn get_port() -> u16 {
-    static PORT_COUNTER: AtomicU16 = AtomicU16::new(20000);
-    PORT_COUNTER.fetch_add(1, Ordering::Relaxed)
+    let socket = socket(
+        AddressFamily::Inet6,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+    setsockopt(
+        &socket,
+        Linger,
+        &linger {
+            l_onoff: 1,
+            l_linger: 0,
+        },
+    )
+    .unwrap();
+    socket::bind(
+        socket.as_raw_fd(),
+        &SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+    )
+    .unwrap();
+    getsockname::<SockaddrIn6>(socket.as_raw_fd())
+        .unwrap()
+        .port()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SocketAOp {
     ListenEarly,
     ListenLate,
-    ConnectEarly(Ipv4Addr),
-    ConnectLate(Ipv4Addr),
+    ConnectEarly(IpAddr),
+    ConnectLate(IpAddr),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SocketBOp {
     Listen,
-    Connect(Ipv4Addr),
+    Connect(IpAddr),
 }
 
-const TEST_IPS: [Ipv4Addr; 3] = [
-    Ipv4Addr::new(127, 0, 0, 1),
-    Ipv4Addr::new(127, 0, 0, 2),
-    Ipv4Addr::UNSPECIFIED,
+const TEST_IPS: [IpAddr; 5] = [
+    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+    IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+    IpAddr::V6(Ipv6Addr::LOCALHOST),
+    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
 ];
-const SOCKET_A_OPS: [Option<SocketAOp>; 9] = [
+const SOCKET_A_OPS: [Option<SocketAOp>; 13] = [
     None,
     Some(SocketAOp::ListenEarly),
     Some(SocketAOp::ListenLate),
-    Some(SocketAOp::ConnectEarly(Ipv4Addr::new(127, 0, 0, 1))),
-    Some(SocketAOp::ConnectEarly(Ipv4Addr::new(127, 0, 0, 2))),
-    Some(SocketAOp::ConnectEarly(Ipv4Addr::UNSPECIFIED)),
-    Some(SocketAOp::ConnectLate(Ipv4Addr::new(127, 0, 0, 1))),
-    Some(SocketAOp::ConnectLate(Ipv4Addr::new(127, 0, 0, 2))),
-    Some(SocketAOp::ConnectLate(Ipv4Addr::UNSPECIFIED)),
+    Some(SocketAOp::ConnectEarly(IpAddr::V4(Ipv4Addr::new(
+        127, 0, 0, 1,
+    )))),
+    Some(SocketAOp::ConnectEarly(IpAddr::V4(Ipv4Addr::new(
+        127, 0, 0, 2,
+    )))),
+    Some(SocketAOp::ConnectEarly(IpAddr::V4(Ipv4Addr::UNSPECIFIED))),
+    Some(SocketAOp::ConnectEarly(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+    Some(SocketAOp::ConnectEarly(IpAddr::V6(Ipv6Addr::UNSPECIFIED))),
+    Some(SocketAOp::ConnectLate(IpAddr::V4(Ipv4Addr::new(
+        127, 0, 0, 1,
+    )))),
+    Some(SocketAOp::ConnectLate(IpAddr::V4(Ipv4Addr::new(
+        127, 0, 0, 2,
+    )))),
+    Some(SocketAOp::ConnectLate(IpAddr::V4(Ipv4Addr::UNSPECIFIED))),
+    Some(SocketAOp::ConnectLate(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+    Some(SocketAOp::ConnectLate(IpAddr::V6(Ipv6Addr::UNSPECIFIED))),
 ];
-const SOCKET_B_OPS: [SocketBOp; 4] = [
+const SOCKET_B_OPS: [SocketBOp; 6] = [
     SocketBOp::Listen,
-    SocketBOp::Connect(Ipv4Addr::new(127, 0, 0, 1)),
-    SocketBOp::Connect(Ipv4Addr::new(127, 0, 0, 2)),
-    SocketBOp::Connect(Ipv4Addr::UNSPECIFIED),
+    SocketBOp::Connect(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+    SocketBOp::Connect(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))),
+    SocketBOp::Connect(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+    SocketBOp::Connect(IpAddr::V6(Ipv6Addr::LOCALHOST)),
+    SocketBOp::Connect(IpAddr::V6(Ipv6Addr::UNSPECIFIED)),
 ];
 
 #[test]
 fn test_bind() {
     // Create a socket that we can connect to.
     let connect_port = get_port();
-    let sock = bind(Ipv4Addr::UNSPECIFIED, connect_port, false, false).unwrap();
+    let sock = bind(
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        connect_port,
+        false,
+        false,
+        Some(false),
+    )
+    .unwrap();
     socket::listen(&sock, Backlog::MAXALLOWABLE).unwrap();
     // Spawn a thread that accepts connections.
     let sockfd = sock.as_raw_fd();
@@ -106,27 +161,43 @@ fn test_bind() {
     let mut counter = 0;
 
     for ip_a in TEST_IPS {
-        for reuse_addr_a in [false, true] {
-            for reuse_port_a in [false, true] {
-                for socket_a_op in SOCKET_A_OPS {
-                    for ip_b in TEST_IPS {
-                        for reuse_addr_b in [false, true] {
-                            for reuse_port_b in [false, true] {
-                                for socket_b_op in SOCKET_B_OPS {
-                                    counter += 1;
-                                    println!("---------------------------------------");
-                                    println!("test case {counter}");
-                                    test_case(
-                                        connect_port,
-                                        ip_a,
-                                        reuse_addr_a,
-                                        reuse_port_a,
-                                        socket_a_op,
-                                        ip_b,
-                                        reuse_addr_b,
-                                        reuse_port_b,
-                                        socket_b_op,
-                                    );
+        for ip_b in TEST_IPS {
+            for reuse_addr_a in [false, true] {
+                for reuse_addr_b in [false, true] {
+                    for reuse_port_a in [false, true] {
+                        for reuse_port_b in [false, true] {
+                            let v6only_options_a = if ip_a.is_ipv6() {
+                                &[Some(false), Some(true)] as &[_]
+                            } else {
+                                &[None]
+                            };
+                            for v6only_a in v6only_options_a.iter().copied() {
+                                let v6only_options_b = if ip_b.is_ipv6() {
+                                    &[Some(false), Some(true)] as &[_]
+                                } else {
+                                    &[None]
+                                };
+                                for v6only_b in v6only_options_b.iter().copied() {
+                                    for socket_a_op in SOCKET_A_OPS {
+                                        for socket_b_op in SOCKET_B_OPS {
+                                            counter += 1;
+                                            println!("---------------------------------------");
+                                            println!("test case {counter}");
+                                            test_case(
+                                                connect_port,
+                                                ip_a,
+                                                ip_b,
+                                                reuse_addr_a,
+                                                reuse_port_a,
+                                                reuse_addr_b,
+                                                reuse_port_b,
+                                                v6only_a,
+                                                v6only_b,
+                                                socket_a_op,
+                                                socket_b_op,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -138,13 +209,15 @@ fn test_bind() {
     #[allow(clippy::too_many_arguments)]
     fn test_case(
         connect_port: u16,
-        mut ip_a: Ipv4Addr,
+        mut ip_a: IpAddr,
+        ip_b: IpAddr,
         reuse_addr_a: bool,
         reuse_port_a: bool,
-        socket_a_op: Option<SocketAOp>,
-        ip_b: Ipv4Addr,
         reuse_addr_b: bool,
         reuse_port_b: bool,
+        v6only_a: Option<bool>,
+        v6only_b: Option<bool>,
+        socket_a_op: Option<SocketAOp>,
         socket_b_op: SocketBOp,
     ) {
         let port = get_port();
@@ -153,63 +226,85 @@ fn test_bind() {
 
         // Bind the first socket.
         println!(
-            "Binding socket A to {ip_a}:{port} with reuse_addr={reuse_addr_a} and reuse_port={reuse_port_a}"
+            "Binding socket A to {ip_a}:{port} with reuse_addr={reuse_addr_a}, reuse_port={reuse_port_a}, and v6only={v6only_a:?}"
         );
-        let a = bind(ip_a, port, reuse_addr_a, reuse_port_a).unwrap();
+        let a = bind(ip_a, port, reuse_addr_a, reuse_port_a, v6only_a).unwrap();
+        let bound_ip_a = ip_a;
 
         // Optionally make the first socket into a passive socket before binding
         // the other socket.
         if socket_a_op == Some(SocketAOp::ListenEarly) {
-            println!("Starting to listen on socket A");
+            println!("Starting to listen on socket A (early)");
             socket::listen(&a, Backlog::MAXALLOWABLE).unwrap();
         }
         // Optionally make the first socket into an active socket before binding
         // the other socket.
         if let Some(SocketAOp::ConnectEarly(ip)) = socket_a_op {
-            println!("Connecting socket A to {ip}:{connect_port}");
-            socket::connect(
+            println!("Connecting socket A to {ip}:{connect_port} (early)");
+            let res = socket::connect(
                 a.as_raw_fd(),
-                &SockaddrIn::new(
-                    ip.octets()[0],
-                    ip.octets()[1],
-                    ip.octets()[2],
-                    ip.octets()[3],
-                    connect_port,
-                ),
-            )
-            .unwrap();
+                &SockaddrStorage::from(SocketAddr::new(ip, connect_port)),
+            );
+            let expect_success = ip_a.is_ipv4() == ip.is_ipv4();
+            assert_eq!(res.is_ok(), expect_success);
+
+            // Stop the test if connecting failed.
+            let Ok(()) = res else {
+                return;
+            };
 
             // Connecting the socket might have changed its ip, so update the IP.
-            let sockname = getsockname::<SockaddrIn>(a.as_raw_fd()).unwrap();
-            if ip_a.is_unspecified() {
-                assert_eq!(sockname.ip(), Ipv4Addr::LOCALHOST);
+            let sockname = getsockname::<SockaddrStorage>(a.as_raw_fd()).unwrap();
+            let sockname = if let Some(sockname) = sockname.as_sockaddr_in() {
+                IpAddr::V4(sockname.ip())
             } else {
-                assert_eq!(sockname.ip(), ip_a);
+                let sockname = sockname.as_sockaddr_in6().unwrap();
+                IpAddr::V6(sockname.ip())
+            };
+            if ip_a.is_unspecified() {
+                match sockname {
+                    IpAddr::V4(sockname) => assert_eq!(sockname, Ipv4Addr::LOCALHOST),
+                    IpAddr::V6(sockname) => assert_eq!(sockname, Ipv6Addr::LOCALHOST),
+                }
+            } else {
+                assert_eq!(sockname, ip_a);
             }
-            ip_a = sockname.ip();
+            ip_a = sockname;
 
             // Check the IP of the peer.
-            let peername = getpeername::<SockaddrIn>(a.as_raw_fd()).unwrap();
-            if !ip.is_unspecified() {
-                assert_eq!(peername.ip(), ip);
+            let peername = getpeername::<SockaddrStorage>(a.as_raw_fd()).unwrap();
+            let peername = if let Some(peername) = peername.as_sockaddr_in() {
+                IpAddr::V4(peername.ip())
             } else {
-                assert_eq!(sockname.ip(), ip_a);
+                let peername = peername.as_sockaddr_in6().unwrap();
+                IpAddr::V6(peername.ip())
+            };
+            if !ip.is_unspecified() {
+                assert_eq!(peername, ip);
+            } else {
+                assert_eq!(peername, ip_a);
             }
+            println!("sockname is {sockname:?}, peername is {peername:?}");
         }
 
-        let non_overlapping_ip = !ip_a.is_unspecified() && !ip_b.is_unspecified() && ip_a != ip_b;
+        let non_overlapping_ip = (!ip_a.is_unspecified() && !ip_b.is_unspecified() && ip_a != ip_b)
+            || (ip_a.is_ipv4() && ip_b.is_ipv6() && (!ip_b.is_unspecified() || v6only_b.unwrap()))
+            || (ip_a.is_ipv6()
+                && ip_b.is_ipv4()
+                && (!bound_ip_a.is_unspecified() || v6only_a.unwrap() || !ip_b.is_unspecified())
+                && (!ip_a.is_unspecified() || v6only_a.unwrap()));
 
         // Make sure that binding works when we expect it to.
         let bind_expect_success = non_overlapping_ip
             || (socket_a_op != Some(SocketAOp::ListenEarly) && reuse_addr_a && reuse_addr_b)
             || reuse_port_both;
         println!(
-            "Binding socket B to {ip_b}:{port} with reuse_addr={reuse_addr_b} and reuse_port={reuse_port_b}"
+            "Binding socket B to {ip_b}:{port} with reuse_addr={reuse_addr_b}, reuse_port={reuse_port_b}, and v6only={v6only_b:?}"
         );
-        let res = bind(ip_b, port, reuse_addr_b, reuse_port_b);
+        let res = bind(ip_b, port, reuse_addr_b, reuse_port_b, v6only_b);
         assert_eq!(res.is_ok(), bind_expect_success);
 
-        // Stop the test when binding failed.
+        // Stop the test if binding failed.
         let Ok(b) = res else {
             return;
         };
@@ -217,41 +312,58 @@ fn test_bind() {
         // Optionally make the first socket into a passive socket after binding the
         // the other socket.
         if socket_a_op == Some(SocketAOp::ListenLate) {
-            println!("Starting to listen on socket A");
+            println!("Starting to listen on socket A (late)");
             socket::listen(&a, Backlog::MAXALLOWABLE).unwrap();
         }
         // Optionally make the first socket into an active socket after binding the
         // other socket.
         if let Some(SocketAOp::ConnectLate(ip)) = socket_a_op {
-            println!("Connecting socket A to {ip}:{connect_port}");
-            socket::connect(
+            println!("Connecting socket A to {ip}:{connect_port} (late)");
+            let res = socket::connect(
                 a.as_raw_fd(),
-                &SockaddrIn::new(
-                    ip.octets()[0],
-                    ip.octets()[1],
-                    ip.octets()[2],
-                    ip.octets()[3],
-                    connect_port,
-                ),
-            )
-            .unwrap();
+                &SockaddrStorage::from(SocketAddr::new(ip, connect_port)),
+            );
+
+            let expect_success = ip_a.is_ipv4() == ip.is_ipv4();
+            assert_eq!(res.is_ok(), expect_success);
+
+            // Stop the test if connecting failed.
+            let Ok(()) = res else {
+                return;
+            };
 
             // Connecting the socket might have changed its ip, so update the IP.
-            let sockname = getsockname::<SockaddrIn>(a.as_raw_fd()).unwrap();
-            if ip_a.is_unspecified() {
-                assert_eq!(sockname.ip(), Ipv4Addr::LOCALHOST);
+            let sockname = getsockname::<SockaddrStorage>(a.as_raw_fd()).unwrap();
+            let sockname = if let Some(sockname) = sockname.as_sockaddr_in() {
+                IpAddr::V4(sockname.ip())
             } else {
-                assert_eq!(sockname.ip(), ip_a);
+                let sockname = sockname.as_sockaddr_in6().unwrap();
+                IpAddr::V6(sockname.ip())
+            };
+            if ip_a.is_unspecified() {
+                match sockname {
+                    IpAddr::V4(sockname) => assert_eq!(sockname, Ipv4Addr::LOCALHOST),
+                    IpAddr::V6(sockname) => assert_eq!(sockname, Ipv6Addr::LOCALHOST),
+                }
+            } else {
+                assert_eq!(sockname, ip_a);
             }
-            ip_a = sockname.ip();
+            ip_a = sockname;
 
             // Check the IP of the peer.
-            let peername = getpeername::<SockaddrIn>(a.as_raw_fd()).unwrap();
-            if !ip.is_unspecified() {
-                assert_eq!(peername.ip(), ip);
+            let peername = getpeername::<SockaddrStorage>(a.as_raw_fd()).unwrap();
+            let peername = if let Some(peername) = peername.as_sockaddr_in() {
+                IpAddr::V4(peername.ip())
             } else {
-                assert_eq!(sockname.ip(), ip_a);
+                let peername = peername.as_sockaddr_in6().unwrap();
+                IpAddr::V6(peername.ip())
+            };
+            if !ip.is_unspecified() {
+                assert_eq!(peername, ip);
+            } else {
+                assert_eq!(peername, ip_a);
             }
+            println!("sockname is {sockname:?}, peername is {peername:?}");
         }
 
         match socket_b_op {
@@ -265,48 +377,45 @@ fn test_bind() {
                 println!("Starting to listen on socket B");
                 let res = socket::listen(&b, Backlog::MAXALLOWABLE);
                 assert_eq!(res.is_ok(), listen_b_expect_success);
-                let res = socket::listen(&b, Backlog::MAXALLOWABLE);
-                assert_eq!(res.is_ok(), listen_b_expect_success);
             }
             SocketBOp::Connect(ip_dest_b) => {
                 // Make sure that connecting works when we expect it to.
-                let connect_b_expect_success = socket_a_op.is_none_or(|op| {
-                    match op {
-                        SocketAOp::ListenEarly | SocketAOp::ListenLate => true,
-                        SocketAOp::ConnectEarly(ip_dest_a) | SocketAOp::ConnectLate(ip_dest_a) => {
-                            // Connecting the ip might update the IP, so factor that in
-                            // when predicting whether connecting should fail.
-                            let ip_b = if ip_b.is_unspecified() {
-                                Ipv4Addr::LOCALHOST
-                            } else {
-                                ip_b
-                            };
+                let connect_b_expect_success = ip_b.is_ipv6() == ip_dest_b.is_ipv6()
+                    && socket_a_op.is_none_or(|op| {
+                        match op {
+                            SocketAOp::ListenEarly | SocketAOp::ListenLate => true,
+                            SocketAOp::ConnectEarly(ip_dest_a)
+                            | SocketAOp::ConnectLate(ip_dest_a) => {
+                                // Connecting the ip might update the IP, so factor that in
+                                // when predicting whether connecting should fail.
+                                let ip_b = if ip_b.is_unspecified() {
+                                    match ip_b {
+                                        IpAddr::V4(..) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+                                        IpAddr::V6(..) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+                                    }
+                                } else {
+                                    ip_b
+                                };
 
-                            let effective_ip_dest_a = if ip_dest_a.is_unspecified() {
-                                ip_a
-                            } else {
-                                ip_dest_a
-                            };
-                            let effective_ip_dest_b = if ip_dest_b.is_unspecified() {
-                                ip_b
-                            } else {
-                                ip_dest_b
-                            };
+                                let effective_ip_dest_a = if ip_dest_a.is_unspecified() {
+                                    ip_a
+                                } else {
+                                    ip_dest_a
+                                };
+                                let effective_ip_dest_b = if ip_dest_b.is_unspecified() {
+                                    ip_b
+                                } else {
+                                    ip_dest_b
+                                };
 
-                            (ip_a, effective_ip_dest_a) != (ip_b, effective_ip_dest_b)
+                                (ip_a, effective_ip_dest_a) != (ip_b, effective_ip_dest_b)
+                            }
                         }
-                    }
-                });
+                    });
                 println!("Connecting socket B to {ip_dest_b}:{connect_port}");
                 let res = socket::connect(
                     b.as_raw_fd(),
-                    &SockaddrIn::new(
-                        ip_dest_b.octets()[0],
-                        ip_dest_b.octets()[1],
-                        ip_dest_b.octets()[2],
-                        ip_dest_b.octets()[3],
-                        connect_port,
-                    ),
+                    &SockaddrStorage::from(SocketAddr::new(ip_dest_b, connect_port)),
                 );
                 assert_eq!(res.is_ok(), connect_b_expect_success);
             }

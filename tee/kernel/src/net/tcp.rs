@@ -101,28 +101,8 @@ impl PortData {
 
             ensure!(!ephemeral, AddrInUse);
 
-            // Skip entries with a different address family.
-            match (entry.ip_version, ip_version) {
-                (IpVersion::V4, IpVersion::V4) => {}
-                (IpVersion::V4, IpVersion::V6) => {
-                    if v6only {
-                        continue;
-                    }
-                }
-                (IpVersion::V6, IpVersion::V4) => {
-                    if entry.v6only {
-                        continue;
-                    }
-                }
-                (IpVersion::V6, IpVersion::V6) => {}
-            }
-
             // Skip entries that don't overlap with `ip`.
-            if entry
-                .local_ip
-                .zip(local_ip)
-                .is_some_and(|(entry_ip, ip)| entry_ip != ip)
-            {
+            if !entry.ip_overlaps_with(ip_version, local_ip, v6only) {
                 continue;
             }
 
@@ -134,20 +114,7 @@ impl PortData {
             // Unless when SO_REUSE_ADDR is set, make sure that there's no
             // overlap between an specified and an unspecified address.
             if !reuse_addr || !entry.reuse_addr {
-                ensure!(
-                    Option::zip(entry.local_ip, local_ip)
-                        .is_some_and(|(entry_ip, ip)| entry_ip != ip),
-                    AddrInUse
-                );
-            }
-
-            // The check for listening sockets only applies for v4 sockets.
-            if entry.ip_version == IpVersion::V6
-                && ip_version == IpVersion::V6
-                && entry.v6only
-                && v6only
-            {
-                continue;
+                bail!(AddrInUse);
             }
 
             // Fail if there's already a listening socket.
@@ -184,14 +151,15 @@ impl PortData {
             .iter()
             // Ignore the socket itself.
             .filter(|entry| entry.mode.as_ptr() != &**mode)
-            // Ignore sockets with a different ip version.
-            .filter(|entry| entry.ip_version == socket_entry.ip_version)
             // Ignore if both sockets have the reuse_port option enabled.
             .filter(|entry| !(entry.reuse_port && socket_entry.reuse_port))
             // Ignore sockets that don't have an overlap in the bound address.
             .filter(|entry| {
-                Option::zip(entry.local_ip, socket_entry.local_ip)
-                    .is_none_or(|(entry_ip, ip)| entry_ip == ip)
+                entry.ip_overlaps_with(
+                    socket_entry.ip_version,
+                    socket_entry.local_ip,
+                    socket_entry.v6only,
+                )
             })
             // Only consider sockets which are still active.
             .filter_map(|entry| entry.mode.upgrade())
@@ -218,6 +186,7 @@ impl BindGuard<'_> {
         self.port_data.entries.push(PortDataEntry {
             ino,
             ip_version: self.ip_version,
+            bound_ip: self.local_ip,
             local_ip: self.local_ip,
             remote_addr: None,
             reuse_addr: self.reuse_addr,
@@ -232,6 +201,7 @@ impl BindGuard<'_> {
 struct PortDataEntry {
     ino: u64,
     ip_version: IpVersion,
+    bound_ip: Option<IpAddr>,
     local_ip: Option<IpAddr>,
     remote_addr: Option<net::SocketAddr>,
     reuse_addr: bool,
@@ -239,6 +209,27 @@ struct PortDataEntry {
     v6only: bool,
     effective_uid: Uid,
     mode: Weak<Once<Mode>>,
+}
+
+impl PortDataEntry {
+    pub fn ip_overlaps_with(
+        &self,
+        ip_version: IpVersion,
+        local_ip: Option<IpAddr>,
+        v6only: bool,
+    ) -> bool {
+        match (self.ip_version, ip_version) {
+            (IpVersion::V4, IpVersion::V4) | (IpVersion::V6, IpVersion::V6) => self
+                .local_ip
+                .zip(local_ip)
+                .is_none_or(|(addr_a, addr_b)| addr_a == addr_b),
+            (IpVersion::V4, IpVersion::V6) => local_ip.is_none() && !v6only,
+            (IpVersion::V6, IpVersion::V4) => {
+                (self.local_ip.is_none() || (self.bound_ip.is_none() && local_ip.is_none()))
+                    && !self.v6only
+            }
+        }
+    }
 }
 
 const EPHEMERAL_PORT_START: u16 = 32768;
@@ -299,7 +290,7 @@ impl TcpSocket {
             AddrNotAvail
         );
 
-        // Make sure that the user has permission to bind the port.
+        // Make sure that the superuser has permission to bind the port.
         ensure!(
             socket_addr.port() == 0 || socket_addr.port() >= 1024 || ctx.is_user(Uid::SUPER_USER),
             Acces
@@ -538,8 +529,9 @@ impl OpenFileDescription for TcpSocket {
         let remote_addr = net::SocketAddr::try_from(addr)?;
 
         let remote_ip = remote_addr.ip();
-        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
+        ensure!(self.ip_version == IpVersion::from(remote_ip), AFNoSupport);
 
+        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
         if let Some(remote_ip) = remote_ip {
             ensure!(remote_ip.is_loopback(), NetUnreach);
         }
