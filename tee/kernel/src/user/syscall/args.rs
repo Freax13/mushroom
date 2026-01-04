@@ -1395,6 +1395,24 @@ impl From<RLimit64> for RLimit {
     }
 }
 
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct RLimit32 {
+    /// Soft limit
+    pub rlim_cur: u32,
+    /// Hard limit (ceiling for rlim_cur)
+    pub rlim_max: u32,
+}
+
+impl From<RLimit> for RLimit32 {
+    fn from(value: RLimit) -> Self {
+        Self {
+            rlim_cur: value.rlim_cur.clamp(0, 0x7fff_ffff) as u32,
+            rlim_max: value.rlim_max.clamp(0, 0x7fff_ffff) as u32,
+        }
+    }
+}
+
 bitflags! {
     pub struct SpliceFlags {
         const NONBLOCK = 1 << 1;

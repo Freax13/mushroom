@@ -320,6 +320,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUmask);
     handlers.register(SysGettimeofday);
     handlers.register(SysGetrlimit);
+    handlers.register(SysOldGetrlimit);
     handlers.register(SysGetrusage);
     handlers.register(SysSysinfo);
     handlers.register(SysPtrace);
@@ -3264,7 +3265,7 @@ fn gettimeofday(
     Ok(0)
 }
 
-#[syscall(i386 = 76, amd64 = 97)]
+#[syscall(i386 = 191, amd64 = 97)]
 fn getrlimit(
     thread: &Thread,
     abi: Abi,
@@ -3274,6 +3275,19 @@ fn getrlimit(
 ) -> SyscallResult {
     let value = thread.process().limits[resource].load();
     virtual_memory.write_with_abi(rlim, value, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 76)]
+fn old_getrlimit(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    resource: Resource,
+    rlim: Pointer<RLimit32>,
+) -> SyscallResult {
+    let value = thread.process().limits[resource].load();
+    let value = RLimit32::from(value);
+    virtual_memory.write(rlim, value)?;
     Ok(0)
 }
 

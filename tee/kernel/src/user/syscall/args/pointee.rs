@@ -1689,6 +1689,10 @@ impl Pointee for super::RLimit64 {}
 
 impl PrimitivePointee for super::RLimit64 {}
 
+impl Pointee for super::RLimit32 {}
+
+impl PrimitivePointee for super::RLimit32 {}
+
 impl Pointee for SysInfo {}
 
 impl AbiDependentPointee for SysInfo {
