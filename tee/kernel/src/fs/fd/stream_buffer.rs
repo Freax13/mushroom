@@ -272,7 +272,7 @@ impl ReadHalf {
                 || guard.write_shutdown,
         );
         ready_events.set(
-            Events::RDHUP,
+            Events::HUP,
             guard.half_closed || guard.read_shutdown || guard.write_shutdown,
         );
         ready_events.set(Events::PRI, guard.oob_mark_state.pri_event());
