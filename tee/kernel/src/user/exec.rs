@@ -1,5 +1,5 @@
 use alloc::{borrow::ToOwned, ffi::CString, vec};
-use core::{cmp, ffi::CStr, iter::from_fn};
+use core::{ffi::CStr, iter::from_fn};
 
 use bytemuck::{Zeroable, bytes_of_mut};
 use usize_conversions::FromUsize;
@@ -96,11 +96,13 @@ impl VirtualMemory {
     where
         E: ElfLoaderParams,
     {
-        let info = elf::load_elf::<E>(file, ctx, self.modify(), 0x2000_0000)?;
+        let load_bias = match E::ABI {
+            Abi::I386 => 0x5655_5000,
+            Abi::Amd64 => 0x5555_5555_4000,
+        };
+        let info = elf::load_elf::<E>(file, ctx, self.modify(), load_bias)?;
 
         let mut entrypoint = info.entry;
-        let mut brk_start = info.end;
-
         let mut at_base = None;
 
         if let Some(interpreter_path) = info.interpreter_path {
@@ -117,14 +119,17 @@ impl VirtualMemory {
                 interpreter_link
                     .node
                     .open(interpreter_link.location, OpenFlags::empty(), ctx)?;
-            let info = elf::load_elf::<E>(&file, ctx, self.modify(), info.base + 0x2000_0000)?;
+            let load_bias = match E::ABI {
+                Abi::I386 => 0xf800_0000,
+                Abi::Amd64 => 0x7fff_8000_0000,
+            };
+            let info = elf::load_elf::<E>(&file, ctx, self.modify(), load_bias)?;
 
             entrypoint = info.entry;
-            brk_start = cmp::max(brk_start, info.end);
             at_base = Some(info.base);
         }
 
-        let brk_start = brk_start.align_up(Size4KiB::SIZE);
+        let brk_start = info.end.align_up(Size4KiB::SIZE);
         self.modify().init_brk(brk_start);
 
         // Create stack.

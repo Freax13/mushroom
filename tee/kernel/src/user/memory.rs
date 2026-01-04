@@ -1404,12 +1404,12 @@ impl VirtualMemoryState {
         let size = size + Size4KiB::SIZE * 2;
 
         let dynamic_base_address = match abi {
-            Abi::I386 => 0xc000_0000,
+            Abi::I386 => 0xf6ff_f000,
             Abi::Amd64 => {
                 if map_32 {
                     0x7fff_f000
                 } else {
-                    0x7fff_0000_0000
+                    0x7fff_6fff_f000
                 }
             }
         };
