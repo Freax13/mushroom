@@ -231,6 +231,8 @@ impl Thread {
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
                 VirtAddr::zero(),
                 VirtAddr::zero(),
+                VirtAddr::zero(),
+                VirtAddr::zero(),
                 Personality::Linux,
             ),
             Arc::new(SignalHandlerTable::new()),
@@ -919,6 +921,8 @@ impl ThreadGuard<'_> {
         *process.exe.write() = res.exe;
         process.set_mm_arg_start(res.mm_arg_start);
         process.set_mm_arg_end(res.mm_arg_end);
+        process.set_mm_env_start(res.mm_env_start);
+        process.set_mm_env_end(res.mm_env_end);
 
         Ok(())
     }
@@ -1062,7 +1066,7 @@ impl ThreadGuard<'_> {
         buffer.extend_from_slice(b" 18446744073709551615"); // rsslim
 
         buffer.extend_from_slice(b" 0"); // TODO: startcode
-        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: encode
+        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: endcode
 
         buffer.extend_from_slice(b" 0"); // TODO: startstack
         buffer.extend_from_slice(b" 0"); // TODO: kstkesp
@@ -1101,11 +1105,11 @@ impl ThreadGuard<'_> {
 
         buffer.extend_from_slice(b" 0"); // TODO: start_brk
 
-        buffer.extend_from_slice(b" 0"); // TODO: arg_start
-        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: arg_end
+        write!(buffer, " {}", self.process().mm_arg_start().as_u64()).unwrap();
+        write!(buffer, " {}", self.process().mm_arg_end().as_u64()).unwrap();
 
-        buffer.extend_from_slice(b" 0"); // TODO: env_start
-        buffer.extend_from_slice(b" 18446744073709551615"); // TODO: env_end
+        write!(buffer, " {}", self.process().mm_env_start().as_u64()).unwrap();
+        write!(buffer, " {}", self.process().mm_env_end().as_u64()).unwrap();
 
         buffer.extend_from_slice(b" 0"); // TODO: exit_code
 

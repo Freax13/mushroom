@@ -1271,6 +1271,7 @@ impl INode for SelfLink {
 pub struct ProcessInos {
     root_dir: u64,
     cmdline_file: u64,
+    environ_file: u64,
     fd_dir: u64,
     fdinfo_dir: u64,
     exe_link: u64,
@@ -1289,6 +1290,7 @@ impl ProcessInos {
         Self {
             root_dir: new_ino(),
             cmdline_file: new_ino(),
+            environ_file: new_ino(),
             fd_dir: new_ino(),
             fdinfo_dir: new_ino(),
             exe_link: new_ino(),
@@ -1313,6 +1315,9 @@ struct ProcessDir {
     cmdline_bsd_file_lock_record: LazyBsdFileLockRecord,
     cmdline_unix_file_lock_record: LazyUnixFileLockRecord,
     cmdline_file_watchers: Arc<Watchers>,
+    environ_bsd_file_lock_record: LazyBsdFileLockRecord,
+    environ_unix_file_lock_record: LazyUnixFileLockRecord,
+    environ_file_watchers: Arc<Watchers>,
     fd_dir_bsd_file_lock_record: LazyBsdFileLockRecord,
     fd_dir_file_watchers: Arc<Watchers>,
     fdinfo_dir_bsd_file_lock_record: LazyBsdFileLockRecord,
@@ -1352,6 +1357,9 @@ impl ProcessDir {
             cmdline_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             cmdline_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             cmdline_file_watchers: Arc::new(Watchers::new()),
+            environ_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            environ_unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            environ_file_watchers: Arc::new(Watchers::new()),
             fd_dir_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             fd_dir_file_watchers: Arc::new(Watchers::new()),
             fdinfo_dir_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
@@ -1450,6 +1458,13 @@ impl Directory for ProcessDir {
                 self.cmdline_bsd_file_lock_record.get().clone(),
                 self.cmdline_unix_file_lock_record.get().clone(),
                 self.cmdline_file_watchers.clone(),
+            ),
+            b"environ" => EnvironFile::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.environ_bsd_file_lock_record.get().clone(),
+                self.environ_unix_file_lock_record.get().clone(),
+                self.environ_file_watchers.clone(),
             ),
             b"fd" => FdDir::new(
                 location.clone(),
@@ -1615,6 +1630,11 @@ impl Directory for ProcessDir {
             ino: process.inos.cmdline_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"cmdline").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: process.inos.environ_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"environ").unwrap()),
         });
         entries.push(DirEntry {
             ino: process.inos.fd_dir,
@@ -1815,6 +1835,155 @@ impl File for CmdlineFile {
         };
         // Clamp the len to the arg end.
         let len = usize_from(process.mm_arg_end().as_u64()).saturating_sub(offset);
+        let len = cmp::min(buf.buffer_len(), len);
+
+        let mut buffer = MaybeUninit::<[u8; 4096]>::uninit();
+        let buffer = buffer.as_bytes_mut();
+        for i in (0..len).step_by(buffer.len()) {
+            let chunk_len = cmp::min(buffer.len(), len - i);
+            let buffer = &mut buffer[..chunk_len];
+            let addr = VirtAddr::try_new(u64::from_usize(offset + i))?;
+            let buffer = virtual_memory.read_uninit_bytes(addr, buffer)?;
+            buf.write(i, buffer)?;
+        }
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
+}
+
+struct EnvironFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl EnvironFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            process,
+            bsd_file_lock_record,
+            unix_file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for EnvironFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let size = process
+            .mm_env_end()
+            .as_u64()
+            .saturating_sub(process.mm_env_start().as_u64()) as i64;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.environ_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for EnvironFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let virtual_memory = thread.lock().virtual_memory().clone();
+
+        // Add the env start to the offset.
+        let Some(offset) = offset.checked_add(usize_from(process.mm_env_start().as_u64())) else {
+            return Ok(0);
+        };
+        // Clamp the len to the env end.
+        let len = usize_from(process.mm_env_end().as_u64()).saturating_sub(offset);
         let len = cmp::min(buf.buffer_len(), len);
 
         let mut buffer = MaybeUninit::<[u8; 4096]>::uninit();
