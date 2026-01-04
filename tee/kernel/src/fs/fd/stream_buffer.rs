@@ -447,7 +447,7 @@ impl WriteHalf {
         match guard.ty {
             Type::Pipe { .. } => ensure!(!guard.half_closed, Pipe),
             Type::Socket => {
-                ensure!(!guard.write_shutdown, ConnReset);
+                ensure!(!guard.write_shutdown, Pipe);
                 if guard.half_closed {
                     guard.reset = true;
                     return Ok(cmp::min(buf.buffer_len(), guard.total_capacity()));
