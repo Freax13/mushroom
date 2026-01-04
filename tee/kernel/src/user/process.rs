@@ -45,7 +45,7 @@ use crate::{
         memory::VirtualMemory,
         syscall::args::{
             ClockId, ExtractableThreadState, FileMode, ITimerWhich, ITimerspec, ITimerval,
-            OpenFlags, Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
+            OpenFlags, Personality, Rusage, SigEvent, Signal, TimerId, Timespec, WStatus,
         },
         thread::{
             Credentials, Gid, PendingSignals, SigChld, SigFields, SigInfo, SigInfoCode, Sigset,
@@ -92,6 +92,7 @@ pub struct Process {
     mm_arg_start: AtomicCell<VirtAddr>,
     mm_arg_end: AtomicCell<VirtAddr>,
     parent_death_signal: AtomicCell<Option<Signal>>,
+    personality: AtomicCell<Personality>,
 }
 
 impl Process {
@@ -108,6 +109,7 @@ impl Process {
         umask: FileMode,
         mm_arg_start: VirtAddr,
         mm_arg_end: VirtAddr,
+        personality: Personality,
     ) -> Arc<Self> {
         let file_name = exe.location.file_name().unwrap();
         let task_comm = file_name
@@ -153,6 +155,7 @@ impl Process {
             mm_arg_start: AtomicCell::new(mm_arg_start),
             mm_arg_end: AtomicCell::new(mm_arg_end),
             parent_death_signal: AtomicCell::new(None),
+            personality: AtomicCell::new(personality),
         });
 
         if let Some(parent) = parent.upgrade() {
@@ -696,6 +699,23 @@ impl Process {
             code: SigInfoCode::KERNEL,
             fields: SigFields::None,
         });
+    }
+
+    pub fn personality(&self) -> Personality {
+        self.personality.load()
+    }
+
+    pub fn set_personality(&self, new: Personality) -> Personality {
+        assert_ne!(new, Personality::Invalid);
+        self.personality.swap(new)
+    }
+
+    pub fn machine(&self) -> &'static CStr {
+        match self.personality() {
+            Personality::Linux => c"x86_64",
+            Personality::Linux32 => c"i686",
+            Personality::Invalid => unreachable!(),
+        }
     }
 
     #[cfg(not(feature = "harden"))]

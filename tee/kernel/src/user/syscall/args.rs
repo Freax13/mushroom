@@ -137,6 +137,7 @@ macro_rules! enum_arg {
         )*
     }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[allow(clippy::enum_clike_unportable_variant)]
         pub enum $enuhm {
             $(
                 $variant = $expr,
@@ -2728,5 +2729,15 @@ enum_arg! {
         Accept4 = 18,
         Recvmmsg = 19,
         Sendmmsg = 20,
+    }
+}
+
+enum_arg! {
+    // TODO: Only the lower byte is an enum, the upper 3 bytes are a bitfield.
+    //       Add support for this.
+    pub enum Personality {
+        Linux = 0,
+        Linux32 = 8,
+        Invalid = 0xffff_ffff,
     }
 }

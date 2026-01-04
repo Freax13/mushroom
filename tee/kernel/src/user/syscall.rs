@@ -352,6 +352,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysStatfs);
     handlers.register(SysStatfs64);
     handlers.register(SysMknod);
+    handlers.register(SysPersonality);
     handlers.register(SysFstatfs);
     handlers.register(SysFstatfs64);
     handlers.register(SysGetpriority);
@@ -2222,6 +2223,7 @@ async fn clone(
             process.umask(),
             process.mm_arg_start(),
             process.mm_arg_end(),
+            process.personality(),
         ))
     };
 
@@ -2557,7 +2559,6 @@ const SYSNAME: &CStr = c"Linux";
 const NODENAME: &CStr = c"myhostname";
 const RELEASE: &CStr = c"6.1.46";
 const VERSION: &CStr = c"mushroom";
-const MACHINE: &CStr = c"x86_64";
 const DOMAINNAME: &CStr = c"(none)";
 
 fn uname_impl(
@@ -2574,20 +2575,35 @@ fn uname_impl(
 }
 
 #[syscall(i386 = 122, amd64 = 63)]
-fn newuname(#[state] virtual_memory: Arc<VirtualMemory>, name: Pointer<c_void>) -> SyscallResult {
-    let values = [SYSNAME, NODENAME, RELEASE, VERSION, MACHINE, DOMAINNAME];
+fn newuname(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+) -> SyscallResult {
+    let machine = thread.process().machine();
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine, DOMAINNAME];
     uname_impl(virtual_memory, name, &values, 65)
 }
 
 #[syscall(i386 = 109)]
-fn uname(#[state] virtual_memory: Arc<VirtualMemory>, name: Pointer<c_void>) -> SyscallResult {
-    let values = [SYSNAME, NODENAME, RELEASE, VERSION, MACHINE];
+fn uname(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+) -> SyscallResult {
+    let machine = thread.process().machine();
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine];
     uname_impl(virtual_memory, name, &values, 65)
 }
 
 #[syscall(i386 = 59)]
-fn olduname(#[state] virtual_memory: Arc<VirtualMemory>, name: Pointer<c_void>) -> SyscallResult {
-    let values = [SYSNAME, NODENAME, RELEASE, VERSION, MACHINE];
+fn olduname(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+) -> SyscallResult {
+    let machine = thread.process().machine();
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine];
     uname_impl(virtual_memory, name, &values, 9)
 }
 
@@ -4187,6 +4203,17 @@ fn mknod(
         mode,
         dev,
     )
+}
+
+#[syscall(i386 = 136, amd64 = 135)]
+fn personality(thread: &Thread, persona: Personality) -> SyscallResult {
+    let process = thread.process();
+    let old = if persona == Personality::Invalid {
+        process.personality()
+    } else {
+        process.set_personality(persona)
+    };
+    Ok(old as u64)
 }
 
 #[syscall(i386 = 99, amd64 = 137)]

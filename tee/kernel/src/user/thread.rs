@@ -47,8 +47,9 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Pointer, PtraceEvent, PtraceOptions, PtraceSyscallInfo, Rusage,
-                SchedParam, SchedulingPolicy, Signal, TimerId, Timespec, UserDesc, WStatus,
+                FileMode, Nice, Personality, Pointer, PtraceEvent, PtraceOptions,
+                PtraceSyscallInfo, Rusage, SchedParam, SchedulingPolicy, Signal, TimerId, Timespec,
+                UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -230,6 +231,7 @@ impl Thread {
                 FileMode::GROUP_WRITE | FileMode::OTHER_WRITE,
                 VirtAddr::zero(),
                 VirtAddr::zero(),
+                Personality::Linux,
             ),
             Arc::new(SignalHandlerTable::new()),
             Sigset::empty(),
