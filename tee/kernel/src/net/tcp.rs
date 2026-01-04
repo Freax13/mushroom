@@ -909,11 +909,9 @@ impl OpenFileDescription for TcpSocket {
         &self,
         buf: &dyn WriteBuf,
         flags: SentToFlags,
-        addr: Option<SocketAddr>,
+        _: Option<SocketAddr>,
         _: &FileAccessContext,
     ) -> Result<usize> {
-        ensure!(addr.is_none(), IsConn);
-
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
