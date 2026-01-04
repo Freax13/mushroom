@@ -254,6 +254,8 @@ struct TcpSocketInternal {
     no_delay: bool,
     linger: Option<i32>,
     v6only: bool,
+    tcp_user_timeout: u32,
+    ip_recvttl: bool,
 }
 
 impl TcpSocket {
@@ -271,6 +273,8 @@ impl TcpSocket {
                 no_delay: false,
                 linger: None,
                 v6only: false,
+                tcp_user_timeout: 0,
+                ip_recvttl: false,
             }),
             activate_notify: Notify::new(),
             bound_socket: Once::new(),
@@ -720,6 +724,16 @@ impl OpenFileDescription for TcpSocket {
                 let val = guard.receive_buffer_size as u32;
                 val.to_ne_bytes().to_vec()
             }
+            (6, 18) => {
+                // TCP_USER_TIMEOUT
+                let val = guard.tcp_user_timeout;
+                val.to_ne_bytes().to_vec()
+            }
+            (41, 26) => {
+                // IPV6_V6ONLY
+                let val = u32::from(guard.v6only);
+                val.to_ne_bytes().to_vec()
+            }
             _ => bail!(OpNotSupp),
         })
     }
@@ -735,6 +749,14 @@ impl OpenFileDescription for TcpSocket {
     ) -> Result<()> {
         let mut guard = self.internal.lock();
         match (level, optname) {
+            (0, 10) => Ok(()), // IP_MTU_DISCOVER
+            (0, 12) => {
+                // IP_RECVTTL
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ip_recvttl = optval;
+                Ok(())
+            }
             (1, 2) => {
                 // SO_REUSEADDR
                 ensure!(optlen == 4, Inval);
@@ -800,6 +822,13 @@ impl OpenFileDescription for TcpSocket {
             }
             (6, 6) => {
                 // TCP_KEEPCNT
+                Ok(())
+            }
+            (6, 18) => {
+                // TCP_USER_TIMEOUT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<u32>())?;
+                guard.tcp_user_timeout = optval;
                 Ok(())
             }
             (41, 26) => {
