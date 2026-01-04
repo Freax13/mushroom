@@ -9,16 +9,22 @@ use nix::{
     Result,
     errno::Errno,
     fcntl::{FcntlArg, OFlag, fcntl},
-    libc::{Ioctl, in_addr, in_pktinfo, ioctl, linger},
+    libc::{self, IP_RECVTOS, Ioctl, SOL_IP, in_addr, in_pktinfo, ioctl, linger},
     poll::{PollFd, PollFlags, PollTimeout, poll},
-    sys::socket::{
-        self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag,
-        SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrLike, SockaddrStorage, accept,
-        connect, getpeername, getsockname, listen, recv, recvmsg, send, sendmsg, setsockopt,
-        shutdown, socket,
-        sockopt::{Ipv4PacketInfo, Ipv6RecvPacketInfo, Ipv6V6Only, Linger, ReuseAddr, ReusePort},
+    sys::{
+        socket::{
+            self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag,
+            SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrLike, SockaddrStorage, accept,
+            connect, getpeername, getsockname, listen, recv, recvfrom, recvmsg, send, sendmsg,
+            sendto, setsockopt, shutdown, socket, socketpair,
+            sockopt::{
+                Ipv4PacketInfo, Ipv4RecvTtl, Ipv6RecvHopLimit, Ipv6RecvPacketInfo, Ipv6RecvTClass,
+                Ipv6V6Only, Linger, ReceiveTimeout, ReuseAddr, ReusePort, TcpNoDelay,
+            },
+        },
+        time::TimeVal,
     },
-    unistd::close,
+    unistd::{close, read},
 };
 
 mod multicast;
@@ -705,6 +711,129 @@ fn test_oob() -> Result<()> {
 }
 
 #[test]
+fn socket_shutdown_read() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+    setsockopt(&sock1, TcpNoDelay, &true).unwrap();
+
+    socket::connect(fd1, &sockname).unwrap();
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+    setsockopt(&sock2, TcpNoDelay, &true).unwrap();
+
+    // Writes should usually work.
+    assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
+    assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
+
+    shutdown(sock2.as_raw_fd(), socket::Shutdown::Read).unwrap();
+
+    // Writes to the other half should continue to work after shutdown.
+    assert_eq!(nix::unistd::write(&sock1, b"90"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock1, b"ab"), Ok(2));
+    // Write to the shutdown socket should continue to work.
+    assert_eq!(nix::unistd::write(&sock2, b"cd"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock2, b"ef"), Ok(2));
+
+    let mut buffer = [0; 16];
+    // Reads from the other half should yield the data written before the
+    // shutdown and after the shutdown and then block.
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(8));
+    assert_eq!(buffer[0..8], *b"5678cdef");
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buffer, MsgFlags::MSG_DONTWAIT),
+        Err(Errno::EAGAIN)
+    );
+    // Reads from the other half should yield the data written before the
+    // shutdown and after the shutdown and then return 0.
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(8));
+    assert_eq!(buffer[0..8], *b"123490ab");
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
+
+    // Sending more data still works (even though the socket returned 0
+    // previously).
+    assert_eq!(nix::unistd::write(&sock1, b"wxyz"), Ok(4));
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"wxyz");
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
+
+    Ok(())
+}
+
+#[test]
+fn socket_shutdown_write() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+    setsockopt(&sock1, TcpNoDelay, &true).unwrap();
+
+    socket::connect(fd1, &sockname).unwrap();
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+    setsockopt(&sock2, TcpNoDelay, &true).unwrap();
+
+    // Writes should usually work.
+    assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
+    assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
+
+    shutdown(fd2, socket::Shutdown::Write).unwrap();
+
+    // Writes to the other half should continue to work after shutdown.
+    assert_eq!(nix::unistd::write(&sock1, b"90"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock1, b"ab"), Ok(2));
+
+    // Writes to the shutdown socket should fail.
+    assert_eq!(nix::unistd::write(&sock2, b"cdef"), Err(Errno::EPIPE));
+
+    let mut buffer = [0; 16];
+    // Reads from the other half should yield the data written before the
+    // shutdown and then return 0.
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"5678");
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(0));
+    // Reads from the other half should yield the data written before the
+    // shutdown and the the data written after the shutdown and then block.
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(8));
+    assert_eq!(buffer[0..6], *b"123490");
+    assert_eq!(
+        recv(fd2, &mut buffer, MsgFlags::MSG_DONTWAIT),
+        Err(Errno::EAGAIN)
+    );
+
+    Ok(())
+}
+
+#[test]
 fn socket_shutdown_both() -> Result<()> {
     let listener = socket::socket(
         AddressFamily::Inet,
@@ -723,21 +852,24 @@ fn socket_shutdown_both() -> Result<()> {
         None,
     )?;
     let fd1 = sock1.as_raw_fd();
+    setsockopt(&sock1, TcpNoDelay, &true).unwrap();
 
     socket::connect(fd1, &sockname).unwrap();
 
     let fd2 = socket::accept(listener.as_raw_fd())?;
     let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+    setsockopt(&sock2, TcpNoDelay, &true).unwrap();
 
     // Writes should usually work.
     assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
     assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
 
-    shutdown(sock2.as_raw_fd(), socket::Shutdown::Both).unwrap();
+    shutdown(fd2, socket::Shutdown::Both).unwrap();
 
-    // Writes to the other half should continue to work after shutdown.
-    assert_eq!(nix::unistd::write(&sock1, b"90ab"), Ok(4));
-    // Write to the shutdown socket should fail.
+    // Writes to the other half should continue to work one and then fail.
+    assert_eq!(nix::unistd::write(&sock1, b"90"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock1, b"ab"), Err(Errno::EPIPE));
+    // Writes to the shutdown socket should fail.
     assert_eq!(nix::unistd::write(&sock2, b"cdef"), Err(Errno::ECONNRESET));
 
     let mut buffer = [0; 16];
@@ -751,6 +883,181 @@ fn socket_shutdown_both() -> Result<()> {
     // the shutdown.
     assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(4));
     assert_eq!(buffer[0..4], *b"1234");
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
+
+    Ok(())
+}
+
+#[test]
+fn socket_shutdown_both_reverse() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+    setsockopt(&sock1, TcpNoDelay, &true).unwrap();
+
+    socket::connect(fd1, &sockname).unwrap();
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+    setsockopt(&sock2, TcpNoDelay, &true).unwrap();
+
+    // Writes should usually work.
+    assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
+    assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
+
+    shutdown(fd2, socket::Shutdown::Both).unwrap();
+
+    // Writes to the shutdown socket should fail.
+    assert_eq!(nix::unistd::write(&sock2, b"cdef"), Err(Errno::EPIPE));
+    // Writes to the other half should continue to work one and then fail.
+    assert_eq!(nix::unistd::write(&sock1, b"90"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock1, b"ab"), Err(Errno::EPIPE));
+
+    let mut buffer = [0; 16];
+    // Reads from the other half should yield the data written before the
+    // shutdown and then return 0.
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"5678");
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(0));
+    // Reads from the shutdown half should yield the data written before the
+    // shutdown and then return 0. They should not yield the data written after
+    // the shutdown.
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"1234");
+    assert_eq!(
+        nix::unistd::read(&sock2, &mut buffer),
+        Err(Errno::ECONNRESET)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn socket_shutdown_reset_reset_with_read() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+    setsockopt(&sock1, TcpNoDelay, &true).unwrap();
+
+    socket::connect(fd1, &sockname).unwrap();
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+    setsockopt(&sock2, TcpNoDelay, &true).unwrap();
+
+    // Writes should usually work.
+    assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
+    assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
+
+    shutdown(fd2, socket::Shutdown::Both).unwrap();
+
+    // Writes to the other half should continue to work one and then fail.
+    assert_eq!(nix::unistd::write(&sock1, b"90"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock1, b"ab"), Err(Errno::EPIPE));
+    // Writes to the shutdown socket should fail.
+
+    let mut buffer = [0; 16];
+    // Reads from the other half should yield the data written before the
+    // shutdown and then return 0.
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"5678");
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(0));
+    // Reads from the shutdown half should yield the data written before the
+    // shutdown and then return 0. They should not yield the data written after
+    // the shutdown.
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"1234");
+    assert_eq!(
+        nix::unistd::read(&sock2, &mut buffer),
+        Err(Errno::ECONNRESET)
+    );
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
+
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
+
+    Ok(())
+}
+
+#[test]
+fn socket_shutdown_reset_reset_with_write() -> Result<()> {
+    let listener = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    socket::listen(&listener, Backlog::MAXALLOWABLE)?;
+    let sockname = getsockname::<SockaddrIn>(listener.as_raw_fd())?;
+
+    let sock1 = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    let fd1 = sock1.as_raw_fd();
+    setsockopt(&sock1, TcpNoDelay, &true).unwrap();
+
+    socket::connect(fd1, &sockname).unwrap();
+
+    let fd2 = socket::accept(listener.as_raw_fd())?;
+    let sock2 = unsafe { OwnedFd::from_raw_fd(fd2) };
+    setsockopt(&sock2, TcpNoDelay, &true).unwrap();
+
+    // Writes should usually work.
+    assert_eq!(nix::unistd::write(&sock1, b"1234")?, 4);
+    assert_eq!(nix::unistd::write(&sock2, b"5678")?, 4);
+
+    shutdown(fd2, socket::Shutdown::Both).unwrap();
+
+    // Writes to the other half should continue to work one and then fail.
+    assert_eq!(nix::unistd::write(&sock1, b"90"), Ok(2));
+    assert_eq!(nix::unistd::write(&sock1, b"ab"), Err(Errno::EPIPE));
+    // Writes to the shutdown socket should fail.
+
+    let mut buffer = [0; 16];
+    // Reads from the other half should yield the data written before the
+    // shutdown and then return 0.
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"5678");
+    assert_eq!(nix::unistd::read(&sock1, &mut buffer), Ok(0));
+    // Reads from the shutdown half should yield the data written before the
+    // shutdown and then return 0. They should not yield the data written after
+    // the shutdown.
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(4));
+    assert_eq!(buffer[0..4], *b"1234");
+    assert_eq!(nix::unistd::write(&sock2, b"cdef"), Err(Errno::ECONNRESET));
+    assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
+
     assert_eq!(nix::unistd::read(&sock2, &mut buffer), Ok(0));
 
     Ok(())
@@ -1522,6 +1829,240 @@ fn udp_bind() {
 }
 
 #[test]
+fn udp_ip_recvttl() {
+    let sender = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+    let receiver = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+
+    socket::bind(sender.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0)).unwrap();
+    socket::bind(receiver.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0)).unwrap();
+    let sender_sockname = getsockname::<SockaddrIn>(sender.as_raw_fd()).unwrap();
+    let receiver_sockname = getsockname::<SockaddrIn>(receiver.as_raw_fd()).unwrap();
+
+    assert_eq!(setsockopt(&receiver, Ipv4RecvTtl, &true), Ok(()));
+
+    assert_eq!(
+        sendto(
+            sender.as_raw_fd(),
+            b"1234",
+            &receiver_sockname,
+            MsgFlags::empty()
+        ),
+        Ok(4)
+    );
+
+    let mut buf = [0; 16];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    let mut cmsg_buffer = [0; 128];
+    let res = recvmsg::<SockaddrIn>(
+        receiver.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_buffer),
+        MsgFlags::MSG_DONTWAIT,
+    )
+    .unwrap();
+    assert_eq!(res.bytes, 4);
+    assert_eq!(res.address, Some(sender_sockname));
+    let cmsgs = res.cmsgs().unwrap().collect::<Vec<_>>();
+    assert_eq!(cmsgs.len(), 1);
+    assert!(matches!(cmsgs[0], ControlMessageOwned::Ipv4Ttl(_)));
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn udp_ip_recvtos() {
+    let sender = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+    let receiver = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+
+    socket::bind(sender.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0)).unwrap();
+    socket::bind(receiver.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0)).unwrap();
+    let sender_sockname = getsockname::<SockaddrIn>(sender.as_raw_fd()).unwrap();
+    let receiver_sockname = getsockname::<SockaddrIn>(receiver.as_raw_fd()).unwrap();
+
+    let value = 1u32;
+    let res = unsafe {
+        libc::setsockopt(
+            receiver.as_raw_fd(),
+            SOL_IP,
+            IP_RECVTOS,
+            (&raw const value).cast(),
+            size_of::<u32>() as u32,
+        )
+    };
+    assert_eq!(res, 0);
+
+    assert_eq!(
+        sendto(
+            sender.as_raw_fd(),
+            b"1234",
+            &receiver_sockname,
+            MsgFlags::empty()
+        ),
+        Ok(4)
+    );
+
+    let mut buf = [0; 16];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    let mut cmsg_buffer = [0; 128];
+    let res = recvmsg::<SockaddrIn>(
+        receiver.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_buffer),
+        MsgFlags::MSG_DONTWAIT,
+    )
+    .unwrap();
+    assert_eq!(res.bytes, 4);
+    assert_eq!(res.address, Some(sender_sockname));
+    let cmsgs = res.cmsgs().unwrap().collect::<Vec<_>>();
+    assert_eq!(cmsgs.len(), 1);
+    assert!(matches!(cmsgs[0], ControlMessageOwned::Ipv4Tos(_)));
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn udp_ipv6_recvhoplimit() {
+    let sender = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+    let receiver = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+
+    socket::bind(
+        sender.as_raw_fd(),
+        &SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0)),
+    )
+    .unwrap();
+    socket::bind(
+        receiver.as_raw_fd(),
+        &SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0)),
+    )
+    .unwrap();
+    let sender_sockname = getsockname::<SockaddrIn6>(sender.as_raw_fd()).unwrap();
+    let receiver_sockname = getsockname::<SockaddrIn6>(receiver.as_raw_fd()).unwrap();
+
+    assert_eq!(setsockopt(&receiver, Ipv6RecvHopLimit, &true), Ok(()));
+
+    assert_eq!(
+        sendto(
+            sender.as_raw_fd(),
+            b"1234",
+            &receiver_sockname,
+            MsgFlags::empty()
+        ),
+        Ok(4)
+    );
+
+    let mut buf = [0; 16];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    let mut cmsg_buffer = [0; 128];
+    let res = recvmsg::<SockaddrIn6>(
+        receiver.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_buffer),
+        MsgFlags::MSG_DONTWAIT,
+    )
+    .unwrap();
+    assert_eq!(res.bytes, 4);
+    assert_eq!(res.address, Some(sender_sockname));
+    let cmsgs = res.cmsgs().unwrap().collect::<Vec<_>>();
+    assert_eq!(cmsgs.len(), 1);
+    assert!(matches!(cmsgs[0], ControlMessageOwned::Ipv6HopLimit(_)));
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn udp_ipv6_recvtclass() {
+    let sender = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+    let receiver = socket::socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        SockProtocol::Udp,
+    )
+    .unwrap();
+
+    socket::bind(
+        sender.as_raw_fd(),
+        &SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0)),
+    )
+    .unwrap();
+    socket::bind(
+        receiver.as_raw_fd(),
+        &SockaddrIn6::from(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0)),
+    )
+    .unwrap();
+    let sender_sockname = getsockname::<SockaddrIn6>(sender.as_raw_fd()).unwrap();
+    let receiver_sockname = getsockname::<SockaddrIn6>(receiver.as_raw_fd()).unwrap();
+
+    assert_eq!(setsockopt(&receiver, Ipv6RecvTClass, &true), Ok(()));
+
+    assert_eq!(
+        sendto(
+            sender.as_raw_fd(),
+            b"1234",
+            &receiver_sockname,
+            MsgFlags::empty()
+        ),
+        Ok(4)
+    );
+
+    let mut buf = [0; 16];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    let mut cmsg_buffer = [0; 128];
+    let res = recvmsg::<SockaddrIn6>(
+        receiver.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_buffer),
+        MsgFlags::MSG_DONTWAIT,
+    )
+    .unwrap();
+    assert_eq!(res.bytes, 4);
+    assert_eq!(res.address, Some(sender_sockname));
+    let cmsgs = res.cmsgs().unwrap().collect::<Vec<_>>();
+    assert_eq!(cmsgs.len(), 1);
+    assert!(matches!(cmsgs[0], ControlMessageOwned::Ipv6TClass(_)));
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
 fn udp_pktinfo() {
     let addrs = [
         IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -1561,8 +2102,6 @@ fn udp_pktinfo() {
                     &[None]
                 };
                 for dst_v6only in v6only_values {
-                    dbg!((src, src_v6only, dst, dst_v6only));
-
                     let dst_family = match dst {
                         IpAddr::V4(_) => AddressFamily::Inet,
                         IpAddr::V6(_) => AddressFamily::Inet6,
@@ -1924,4 +2463,161 @@ fn tcp_waitall_oob() {
         recv(sock2.as_raw_fd(), &mut buf, MsgFlags::MSG_WAITALL),
         Ok(11)
     );
+}
+
+#[test]
+fn tcp_recvfrom() {
+    let (sock1, sock2) = tcp_socket_pair();
+    set_non_blocking(&sock1, true);
+    set_non_blocking(&sock2, true);
+
+    assert_eq!(send(sock1.as_raw_fd(), b"1234", MsgFlags::empty()), Ok(4));
+    let mut buf = [0; 16];
+    let (n, addr) = recvfrom::<SockaddrIn>(sock2.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(n, 4);
+    assert_eq!(addr, None);
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn tcp_sendto_peer() {
+    let (sock1, sock2) = tcp_socket_pair();
+    set_non_blocking(&sock1, true);
+    set_non_blocking(&sock2, true);
+
+    let addr = getpeername::<SockaddrIn>(sock1.as_raw_fd()).unwrap();
+
+    assert_eq!(
+        sendto(sock1.as_raw_fd(), b"1234", &addr, MsgFlags::empty()),
+        Ok(4)
+    );
+    let mut buf = [0; 16];
+    let (n, addr) = recvfrom::<SockaddrIn>(sock2.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(n, 4);
+    assert_eq!(addr, None);
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn tcp_sendto_other() {
+    let (sock1, sock2) = tcp_socket_pair();
+    set_non_blocking(&sock1, true);
+    set_non_blocking(&sock2, true);
+
+    let addr = SockaddrIn::new(127, 12, 13, 14, 15);
+
+    assert_eq!(
+        sendto(sock1.as_raw_fd(), b"1234", &addr, MsgFlags::empty()),
+        Ok(4)
+    );
+    let mut buf = [0; 16];
+    let (n, addr) = recvfrom::<SockaddrIn>(sock2.as_raw_fd(), &mut buf).unwrap();
+    assert_eq!(n, 4);
+    assert_eq!(addr, None);
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn tcp_sendto_unconnected() {
+    let sock1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        SockProtocol::Tcp,
+    )
+    .unwrap();
+
+    let addr = SockaddrIn::new(127, 12, 13, 14, 15);
+
+    assert_eq!(
+        sendto(sock1.as_raw_fd(), b"1234", &addr, MsgFlags::empty()),
+        Err(Errno::EPIPE)
+    );
+}
+
+#[test]
+fn tcp_write_unconnected() {
+    let sock1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        SockProtocol::Tcp,
+    )
+    .unwrap();
+
+    assert_eq!(nix::unistd::write(&sock1, b"1234"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn tcp_listen_write() {
+    let sock1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        SockProtocol::Tcp,
+    )
+    .unwrap();
+
+    listen(&sock1, Backlog::MAXALLOWABLE).unwrap();
+
+    assert_eq!(nix::unistd::write(&sock1, b"1234"), Err(Errno::EPIPE));
+}
+
+#[test]
+fn tcp_recvttl() {
+    let (sock1, sock2) = tcp_socket_pair();
+    assert_eq!(setsockopt(&sock1, Ipv4RecvTtl, &true), Ok(()));
+
+    assert_eq!(send(sock2.as_raw_fd(), b"1234", MsgFlags::empty()), Ok(4));
+
+    let mut buf = [0; 16];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    let mut cmsg_buffer = [0; 128];
+    let res = recvmsg::<SockaddrIn>(
+        sock1.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_buffer),
+        MsgFlags::MSG_DONTWAIT,
+    )
+    .unwrap();
+    assert_eq!(res.bytes, 4);
+    let cmsgs = res.cmsgs().unwrap().collect::<Vec<_>>();
+    assert_eq!(cmsgs.len(), 0);
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn unix_stream_receive_timeout() {
+    let (socket1, _socket2) = socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+
+    setsockopt(&socket1, ReceiveTimeout, &TimeVal::new(0, 1000)).unwrap();
+
+    let mut buf = [0; 16];
+    assert_eq!(read(&socket1, &mut buf), Err(Errno::EAGAIN));
+}
+
+#[test]
+fn tcp_close_write() {
+    let (sock1, sock2) = tcp_socket_pair();
+    close(sock2).unwrap();
+
+    let buf = vec![0; 1];
+    loop {
+        let res = nix::unistd::write(&sock1, &buf);
+        match res {
+            Ok(n) => {
+                assert_ne!(n, 0);
+            }
+            Err(err) => {
+                assert_eq!(err, Errno::EPIPE);
+                break;
+            }
+        }
+    }
 }
