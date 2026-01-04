@@ -221,8 +221,15 @@ impl VirtualMemory {
         }
         write(0);
 
+        let platform = match E::ABI {
+            Abi::I386 => c"i686",
+            Abi::Amd64 => c"x86_64",
+        };
+        let platform = write_str(platform, &mut str_addr)?;
+        let random_bytes = write_bytes(&random_bytes(), &mut str_addr)?;
+
         // write auxv.
-        const MAX_NUM_AUX_VECTORS: usize = 10;
+        const MAX_NUM_AUX_VECTORS: usize = 11;
         #[derive(Clone, Copy)]
         enum AuxVector {
             End = 0,
@@ -232,6 +239,7 @@ impl VirtualMemory {
             Pagesz = 6,
             Base = 7,
             Entry = 9,
+            Platform = 15,
             ClkTck = 17,
             Secure = 23,
             Random = 25,
@@ -246,12 +254,10 @@ impl VirtualMemory {
                 (AuxVector::Pagesz, 0x1000),
                 (AuxVector::Base, at_base.unwrap_or_default()),
                 (AuxVector::Entry, info.entry),
+                (AuxVector::Platform, platform.as_u64()),
                 (AuxVector::ClkTck, 100),
                 (AuxVector::Secure, 0),
-                (
-                    AuxVector::Random,
-                    write_bytes(&random_bytes(), &mut str_addr)?.as_u64(),
-                ),
+                (AuxVector::Random, random_bytes.as_u64()),
                 (AuxVector::End, 0),
             ]);
         assert!(aux_vectors.clone().count() <= MAX_NUM_AUX_VECTORS);
