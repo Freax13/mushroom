@@ -848,12 +848,13 @@ impl OpenFileDescription for UdpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
-        _: RecvMsgFlags,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, source, destination) = self.recv(&mut vectored_buf, false)?;
+        let peek = flags.contains(RecvMsgFlags::PEEK);
+        let (len, source, destination) = self.recv(&mut vectored_buf, peek)?;
 
         if msg_hdr.namelen != 0 {
             let source = SocketAddr::from(source);

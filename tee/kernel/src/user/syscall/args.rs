@@ -1830,6 +1830,7 @@ pub struct CmsgHdr {
 
 bitflags! {
     pub struct RecvMsgFlags {
+        const PEEK = 1 << 1;
         const DONTWAIT = 1 << 6;
         const WAITALL = 1 << 8;
         const CMSG_CLOEXEC = 1 << 30;
