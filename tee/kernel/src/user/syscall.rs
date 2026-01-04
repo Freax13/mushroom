@@ -7,7 +7,7 @@ use alloc::{
 };
 use core::{
     cmp,
-    ffi::c_void,
+    ffi::{CStr, c_void},
     fmt,
     future::pending,
     mem::{offset_of, size_of},
@@ -286,7 +286,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysExit);
     handlers.register(SysWait4);
     handlers.register(SysKill);
+    handlers.register(SysNewuname);
     handlers.register(SysUname);
+    handlers.register(SysOlduname);
     handlers.register(SysFcntl);
     handlers.register(SysFcntl64);
     handlers.register(SysFlock);
@@ -2551,24 +2553,42 @@ fn kill(thread: &Thread, pid: i32, signal: Option<Signal>) -> SyscallResult {
     Ok(0)
 }
 
-#[syscall(amd64 = 63)]
-fn uname(#[state] virtual_memory: Arc<VirtualMemory>, fd: u64) -> SyscallResult {
-    const SIZE: usize = 65;
-    virtual_memory.write_bytes(VirtAddr::new(fd), &[0; SIZE * 5])?;
-    for (i, bs) in [
-        b"Linux\0" as &[u8],
-        b"myhostname\0",
-        b"6.1.46\0",
-        b"mushroom\0",
-        b"x86_64\0",
-        b"(none)\0",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        virtual_memory.write_bytes(VirtAddr::new(fd + (i * SIZE) as u64), bs)?;
+const SYSNAME: &CStr = c"Linux";
+const NODENAME: &CStr = c"myhostname";
+const RELEASE: &CStr = c"6.1.46";
+const VERSION: &CStr = c"mushroom";
+const MACHINE: &CStr = c"x86_64";
+const DOMAINNAME: &CStr = c"(none)";
+
+fn uname_impl(
+    virtual_memory: Arc<VirtualMemory>,
+    name: Pointer<c_void>,
+    values: &[&CStr],
+    capacity: usize,
+) -> SyscallResult {
+    virtual_memory.set_bytes(name.get(), values.len() * capacity, 0)?;
+    for (i, value) in values.iter().enumerate() {
+        virtual_memory.write_bytes(name.bytes_offset(i * capacity).get(), value.to_bytes())?;
     }
     Ok(0)
+}
+
+#[syscall(i386 = 122, amd64 = 63)]
+fn newuname(#[state] virtual_memory: Arc<VirtualMemory>, name: Pointer<c_void>) -> SyscallResult {
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, MACHINE, DOMAINNAME];
+    uname_impl(virtual_memory, name, &values, 65)
+}
+
+#[syscall(i386 = 109)]
+fn uname(#[state] virtual_memory: Arc<VirtualMemory>, name: Pointer<c_void>) -> SyscallResult {
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, MACHINE];
+    uname_impl(virtual_memory, name, &values, 65)
+}
+
+#[syscall(i386 = 59)]
+fn olduname(#[state] virtual_memory: Arc<VirtualMemory>, name: Pointer<c_void>) -> SyscallResult {
+    let values = [SYSNAME, NODENAME, RELEASE, VERSION, MACHINE];
+    uname_impl(virtual_memory, name, &values, 9)
 }
 
 #[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
