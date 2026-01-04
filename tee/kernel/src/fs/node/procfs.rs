@@ -85,6 +85,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         location,
         bsd_file_lock_record: LazyBsdFileLockRecord::new(),
         watchers: Watchers::new(),
+        cmdline_file: KernelCmdlineFile::new(fs.clone()),
         cpuinfo_file: CpuinfoFile::new(fs.clone()),
         meminfo_file: MeminfoFile::new(fs.clone()),
         net_dir_ino: new_ino(),
@@ -119,6 +120,7 @@ struct ProcFsRoot {
     location: LinkLocation,
     bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
+    cmdline_file: Arc<KernelCmdlineFile>,
     cpuinfo_file: Arc<CpuinfoFile>,
     meminfo_file: Arc<MeminfoFile>,
     net_dir_ino: u64,
@@ -201,6 +203,7 @@ impl Directory for ProcFsRoot {
         let location =
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
+            b"cmdline" => self.cmdline_file.clone(),
             b"cpuinfo" => self.cpuinfo_file.clone(),
             b"meminfo" => self.meminfo_file.clone(),
             b"net" => NetDir::new(
@@ -325,6 +328,11 @@ impl Directory for ProcFsRoot {
             });
         }
         entries.push(DirEntry {
+            ino: self.cmdline_file.ino,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"cmdline").unwrap()),
+        });
+        entries.push(DirEntry {
             ino: self.cpuinfo_file.ino,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"cpuinfo").unwrap()),
@@ -412,6 +420,132 @@ impl Directory for ProcFsRoot {
         _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
+    }
+}
+
+struct KernelCmdlineFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    ino: u64,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
+    unix_file_lock_record: LazyUnixFileLockRecord,
+    watchers: Watchers,
+}
+
+impl KernelCmdlineFile {
+    pub fn new(fs: Arc<ProcFs>) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            ino: new_ino(),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            watchers: Watchers::new(),
+        })
+    }
+
+    fn content(&self) -> &'static [u8] {
+        b"init=/init"
+    }
+}
+
+impl INode for KernelCmdlineFile {
+    fn stat(&self) -> Result<Stat> {
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for KernelCmdlineFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let content = self.content();
+        let offset = cmp::min(offset, content.len());
+        let content = &content[offset..];
+        let len = cmp::min(content.len(), buf.buffer_len());
+        buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        self.unix_file_lock_record.get()
     }
 }
 
