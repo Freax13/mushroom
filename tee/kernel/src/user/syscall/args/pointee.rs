@@ -1897,6 +1897,9 @@ impl From<StatFs> for StatFs64 {
     }
 }
 
+impl Pointee for crate::fs::StatFs64 {}
+impl PrimitivePointee for crate::fs::StatFs64 {}
+
 impl Pointee for Rusage {}
 impl AbiDependentPointee for Rusage {
     type I386 = Rusage32;

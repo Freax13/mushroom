@@ -37,7 +37,7 @@ use crate::{
     char_dev::mem::random_bytes,
     error::{Error, ErrorKind, Result, bail, ensure, err},
     fs::{
-        StatFs,
+        StatFs, StatFs64,
         fd::{
             Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf, ReadBuf,
             StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
@@ -71,7 +71,10 @@ use crate::{
             Process, WaitFilter, WaitResult,
             limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
-        syscall::{args::pointee::RawPtraceSyscallInfo, cpu_state::CpuState},
+        syscall::{
+            args::pointee::{RawPtraceSyscallInfo, SizedPointee},
+            cpu_state::CpuState,
+        },
         thread::{
             Capability, Gid, NewTls, PtraceState, SchedulingSettings, SigFields, SigInfo,
             SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid,
@@ -345,6 +348,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysRtSigsuspend);
     handlers.register(SysSigaltstack);
     handlers.register(SysStatfs);
+    handlers.register(SysStatfs64);
     handlers.register(SysMknod);
     handlers.register(SysFstatfs);
     handlers.register(SysGetpriority);
@@ -4141,6 +4145,26 @@ fn statfs(
     let cwd = thread.process().cwd();
     let link = lookup_and_resolve_link(cwd, &pathname, &mut ctx)?;
     let statfs = link.node.fs()?.stat();
+    virtual_memory.write_with_abi(buf, statfs, abi)?;
+    Ok(0)
+}
+
+#[syscall(i386 = 268)]
+fn statfs64(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] mut ctx: FileAccessContext,
+    pathname: Pointer<Path>,
+    sz: u64,
+    buf: Pointer<StatFs64>,
+) -> SyscallResult {
+    let pathname = virtual_memory.read(pathname)?;
+    let cwd = thread.process().cwd();
+    let link = lookup_and_resolve_link(cwd, &pathname, &mut ctx)?;
+    let statfs = link.node.fs()?.stat();
+    let statfs = StatFs64::from(statfs);
+    ensure!(u64::from_usize(statfs.size(abi)) == sz, Inval);
     virtual_memory.write_with_abi(buf, statfs, abi)?;
     Ok(0)
 }
