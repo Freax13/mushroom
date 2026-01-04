@@ -2611,6 +2611,7 @@ async fn fcntl(
 
             let use_64bit = cmd == FcntlCmd::GetLk64;
             let flock = if use_64bit {
+                ensure!(abi == Abi::I386, Inval);
                 let pointer = Pointer::<Flock64>::new(arg);
                 Flock::from(virtual_memory.read_with_abi(pointer, abi)?)
             } else {
@@ -2678,6 +2679,7 @@ async fn fcntl(
 
             let use_64bit = matches!(cmd, FcntlCmd::SetLk64 | FcntlCmd::SetLkW64);
             let flock = if use_64bit {
+                ensure!(abi == Abi::I386, Inval);
                 let pointer = Pointer::<Flock64>::new(arg);
                 Flock::from(virtual_memory.read_with_abi(pointer, abi)?)
             } else {

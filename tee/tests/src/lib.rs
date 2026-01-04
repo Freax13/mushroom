@@ -9,6 +9,7 @@ mod ptrace;
 mod pty;
 mod ready;
 mod unix;
+mod unix_file_lock;
 
 use std::{
     alloc::{Layout, alloc, dealloc},
