@@ -1820,6 +1820,7 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct MsgHdrFlags: u32 {
         const CTRUNC = 0x8;
+        const TRUNC = 0x20;
     }
 }
 

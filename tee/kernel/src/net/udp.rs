@@ -39,9 +39,10 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr, OpenFlags,
-                PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags,
-                SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
+                FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr,
+                MsgHdrFlags, OpenFlags, PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -274,12 +275,12 @@ impl UdpSocket {
         Ok(guard.socketname.unwrap())
     }
 
-    /// Returns a tuple of (size, sender, matching destination address)
+    /// Returns a tuple of (size, truncated, sender, matching destination address)
     fn recv(
         &self,
         buf: &mut (impl ReadBuf + ?Sized),
         peek: bool,
-    ) -> Result<(usize, net::SocketAddr, IpAddr)> {
+    ) -> Result<(usize, bool, net::SocketAddr, IpAddr)> {
         let mut guard = self.internal.lock();
         let packed_owned;
         let packet = if peek {
@@ -289,6 +290,7 @@ impl UdpSocket {
             &packed_owned
         };
 
+        let truncated = buf.buffer_len() < packet.bytes.len();
         let len = cmp::min(buf.buffer_len(), packet.bytes.len());
         buf.write(0, &packet.bytes[..len])?;
 
@@ -296,7 +298,7 @@ impl UdpSocket {
             self.rx_notify.notify();
         }
 
-        Ok((len, packet.source, packet.destination))
+        Ok((len, truncated, packet.source, packet.destination))
     }
 
     fn send(
@@ -829,7 +831,7 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        let (len, _, _) = self.recv(buf, false)?;
+        let (len, _, _, _) = self.recv(buf, false)?;
         Ok(len)
     }
 
@@ -839,7 +841,7 @@ impl OpenFileDescription for UdpSocket {
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
         let peek = flags.contains(RecvFromFlags::PEEK);
-        let (len, source, _) = self.recv(buf, peek)?;
+        let (len, _, source, _) = self.recv(buf, peek)?;
         Ok((len, Some(SocketAddr::from(source))))
     }
 
@@ -854,7 +856,9 @@ impl OpenFileDescription for UdpSocket {
     ) -> Result<usize> {
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let peek = flags.contains(RecvMsgFlags::PEEK);
-        let (len, source, destination) = self.recv(&mut vectored_buf, peek)?;
+        let (len, truncated, source, destination) = self.recv(&mut vectored_buf, peek)?;
+
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, truncated);
 
         if msg_hdr.namelen != 0 {
             let source = SocketAddr::from(source);
