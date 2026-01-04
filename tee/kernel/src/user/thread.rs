@@ -1127,6 +1127,8 @@ impl ThreadGuard<'_> {
 
         writeln!(buffer, "Umask:\t{0:4o}", self.process().umask()).unwrap();
 
+        buffer.extend_from_slice(b"State:\tR (running)\n");
+
         writeln!(buffer, "Tgid:\t{}", self.process().pid()).unwrap();
 
         writeln!(buffer, "Ngid:\t0").unwrap();
@@ -1137,10 +1139,31 @@ impl ThreadGuard<'_> {
 
         writeln!(
             buffer,
-            "Ppid:\t{}",
+            "TracerPid:\t{}",
             self.tracer.upgrade().map_or(0, |thread| thread.tid())
         )
         .unwrap();
+
+        let credentials_guard = self.process().credentials.read();
+        writeln!(
+            buffer,
+            "Uid:\t{}\t{}\t{}\t{}",
+            credentials_guard.real_user_id.get(),
+            credentials_guard.effective_user_id.get(),
+            credentials_guard.saved_set_user_id.get(),
+            credentials_guard.filesystem_user_id.get(),
+        )
+        .unwrap();
+        writeln!(
+            buffer,
+            "Gid:\t{}\t{}\t{}\t{}",
+            credentials_guard.real_group_id.get(),
+            credentials_guard.effective_group_id.get(),
+            credentials_guard.saved_set_group_id.get(),
+            credentials_guard.filesystem_group_id.get(),
+        )
+        .unwrap();
+        drop(credentials_guard);
 
         let usage = self.virtual_memory.usage();
         writeln!(
