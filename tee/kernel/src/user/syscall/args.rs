@@ -571,6 +571,9 @@ enum_arg! {
         SetLkW = 7,
         SetOwn = 8,
         GetOwn = 9,
+        GetLk64 = 12,
+        SetLk64 = 13,
+        SetLkW64 = 14,
         SetOwnEx = 15,
         GetOwnEx = 16,
         OfdSetLk = 37,
@@ -2465,6 +2468,21 @@ pub enum FlockWhence {
     Set = 0,
     Cur = 1,
     End = 2,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Flock64(Flock);
+
+impl From<Flock64> for Flock {
+    fn from(value: Flock64) -> Self {
+        value.0
+    }
+}
+
+impl From<Flock> for Flock64 {
+    fn from(value: Flock) -> Self {
+        Self(value)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]

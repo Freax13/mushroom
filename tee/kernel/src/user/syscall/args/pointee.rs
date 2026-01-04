@@ -2957,6 +2957,63 @@ impl From<Flock> for Flock64 {
     }
 }
 
+impl Pointee for super::Flock64 {}
+impl AbiDependentPointee for super::Flock64 {
+    type I386 = Flock64On32Bit;
+    type Amd64 = Flock64;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed(4))]
+pub struct Flock64On32Bit {
+    r#type: i16,
+    whence: i16,
+    start: u64,
+    len: u64,
+    pid: u32,
+}
+
+impl TryFrom<Flock64On32Bit> for super::Flock64 {
+    type Error = Error;
+
+    fn try_from(value: Flock64On32Bit) -> Result<Self> {
+        Ok(Self::from(Flock {
+            r#type: FlockType::try_from(value.r#type)?,
+            whence: FlockWhence::try_from(value.whence)?,
+            start: value.start,
+            len: value.len,
+            pid: value.pid,
+        }))
+    }
+}
+
+impl From<super::Flock64> for Flock64On32Bit {
+    fn from(value: super::Flock64) -> Self {
+        let value = Flock::from(value);
+        Self {
+            r#type: value.r#type as i16,
+            whence: value.whence as i16,
+            start: value.start,
+            len: value.len,
+            pid: value.pid,
+        }
+    }
+}
+
+impl TryFrom<Flock64> for super::Flock64 {
+    type Error = Error;
+
+    fn try_from(value: Flock64) -> Result<Self> {
+        Flock::try_from(value).map(Self::from)
+    }
+}
+
+impl From<super::Flock64> for Flock64 {
+    fn from(value: super::Flock64) -> Self {
+        Self::from(Flock::from(value))
+    }
+}
+
 impl TryFrom<i16> for FlockType {
     type Error = Error;
 

@@ -2606,10 +2606,17 @@ async fn fcntl(
             fd.set_flags(OpenFlags::from_bits_truncate(arg));
             Ok(0)
         }
-        FcntlCmd::GetLk => {
+        FcntlCmd::GetLk | FcntlCmd::GetLk64 => {
             let record = fd.unix_file_lock_record()?;
-            let pointer = Pointer::<Flock>::new(arg);
-            let flock = virtual_memory.read_with_abi(pointer, abi)?;
+
+            let use_64bit = cmd == FcntlCmd::GetLk64;
+            let flock = if use_64bit {
+                let pointer = Pointer::<Flock64>::new(arg);
+                Flock::from(virtual_memory.read_with_abi(pointer, abi)?)
+            } else {
+                let pointer = Pointer::<Flock>::new(arg);
+                virtual_memory.read_with_abi(pointer, abi)?
+            };
 
             let start = match flock.whence {
                 FlockWhence::Set => flock.start,
@@ -2650,17 +2657,36 @@ async fn fcntl(
                 }
             };
 
-            virtual_memory.write_with_abi(pointer, flock, abi)?;
+            if use_64bit {
+                let pointer = Pointer::new(arg);
+                let flock = Flock64::from(flock);
+                virtual_memory.write_with_abi(pointer, flock, abi)?;
+            } else {
+                let pointer = Pointer::new(arg);
+                virtual_memory.write_with_abi(pointer, flock, abi)?;
+            }
 
             Ok(0)
         }
-        FcntlCmd::SetLk | FcntlCmd::OfdSetLk | FcntlCmd::SetLkW | FcntlCmd::OfdSetLkW => {
+        FcntlCmd::SetLk
+        | FcntlCmd::SetLk64
+        | FcntlCmd::OfdSetLk
+        | FcntlCmd::SetLkW
+        | FcntlCmd::SetLkW64
+        | FcntlCmd::OfdSetLkW => {
             let record = fd.unix_file_lock_record()?;
-            let pointer = Pointer::<Flock>::new(arg);
-            let flock = virtual_memory.read_with_abi(pointer, abi)?;
+
+            let use_64bit = matches!(cmd, FcntlCmd::SetLk64 | FcntlCmd::SetLkW64);
+            let flock = if use_64bit {
+                let pointer = Pointer::<Flock64>::new(arg);
+                Flock::from(virtual_memory.read_with_abi(pointer, abi)?)
+            } else {
+                let pointer = Pointer::<Flock>::new(arg);
+                virtual_memory.read_with_abi(pointer, abi)?
+            };
 
             let (owner, pid) = match cmd {
-                FcntlCmd::SetLk | FcntlCmd::SetLkW => (
+                FcntlCmd::SetLk | FcntlCmd::SetLk64 | FcntlCmd::SetLkW | FcntlCmd::SetLkW64 => (
                     UnixLockOwner::process(&fdtable),
                     Some(thread.process().pid()),
                 ),
@@ -2694,10 +2720,12 @@ async fn fcntl(
                 };
 
                 match cmd {
-                    FcntlCmd::SetLk | FcntlCmd::OfdSetLk => {
+                    FcntlCmd::SetLk | FcntlCmd::SetLk64 | FcntlCmd::OfdSetLk => {
                         record.lock(lock).map_err(|_| err!(Acces))?
                     }
-                    FcntlCmd::SetLkW | FcntlCmd::OfdSetLkW => record.lock_wait(lock).await,
+                    FcntlCmd::SetLkW | FcntlCmd::SetLkW64 | FcntlCmd::OfdSetLkW => {
+                        record.lock_wait(lock).await
+                    }
                     _ => unreachable!(),
                 }
             } else {
@@ -2725,6 +2753,7 @@ async fn fcntl(
 
 #[syscall(i386 = 221, interruptable, restartable)]
 async fn fcntl64(
+    abi: Abi,
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -2735,7 +2764,7 @@ async fn fcntl64(
     arg: u64,
 ) -> SyscallResult {
     fcntl(
-        Abi::Amd64,
+        abi,
         thread,
         virtual_memory,
         fdtable,
