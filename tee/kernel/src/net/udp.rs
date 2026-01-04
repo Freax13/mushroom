@@ -136,6 +136,8 @@ pub struct UdpSocket {
 struct UdpSocketInternal {
     flags: OpenFlags,
     ip_recverr: bool,
+    ip_recvttl: bool,
+    ip_recvtos: bool,
     reuse_addr: bool,
     reuse_port: bool,
     send_buffer_size: usize,
@@ -143,6 +145,8 @@ struct UdpSocketInternal {
     v6only: bool,
     ipv4_pktinfo: bool,
     ipv6_pktinfo: bool,
+    ipv6_recvhoplimit: bool,
+    ipv6_recvtclass: bool,
     socketname: Option<net::SocketAddr>,
     peername: Option<net::SocketAddr>,
     rx: VecDeque<Packet>,
@@ -161,6 +165,8 @@ impl UdpSocket {
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,
                 ip_recverr: false,
+                ip_recvttl: false,
+                ip_recvtos: false,
                 reuse_addr: false,
                 reuse_port: false,
                 send_buffer_size: 1024 * 1024,
@@ -168,6 +174,8 @@ impl UdpSocket {
                 v6only: false,
                 ipv4_pktinfo: false,
                 ipv6_pktinfo: false,
+                ipv6_recvhoplimit: false,
+                ipv6_recvtclass: false,
                 socketname: None,
                 peername: None,
                 rx: VecDeque::new(),
@@ -610,6 +618,22 @@ impl OpenFileDescription for UdpSocket {
                 guard.ip_recverr = optval;
                 Ok(())
             }
+            (0, 12) => {
+                // IP_RECVTTL
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ip_recvttl = optval;
+                Ok(())
+            }
+            (0, 13) => {
+                // IP_RECVTOS
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ip_recvtos = optval;
+                Ok(())
+            }
             (0, 32) => {
                 // IP_MULTICAST_IF
                 match optlen {
@@ -707,6 +731,22 @@ impl OpenFileDescription for UdpSocket {
                 let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
                 let mut guard = self.internal.lock();
                 guard.ipv6_pktinfo = optval;
+                Ok(())
+            }
+            (41, 51) => {
+                // IPV6_RECVHOPLIMIT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ipv6_recvhoplimit = optval;
+                Ok(())
+            }
+            (41, 66) => {
+                // IPV6_RECVTCLASS
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ipv6_recvtclass = optval;
                 Ok(())
             }
             _ => bail!(OpNotSupp),
@@ -822,8 +862,12 @@ impl OpenFileDescription for UdpSocket {
 
         let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         let guard = self.internal.lock();
+        let ip_recvttl = guard.ip_recvttl;
+        let ip_recvtos = guard.ip_recvtos;
         let ipv4_pktinfo = guard.ipv4_pktinfo;
         let ipv6_pktinfo = guard.ipv6_pktinfo;
+        let ipv6_recvhoplimit = guard.ipv6_recvhoplimit;
+        let ipv6_recvtclass = guard.ipv6_recvtclass;
         drop(guard);
         match destination {
             IpAddr::V4(destination) => {
@@ -843,6 +887,24 @@ impl OpenFileDescription for UdpSocket {
                         ifindex: 1,
                     };
                     cmsg_builder.add(41, 50, payload)?;
+                }
+            }
+        }
+        match self.ip_version {
+            IpVersion::V4 => {
+                if ip_recvttl {
+                    cmsg_builder.add(0, 2, 64i32)?;
+                }
+                if ip_recvtos {
+                    cmsg_builder.add(0, 1, 0u8)?;
+                }
+            }
+            IpVersion::V6 => {
+                if ipv6_recvhoplimit {
+                    cmsg_builder.add(41, 52, 64i32)?;
+                }
+                if ipv6_recvtclass {
+                    cmsg_builder.add(41, 67, 0i32)?;
                 }
             }
         }
