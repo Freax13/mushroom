@@ -13,8 +13,8 @@ use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use bytemuck::bytes_of;
-use usize_conversions::{FromUsize, usize_from};
-use x86_64::{align_down, align_up};
+use usize_conversions::usize_from;
+use x86_64::align_up;
 
 use crate::{
     error::{Result, bail, ensure, err},
@@ -31,6 +31,7 @@ use crate::{
         ownership::Ownership,
         path::Path,
     },
+    net::CMsgBuilder,
     rt::notify::{Notify, NotifyOnDrop},
     spin::{
         mutex::{Mutex, MutexGuard},
@@ -41,10 +42,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
-                Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow,
-                SocketAddr, SocketAddrUnix, SocketType, Stat, Timespec, Ucred,
-                pointee::SizedPointee,
+                Accept4Flags, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
+                SocketAddrUnix, SocketType, Stat, Timespec, Ucred,
             },
             traits::Abi,
         },
@@ -245,58 +245,15 @@ impl OpenFileDescription for StreamUnixSocket {
                 .lock()
                 .read(&mut vectored_buf, false, waitall)?;
 
-        if let Some(ancillary_data) = ancillary_data {
-            let align = match abi {
-                Abi::I386 => 4,
-                Abi::Amd64 => 8,
-            };
-            let mut control = msg_hdr.control;
-            let mut control_len = align_down(msg_hdr.controllen, align);
-
-            if let Some(fds) = ancillary_data.rights.filter(|fds| !fds.is_empty()) {
-                let mut cmsg_header = CmsgHdr {
-                    len: 0,
-                    level: 1,
-                    r#type: 1,
-                };
-                let header_len = cmsg_header.size(abi);
-                cmsg_header.len = u64::from_usize(header_len);
-                if let Some(mut payload_len) = control_len.checked_sub(u64::from_usize(header_len))
-                {
-                    for fd in fds {
-                        let Some(next_payload_len) = payload_len.checked_sub(4) else {
-                            break;
-                        };
-                        payload_len = next_payload_len;
-
-                        let mut fd_flags = FdFlags::empty();
-                        fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
-                        let Ok(num) = fdtable.insert(fd, fd_flags, no_file_limit) else {
-                            break;
-                        };
-
-                        vm.write(
-                            control.bytes_offset(usize_from(cmsg_header.len)).cast(),
-                            num,
-                        )?;
-
-                        cmsg_header.len += 4;
-                    }
-
-                    vm.write_with_abi(control, cmsg_header, abi)?;
-
-                    let offset = align_up(cmsg_header.len, align);
-                    control = control.bytes_offset(usize_from(offset));
-                    control_len -= offset;
-                }
-            }
-
-            _ = control;
-
-            msg_hdr.controllen -= control_len;
-        } else {
-            msg_hdr.controllen = 0;
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
+        if let Some(ancillary_data) = ancillary_data
+            && let Some(fds) = ancillary_data.rights.filter(|fds| !fds.is_empty())
+        {
+            let mut fd_flags = FdFlags::empty();
+            fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
+            cmsg_builder.add_fds(1, 1, fds, fd_flags, fdtable, no_file_limit)?;
         }
+        drop(cmsg_builder);
 
         Ok(len)
     }

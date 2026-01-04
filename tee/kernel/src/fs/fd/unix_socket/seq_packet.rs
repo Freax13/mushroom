@@ -25,8 +25,8 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
-                SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
+                RecvFromFlags, SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -195,7 +195,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         if msg_hdr.controllen != 0 {
             todo!()
         }
-        if msg_hdr.flags != 0 {
+        if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
 

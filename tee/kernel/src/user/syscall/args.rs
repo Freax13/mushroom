@@ -1808,7 +1808,14 @@ pub struct MsgHdr {
     pub controllen: u64,
 
     /// Flags on received message.
-    pub flags: u32,
+    pub flags: MsgHdrFlags,
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MsgHdrFlags: u32 {
+        const CTRUNC = 0x8;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

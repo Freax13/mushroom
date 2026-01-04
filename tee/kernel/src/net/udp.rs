@@ -12,7 +12,7 @@ use core::{
 };
 
 use async_trait::async_trait;
-use usize_conversions::{FromUsize, usize_from};
+use usize_conversions::usize_from;
 use x86_64::align_up;
 
 use crate::{
@@ -29,7 +29,7 @@ use crate::{
         path::Path,
     },
     net::{
-        IpVersion,
+        CMsgBuilder, IpVersion,
         netlink::{lo_interface_flags, lo_mtu},
     },
     rt::notify::Notify,
@@ -39,10 +39,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                CmsgHdr, FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr,
-                OpenFlags, PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
-                SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
-                pointee::SizedPointee,
+                FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr, OpenFlags,
+                PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags,
+                SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -821,64 +820,33 @@ impl OpenFileDescription for UdpSocket {
             msg_hdr.namelen = source.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
         }
 
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         let guard = self.internal.lock();
         let ipv4_pktinfo = guard.ipv4_pktinfo;
         let ipv6_pktinfo = guard.ipv6_pktinfo;
         drop(guard);
-
         match destination {
             IpAddr::V4(destination) => {
                 if ipv4_pktinfo {
-                    let mut cmsg_header = CmsgHdr {
-                        len: 0,
-                        level: 0,
-                        r#type: 8,
-                    };
                     let payload = PktInfo {
                         ifindex: 1,
                         spec_dst: destination,
                         addr: destination,
                     };
-                    let header_len = cmsg_header.size(abi);
-                    let payload_len = payload.size(abi);
-                    cmsg_header.len = u64::from_usize(header_len + payload_len);
-                    if msg_hdr.controllen >= cmsg_header.len {
-                        let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
-                        vm.write_with_abi(msg_hdr.control.bytes_offset(size).cast(), payload, abi)?;
-                        msg_hdr.controllen = cmsg_header.len;
-                    } else {
-                        msg_hdr.controllen = 0;
-                    }
-                } else {
-                    msg_hdr.controllen = 0;
+                    cmsg_builder.add(0, 8, payload)?;
                 }
             }
             IpAddr::V6(destination) => {
                 if ipv6_pktinfo {
-                    let mut cmsg_header = CmsgHdr {
-                        len: 0,
-                        level: 41,
-                        r#type: 50,
-                    };
                     let payload = PktInfo6 {
                         spec_dst: destination,
                         ifindex: 1,
                     };
-                    let header_len = cmsg_header.size(abi);
-                    let payload_len = payload.size(abi);
-                    cmsg_header.len = u64::from_usize(header_len + payload_len);
-                    if msg_hdr.controllen >= cmsg_header.len {
-                        let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
-                        vm.write_with_abi(msg_hdr.control.bytes_offset(size).cast(), payload, abi)?;
-                        msg_hdr.controllen = cmsg_header.len;
-                    } else {
-                        msg_hdr.controllen = 0;
-                    }
-                } else {
-                    msg_hdr.controllen = 0;
+                    cmsg_builder.add(41, 50, payload)?;
                 }
             }
         }
+        drop(cmsg_builder);
 
         Ok(len)
     }

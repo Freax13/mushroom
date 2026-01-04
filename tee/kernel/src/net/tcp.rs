@@ -34,7 +34,7 @@ use crate::{
         path::Path,
     },
     memory::page::KernelPage,
-    net::IpVersion,
+    net::{CMsgBuilder, IpVersion},
     rt::{
         self,
         notify::{Notify, NotifyOnDrop},
@@ -50,8 +50,9 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
-                MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags,
-                ShutdownHow, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
+                MsgHdr, MsgHdrFlags, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
+                SentToFlags, ShutdownHow, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -885,12 +886,12 @@ impl OpenFileDescription for TcpSocket {
             && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
 
         ensure!(msg_hdr.namelen == 0, IsConn);
-        ensure!(msg_hdr.flags == 0, Inval);
+        ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let len = self.read(&mut vectored_buf, waitall)?;
 
-        msg_hdr.controllen = 0;
+        drop(CMsgBuilder::new(abi, vm, msg_hdr));
 
         Ok(len)
     }
@@ -937,7 +938,7 @@ impl OpenFileDescription for TcpSocket {
         if !msg_hdr.control.is_null() {
             todo!();
         }
-        if msg_hdr.flags != 0 {
+        if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
 

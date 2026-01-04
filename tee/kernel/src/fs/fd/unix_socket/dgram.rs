@@ -28,6 +28,7 @@ use crate::{
         ownership::Ownership,
         path::Path,
     },
+    net::CMsgBuilder,
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
@@ -35,9 +36,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
-                RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat,
-                Timespec,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix,
+                Stat, Timespec,
             },
             traits::Abi,
         },
@@ -331,7 +332,7 @@ impl OpenFileDescription for DgramUnixSocket {
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         ensure!(msg_hdr.namelen == 0, IsConn);
-        ensure!(msg_hdr.flags == 0, Inval);
+        ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let (n, addr) = self.recv_from(&mut vectored_buf, RecvFromFlags::empty())?;
@@ -344,7 +345,7 @@ impl OpenFileDescription for DgramUnixSocket {
             }
         }
 
-        msg_hdr.controllen = 0;
+        drop(CMsgBuilder::new(abi, vm, msg_hdr));
 
         Ok(n)
     }
@@ -432,7 +433,7 @@ impl OpenFileDescription for DgramUnixSocket {
         if msg_hdr.controllen != 0 {
             todo!()
         }
-        if msg_hdr.flags != 0 {
+        if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
 

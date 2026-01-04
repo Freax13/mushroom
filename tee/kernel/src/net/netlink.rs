@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bitflags::bitflags;
 use bytemuck::{Pod, Zeroable};
 use log::warn;
-use usize_conversions::{FromUsize, usize_from};
+use usize_conversions::usize_from;
 
 use crate::{
     error::{Error, Result, bail, ensure, err},
@@ -19,6 +19,7 @@ use crate::{
         node::{FileAccessContext, new_ino},
         path::Path,
     },
+    net::CMsgBuilder,
     rt::{self, mpmc, mpsc, notify::Notify},
     spin::{mutex::Mutex, once::Once},
     user::{
@@ -26,10 +27,10 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
-                RecvMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
-                SocketTypeWithFlags, Stat, Timespec,
-                pointee::{Pointee, PrimitivePointee, SizedPointee},
+                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvMsgFlags,
+                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
+                pointee::{Pointee, PrimitivePointee},
             },
             traits::Abi,
         },
@@ -245,27 +246,12 @@ impl OpenFileDescription for NetlinkSocket {
         let buffer = &buffer[..len];
         vectored_buf.write(0, buffer)?;
 
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         let pktinfo = self.internal.lock().pktinfo;
         if pktinfo {
-            let mut cmsg_header = CmsgHdr {
-                len: 0,
-                level: 270,
-                r#type: 3,
-            };
-            let payload = 0u32;
-            let header_len = cmsg_header.size(abi);
-            let payload_len = payload.size(abi);
-            cmsg_header.len = u64::from_usize(header_len + payload_len);
-            if msg_hdr.controllen >= cmsg_header.len {
-                let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
-                vm.write(msg_hdr.control.bytes_offset(size).cast(), payload)?;
-                msg_hdr.controllen = cmsg_header.len;
-            } else {
-                msg_hdr.controllen = 0;
-            }
-        } else {
-            msg_hdr.controllen = 0;
+            cmsg_builder.add(270, 3, 0u32)?;
         }
+        drop(cmsg_builder);
 
         Ok(len)
     }

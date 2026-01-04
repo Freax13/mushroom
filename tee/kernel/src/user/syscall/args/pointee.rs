@@ -30,12 +30,12 @@ use crate::{
             args::{
                 CmsgHdr, ControlMode, Domain, FdNum, FileMode, Flock, FlockType, FlockWhence,
                 ITimerspec, ITimerval, InputMode, Iovec, IpMreq, IpMreqn, Ipv6Mreq, Linger,
-                LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, Offset, OpenFlags, OpenHow,
-                OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer, PtraceSyscallInfo,
-                PtraceSyscallInfoValue, RLimit, ResolveFlags, Rusage, SchedParam, SigEvent,
-                SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix, Stat, SysInfo,
-                Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred, UserCapData,
-                UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, MsgHdrFlags, Offset,
+                OpenFlags, OpenHow, OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer,
+                PtraceSyscallInfo, PtraceSyscallInfoValue, RLimit, ResolveFlags, Rusage,
+                SchedParam, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
+                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
+                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -2277,7 +2277,7 @@ impl From<MsgHdr32> for MsgHdr {
             iovlen: value.iovlen.into(),
             control: value.control.into(),
             controllen: value.controllen.into(),
-            flags: value.flags,
+            flags: MsgHdrFlags::from_bits_retain(value.flags),
         }
     }
 }
@@ -2291,7 +2291,7 @@ impl From<MsgHdr64> for MsgHdr {
             iovlen: value.iovlen,
             control: value.control.into(),
             controllen: value.controllen,
-            flags: value.flags,
+            flags: MsgHdrFlags::from_bits_retain(value.flags),
         }
     }
 }
@@ -2307,7 +2307,7 @@ impl TryFrom<MsgHdr> for MsgHdr32 {
             iovlen: value.iovlen.try_into()?,
             control: value.control.try_into()?,
             controllen: value.controllen.try_into()?,
-            flags: value.flags,
+            flags: value.flags.bits(),
         })
     }
 }
@@ -2322,7 +2322,7 @@ impl From<MsgHdr> for MsgHdr64 {
             iovlen: value.iovlen,
             control: value.control.into(),
             controllen: value.controllen,
-            flags: value.flags,
+            flags: value.flags.bits(),
             _padding2: 0,
         }
     }
