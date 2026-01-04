@@ -72,7 +72,7 @@ use crate::{
             limits::{CurrentAsLimit, CurrentNoFileLimit, CurrentStackLimit},
         },
         syscall::{
-            args::pointee::{RawPtraceSyscallInfo, SizedPointee},
+            args::pointee::{RawPtraceSyscallInfo, SizedPointee, WritablePointee},
             cpu_state::CpuState,
         },
         thread::{
@@ -398,6 +398,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysFchownat);
     handlers.register(SysFutimesat);
     handlers.register(SysNewfstatat);
+    handlers.register(SysFstatat64);
     handlers.register(SysUnlinkat);
     handlers.register(SysRenameat);
     handlers.register(SysLinkat);
@@ -5353,18 +5354,21 @@ fn futimesat(
     Ok(0)
 }
 
-#[syscall(amd64 = 262)]
-fn newfstatat(
+#[expect(clippy::too_many_arguments)]
+fn fstatat_impl<T, P>(
     thread: &Thread,
     abi: Abi,
-    #[state] virtual_memory: Arc<VirtualMemory>,
-    #[state] fdtable: Arc<FileDescriptorTable>,
-    #[state] mut ctx: FileAccessContext,
+    virtual_memory: Arc<VirtualMemory>,
+    fdtable: Arc<FileDescriptorTable>,
+    mut ctx: FileAccessContext,
     dfd: FdNum,
     pathname: Pointer<Path>,
-    statbuf: Pointer<Stat>,
+    statbuf: Pointer<T>,
     flags: AtFlags,
-) -> SyscallResult {
+) -> SyscallResult
+where
+    T: From<Stat> + WritablePointee<P>,
+{
     if flags.contains(AtFlags::AT_EMPTY_PATH) {
         // Check if the path is empty by checking if the first character is the
         // null-terminator.
@@ -5376,6 +5380,7 @@ fn newfstatat(
                 let fd = fdtable.get(dfd)?;
                 fd.stat()?
             };
+            let stat = T::from(stat);
 
             virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
@@ -5392,10 +5397,61 @@ fn newfstatat(
         lookup_and_resolve_link(start_dir, &pathname, &mut ctx)?
     };
     let stat = link.node.stat()?;
+    let stat = T::from(stat);
 
     virtual_memory.write_with_abi(statbuf, stat, abi)?;
 
     Ok(0)
+}
+
+#[syscall(amd64 = 262)]
+fn newfstatat(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    statbuf: Pointer<Stat>,
+    flags: AtFlags,
+) -> SyscallResult {
+    fstatat_impl(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        ctx,
+        dfd,
+        pathname,
+        statbuf,
+        flags,
+    )
+}
+
+#[syscall(i386 = 300)]
+fn fstatat64(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    dfd: FdNum,
+    pathname: Pointer<Path>,
+    statbuf: Pointer<Stat64>,
+    flags: AtFlags,
+) -> SyscallResult {
+    fstatat_impl(
+        thread,
+        abi,
+        virtual_memory,
+        fdtable,
+        ctx,
+        dfd,
+        pathname,
+        statbuf,
+        flags,
+    )
 }
 
 #[syscall(i386 = 301, amd64 = 263)]
