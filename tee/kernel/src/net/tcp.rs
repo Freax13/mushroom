@@ -907,7 +907,6 @@ impl OpenFileDescription for TcpSocket {
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
-        ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
@@ -916,6 +915,11 @@ impl OpenFileDescription for TcpSocket {
             && !flags.contains(RecvMsgFlags::DONTWAIT)
             && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
         let len = self.read(&mut vectored_buf, peek, waitall)?;
+
+        if msg_hdr.namelen != 0 {
+            let addr = self.get_peer_name().unwrap();
+            msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
+        }
 
         drop(CMsgBuilder::new(abi, vm, msg_hdr));
 
