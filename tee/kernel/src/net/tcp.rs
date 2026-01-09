@@ -27,7 +27,8 @@ use crate::{
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             file::{File, open_file},
             inotify::Watchers,
-            socket_common_ioctl, stream_buffer,
+            socket_common_ioctl,
+            stream_buffer::{self, ConnectionState},
         },
         node::{FileAccessContext, INode, LinkLocation, new_ino, procfs::ProcFs},
         ownership::Ownership,
@@ -851,10 +852,14 @@ impl OpenFileDescription for TcpSocket {
         };
         match how {
             ShutdownHow::Rd => active.read_half.shutdown(),
-            ShutdownHow::Wr => active.write_half.shutdown(),
+            ShutdownHow::Wr => {
+                active.write_half.shutdown();
+                active.read_half.write_shutdown();
+            }
             ShutdownHow::RdWr => {
                 active.read_half.shutdown();
                 active.write_half.shutdown();
+                active.read_half.write_shutdown();
             }
         }
         Ok(())
@@ -918,10 +923,10 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(Pipe))?;
+        let mode = bound.mode.get().ok_or(err!(Pipe))?;
         let Mode::Active(active) = mode else {
-            bail!(NotConn);
+            bail!(Pipe);
         };
         active.write_half.write(buf)
     }
@@ -933,10 +938,10 @@ impl OpenFileDescription for TcpSocket {
         _: Option<SocketAddr>,
         _: &FileAccessContext,
     ) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(Pipe))?;
+        let mode = bound.mode.get().ok_or(err!(Pipe))?;
         let Mode::Active(active) = mode else {
-            bail!(NotConn);
+            bail!(Pipe);
         };
         active
             .write_half
@@ -1182,6 +1187,7 @@ impl Drop for TcpSocket {
         } else {
             // Otherwise, properly shut down the write half.
             active_tcp_socket.write_half.shutdown();
+            active_tcp_socket.read_half.write_shutdown();
         }
 
         // Keep the socket alive until the deadline.
@@ -1255,8 +1261,22 @@ impl ActiveTcpSocket {
         remote_addr: net::SocketAddr,
         server_domain: IpVersion,
     ) -> (Self, Self) {
-        let (rx1, tx1) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
-        let (rx2, tx2) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
+        let reset1 = Arc::new(ConnectionState::new());
+        let reset2 = Arc::new(ConnectionState::new());
+        let (rx1, tx1) = stream_buffer::new(
+            0x200000,
+            stream_buffer::Type::Socket {
+                read_reset: reset1.clone(),
+                write_reset: reset2.clone(),
+            },
+        );
+        let (rx2, tx2) = stream_buffer::new(
+            0x200000,
+            stream_buffer::Type::Socket {
+                read_reset: reset2,
+                write_reset: reset1,
+            },
+        );
 
         let client_local_addr = local_addr;
         let client_remote_addr = remote_addr;
