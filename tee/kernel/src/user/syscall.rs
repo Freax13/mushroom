@@ -39,9 +39,9 @@ use crate::{
     fs::{
         StatFs, StatFs64,
         fd::{
-            Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf, ReadBuf,
-            StrongFileDescriptor, UnixLock, UnixLockOwner, UnixLockType, UserBuf, VectoredUserBuf,
-            WriteBuf, do_io, do_write_io,
+            Events, FdFlags, FileDescriptorTable, KernelPageWriteBuf, OffsetBuf,
+            OpenFileDescription, ReadBuf, StrongFileDescriptor, UnixLock, UnixLockOwner,
+            UnixLockType, UserBuf, VectoredUserBuf, WriteBuf, do_io, do_write_io,
             epoll::{Epoll, do_edge_triggered_io},
             eventfd::EventFd,
             inotify::Inotify,
@@ -451,6 +451,31 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers
 };
 
+async fn with_socket_receive_timeout<F, R>(
+    fd: &(impl OpenFileDescription + ?Sized),
+    future: F,
+) -> Result<R>
+where
+    F: Future<Output = Result<R>>,
+{
+    let timeout_future = async {
+        let timeout = fd.get_receive_timeout();
+        if timeout == Timeval::ZERO {
+            return pending().await;
+        }
+        let timeout = Timespec::from(timeout);
+        let now = now(ClockId::Monotonic);
+        sleep_until(now.saturating_add(timeout), ClockId::Monotonic).await;
+        bail!(Again)
+    };
+    let future = pin!(future);
+    let timeout_future = pin!(timeout_future);
+    future::select(future, timeout_future)
+        .await
+        .factor_first()
+        .0
+}
+
 #[syscall(i386 = 3, amd64 = 0, interruptable, restartable)]
 async fn read(
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -463,7 +488,11 @@ async fn read(
     let fd = fdtable.get(fd)?;
     let count = usize_from(count);
     let mut buf = UserBuf::new(&virtual_memory, buf, count);
-    let len = do_io(&***fd, Events::READ, &ctx, || fd.read(&mut buf, &ctx)).await?;
+    let len = with_socket_receive_timeout(
+        &***fd,
+        do_io(&***fd, Events::READ, &ctx, || fd.read(&mut buf, &ctx)),
+    )
+    .await?;
     let len = u64::from_usize(len);
     Ok(len)
 }
@@ -1134,7 +1163,7 @@ fn pwrite64(
     Ok(len)
 }
 
-#[syscall(i386 = 145, amd64 = 19)]
+#[syscall(i386 = 145, amd64 = 19, interruptable, restartable)]
 async fn readv(
     abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1147,9 +1176,12 @@ async fn readv(
     let fd = fdtable.get(fd)?;
 
     let mut vectored_buf = VectoredUserBuf::new(&virtual_memory, vec, vlen, abi)?;
-    let len = do_io(&***fd, Events::READ, &ctx, || {
-        fd.read(&mut vectored_buf, &ctx)
-    })
+    let len = with_socket_receive_timeout(
+        &***fd,
+        do_io(&***fd, Events::READ, &ctx, || {
+            fd.read(&mut vectored_buf, &ctx)
+        }),
+    )
     .await?;
     let len = u64::from_usize(len);
     Ok(len)
@@ -6260,7 +6292,11 @@ async fn accept4(
     flags: Accept4Flags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let (socket, addr) = do_io(&***fd, Events::READ, &ctx, || fd.accept(flags)).await?;
+    let (socket, addr) = with_socket_receive_timeout(
+        &***fd,
+        do_io(&***fd, Events::READ, &ctx, || fd.accept(flags)),
+    )
+    .await?;
     let fd_num = fdtable.insert(socket, flags, no_file_limit)?;
 
     if !upeer_sockaddr.is_null() {
@@ -6480,16 +6516,19 @@ async fn recvmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = {
-            let recv_fut = do_io(&***socket, Events::READ, &ctx, || {
-                socket.recv_msg(
-                    &virtual_memory,
-                    abi,
-                    &mut msg_header.hdr,
-                    flags.into(),
-                    &fdtable,
-                    no_file_limit,
-                )
-            });
+            let recv_fut = with_socket_receive_timeout(
+                &***socket,
+                do_io(&***socket, Events::READ, &ctx, || {
+                    socket.recv_msg(
+                        &virtual_memory,
+                        abi,
+                        &mut msg_header.hdr,
+                        flags.into(),
+                        &fdtable,
+                        no_file_limit,
+                    )
+                }),
+            );
             let recv_fut = pin!(recv_fut);
             let Either::Left((res, _)) = future::select(recv_fut, &mut timeout_fut).await else {
                 break i;

@@ -53,7 +53,7 @@ use crate::{
                 Accept4Flags, EpollEvent, FallocateMode, FdNum, FileMode, FileType, ITimerspec,
                 InotifyMask, MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, Seals,
                 SendMsgFlags, SentToFlags, SetTimeFlags, ShutdownHow, SocketAddr, Stat, Timespec,
-                Whence,
+                Timeval, Whence,
             },
             traits::Abi,
         },
@@ -943,6 +943,10 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         bail!(NotSock)
     }
 
+    fn get_receive_timeout(&self) -> Timeval {
+        Timeval::ZERO
+    }
+
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()>;
 
     fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()>;
@@ -1146,6 +1150,46 @@ where
             Ok(0)
         }
         _ => bail!(NoTty),
+    }
+}
+
+pub fn socket_common_ioctl<O>(
+    fd: &O,
+    thread: &mut ThreadGuard,
+    cmd: u32,
+    arg: Pointer<c_void>,
+    abi: Abi,
+) -> Result<u64>
+where
+    O: OpenFileDescription + ?Sized,
+{
+    const IFNAMSIZ: usize = 16;
+
+    match cmd {
+        0x8910 => {
+            // SIOCGIFNAME
+            let virtual_memory = thread.virtual_memory();
+
+            let index = virtual_memory.read(arg.bytes_offset(IFNAMSIZ).cast::<i32>())?;
+            ensure!(index == 1, NoDev);
+
+            let ifname = c"lo";
+            virtual_memory.write_bytes(arg.get(), ifname.to_bytes_with_nul())?;
+
+            Ok(0)
+        }
+        0x8933 => {
+            // SIOCGIFINDEX
+            let virtual_memory = thread.virtual_memory();
+            let ifname = virtual_memory.read(arg.cast::<[u8; IFNAMSIZ]>())?;
+            let index = match ifname {
+                [b'l', b'o', 0, ..] => 1,
+                _ => bail!(NoDev),
+            };
+            virtual_memory.write(arg.bytes_offset(IFNAMSIZ).cast(), index)?;
+            Ok(0)
+        }
+        _ => common_ioctl(fd, thread, cmd, arg, abi),
     }
 }
 

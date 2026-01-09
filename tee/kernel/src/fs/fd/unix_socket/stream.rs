@@ -9,12 +9,12 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
-use core::cmp;
+use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use bytemuck::bytes_of;
-use usize_conversions::{FromUsize, usize_from};
-use x86_64::{align_down, align_up};
+use usize_conversions::usize_from;
+use x86_64::align_up;
 
 use crate::{
     error::{Result, bail, ensure, err},
@@ -25,12 +25,13 @@ use crate::{
             OpenFileDescriptionData, PipeBlocked, ReadBuf, StrongFileDescriptor, VectoredUserBuf,
             WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
-            stream_buffer,
+            socket_common_ioctl, stream_buffer,
         },
         node::{FileAccessContext, bind_socket, get_socket, new_ino},
         ownership::Ownership,
         path::Path,
     },
+    net::CMsgBuilder,
     rt::notify::{Notify, NotifyOnDrop},
     spin::{
         mutex::{Mutex, MutexGuard},
@@ -41,14 +42,14 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                Accept4Flags, CmsgHdr, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags,
-                Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow,
-                SocketAddr, SocketAddrUnix, SocketType, Stat, Timespec, Ucred,
-                pointee::SizedPointee,
+                Accept4Flags, FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
+                SocketAddrUnix, SocketType, Stat, Timespec, Timeval, Ucred,
+                pointee::{Timeval32, Timeval64},
             },
             traits::Abi,
         },
-        thread::{Gid, Uid},
+        thread::{Gid, ThreadGuard, Uid},
     },
 };
 
@@ -71,6 +72,7 @@ pub struct StreamUnixSocket {
 struct StreamUnixSocketInternal {
     flags: OpenFlags,
     ownership: Ownership,
+    receive_timeout: Timeval,
 }
 
 enum Mode {
@@ -91,6 +93,7 @@ impl StreamUnixSocket {
             internal: Mutex::new(StreamUnixSocketInternal {
                 flags,
                 ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                receive_timeout: Timeval::ZERO,
             }),
             socketname: Mutex::new(SocketAddrUnix::Unnamed),
             activate_notify: Notify::new(),
@@ -118,6 +121,7 @@ impl StreamUnixSocket {
                         ctx.filesystem_user_id(),
                         ctx.filesystem_group_id(),
                     ),
+                    receive_timeout: Timeval::ZERO,
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
                 activate_notify: Notify::new(),
@@ -140,6 +144,7 @@ impl StreamUnixSocket {
                         ctx.filesystem_user_id(),
                         ctx.filesystem_group_id(),
                     ),
+                    receive_timeout: Timeval::ZERO,
                 }),
                 socketname: Mutex::new(SocketAddrUnix::Unnamed),
                 activate_notify: Notify::new(),
@@ -239,64 +244,22 @@ impl OpenFileDescription for StreamUnixSocket {
         let waitall = flags.contains(RecvMsgFlags::WAITALL)
             && !flags.contains(RecvMsgFlags::DONTWAIT)
             && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
+        let peek = flags.contains(RecvMsgFlags::PEEK);
         let (len, ancillary_data) =
             active
                 .read_half
                 .lock()
-                .read(&mut vectored_buf, false, waitall)?;
+                .read(&mut vectored_buf, peek, waitall)?;
 
-        if let Some(ancillary_data) = ancillary_data {
-            let align = match abi {
-                Abi::I386 => 4,
-                Abi::Amd64 => 8,
-            };
-            let mut control = msg_hdr.control;
-            let mut control_len = align_down(msg_hdr.controllen, align);
-
-            if let Some(fds) = ancillary_data.rights.filter(|fds| !fds.is_empty()) {
-                let mut cmsg_header = CmsgHdr {
-                    len: 0,
-                    level: 1,
-                    r#type: 1,
-                };
-                let header_len = cmsg_header.size(abi);
-                cmsg_header.len = u64::from_usize(header_len);
-                if let Some(mut payload_len) = control_len.checked_sub(u64::from_usize(header_len))
-                {
-                    for fd in fds {
-                        let Some(next_payload_len) = payload_len.checked_sub(4) else {
-                            break;
-                        };
-                        payload_len = next_payload_len;
-
-                        let mut fd_flags = FdFlags::empty();
-                        fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
-                        let Ok(num) = fdtable.insert(fd, fd_flags, no_file_limit) else {
-                            break;
-                        };
-
-                        vm.write(
-                            control.bytes_offset(usize_from(cmsg_header.len)).cast(),
-                            num,
-                        )?;
-
-                        cmsg_header.len += 4;
-                    }
-
-                    vm.write_with_abi(control, cmsg_header, abi)?;
-
-                    let offset = align_up(cmsg_header.len, align);
-                    control = control.bytes_offset(usize_from(offset));
-                    control_len -= offset;
-                }
-            }
-
-            _ = control;
-
-            msg_hdr.controllen -= control_len;
-        } else {
-            msg_hdr.controllen = 0;
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
+        if let Some(ancillary_data) = ancillary_data
+            && let Some(fds) = ancillary_data.rights.filter(|fds| !fds.is_empty())
+        {
+            let mut fd_flags = FdFlags::empty();
+            fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
+            cmsg_builder.add_fds(1, 1, fds, fd_flags, fdtable, no_file_limit)?;
         }
+        drop(cmsg_builder);
 
         Ok(len)
     }
@@ -546,18 +509,37 @@ impl OpenFileDescription for StreamUnixSocket {
 
     fn set_socket_option(
         &self,
-        _: Arc<VirtualMemory>,
-        _: Abi,
+        virtual_memory: Arc<VirtualMemory>,
+        abi: Abi,
         level: i32,
         optname: i32,
-        _optval: Pointer<[u8]>,
-        _optlen: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
     ) -> Result<()> {
         match (level, optname) {
             (1, 2) => Ok(()), // SO_REUSEADDR
             (1, 9) => Ok(()), // SO_KEEPALIVE
+            (1, 20) => {
+                // SO_RCVTIMEO
+
+                match abi {
+                    Abi::I386 => ensure!(optlen == size_of::<Timeval32>() as i32, Inval),
+                    Abi::Amd64 => ensure!(optlen == size_of::<Timeval64>() as i32, Inval),
+                }
+                let value = virtual_memory.read_with_abi(optval.cast::<Timeval>(), abi)?;
+
+                let mut guard = self.internal.lock();
+                guard.receive_timeout = value;
+                drop(guard);
+
+                Ok(())
+            }
             _ => bail!(OpNotSupp),
         }
+    }
+
+    fn get_receive_timeout(&self) -> Timeval {
+        self.internal.lock().receive_timeout
     }
 
     fn get_socket_name(&self) -> Result<SocketAddr> {
@@ -775,6 +757,16 @@ impl OpenFileDescription for StreamUnixSocket {
         _: &FileAccessContext,
     ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
+    }
+
+    fn ioctl(
+        &self,
+        thread: &mut ThreadGuard,
+        cmd: u32,
+        arg: Pointer<c_void>,
+        abi: Abi,
+    ) -> Result<u64> {
+        socket_common_ioctl(self, thread, cmd, arg, abi)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

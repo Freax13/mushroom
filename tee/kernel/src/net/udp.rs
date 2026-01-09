@@ -12,7 +12,7 @@ use core::{
 };
 
 use async_trait::async_trait;
-use usize_conversions::{FromUsize, usize_from};
+use usize_conversions::usize_from;
 use x86_64::align_up;
 
 use crate::{
@@ -29,7 +29,7 @@ use crate::{
         path::Path,
     },
     net::{
-        IpVersion,
+        CMsgBuilder, IpVersion,
         netlink::{lo_interface_flags, lo_mtu},
     },
     rt::notify::Notify,
@@ -39,10 +39,10 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                CmsgHdr, FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr,
-                OpenFlags, PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
-                SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
-                pointee::SizedPointee,
+                FileMode, FileType, FileTypeAndMode, IpMreq, IpMreqn, Ipv6Mreq, MsgHdr,
+                MsgHdrFlags, OpenFlags, PktInfo, PktInfo6, Pointer, RecvFromFlags, RecvMsgFlags,
+                SendMsgFlags, SentToFlags, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -137,6 +137,8 @@ pub struct UdpSocket {
 struct UdpSocketInternal {
     flags: OpenFlags,
     ip_recverr: bool,
+    ip_recvttl: bool,
+    ip_recvtos: bool,
     reuse_addr: bool,
     reuse_port: bool,
     send_buffer_size: usize,
@@ -144,6 +146,8 @@ struct UdpSocketInternal {
     v6only: bool,
     ipv4_pktinfo: bool,
     ipv6_pktinfo: bool,
+    ipv6_recvhoplimit: bool,
+    ipv6_recvtclass: bool,
     socketname: Option<net::SocketAddr>,
     peername: Option<net::SocketAddr>,
     rx: VecDeque<Packet>,
@@ -162,6 +166,8 @@ impl UdpSocket {
             internal: Mutex::new(UdpSocketInternal {
                 flags: r#type.flags,
                 ip_recverr: false,
+                ip_recvttl: false,
+                ip_recvtos: false,
                 reuse_addr: false,
                 reuse_port: false,
                 send_buffer_size: 1024 * 1024,
@@ -169,6 +175,8 @@ impl UdpSocket {
                 v6only: false,
                 ipv4_pktinfo: false,
                 ipv6_pktinfo: false,
+                ipv6_recvhoplimit: false,
+                ipv6_recvtclass: false,
                 socketname: None,
                 peername: None,
                 rx: VecDeque::new(),
@@ -267,12 +275,12 @@ impl UdpSocket {
         Ok(guard.socketname.unwrap())
     }
 
-    /// Returns a tuple of (size, sender, matching destination address)
+    /// Returns a tuple of (size, truncated, sender, matching destination address)
     fn recv(
         &self,
         buf: &mut (impl ReadBuf + ?Sized),
         peek: bool,
-    ) -> Result<(usize, net::SocketAddr, IpAddr)> {
+    ) -> Result<(usize, bool, net::SocketAddr, IpAddr)> {
         let mut guard = self.internal.lock();
         let packed_owned;
         let packet = if peek {
@@ -282,6 +290,7 @@ impl UdpSocket {
             &packed_owned
         };
 
+        let truncated = buf.buffer_len() < packet.bytes.len();
         let len = cmp::min(buf.buffer_len(), packet.bytes.len());
         buf.write(0, &packet.bytes[..len])?;
 
@@ -289,7 +298,7 @@ impl UdpSocket {
             self.rx_notify.notify();
         }
 
-        Ok((len, packet.source, packet.destination))
+        Ok((len, truncated, packet.source, packet.destination))
     }
 
     fn send(
@@ -611,6 +620,22 @@ impl OpenFileDescription for UdpSocket {
                 guard.ip_recverr = optval;
                 Ok(())
             }
+            (0, 12) => {
+                // IP_RECVTTL
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ip_recvttl = optval;
+                Ok(())
+            }
+            (0, 13) => {
+                // IP_RECVTOS
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ip_recvtos = optval;
+                Ok(())
+            }
             (0, 32) => {
                 // IP_MULTICAST_IF
                 match optlen {
@@ -710,6 +735,22 @@ impl OpenFileDescription for UdpSocket {
                 guard.ipv6_pktinfo = optval;
                 Ok(())
             }
+            (41, 51) => {
+                // IPV6_RECVHOPLIMIT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ipv6_recvhoplimit = optval;
+                Ok(())
+            }
+            (41, 66) => {
+                // IPV6_RECVTCLASS
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.ipv6_recvtclass = optval;
+                Ok(())
+            }
             _ => bail!(OpNotSupp),
         }
     }
@@ -790,7 +831,7 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        let (len, _, _) = self.recv(buf, false)?;
+        let (len, _, _, _) = self.recv(buf, false)?;
         Ok(len)
     }
 
@@ -800,7 +841,7 @@ impl OpenFileDescription for UdpSocket {
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
         let peek = flags.contains(RecvFromFlags::PEEK);
-        let (len, source, _) = self.recv(buf, peek)?;
+        let (len, _, source, _) = self.recv(buf, peek)?;
         Ok((len, Some(SocketAddr::from(source))))
     }
 
@@ -809,76 +850,70 @@ impl OpenFileDescription for UdpSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
-        _: RecvMsgFlags,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let (len, source, destination) = self.recv(&mut vectored_buf, false)?;
+        let peek = flags.contains(RecvMsgFlags::PEEK);
+        let (len, truncated, source, destination) = self.recv(&mut vectored_buf, peek)?;
+
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, truncated);
 
         if msg_hdr.namelen != 0 {
             let source = SocketAddr::from(source);
             msg_hdr.namelen = source.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
         }
 
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         let guard = self.internal.lock();
+        let ip_recvttl = guard.ip_recvttl;
+        let ip_recvtos = guard.ip_recvtos;
         let ipv4_pktinfo = guard.ipv4_pktinfo;
         let ipv6_pktinfo = guard.ipv6_pktinfo;
+        let ipv6_recvhoplimit = guard.ipv6_recvhoplimit;
+        let ipv6_recvtclass = guard.ipv6_recvtclass;
         drop(guard);
-
         match destination {
             IpAddr::V4(destination) => {
                 if ipv4_pktinfo {
-                    let mut cmsg_header = CmsgHdr {
-                        len: 0,
-                        level: 0,
-                        r#type: 8,
-                    };
                     let payload = PktInfo {
                         ifindex: 1,
                         spec_dst: destination,
                         addr: destination,
                     };
-                    let header_len = cmsg_header.size(abi);
-                    let payload_len = payload.size(abi);
-                    cmsg_header.len = u64::from_usize(header_len + payload_len);
-                    if msg_hdr.controllen >= cmsg_header.len {
-                        let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
-                        vm.write_with_abi(msg_hdr.control.bytes_offset(size).cast(), payload, abi)?;
-                        msg_hdr.controllen = cmsg_header.len;
-                    } else {
-                        msg_hdr.controllen = 0;
-                    }
-                } else {
-                    msg_hdr.controllen = 0;
+                    cmsg_builder.add(0, 8, payload)?;
                 }
             }
             IpAddr::V6(destination) => {
                 if ipv6_pktinfo {
-                    let mut cmsg_header = CmsgHdr {
-                        len: 0,
-                        level: 41,
-                        r#type: 50,
-                    };
                     let payload = PktInfo6 {
                         spec_dst: destination,
                         ifindex: 1,
                     };
-                    let header_len = cmsg_header.size(abi);
-                    let payload_len = payload.size(abi);
-                    cmsg_header.len = u64::from_usize(header_len + payload_len);
-                    if msg_hdr.controllen >= cmsg_header.len {
-                        let size = vm.write_with_abi(msg_hdr.control.cast(), cmsg_header, abi)?;
-                        vm.write_with_abi(msg_hdr.control.bytes_offset(size).cast(), payload, abi)?;
-                        msg_hdr.controllen = cmsg_header.len;
-                    } else {
-                        msg_hdr.controllen = 0;
-                    }
-                } else {
-                    msg_hdr.controllen = 0;
+                    cmsg_builder.add(41, 50, payload)?;
                 }
             }
         }
+        match self.ip_version {
+            IpVersion::V4 => {
+                if ip_recvttl {
+                    cmsg_builder.add(0, 2, 64i32)?;
+                }
+                if ip_recvtos {
+                    cmsg_builder.add(0, 1, 0u8)?;
+                }
+            }
+            IpVersion::V6 => {
+                if ipv6_recvhoplimit {
+                    cmsg_builder.add(41, 52, 64i32)?;
+                }
+                if ipv6_recvtclass {
+                    cmsg_builder.add(41, 67, 0i32)?;
+                }
+            }
+        }
+        drop(cmsg_builder);
 
         Ok(len)
     }

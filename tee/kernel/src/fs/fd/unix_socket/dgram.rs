@@ -21,13 +21,14 @@ use crate::{
         fd::{
             BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
-            common_ioctl,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
+            socket_common_ioctl,
         },
         node::{FileAccessContext, lookup_and_resolve_link, new_ino},
         ownership::Ownership,
         path::Path,
     },
+    net::CMsgBuilder,
     rt::notify::Notify,
     spin::mutex::Mutex,
     user::{
@@ -35,9 +36,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvFromFlags,
-                RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix, Stat,
-                Timespec,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix,
+                Stat, Timespec,
             },
             traits::Abi,
         },
@@ -326,14 +327,16 @@ impl OpenFileDescription for DgramUnixSocket {
         vm: &VirtualMemory,
         abi: Abi,
         msg_hdr: &mut MsgHdr,
-        _: RecvMsgFlags,
+        flags: RecvMsgFlags,
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
         ensure!(msg_hdr.namelen == 0, IsConn);
-        ensure!(msg_hdr.flags == 0, Inval);
+        ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let mut recv_from_flags = RecvFromFlags::empty();
+        recv_from_flags.set(RecvFromFlags::PEEK, flags.contains(RecvMsgFlags::PEEK));
         let (n, addr) = self.recv_from(&mut vectored_buf, RecvFromFlags::empty())?;
 
         if msg_hdr.namelen != 0 {
@@ -344,7 +347,7 @@ impl OpenFileDescription for DgramUnixSocket {
             }
         }
 
-        msg_hdr.controllen = 0;
+        drop(CMsgBuilder::new(abi, vm, msg_hdr));
 
         Ok(n)
     }
@@ -432,7 +435,7 @@ impl OpenFileDescription for DgramUnixSocket {
         if msg_hdr.controllen != 0 {
             todo!()
         }
-        if msg_hdr.flags != 0 {
+        if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
 
@@ -497,21 +500,7 @@ impl OpenFileDescription for DgramUnixSocket {
         arg: Pointer<c_void>,
         abi: Abi,
     ) -> Result<u64> {
-        match cmd {
-            0x8933 => {
-                // SIOCGIFINDEX
-                let virtual_memory = thread.virtual_memory();
-                const IFNAMSIZ: usize = 16;
-                let ifname = virtual_memory.read(arg.cast::<[u8; IFNAMSIZ]>())?;
-                let index = match ifname {
-                    [b'l', b'o', 0, ..] => 1,
-                    _ => bail!(NoDev),
-                };
-                virtual_memory.write(arg.bytes_offset(IFNAMSIZ).cast(), index)?;
-                Ok(0)
-            }
-            _ => common_ioctl(self, thread, cmd, arg, abi),
-        }
+        socket_common_ioctl(self, thread, cmd, arg, abi)
     }
 
     fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {

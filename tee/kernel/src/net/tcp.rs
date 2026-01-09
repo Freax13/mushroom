@@ -24,18 +24,18 @@ use crate::{
             BsdFileLock, BsdFileLockRecord, Events, FileDescriptorTable, LazyBsdFileLockRecord,
             LazyUnixFileLockRecord, NonEmptyEvents, OpenFileDescription, OpenFileDescriptionData,
             ReadBuf, StrongFileDescriptor, UnixFileLockRecord, VectoredUserBuf, WriteBuf,
-            common_ioctl,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             file::{File, open_file},
             inotify::Watchers,
-            stream_buffer,
+            socket_common_ioctl,
+            stream_buffer::{self, ConnectionState},
         },
         node::{FileAccessContext, INode, LinkLocation, new_ino, procfs::ProcFs},
         ownership::Ownership,
         path::Path,
     },
     memory::page::KernelPage,
-    net::IpVersion,
+    net::{CMsgBuilder, IpVersion},
     rt::{
         self,
         notify::{Notify, NotifyOnDrop},
@@ -51,8 +51,9 @@ use crate::{
         syscall::{
             args::{
                 Accept4Flags, ClockId, FallocateMode, FileMode, FileType, FileTypeAndMode, Linger,
-                MsgHdr, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags,
-                ShutdownHow, SocketAddr, SocketType, SocketTypeWithFlags, Stat, Timespec,
+                MsgHdr, MsgHdrFlags, OpenFlags, Pointer, RecvFromFlags, RecvMsgFlags, SendMsgFlags,
+                SentToFlags, ShutdownHow, SocketAddr, SocketType, SocketTypeWithFlags, Stat,
+                Timespec,
             },
             traits::Abi,
         },
@@ -101,28 +102,8 @@ impl PortData {
 
             ensure!(!ephemeral, AddrInUse);
 
-            // Skip entries with a different address family.
-            match (entry.ip_version, ip_version) {
-                (IpVersion::V4, IpVersion::V4) => {}
-                (IpVersion::V4, IpVersion::V6) => {
-                    if v6only {
-                        continue;
-                    }
-                }
-                (IpVersion::V6, IpVersion::V4) => {
-                    if entry.v6only {
-                        continue;
-                    }
-                }
-                (IpVersion::V6, IpVersion::V6) => {}
-            }
-
             // Skip entries that don't overlap with `ip`.
-            if entry
-                .local_ip
-                .zip(local_ip)
-                .is_some_and(|(entry_ip, ip)| entry_ip != ip)
-            {
+            if !entry.ip_overlaps_with(ip_version, local_ip, v6only) {
                 continue;
             }
 
@@ -134,20 +115,7 @@ impl PortData {
             // Unless when SO_REUSE_ADDR is set, make sure that there's no
             // overlap between an specified and an unspecified address.
             if !reuse_addr || !entry.reuse_addr {
-                ensure!(
-                    Option::zip(entry.local_ip, local_ip)
-                        .is_some_and(|(entry_ip, ip)| entry_ip != ip),
-                    AddrInUse
-                );
-            }
-
-            // The check for listening sockets only applies for v4 sockets.
-            if entry.ip_version == IpVersion::V6
-                && ip_version == IpVersion::V6
-                && entry.v6only
-                && v6only
-            {
-                continue;
+                bail!(AddrInUse);
             }
 
             // Fail if there's already a listening socket.
@@ -184,14 +152,15 @@ impl PortData {
             .iter()
             // Ignore the socket itself.
             .filter(|entry| entry.mode.as_ptr() != &**mode)
-            // Ignore sockets with a different ip version.
-            .filter(|entry| entry.ip_version == socket_entry.ip_version)
             // Ignore if both sockets have the reuse_port option enabled.
             .filter(|entry| !(entry.reuse_port && socket_entry.reuse_port))
             // Ignore sockets that don't have an overlap in the bound address.
             .filter(|entry| {
-                Option::zip(entry.local_ip, socket_entry.local_ip)
-                    .is_none_or(|(entry_ip, ip)| entry_ip == ip)
+                entry.ip_overlaps_with(
+                    socket_entry.ip_version,
+                    socket_entry.local_ip,
+                    socket_entry.v6only,
+                )
             })
             // Only consider sockets which are still active.
             .filter_map(|entry| entry.mode.upgrade())
@@ -218,6 +187,7 @@ impl BindGuard<'_> {
         self.port_data.entries.push(PortDataEntry {
             ino,
             ip_version: self.ip_version,
+            bound_ip: self.local_ip,
             local_ip: self.local_ip,
             remote_addr: None,
             reuse_addr: self.reuse_addr,
@@ -232,6 +202,7 @@ impl BindGuard<'_> {
 struct PortDataEntry {
     ino: u64,
     ip_version: IpVersion,
+    bound_ip: Option<IpAddr>,
     local_ip: Option<IpAddr>,
     remote_addr: Option<net::SocketAddr>,
     reuse_addr: bool,
@@ -239,6 +210,27 @@ struct PortDataEntry {
     v6only: bool,
     effective_uid: Uid,
     mode: Weak<Once<Mode>>,
+}
+
+impl PortDataEntry {
+    pub fn ip_overlaps_with(
+        &self,
+        ip_version: IpVersion,
+        local_ip: Option<IpAddr>,
+        v6only: bool,
+    ) -> bool {
+        match (self.ip_version, ip_version) {
+            (IpVersion::V4, IpVersion::V4) | (IpVersion::V6, IpVersion::V6) => self
+                .local_ip
+                .zip(local_ip)
+                .is_none_or(|(addr_a, addr_b)| addr_a == addr_b),
+            (IpVersion::V4, IpVersion::V6) => local_ip.is_none() && !v6only,
+            (IpVersion::V6, IpVersion::V4) => {
+                (self.local_ip.is_none() || (self.bound_ip.is_none() && local_ip.is_none()))
+                    && !self.v6only
+            }
+        }
+    }
 }
 
 const EPHEMERAL_PORT_START: u16 = 32768;
@@ -263,6 +255,8 @@ struct TcpSocketInternal {
     no_delay: bool,
     linger: Option<i32>,
     v6only: bool,
+    tcp_user_timeout: u32,
+    ip_recvttl: bool,
 }
 
 impl TcpSocket {
@@ -280,6 +274,8 @@ impl TcpSocket {
                 no_delay: false,
                 linger: None,
                 v6only: false,
+                tcp_user_timeout: 0,
+                ip_recvttl: false,
             }),
             activate_notify: Notify::new(),
             bound_socket: Once::new(),
@@ -299,7 +295,7 @@ impl TcpSocket {
             AddrNotAvail
         );
 
-        // Make sure that the user has permission to bind the port.
+        // Make sure that the superuser has permission to bind the port.
         ensure!(
             socket_addr.port() == 0 || socket_addr.port() >= 1024 || ctx.is_user(Uid::SUPER_USER),
             Acces
@@ -380,13 +376,13 @@ impl TcpSocket {
         Ok(self.bound_socket.get().unwrap())
     }
 
-    fn read(&self, buf: &mut dyn ReadBuf, waitall: bool) -> Result<usize> {
+    fn read(&self, buf: &mut dyn ReadBuf, peek: bool, waitall: bool) -> Result<usize> {
         let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
         let mode = bound.mode.get().ok_or(err!(NotConn))?;
         let Mode::Active(active) = mode else {
             bail!(NotConn);
         };
-        active.read_half.read(buf, false, waitall)
+        active.read_half.read(buf, peek, waitall)
     }
 }
 
@@ -528,15 +524,19 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn connect(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
-        let v6only = self.internal.lock().v6only;
+        let guard = self.internal.lock();
+        let v6only = guard.v6only;
+        let nonblock = guard.flags.contains(OpenFlags::NONBLOCK);
+        drop(guard);
 
         let bound = self.get_or_bind_ephemeral(ctx)?;
 
         let remote_addr = net::SocketAddr::try_from(addr)?;
 
         let remote_ip = remote_addr.ip();
-        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
+        ensure!(self.ip_version == IpVersion::from(remote_ip), AFNoSupport);
 
+        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
         if let Some(remote_ip) = remote_ip {
             ensure!(remote_ip.is_loopback(), NetUnreach);
         }
@@ -559,6 +559,7 @@ impl OpenFileDescription for TcpSocket {
                     // Bail out if there are no sockets.
                     ensure!(found_passive_socket, ConnRefused);
                     drop(guard);
+                    ensure!(!nonblock, Again);
                     wait.await;
                     continue 'outer;
                 }
@@ -694,6 +695,7 @@ impl OpenFileDescription for TcpSocket {
                 this_entry.local_ip = Some(local_ip);
                 this_entry.remote_addr = Some(remote_addr);
 
+                ensure!(!nonblock, InProgress);
                 return Ok(());
             }
         }
@@ -723,6 +725,16 @@ impl OpenFileDescription for TcpSocket {
                 let val = guard.receive_buffer_size as u32;
                 val.to_ne_bytes().to_vec()
             }
+            (6, 18) => {
+                // TCP_USER_TIMEOUT
+                let val = guard.tcp_user_timeout;
+                val.to_ne_bytes().to_vec()
+            }
+            (41, 26) => {
+                // IPV6_V6ONLY
+                let val = u32::from(guard.v6only);
+                val.to_ne_bytes().to_vec()
+            }
             _ => bail!(OpNotSupp),
         })
     }
@@ -738,6 +750,14 @@ impl OpenFileDescription for TcpSocket {
     ) -> Result<()> {
         let mut guard = self.internal.lock();
         match (level, optname) {
+            (0, 10) => Ok(()), // IP_MTU_DISCOVER
+            (0, 12) => {
+                // IP_RECVTTL
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())? != 0;
+                guard.ip_recvttl = optval;
+                Ok(())
+            }
             (1, 2) => {
                 // SO_REUSEADDR
                 ensure!(optlen == 4, Inval);
@@ -805,6 +825,13 @@ impl OpenFileDescription for TcpSocket {
                 // TCP_KEEPCNT
                 Ok(())
             }
+            (6, 18) => {
+                // TCP_USER_TIMEOUT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<u32>())?;
+                guard.tcp_user_timeout = optval;
+                Ok(())
+            }
             (41, 26) => {
                 // IPV6_V6ONLY
                 ensure!(optlen == 4, Inval);
@@ -825,17 +852,21 @@ impl OpenFileDescription for TcpSocket {
         };
         match how {
             ShutdownHow::Rd => active.read_half.shutdown(),
-            ShutdownHow::Wr => active.write_half.shutdown(),
+            ShutdownHow::Wr => {
+                active.write_half.shutdown();
+                active.read_half.write_shutdown();
+            }
             ShutdownHow::RdWr => {
                 active.read_half.shutdown();
                 active.write_half.shutdown();
+                active.read_half.write_shutdown();
             }
         }
         Ok(())
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        self.read(buf, false)
+        self.read(buf, false, false)
     }
 
     fn recv_from(
@@ -876,26 +907,30 @@ impl OpenFileDescription for TcpSocket {
         _: &FileDescriptorTable,
         _: CurrentNoFileLimit,
     ) -> Result<usize> {
+        ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
+
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let peek = flags.contains(RecvMsgFlags::PEEK);
         let waitall = flags.contains(RecvMsgFlags::WAITALL)
             && !flags.contains(RecvMsgFlags::DONTWAIT)
             && !self.internal.lock().flags.contains(OpenFlags::NONBLOCK);
+        let len = self.read(&mut vectored_buf, peek, waitall)?;
 
-        ensure!(msg_hdr.namelen == 0, IsConn);
-        ensure!(msg_hdr.flags == 0, Inval);
+        if msg_hdr.namelen != 0 {
+            let addr = self.get_peer_name().unwrap();
+            msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
+        }
 
-        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = self.read(&mut vectored_buf, waitall)?;
-
-        msg_hdr.controllen = 0;
+        drop(CMsgBuilder::new(abi, vm, msg_hdr));
 
         Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(Pipe))?;
+        let mode = bound.mode.get().ok_or(err!(Pipe))?;
         let Mode::Active(active) = mode else {
-            bail!(NotConn);
+            bail!(Pipe);
         };
         active.write_half.write(buf)
     }
@@ -904,15 +939,13 @@ impl OpenFileDescription for TcpSocket {
         &self,
         buf: &dyn WriteBuf,
         flags: SentToFlags,
-        addr: Option<SocketAddr>,
+        _: Option<SocketAddr>,
         _: &FileAccessContext,
     ) -> Result<usize> {
-        ensure!(addr.is_none(), IsConn);
-
-        let bound = self.bound_socket.get().ok_or(err!(NotConn))?;
-        let mode = bound.mode.get().ok_or(err!(NotConn))?;
+        let bound = self.bound_socket.get().ok_or(err!(Pipe))?;
+        let mode = bound.mode.get().ok_or(err!(Pipe))?;
         let Mode::Active(active) = mode else {
-            bail!(NotConn);
+            bail!(Pipe);
         };
         active
             .write_half
@@ -933,7 +966,7 @@ impl OpenFileDescription for TcpSocket {
         if !msg_hdr.control.is_null() {
             todo!();
         }
-        if msg_hdr.flags != 0 {
+        if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
 
@@ -1077,7 +1110,7 @@ impl OpenFileDescription for TcpSocket {
                     .write(arg.cast(), u32::from(at_mark))?;
                 Ok(0)
             }
-            _ => common_ioctl(self, thread, cmd, arg, abi),
+            _ => socket_common_ioctl(self, thread, cmd, arg, abi),
         }
     }
 
@@ -1158,6 +1191,7 @@ impl Drop for TcpSocket {
         } else {
             // Otherwise, properly shut down the write half.
             active_tcp_socket.write_half.shutdown();
+            active_tcp_socket.read_half.write_shutdown();
         }
 
         // Keep the socket alive until the deadline.
@@ -1231,8 +1265,22 @@ impl ActiveTcpSocket {
         remote_addr: net::SocketAddr,
         server_domain: IpVersion,
     ) -> (Self, Self) {
-        let (rx1, tx1) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
-        let (rx2, tx2) = stream_buffer::new(0x200000, stream_buffer::Type::Socket);
+        let reset1 = Arc::new(ConnectionState::new());
+        let reset2 = Arc::new(ConnectionState::new());
+        let (rx1, tx1) = stream_buffer::new(
+            0x200000,
+            stream_buffer::Type::Socket {
+                read_reset: reset1.clone(),
+                write_reset: reset2.clone(),
+            },
+        );
+        let (rx2, tx2) = stream_buffer::new(
+            0x200000,
+            stream_buffer::Type::Socket {
+                read_reset: reset2,
+                write_reset: reset1,
+            },
+        );
 
         let client_local_addr = local_addr;
         let client_remote_addr = remote_addr;

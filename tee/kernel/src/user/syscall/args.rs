@@ -1072,6 +1072,11 @@ pub struct Timeval {
 }
 
 impl Timeval {
+    pub const ZERO: Self = Self {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+
     pub fn saturating_add(self, rhs: Self) -> Self {
         let tv_sec = self.tv_sec + rhs.tv_sec;
         let tv_usec = self.tv_usec + rhs.tv_usec;
@@ -1808,7 +1813,15 @@ pub struct MsgHdr {
     pub controllen: u64,
 
     /// Flags on received message.
-    pub flags: u32,
+    pub flags: MsgHdrFlags,
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MsgHdrFlags: u32 {
+        const CTRUNC = 0x8;
+        const TRUNC = 0x20;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1823,6 +1836,7 @@ pub struct CmsgHdr {
 
 bitflags! {
     pub struct RecvMsgFlags {
+        const PEEK = 1 << 1;
         const DONTWAIT = 1 << 6;
         const WAITALL = 1 << 8;
         const CMSG_CLOEXEC = 1 << 30;

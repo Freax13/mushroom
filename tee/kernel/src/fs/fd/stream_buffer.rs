@@ -1,5 +1,9 @@
 use alloc::{collections::vec_deque::VecDeque, sync::Arc};
-use core::{cmp, num::NonZeroUsize};
+use core::{
+    cmp,
+    num::NonZeroUsize,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
 use crate::{
     error::{Result, bail, ensure},
@@ -25,9 +29,7 @@ pub fn new(capacity: usize, ty: Type) -> (ReadHalf, WriteHalf) {
             err_event_counter: EventCounter::new(),
             read_shutdown: false,
             write_shutdown: false,
-            reset: false,
-            closed_socket_write_counter: 16,
-            closed_socket_write_num_bytes: 0,
+            write_read_shutdown: false,
             oob_mark_state: OobMarkState::None,
         }),
     });
@@ -62,20 +64,8 @@ struct PipeDataBuffer {
     read_shutdown: bool,
     /// Whether the write half of a socket has been shut down.
     write_shutdown: bool,
-    reset: bool,
-    /// After the socket has been shut down, we allow a few more writes and
-    /// then fail. This simulates the real world where the local system also
-    /// doesn't immediately know that a socket has been shut down on the peer
-    /// system.
-    closed_socket_write_counter: u8,
-    /// After the socket has been shut down, we allow a writing some more bytes
-    /// and then fail. This simulates the real world where the local system
-    /// also doesn't immediately know that a socket has been shut down on the
-    /// peer system, but writing more than the tx capacity will eventually
-    /// result in an error.
-    /// This tracks the number of bytes that have been "written" after the
-    /// socket was closed.
-    closed_socket_write_num_bytes: usize,
+    /// Whether the socket whose read half this is has had its read write shut down.
+    write_read_shutdown: bool,
     /// This field tracks the state of the mark for OOB data.
     oob_mark_state: OobMarkState,
 }
@@ -85,22 +75,37 @@ impl PipeDataBuffer {
         // For sockets allow writing a little more than the capacity.
         let extra_capacity = match self.ty {
             Type::Pipe { .. } => 0,
-            Type::Socket => 0x1000,
+            Type::Socket { .. } => 0x1000,
         };
         self.capacity.saturating_add(extra_capacity)
     }
 }
 
 pub enum Type {
-    Pipe { atomic_write_size: NonZeroUsize },
-    Socket,
+    Pipe {
+        atomic_write_size: NonZeroUsize,
+    },
+    Socket {
+        read_reset: Arc<ConnectionState>,
+        write_reset: Arc<ConnectionState>,
+    },
 }
 
 impl Type {
     fn atomic_write_size(&self) -> usize {
         match self {
             Type::Pipe { atomic_write_size } => atomic_write_size.get(),
-            Type::Socket => 1,
+            Type::Socket { .. } => 1,
+        }
+    }
+
+    fn is_either_reset(&self) -> bool {
+        match self {
+            Self::Pipe { .. } => false,
+            Self::Socket {
+                read_reset,
+                write_reset,
+            } => read_reset.was_ever_reset() || write_reset.was_ever_reset(),
         }
     }
 }
@@ -201,19 +206,22 @@ impl ReadHalf {
 
         // Check if there is data to receive.
         if guard.bytes.is_empty() {
-            // Check if the write half has been closed.
-            if guard.read_shutdown || guard.write_shutdown {
-                return Ok(0);
-            }
+            match &guard.ty {
+                Type::Pipe { .. } => {
+                    ensure!(guard.half_closed, Again);
+                    return Ok(0);
+                }
+                Type::Socket { read_reset, .. } => {
+                    ensure!(!read_reset.take_reset().0, ConnReset);
 
-            if guard.half_closed {
-                match guard.ty {
-                    Type::Pipe { .. } => return Ok(0),
-                    Type::Socket => bail!(ConnReset),
+                    // Check if the write half has been closed.
+                    if guard.read_shutdown || guard.write_shutdown {
+                        return Ok(0);
+                    }
+                    ensure!(!guard.half_closed, ConnReset);
+                    bail!(Again);
                 }
             }
-
-            bail!(Again);
         }
         let was_full =
             guard.capacity.saturating_sub(guard.bytes.len()) < guard.ty.atomic_write_size();
@@ -272,7 +280,7 @@ impl ReadHalf {
                 || guard.write_shutdown,
         );
         ready_events.set(
-            Events::RDHUP,
+            Events::HUP,
             guard.half_closed || guard.read_shutdown || guard.write_shutdown,
         );
         ready_events.set(Events::PRI, guard.oob_mark_state.pri_event());
@@ -344,7 +352,7 @@ impl ReadHalf {
             if guard.half_closed {
                 match guard.ty {
                     Type::Pipe { .. } => return Ok(Ok(0)),
-                    Type::Socket => bail!(ConnReset),
+                    Type::Socket { .. } => bail!(ConnReset),
                 }
             }
 
@@ -381,6 +389,12 @@ impl ReadHalf {
 
         guard.read_shutdown = true;
         guard.write_event_counter.inc();
+        self.notify().notify();
+    }
+
+    pub fn write_shutdown(&self) {
+        let mut guard = self.data.buffer.lock();
+        guard.write_read_shutdown = true;
         self.notify().notify();
     }
 
@@ -441,15 +455,23 @@ impl WriteHalf {
     pub fn send(&self, buf: &dyn WriteBuf, oob: bool) -> Result<usize> {
         let mut guard = self.data.buffer.lock();
 
-        ensure!(!guard.reset, ConnReset);
-
         // Check if the write half has been closed.
-        match guard.ty {
+        match &guard.ty {
             Type::Pipe { .. } => ensure!(!guard.half_closed, Pipe),
-            Type::Socket => {
-                ensure!(!guard.write_shutdown, ConnReset);
+            Type::Socket {
+                read_reset,
+                write_reset,
+            } => {
+                let (_, ever_reset) = write_reset.take_reset();
+                ensure!(!ever_reset, ConnReset);
+                ensure!(!read_reset.was_ever_reset(), Pipe);
+                ensure!(!guard.write_shutdown, Pipe);
                 if guard.half_closed {
-                    guard.reset = true;
+                    write_reset.reset();
+                    return Ok(cmp::min(buf.buffer_len(), guard.total_capacity()));
+                }
+                if guard.read_shutdown && guard.write_read_shutdown {
+                    read_reset.reset();
                     return Ok(cmp::min(buf.buffer_len(), guard.total_capacity()));
                 }
             }
@@ -458,28 +480,6 @@ impl WriteHalf {
         let len = buf.buffer_len();
         if len == 0 {
             return Ok(0);
-        }
-
-        if guard.read_shutdown {
-            // Make sure not to allow writing to many times after the other
-            // half has been closed.
-            let next = guard
-                .closed_socket_write_counter
-                .checked_sub(1)
-                .ok_or(err!(Pipe))?;
-            guard.closed_socket_write_counter = next;
-
-            // Make sure not to allow writing to many bytes after the other
-            // half has been closed.
-            let remaining_capacity = guard
-                .total_capacity()
-                .saturating_sub(guard.closed_socket_write_num_bytes);
-            ensure!(remaining_capacity > 0, Pipe);
-            let len = cmp::min(len, remaining_capacity);
-            guard.closed_socket_write_num_bytes =
-                guard.closed_socket_write_num_bytes.saturating_add(len);
-
-            return Ok(len);
         }
 
         if guard.oob_mark_state.should_skip() {
@@ -515,6 +515,7 @@ impl WriteHalf {
         if res.is_err() {
             guard.bytes.truncate(start_idx);
         }
+        res?;
 
         if oob && let Some(remaining_length) = guard.bytes.len().checked_sub(1) {
             guard.oob_mark_state = OobMarkState::Pending {
@@ -527,8 +528,6 @@ impl WriteHalf {
 
         drop(guard);
 
-        res?;
-
         self.notify.notify();
 
         Ok(len)
@@ -538,15 +537,13 @@ impl WriteHalf {
         let mut ready_events = Events::empty();
 
         let guard = self.data.buffer.lock();
+        let reset = guard.ty.is_either_reset();
         ready_events.set(
             Events::WRITE,
-            guard.bytes.len() < guard.capacity
-                || guard.read_shutdown
-                || guard.reset
-                || guard.half_closed,
+            guard.bytes.len() < guard.capacity || guard.read_shutdown || reset || guard.half_closed,
         );
         ready_events &= events;
-        ready_events.set(Events::ERR, guard.reset || guard.half_closed);
+        ready_events.set(Events::ERR, reset || guard.half_closed);
         drop(guard);
 
         NonEmptyEvents::new(ready_events)
@@ -563,7 +560,11 @@ impl WriteHalf {
                 } else {
                     0 < remaining_capacity
                 };
-                (can_write || guard.half_closed || guard.read_shutdown || guard.reset).then_some(())
+                (can_write
+                    || guard.half_closed
+                    || guard.read_shutdown
+                    || guard.ty.is_either_reset())
+                .then_some(())
             })
             .await
     }
@@ -571,14 +572,11 @@ impl WriteHalf {
     pub fn epoll_ready(&self) -> EpollResult {
         let mut result = EpollResult::new();
         let guard = self.data.buffer.lock();
-        if guard.bytes.len() < guard.capacity
-            || guard.read_shutdown
-            || guard.reset
-            || guard.half_closed
-        {
+        let reset = guard.ty.is_either_reset();
+        if guard.bytes.len() < guard.capacity || guard.read_shutdown || reset || guard.half_closed {
             result.set_ready(Events::WRITE);
         }
-        if guard.reset || guard.half_closed {
+        if reset || guard.half_closed {
             result.set_ready(Events::ERR);
         }
 
@@ -611,31 +609,30 @@ impl WriteHalf {
     ) -> Result<Result<usize, PipeBlocked>> {
         let mut guard = self.data.buffer.lock();
 
-        ensure!(!guard.reset, ConnReset);
-
         // Check if the write half has been closed.
-        match guard.ty {
+        match &guard.ty {
             Type::Pipe { .. } => ensure!(!guard.half_closed, Pipe),
-            Type::Socket => {
-                ensure!(!guard.write_shutdown, ConnReset);
+            Type::Socket {
+                read_reset,
+                write_reset,
+            } => {
+                ensure!(!write_reset.was_ever_reset(), ConnReset);
+                let (_, ever_reset) = read_reset.take_reset();
+                ensure!(!ever_reset, Pipe);
+                ensure!(!guard.write_shutdown, Pipe);
                 if guard.half_closed {
-                    guard.reset = true;
-                    return Ok(Ok(len));
+                    write_reset.reset();
+                    return Ok(Ok(cmp::min(len, guard.total_capacity())));
+                }
+                if guard.read_shutdown && guard.write_read_shutdown {
+                    read_reset.reset();
+                    return Ok(Ok(cmp::min(len, guard.total_capacity())));
                 }
             }
         }
 
         if len == 0 {
             return Ok(Ok(0));
-        }
-
-        if guard.read_shutdown {
-            let next = guard
-                .closed_socket_write_counter
-                .checked_sub(1)
-                .ok_or(err!(Pipe))?;
-            guard.closed_socket_write_counter = next;
-            return Ok(Ok(len));
         }
 
         if guard.oob_mark_state.should_skip() {
@@ -743,4 +740,30 @@ pub enum SpliceBlockedError {
     Read,
     /// The write half of the splice operation was blocked.
     Write,
+}
+
+pub struct ConnectionState(AtomicU8);
+
+impl ConnectionState {
+    const RESET: u8 = 1 << 0;
+    const EVER_RESET: u8 = 1 << 1;
+
+    pub const fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
+
+    pub fn reset(&self) {
+        self.0
+            .fetch_or(Self::RESET | Self::EVER_RESET, Ordering::SeqCst);
+    }
+
+    /// Returns a tuple of (reset, ever_reset).
+    pub fn take_reset(&self) -> (bool, bool) {
+        let prev = self.0.fetch_and(!Self::RESET, Ordering::SeqCst);
+        (prev & Self::RESET != 0, prev & Self::EVER_RESET != 0)
+    }
+
+    pub fn was_ever_reset(&self) -> bool {
+        self.0.load(Ordering::SeqCst) & Self::EVER_RESET != 0
+    }
 }
