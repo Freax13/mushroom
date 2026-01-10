@@ -149,7 +149,7 @@ impl AnonymousPrivateMapping {
                 None,
                 len,
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                MapFlags::MAP_ANONYMOUS | MapFlags::MAP_PRIVATE,
+                MapFlags::MAP_ANONYMOUS | MapFlags::MAP_PRIVATE | MapFlags::MAP_NORESERVE,
             )
         };
         let ptr = res.context("failed to mmap memory")?;
