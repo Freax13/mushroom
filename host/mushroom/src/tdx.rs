@@ -17,6 +17,8 @@ use constants::{
     FINISH_OUTPUT_MSR, MAX_APS_COUNT, MEMORY_PORT, UPDATE_OUTPUT_MSR,
     physical_address::{DYNAMIC_2MIB, kernel, supervisor},
 };
+use kvm_bindings::{KVM_CAP_MAX_VCPUS, KVM_CAP_X2APIC_API, KVM_MAX_CPUID_ENTRIES, KVM_X86_TDX_VM};
+use kvm_ioctls::Kvm;
 use loader::Input;
 use nix::{
     fcntl::{FallocateFlags, fallocate},
@@ -135,11 +137,12 @@ impl VmContext {
         init: &[u8],
         inputs: &[Input<impl AsRef<[u8]>>],
         load_kasan_shadow_mappings: bool,
-        kvm_handle: &KvmHandle,
+        kvm_handle: &Kvm,
         profiler_folder: Option<ProfileFolder>,
     ) -> Result<(Self, Vec<VcpuHandle>)> {
-        let mut cpuid_entries = kvm_handle.get_supported_cpuid()?;
+        let mut cpuid_entries = kvm_handle.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?;
         let piafb = cpuid_entries
+            .as_mut_slice()
             .iter_mut()
             .find(|entry| entry.function == 1 && entry.index == 0)
             .context("failed to find 'processor info and feature bits' entry")?;
@@ -147,6 +150,7 @@ impl VmContext {
         piafb.ecx.set_bit(21, true);
 
         let xsave = cpuid_entries
+            .as_mut_slice()
             .iter_mut()
             .find(|entry| entry.function == 0xd && entry.index == 0x1)
             .context("failed to find 'xsave state components' entry")?;
@@ -154,11 +158,18 @@ impl VmContext {
         xsave.ecx.set_bit(11, true);
         xsave.ecx.set_bit(12, true);
 
-        let vm = kvm_handle.create_tdx_vm()?;
+        let vm = kvm_handle.create_vm_with_type(u64::from(KVM_X86_TDX_VM))?;
 
-        vm.enable_capability(KvmCap::MAX_VCPUS, u64::from(MAX_APS_COUNT))?;
+        vm.enable_cap(&kvm_bindings::kvm_enable_cap {
+            cap: KVM_CAP_MAX_VCPUS,
+            args: [u64::from(MAX_APS_COUNT), 0, 0, 0],
+            ..Default::default()
+        })?;
 
-        vm.enable_capability(KvmCap::X2APIC_API, 0)?;
+        vm.enable_cap(&kvm_bindings::kvm_enable_cap {
+            cap: KVM_CAP_X2APIC_API,
+            ..Default::default()
+        })?;
 
         let tdx_capabilities = vm.tdx_capabilities()?;
         ensure!(

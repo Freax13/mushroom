@@ -757,7 +757,6 @@ dependencies = [
 [[package]]
 name = "kvm-bindings"
 version = "0.14.0"
-source = "git+https://github.com/Freax13/kvm-ioctls.git?rev=c4d7a84#c4d7a84604632aa0cfd9a3feeb927d7f99c01ac4"
 dependencies = [
  "vmm-sys-util",
 ]
@@ -765,7 +764,6 @@ dependencies = [
 [[package]]
 name = "kvm-ioctls"
 version = "0.24.0"
-source = "git+https://github.com/Freax13/kvm-ioctls.git?rev=c4d7a84#c4d7a84604632aa0cfd9a3feeb927d7f99c01ac4"
 dependencies = [
  "bitflags 2.10.0",
  "kvm-bindings",
@@ -882,6 +880,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vcek-kds",
+ "vmm-sys-util",
  "volatile 0.6.1",
  "x86_64",
  "xdg",
