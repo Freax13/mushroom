@@ -7,8 +7,9 @@ use core::{
 use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit, Nonce, Tag};
 use bit_field::BitField;
 use bytemuck::{
-    NoUninit, bytes_of, cast,
+    NoUninit, Zeroable, bytes_of, bytes_of_mut, cast, cast_slice_mut,
     checked::{self, pod_read_unaligned},
+    from_bytes_mut,
 };
 use constants::MAX_APS_COUNT;
 use log::debug;
@@ -17,8 +18,9 @@ use snp_types::{
         AttestionReport, KeySelect, MsgReportReq, MsgReportRspHeader, MsgReportRspStatus,
     },
     ghcb::{
-        Ghcb, ProtocolVersion,
-        msr_protocol::{GhcbInfo, GhcbProtocolMsr, PageOperation, TerminateReasonCode},
+        Ghcb, PageOperation, PageStateChangeEntry, PageStateChangeHeader, ProtocolVersion,
+        SHARED_BUFFER_SIZE,
+        msr_protocol::{self, GhcbInfo, GhcbProtocolMsr, TerminateReasonCode},
     },
     guest_message::{Algo, Content, ContentV1, Message},
     intercept::{VMEXIT_IOIO, VMEXIT_MSR},
@@ -26,7 +28,7 @@ use snp_types::{
     vmsa::{SevFeatures, VmsaTweakBitmap},
 };
 use volatile::{VolatilePtr, map_field};
-use x86_64::structures::paging::PhysFrame;
+use x86_64::structures::paging::{PageSize, PhysFrame, Size2MiB, Size4KiB, frame::PhysFrameRange};
 
 use crate::{per_cpu::PerCpu, shared};
 
@@ -46,7 +48,7 @@ pub fn vmsa_tweak_bitmap() -> &'static VmsaTweakBitmap {
 /// Initialize a GHCB and pass it to the closure.
 pub fn with_ghcb<R, F>(f: F) -> Result<R, GhcbInUse>
 where
-    F: for<'a> FnOnce(VolatilePtr<'a, Ghcb>) -> R,
+    F: for<'a> FnOnce(VolatilePtr<'a, Ghcb>, PhysFrame) -> R,
 {
     let per_cpu = PerCpu::get();
 
@@ -77,7 +79,7 @@ where
         .as_slice()
         .index(usize::from(per_cpu.vcpu_index.as_u8()));
 
-    let res = f(ghcb);
+    let res = f(ghcb, frame);
 
     per_cpu.ghcb_in_use.set(false);
 
@@ -140,17 +142,21 @@ fn interruptable_vmgexit() {
 /// bitmap.
 macro_rules! ghcb_write {
     ($ghcb:ident.$field:ident = $value:expr) => {{
-        map_field!($ghcb.$field).write($value);
-        let bit_offset = offset_of!(Ghcb, $field);
+        let value = $value;
+        let bit_offset_start = offset_of!(Ghcb, $field);
+        let bit_offset_end = bit_offset_start + size_of_val(&value);
+        map_field!($ghcb.$field).write(value);
         map_field!($ghcb.valid_bitmap).update(|mut value| {
-            value.set_bit(bit_offset / 8, true);
+            for i in bit_offset_start / 8..bit_offset_end / 8 {
+                value.set_bit(i, true);
+            }
             value
         });
     }};
 }
 
 pub fn ioio_write(port: u16, value: u32) {
-    with_ghcb(|ghcb| {
+    with_ghcb(|ghcb, _frame| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
@@ -169,7 +175,7 @@ pub fn ioio_write(port: u16, value: u32) {
     .unwrap();
 }
 
-pub fn page_state_change(address: PhysFrame, operation: PageOperation) {
+pub fn page_state_change(address: PhysFrame, operation: msr_protocol::PageOperation) {
     let mut msr = GhcbProtocolMsr::MSR;
 
     // Save the GHCB MSR.
@@ -197,8 +203,64 @@ pub fn page_state_change(address: PhysFrame, operation: PageOperation) {
     assert_eq!(error_code, None);
 }
 
+pub fn page_state_change_multiple(mut range: PhysFrameRange, operation: PageOperation) {
+    with_ghcb(|ghcb, frame| {
+        let shared_buffer_addr =
+            frame.start_address().as_u64() + offset_of!(Ghcb, shared_buffer) as u64;
+
+        while range.start < range.end {
+            ghcb.write(Ghcb::ZERO);
+            map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
+            ghcb_write!(ghcb.sw_exit_code = 0x8000_0010);
+            ghcb_write!(ghcb.sw_exit_info1 = 0);
+            ghcb_write!(ghcb.sw_exit_info2 = 0);
+            ghcb_write!(ghcb.sw_scratch = shared_buffer_addr);
+
+            let mut shared_buffer = [0; SHARED_BUFFER_SIZE];
+            let (header, entries) = shared_buffer.split_at_mut(size_of::<PageStateChangeHeader>());
+            let header = from_bytes_mut::<PageStateChangeHeader>(header);
+            let entries = cast_slice_mut::<_, PageStateChangeEntry>(entries);
+
+            for (i, entry) in (0..).zip(entries.iter_mut()) {
+                if range.start >= range.end {
+                    break;
+                }
+                if let Some(frame) =
+                    PhysFrame::<Size2MiB>::from_start_address(range.start.start_address())
+                        .ok()
+                        .filter(|&frame| (frame + 1).start_address() <= range.end.start_address())
+                {
+                    *entry = PageStateChangeEntry::new(operation, frame);
+                    range.start += frame.size() / Size4KiB::SIZE;
+                } else {
+                    let frame = range.start;
+                    *entry = PageStateChangeEntry::new(operation, frame);
+                    range.start += frame.size() / Size4KiB::SIZE;
+                }
+                header.end_entry = i;
+            }
+
+            map_field!(ghcb.shared_buffer).write(shared_buffer);
+
+            vmgexit();
+
+            let mut header = PageStateChangeHeader::zeroed();
+            let bytes = bytes_of_mut(&mut header);
+            map_field!(ghcb.shared_buffer)
+                .as_slice()
+                .index(..bytes.len())
+                .copy_into_slice(bytes);
+            debug_assert!(header.cur_entry > header.end_entry);
+
+            let status = map_field!(ghcb.sw_exit_info2).read();
+            debug_assert_eq!(status, 0);
+        }
+    })
+    .unwrap();
+}
+
 pub fn write_msr(msr: u32, value: u64) -> Result<(), GhcbInUse> {
-    with_ghcb(|ghcb| {
+    with_ghcb(|ghcb, _frame| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
@@ -312,7 +374,7 @@ pub fn do_guest_request(request: Message) -> Message {
     let req_pa = REQ.frame().start_address();
     let rsp_pa = RSP.frame().start_address();
 
-    let sw_exit_info2 = with_ghcb(|ghcb| {
+    let sw_exit_info2 = with_ghcb(|ghcb, _frame| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
@@ -357,7 +419,7 @@ pub fn get_host_data() -> [u8; 32] {
 }
 
 pub fn create_ap(vmsa: PhysFrame, features: SevFeatures) {
-    with_ghcb(|ghcb| {
+    with_ghcb(|ghcb, _frame| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
@@ -404,7 +466,7 @@ pub fn run_vmpl(vmpl: u8) {
 }
 
 pub fn set_hv_doorbell_page(frame: PhysFrame) {
-    with_ghcb(|ghcb| {
+    with_ghcb(|ghcb, _frame| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 
@@ -416,7 +478,7 @@ pub fn set_hv_doorbell_page(frame: PhysFrame) {
     })
     .unwrap();
 
-    with_ghcb(|ghcb| {
+    with_ghcb(|ghcb, _frame| {
         ghcb.write(Ghcb::ZERO);
         map_field!(ghcb.protocol_version).write(ProtocolVersion::VERSION2);
 

@@ -17,7 +17,7 @@ use crate::{
     dynamic::{allocate_memory, deallocate_memory},
     exception::{eoi, pop_pending_event, send_ipi},
     ghcb::{create_ap, exit, run_vmpl, vmsa_tweak_bitmap},
-    output,
+    input, output,
     per_cpu::PerCpu,
     scheduler::{STARTUP_VECTOR, TIMER_VECTOR, WAKE_UP_VECTOR, start_next_ap},
 };
@@ -179,6 +179,7 @@ pub fn run_vcpu() -> ! {
                         let slot_index = SlotIndex::new(u16::try_from(slot_index).unwrap());
                         deallocate_memory(slot_index);
                     }
+                    nr if nr == SupervisorCallNr::ReleaseInput as u64 => input::release(),
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = guard.rdi(tweak_bitmap);
                         let xmm = guard.fpreg_xmm(tweak_bitmap);

@@ -407,6 +407,9 @@ fn run_kernel_vcpu(
                             madvise(addr, Size2MiB::SIZE as usize, MmapAdvise::MADV_DONTNEED)?;
                         }
                     }
+                    nr if nr == SupervisorCallNr::ReleaseInput as u64 => {
+                        // Not supported. Do nothing.
+                    }
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = regs.rdi as usize;
 

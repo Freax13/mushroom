@@ -10,6 +10,7 @@ pub enum SupervisorCallNr {
     Kick,
     AllocateMemory,
     DeallocateMemory,
+    ReleaseInput,
     UpdateOutput,
     FinishOutput,
     FailOutput,

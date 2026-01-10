@@ -343,7 +343,24 @@ impl VmContext {
                                     }
                                 }
                             } else {
-                                unimplemented!()
+                                // Invalidate private mapping.
+                                for i in 0..num_pages {
+                                    let gpa = PhysAddr::new(address + i * Size4KiB::SIZE);
+                                    let slot = find_slot(
+                                        PhysFrame::containing_address(gpa),
+                                        &self.memory_slots,
+                                    )?;
+                                    let restricted_fd = slot.restricted_fd().unwrap();
+                                    let offset = gpa - slot.gpa().start_address();
+
+                                    fallocate(
+                                        restricted_fd,
+                                        FallocateFlags::FALLOC_FL_KEEP_SIZE
+                                            | FallocateFlags::FALLOC_FL_PUNCH_HOLE,
+                                        offset as i64,
+                                        Size4KiB::SIZE as i64,
+                                    )?;
+                                }
                             }
 
                             tdx_exit.out_r10 = VMCALL_SUCCESS;

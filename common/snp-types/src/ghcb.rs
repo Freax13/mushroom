@@ -2,11 +2,16 @@ use core::fmt;
 
 use bit_field::BitField;
 use bytemuck::{CheckedBitPattern, Pod, Zeroable};
-use x86_64::{PhysAddr, structures::paging::PhysFrame};
+use x86_64::{
+    PhysAddr,
+    structures::paging::{PageSize as _, PhysFrame, Size2MiB, page::NotGiantPageSize},
+};
 
 use crate::Reserved;
 
 pub mod msr_protocol;
+
+pub const SHARED_BUFFER_SIZE: usize = 0x7f0;
 
 #[derive(Clone, Copy, Debug, CheckedBitPattern, Zeroable)]
 #[repr(C, align(4096))]
@@ -34,7 +39,7 @@ pub struct Ghcb {
     pub valid_bitmap: u128,
     pub x87_state_gpa: u64,
     _reserved9: Reserved<0x3f8>,
-    pub shared_buffer: [u8; 0x7f0],
+    pub shared_buffer: [u8; SHARED_BUFFER_SIZE],
     _reserved10: Reserved<0xa>,
     pub protocol_version: ProtocolVersion,
     pub ghcb_usage: GhcbUsage,
@@ -65,7 +70,7 @@ impl Ghcb {
         valid_bitmap: 0,
         x87_state_gpa: 0,
         _reserved9: Reserved([0; 0x3f8]),
-        shared_buffer: [0; 0x7f0],
+        shared_buffer: [0; SHARED_BUFFER_SIZE],
         _reserved10: Reserved([0; 0xa]),
         protocol_version: ProtocolVersion(0),
         ghcb_usage: GhcbUsage(0),
@@ -122,22 +127,15 @@ pub struct PageStateChangeHeader {
 pub struct PageStateChangeEntry(u64);
 
 impl PageStateChangeEntry {
-    pub fn page_assign_private_4kib(frame: PhysFrame) -> Self {
+    pub fn new<S>(operation: PageOperation, frame: PhysFrame<S>) -> Self
+    where
+        S: NotGiantPageSize,
+    {
         let mut value = 0;
         value.set_bits(0..=11, 0); // Current page must be zero if the page size is 4K.
         value.set_bits(12..=51, frame.start_address().as_u64().get_bits(12..));
-        value.set_bits(52..=55, 1); // Page operation: Page assignment, Private
-        value.set_bit(56, false); // Page size: 4K
-        value.set_bits(57..=63, 0); // Reserved, must be zero
-        Self(value)
-    }
-
-    pub fn page_assign_shared_4kib(frame: PhysFrame) -> Self {
-        let mut value = 0;
-        value.set_bits(0..=11, 0); // Current page must be zero if the page size is 4K.
-        value.set_bits(12..=51, frame.start_address().as_u64().get_bits(12..));
-        value.set_bits(52..=55, 2); // Page operation: Page assignment, Shared
-        value.set_bit(56, false); // Page size: 4K
+        value.set_bits(52..=55, operation as u64); // Page operation
+        value.set_bit(56, S::SIZE == Size2MiB::SIZE); // Page size
         value.set_bits(57..=63, 0); // Reserved, must be zero
         Self(value)
     }
@@ -162,7 +160,7 @@ impl PageStateChangeEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PageOperation {
     PageAssignmentPrivate = 1,
     PageAssignmentShared = 2,
