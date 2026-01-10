@@ -120,8 +120,8 @@ static PD_352_80: StaticPd = {
 static PDP_257: StaticPdp = {
     let mut page_table = StaticPageTable::new();
     page_table.set_page_range(0, DYNAMIC, flags!(WRITE | GLOBAL | EXECUTE_DISABLE));
-    page_table.set_page_range(64, INIT_FILE, flags!(GLOBAL | EXECUTE_DISABLE));
-    page_table.set_page_range(128, INPUT_FILE, flags!(GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(128, INIT_FILE, flags!(GLOBAL | EXECUTE_DISABLE));
+    page_table.set_page_range(192, INPUT_FILE, flags!(GLOBAL | EXECUTE_DISABLE));
     page_table
 };
 

@@ -97,13 +97,13 @@ SECTIONS {
         KEEP(*(.log_buffer .log_buffer.*))
     } :log_buffer
 
-    .init_file (0xffff809000000000) :
+    .init_file (0xffff80a000000000) :
     {
         init_file = .;
         . += 8;
     } :init_file
 
-    .input_file (0xffff80a000000000) :
+    .input_file (0xffff80b000000000) :
     {
         input_file = .;
         . += 8;

@@ -4,7 +4,7 @@ use core::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LimitedIndex<const N: usize>(u16);
+pub struct LimitedIndex<const N: usize>(u32);
 
 impl<const N: usize> LimitedIndex<N> {
     pub const MIN: Self = Self::new(0);
@@ -13,16 +13,16 @@ impl<const N: usize> LimitedIndex<N> {
 
     #[inline(always)]
     pub const fn new(idx: usize) -> Self {
-        assert!(N <= u16::MAX as usize);
+        assert!(N <= u32::MAX as usize);
 
         assert!(idx < N);
-        Self(idx as u16)
+        Self(idx as u32)
     }
 
     #[inline(always)]
     pub const fn try_new(idx: usize) -> Option<Self> {
         if idx < N {
-            Some(Self(idx as u16))
+            Some(Self(idx as u32))
         } else {
             None
         }
@@ -48,7 +48,7 @@ impl<const N: usize> Step for LimitedIndex<N> {
 
     #[inline(always)]
     unsafe fn forward_unchecked(start: Self, count: usize) -> Self {
-        Self(start.0.wrapping_add(count as u16))
+        Self(start.0.wrapping_add(count as u32))
     }
 
     #[inline(always)]
@@ -59,7 +59,7 @@ impl<const N: usize> Step for LimitedIndex<N> {
 
     #[inline(always)]
     unsafe fn backward_unchecked(start: Self, count: usize) -> Self {
-        Self(start.0.wrapping_sub(count as u16))
+        Self(start.0.wrapping_sub(count as u32))
     }
 }
 

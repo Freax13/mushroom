@@ -20,7 +20,7 @@ use anyhow::{Context, Result, bail};
 use bit_field::BitField;
 use constants::{
     INSECURE_SUPERVISOR_CALL_PORT, MAX_APS_COUNT, TIMER_VECTOR,
-    physical_address::{DYNAMIC_2MIB, kernel, supervisor},
+    physical_address::{DYNAMIC_2MIB, NUM_DYNAMIC_SLOTS, kernel, supervisor},
 };
 use loader::Input;
 use mushroom_verify::{HashedInput, InputHash, OutputHash, forge_insecure_attestation_report};
@@ -539,16 +539,14 @@ enum NextRunStateValue {
     Stopped,
 }
 
-const SLOTS: usize = 1 << 15;
-
 struct DynamicMemory {
-    in_use: [bool; SLOTS],
+    in_use: [bool; NUM_DYNAMIC_SLOTS as usize],
 }
 
 impl DynamicMemory {
     pub fn new() -> Self {
         Self {
-            in_use: [false; SLOTS],
+            in_use: [false; NUM_DYNAMIC_SLOTS as usize],
         }
     }
 
