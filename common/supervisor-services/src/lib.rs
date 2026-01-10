@@ -10,6 +10,7 @@ pub enum SupervisorCallNr {
     Kick,
     AllocateMemory,
     DeallocateMemory,
+    ReleaseInput,
     UpdateOutput,
     FinishOutput,
     FailOutput,
@@ -23,12 +24,10 @@ impl SlotIndex {
     pub const EMPTY: Self = Self(0xffff);
 
     pub fn new(value: u16) -> Self {
-        assert!(value <= u16::MAX / 2);
         Self(value)
     }
 
     pub const fn get(&self) -> u16 {
-        assert!(self.0 <= u16::MAX / 2);
         self.0
     }
 }

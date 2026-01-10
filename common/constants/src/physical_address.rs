@@ -97,8 +97,11 @@ pub mod supervisor {
     pub const LOG_BUFFER: PhysFrame<Size2MiB> = addr(0x90000200000);
 }
 
-// 64 gibibytes of dynamic physical memory that can be hot-plugged and hot-unplugged.
-pub const DYNAMIC: Range<PhysFrame<Size1GiB>> = addr_range(0x020000000000, 0x20fffffffff);
+// 128 gibibytes of dynamic physical memory that can be hot-plugged and hot-unplugged.
+pub const NUM_DYNAMIC_SLOTS: u64 = 1 << 16;
+pub const DYNAMIC_SIZE: u64 = NUM_DYNAMIC_SLOTS * Size2MiB::SIZE;
+pub const DYNAMIC: Range<PhysFrame<Size1GiB>> =
+    addr_range(0x020000000000, 0x020000000000 + DYNAMIC_SIZE - 1);
 pub const DYNAMIC_2MIB: Range<PhysFrame<Size2MiB>> = addr_range(
     DYNAMIC.start.start_address().as_u64(),
     DYNAMIC.end.start_address().as_u64() - 1,

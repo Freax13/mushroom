@@ -102,6 +102,17 @@ pub fn kick(ap: ApIndex) {
     }
 }
 
+pub fn release_input() {
+    unsafe {
+        asm!(
+            "call {supervisor_call}",
+            in("rax") SupervisorCallNr::ReleaseInput as u64,
+            supervisor_call = in(reg) *SUPERVISOR_CALL_FN,
+            options(nomem),
+        );
+    }
+}
+
 pub const OUTPUT_BUFFER_CAPACITY: usize = 32 * 16;
 
 pub fn update_output(data: &[u8]) {

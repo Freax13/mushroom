@@ -17,6 +17,7 @@ use crate::{
         },
         path::{FileName, Path},
     },
+    supervisor,
     user::{
         syscall::args::FileMode,
         thread::{Gid, Uid},
@@ -42,6 +43,7 @@ pub fn new(location: LinkLocation) -> Result<Arc<dyn Directory>> {
         .ok()
         .unwrap();
     StaticFile::input_file().copy_to(&input_file)?;
+    supervisor::release_input();
 
     let output_name = FileName::new(b"output").unwrap();
     tmp_fs_dir.create_char_dev(

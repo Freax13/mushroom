@@ -32,7 +32,7 @@ use x86_64::{
 use crate::{
     dynamic::{allocate_memory, deallocate_memory},
     exception::{WAKEUP_TOKEN, WAKEUP_VECTOR, send_ipi},
-    output,
+    input, output,
     per_cpu::PerCpu,
     tdcall::{Tdcall, Vmcall},
 };
@@ -276,6 +276,7 @@ pub fn run_vcpu() -> ! {
                         let slot_index = SlotIndex::new(u16::try_from(slot_index).unwrap());
                         deallocate_memory(slot_index);
                     }
+                    nr if nr == SupervisorCallNr::ReleaseInput as u64 => input::release(),
                     nr if nr == SupervisorCallNr::UpdateOutput as u64 => {
                         let chunk_len = guest_state.rdi;
 

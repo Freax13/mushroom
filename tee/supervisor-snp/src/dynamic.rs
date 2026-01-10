@@ -1,5 +1,5 @@
 use bit_field::BitField;
-use constants::MEMORY_PORT;
+use constants::{MEMORY_PORT, physical_address::NUM_DYNAMIC_SLOTS};
 use snp_types::VmplPermissions;
 use spin::Mutex;
 use supervisor_services::SlotIndex;
@@ -13,8 +13,7 @@ use crate::{
     rmp::{pvalidate_2mib, rmpadjust_2mib},
 };
 
-const SLOTS: usize = 1 << 15;
-const BITMAP_SIZE: usize = SLOTS / 8;
+const BITMAP_SIZE: usize = NUM_DYNAMIC_SLOTS.div_ceil(8) as usize;
 
 static HOST_ALLOCATOR: Mutex<HostAllocator> = Mutex::new(HostAllocator::new());
 
@@ -138,7 +137,7 @@ impl HostAllocator {
 
 unsafe fn update_slot_status(slot_idx: SlotIndex, enabled: bool) {
     let mut request: u32 = 0;
-    request.set_bits(0..15, u32::from(slot_idx.get()));
-    request.set_bit(15, enabled);
+    request.set_bits(0..31, u32::from(slot_idx.get()));
+    request.set_bit(31, enabled);
     ioio_write(MEMORY_PORT, request);
 }

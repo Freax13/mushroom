@@ -364,7 +364,22 @@ impl VmContext {
                             }
                         }
                     } else {
-                        unimplemented!()
+                        // Invalidate private mapping.
+                        for i in 0..num_pages {
+                            let gpa = PhysAddr::new(address + i * Size4KiB::SIZE);
+                            let slot =
+                                find_slot(PhysFrame::containing_address(gpa), &self.memory_slots)?;
+                            let restricted_fd = slot.restricted_fd().unwrap();
+                            let offset = gpa - slot.gpa().start_address();
+
+                            fallocate(
+                                restricted_fd,
+                                FallocateFlags::FALLOC_FL_KEEP_SIZE
+                                    | FallocateFlags::FALLOC_FL_PUNCH_HOLE,
+                                offset as i64,
+                                Size4KiB::SIZE as i64,
+                            )?;
+                        }
                     }
 
                     kvm_run.update(|mut run| {
@@ -384,16 +399,15 @@ impl VmContext {
 
                     match io.port {
                         MEMORY_PORT => {
-                            let slot_id = value.get_bits(0..15) as u16;
-                            let enabled = value.get_bit(15);
+                            let slot_id = value.get_bits(0..31);
+                            let enabled = value.get_bit(31);
                             let gpa = DYNAMIC_2MIB.start + u64::from(slot_id);
                             debug!(slot_id, enabled, gpa = %format_args!("{gpa:?}"), "updating slot status");
 
-                            let gfn = DYNAMIC_2MIB.start + u64::from(slot_id);
                             let mut attributes = KvmMemoryAttributes::empty();
                             attributes.set(KvmMemoryAttributes::PRIVATE, enabled);
                             self.vm.set_memory_attributes(
-                                gfn.start_address().as_u64(),
+                                gpa.start_address().as_u64(),
                                 Size2MiB::SIZE,
                                 attributes,
                             )?;

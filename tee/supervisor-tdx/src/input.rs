@@ -1,10 +1,14 @@
-use core::mem::size_of;
+use core::{
+    mem::size_of,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use bit_field::BitField;
 use bytemuck::checked::pod_read_unaligned;
 use constants::physical_address::{INIT_FILE, INPUT_FILE};
 use io::input::{Hasher, Header};
 use log::info;
+use spin::Once;
 use tdx_types::tdcall::GpaAttr;
 use x86_64::{
     PhysAddr, VirtAddr,
@@ -22,20 +26,23 @@ pub fn init() {
     load_init();
 }
 
+static PAGE_INDEX: AtomicU64 = AtomicU64::new(0);
+
+fn next_page_index() -> u64 {
+    PAGE_INDEX.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Verify the input and make it accessible to the L2 VM.
 fn verify_and_load() {
-    let mut page_index = 0;
-
     // Verify the input header.
     let mr_config_id = Tdcall::mr_report([0; 64]).td_info.base.mr_config_id;
     assert_eq!(mr_config_id[32..], [0; 16]);
     let mut next_hash = <[u8; 32]>::try_from(&mr_config_id[0..32]).unwrap();
     loop {
         // Read the input header.
-        let header_page_bytes = convert_to_private_in_place(page_index);
+        let header_page_bytes = convert_to_private_in_place(next_page_index());
         let header_bytes = &header_page_bytes[..size_of::<Header>()];
         let header = pod_read_unaligned::<Header>(header_bytes);
-        page_index += 1;
 
         // Verify the input header.
         assert!(header.verify(next_hash), "header doesn't match");
@@ -51,16 +58,14 @@ fn verify_and_load() {
         // Copy pages one at a time.
         let mut remaining_len = usize::try_from(header.input_len).unwrap();
         while remaining_len >= 0x1000 {
-            let input_bytes = convert_to_private_in_place(page_index);
-            page_index += 1;
+            let input_bytes = convert_to_private_in_place(next_page_index());
             hasher.update(&input_bytes);
             remaining_len -= 0x1000;
         }
 
         // The last page may not be a full page.
         if remaining_len > 0 {
-            let input_bytes = convert_to_private_in_place(page_index);
-            page_index += 1;
+            let input_bytes = convert_to_private_in_place(next_page_index());
             let (input_bytes, rest) = input_bytes.split_at(remaining_len);
             hasher.update(input_bytes);
 
@@ -201,4 +206,19 @@ fn load_init() {
             Tdcall::mem_page_attr_wr(frame, GpaAttr::READ | GpaAttr::VALID, GpaAttr::READ, true);
         }
     }
+}
+
+pub fn release() {
+    static RELEASE: Once = Once::new();
+    RELEASE.call_once(|| {
+        let num_pages = PAGE_INDEX.load(Ordering::SeqCst);
+
+        // Tell the Hypervisor that we want to change the page to shared.
+        let input_file_start =
+            PhysFrame::<Size4KiB>::from_start_address(INPUT_FILE.start.start_address()).unwrap();
+        tdcall::Vmcall::map_gpa(
+            PhysFrame::range(input_file_start, input_file_start + num_pages),
+            false,
+        );
+    });
 }

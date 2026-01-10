@@ -9,7 +9,7 @@ use core::{
 };
 
 use bit_field::BitField;
-use constants::physical_address::DYNAMIC_2MIB;
+use constants::physical_address::{DYNAMIC_2MIB, NUM_DYNAMIC_SLOTS};
 use crossbeam_utils::atomic::AtomicCell;
 use usize_conversions::{FromUsize, usize_from};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size2MiB};
@@ -31,7 +31,7 @@ use crate::{
 // hot-plug 2MiB "slots" of memory at an address of its choosing. We assign a
 // chunk a slot by storing it in `PHYSICAL_ADDRESSES`.
 
-const SLOTS_ORDER: usize = 15;
+const SLOTS_ORDER: usize = NUM_DYNAMIC_SLOTS.next_power_of_two().ilog2() as usize;
 const CHUNK_ORDER: usize = 9;
 const GROUP_ORDER: usize = 3;
 const SUPER_GROUP_ORDER: usize = SLOTS_ORDER - GROUP_ORDER;
