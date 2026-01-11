@@ -2672,6 +2672,8 @@ bitflags! {
         const SHRINK = 0x0002;
         /// Prevent file from growing
         const GROW = 0x0004;
+        /// Prevent file from being modified
+        const WRITE = 0x0008;
     }
 }
 
