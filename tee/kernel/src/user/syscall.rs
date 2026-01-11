@@ -5095,13 +5095,14 @@ async fn clock_nanosleep(
 ) -> SyscallResult {
     let request = virtual_memory.read_with_abi(request, abi)?;
 
+    let start = time::now(clock_id);
     let deadline = if flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
         request
     } else {
-        time::now(clock_id) + request
+        start.saturating_add(request)
     };
 
-    let res = thread
+    let mut res = thread
         .interruptable(
             async {
                 sleep_until(deadline, clock_id).await;
@@ -5112,8 +5113,14 @@ async fn clock_nanosleep(
         .await;
 
     if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let difference = deadline.saturating_sub(time::now(clock_id));
-        virtual_memory.write_with_abi(remain, difference, abi)?;
+        let now = time::now(clock_id);
+        let elapsed = now.saturating_sub(start);
+        let remaining = request.saturating_sub(elapsed);
+        if remaining == Timespec::ZERO {
+            res = Ok(());
+        } else {
+            virtual_memory.write_with_abi(remain, remaining, abi)?;
+        }
     }
 
     res?;
