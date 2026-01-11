@@ -45,7 +45,7 @@ use crate::{
         process::{limits::CurrentAsLimit, usage::MemoryUsage},
         syscall::{
             args::{
-                OpenFlags, Pointer, ProtFlags, Stat,
+                FileType, OpenFlags, Pointer, ProtFlags, Stat,
                 pointee::{AbiAgnosticPointee, ReadablePointee, WritablePointee},
             },
             traits::Abi,
@@ -844,6 +844,7 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         let stat = file.stat()?;
+        ensure!(stat.mode.ty() == FileType::File, NoDev);
         let futexes = if shared {
             file.futexes().expect("TODO")
         } else {
