@@ -933,6 +933,8 @@ enum_arg! {
         Realtime = 0,
         Monotonic = 1,
         MonotonicRaw = 4,
+        RealtimeCoarse = 5,
+        MonotonicCoarse = 6,
         BootTime = 7,
     }
 }
