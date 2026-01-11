@@ -471,6 +471,10 @@ impl OpenFileDescription for Pty {
                 self.data.internal.lock().termios = termios;
                 Ok(0)
             }
+            0x5409 => {
+                // TCSBRK
+                Ok(0)
+            }
             0x540b => {
                 // TCFLSH
                 let (flush_relative_input, flush_relative_output) = match arg.get().as_u64() {
@@ -557,6 +561,10 @@ impl OpenFileDescription for Pty {
                 // TIOCSWINSZ
                 let win_size = thread.virtual_memory().read(arg.cast())?;
                 self.data.internal.lock().win_size = win_size;
+                Ok(0)
+            }
+            0x5416 => {
+                // TIOCMBIS
                 Ok(0)
             }
             0x5441 => {
