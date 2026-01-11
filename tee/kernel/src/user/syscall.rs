@@ -6251,7 +6251,6 @@ fn signalfd(
 fn timerfd_create(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
-
     #[state] no_file_limit: CurrentNoFileLimit,
     clockid: ClockId,
     flags: TimerfdCreateFlags,
