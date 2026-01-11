@@ -9,6 +9,7 @@ mod ptrace;
 mod pty;
 mod ready;
 mod rlimit;
+mod semaphore;
 mod timer;
 mod uname;
 mod unix;

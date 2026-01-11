@@ -292,6 +292,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUname);
     handlers.register(SysOlduname);
     handlers.register(SysFcntl);
+    handlers.register(SysSemctl);
     handlers.register(SysFcntl64);
     handlers.register(SysFlock);
     handlers.register(SysFsync);
@@ -2635,6 +2636,36 @@ fn olduname(
     let machine = thread.process().machine();
     let values = [SYSNAME, NODENAME, RELEASE, VERSION, machine];
     uname_impl(virtual_memory, name, &values, 9)
+}
+
+#[syscall(i386 = 394, amd64 = 66)]
+fn semctl(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    semid: u64,
+    semnum: u64,
+    op: SemOp,
+    arg: u64,
+) -> SyscallResult {
+    match op {
+        SemOp::Info => {
+            let buf = Pointer::parse(arg, abi)?;
+            let sem_info = SemInfo {
+                map: 1024000000,
+                mni: 32000,
+                mns: 1024000000,
+                mnu: 1024000000,
+                msl: 32000,
+                opm: 500,
+                ume: 500,
+                usz: 0,
+                vmx: 32767,
+                aem: 0,
+            };
+            virtual_memory.write(buf, sem_info)?;
+            Ok(0)
+        }
+    }
 }
 
 #[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]

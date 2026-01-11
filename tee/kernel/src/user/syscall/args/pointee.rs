@@ -33,9 +33,9 @@ use crate::{
                 LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, MsgHdrFlags, Offset,
                 OpenFlags, OpenHow, OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer,
                 PtraceSyscallInfo, PtraceSyscallInfoValue, RLimit, ResolveFlags, Rusage,
-                SchedParam, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
-                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
-                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                SchedParam, SemInfo, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink,
+                SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone,
+                Ucred, UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -3259,3 +3259,6 @@ impl From<PtraceSyscallInfo> for RawPtraceSyscallInfo {
         }
     }
 }
+
+impl Pointee for SemInfo {}
+impl PrimitivePointee for SemInfo {}

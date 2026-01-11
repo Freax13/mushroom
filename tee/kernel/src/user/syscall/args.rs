@@ -2744,6 +2744,37 @@ pub enum PtraceSyscallInfoValue {
 }
 
 enum_arg! {
+    pub enum SemOp {
+        Info = 19,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct SemInfo {
+    /// Number of entries in semaphore map; unused within kernel
+    pub map: i32,
+    /// Maximum number of semaphore sets
+    pub mni: i32,
+    /// Maximum number of semaphores in all semaphore sets
+    pub mns: i32,
+    /// System-wide maximum number of undo structures; unused within kernel
+    pub mnu: i32,
+    /// Maximum number of semaphores in a set
+    pub msl: i32,
+    /// Maximum number of operations for semop(2)
+    pub opm: i32,
+    /// Maximum number of undo entries per process; unused within kernel
+    pub ume: i32,
+    /// Size of struct sem_undo
+    pub usz: i32,
+    /// Maximum semaphore value
+    pub vmx: i32,
+    /// Max. value that can be recorded for semaphore adjustment (SEM_UNDO)
+    pub aem: i32,
+}
+
+enum_arg! {
     pub enum SocketCall {
         Socket = 1,
         Bind = 2,
