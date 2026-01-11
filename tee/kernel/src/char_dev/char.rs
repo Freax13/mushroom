@@ -155,8 +155,8 @@ struct PtyDataInternal {
     slave_exclusive_mode: bool,
 
     termios: Termios,
-    input_buffer: ArrayVec<u8, 4095>,
-    output_buffer: ArrayVec<u8, 4096>,
+    input_buffer: ArrayVec<u8, 0xfff>,
+    output_buffer: ArrayVec<u8, 0x2fff>,
     column_pointer: usize,
 
     master_read_counter: EventCounter,
