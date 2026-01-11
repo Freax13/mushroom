@@ -1852,7 +1852,7 @@ where
     T: Default,
 {
     fn from(mut value: StackOptimizedSplitVec<T>) -> Self {
-        value.entries.reserve_exact(value.entries.len() - value.len);
+        value.entries.reserve_exact(value.len - value.entries.len());
         value.entries.resize_with(value.len, T::default);
         value.entries.reverse();
         Self::from_vec(value.entries)
