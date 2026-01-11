@@ -655,7 +655,7 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         impl Backing for ZeroBacking {
-            fn get_initial_page(&self, _offset: u64) -> Result<KernelPage> {
+            fn get_initial_page(&self, _offset: u64) -> Result<KernelPage, PageFaultError> {
                 Ok(KernelPage::zeroed())
             }
 
@@ -696,11 +696,13 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         impl Backing for ZeroBacking {
-            fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage, PageFaultError> {
                 let mut pages = self.pages.lock();
-                let page = pages.get_mut(usize_from(offset)).ok_or(err!(Acces))?;
-                page.make_mut(true)?;
-                page.clone()
+                let page = pages
+                    .get_mut(usize_from(offset))
+                    .ok_or(PageFaultError::Other(err!(Acces)))?;
+                page.make_mut(true).map_err(PageFaultError::Other)?;
+                page.clone().map_err(PageFaultError::Other)
             }
 
             fn ino(&self) -> u64 {
@@ -783,21 +785,30 @@ impl VirtualMemoryWriteGuard<'_> {
         }
 
         impl Backing for FileBacking {
-            fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage, PageFaultError> {
                 let start_offset = usize_from(self.zero_offset.saturating_sub(offset * 0x1000));
                 match start_offset {
                     0 => {
-                        ensure!(self.zero_pad, Acces);
+                        if !self.zero_pad {
+                            return Err(PageFaultError::Other(err!(Acces)));
+                        }
                         Ok(KernelPage::zeroed())
                     }
                     1..=0xfff => {
-                        let mut page = self.file.get_page(usize_from(offset), self.shared)?;
+                        let mut page = self
+                            .file
+                            .get_page(usize_from(offset), self.shared)
+                            .map_err(PageFaultError::Other)?;
                         if !self.shared {
-                            page.zero_range(start_offset.., false)?;
+                            page.zero_range(start_offset.., false)
+                                .map_err(PageFaultError::Other)?;
                         }
                         Ok(page)
                     }
-                    _ => self.file.get_page(usize_from(offset), self.shared),
+                    _ => self
+                        .file
+                        .get_page(usize_from(offset), self.shared)
+                        .map_err(PageFaultError::Other),
                 }
             }
 
@@ -875,12 +886,35 @@ impl VirtualMemoryWriteGuard<'_> {
         len: u64,
         as_limit: CurrentAsLimit,
     ) -> Result<VirtAddr> {
-        self.mmap_private_zero_special(
+        struct ZeroBacking;
+
+        impl Backing for ZeroBacking {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage, PageFaultError> {
+                if offset == 0 {
+                    return Err(PageFaultError::Unmapped(err!(Fault)));
+                }
+                Ok(KernelPage::zeroed())
+            }
+
+            fn ino(&self) -> u64 {
+                0
+            }
+
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
+                let path = Path::new(b"[stack]".to_vec()).unwrap();
+                (0, 0, 0, Some((path, false)))
+            }
+        }
+
+        self.mmap(
             bias,
             len,
             MemoryPermissions::READ | MemoryPermissions::WRITE,
-            "stack",
+            Some(Arc::new(ZeroBacking)),
+            0,
+            false,
             true,
+            Arc::new(Futexes::new()),
             as_limit,
         )
     }
@@ -913,9 +947,9 @@ impl VirtualMemoryWriteGuard<'_> {
         struct TrampolineCode;
 
         impl Backing for TrampolineCode {
-            fn get_initial_page(&self, offset: u64) -> Result<KernelPage> {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage, PageFaultError> {
                 assert_eq!(offset, 0);
-                PAGE.lock().clone()
+                PAGE.lock().clone().map_err(PageFaultError::Other)
             }
 
             fn ino(&self) -> u64 {
@@ -1539,9 +1573,7 @@ impl Mapping {
 
         if page.is_none() {
             let kernel_page = if let Some(backing) = self.backing.as_ref() {
-                backing
-                    .get_initial_page(self.page_offset + page_offset)
-                    .map_err(PageFaultError::Other)?
+                backing.get_initial_page(self.page_offset + page_offset)?
             } else {
                 KernelPage::zeroed()
             };
@@ -1647,7 +1679,7 @@ impl Drop for Mapping {
 }
 
 trait Backing: Send + Sync + 'static {
-    fn get_initial_page(&self, offset: u64) -> Result<KernelPage>;
+    fn get_initial_page(&self, offset: u64) -> Result<KernelPage, PageFaultError>;
     fn ino(&self) -> u64;
     /// Returns a tuple of (major dev, minor dev, ino, (path, deleted)).
     fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>);
