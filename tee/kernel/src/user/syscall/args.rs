@@ -17,7 +17,7 @@ use self::pointee::{Pointee, PrimitivePointee, Timespec32};
 use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
-        fd::{Events, FdFlags, FileDescriptorTable},
+        fd::{Events, FdFlags, FileDescriptor, FileDescriptorTable},
         node::FileAccessContext,
         path::Path,
     },
@@ -2487,9 +2487,43 @@ impl From<MemfdCreateFlags> for FdFlags {
 pub struct Flock {
     pub r#type: FlockType,
     pub whence: FlockWhence,
-    pub start: u64,
-    pub len: u64,
+    pub start: i64,
+    pub len: i64,
     pub pid: u32,
+}
+
+impl Flock {
+    /// Get the effective start and length of the file lock operation.
+    pub fn get_start_and_len(
+        &self,
+        fd: &FileDescriptor,
+        ctx: &mut FileAccessContext,
+    ) -> Result<(u64, u64)> {
+        let whence_offset = match self.whence {
+            FlockWhence::Set => 0,
+            FlockWhence::Cur => i64::try_from(fd.seek(0, Whence::Cur, ctx)?).unwrap(),
+            FlockWhence::End => fd.stat()?.size,
+        };
+        let start = whence_offset.checked_add(self.start).unwrap();
+        let opt_end = start.checked_add(self.len);
+        let mut len = self.len;
+        let start = if self.len >= 0 {
+            if opt_end.is_none() {
+                len = 0;
+            }
+            start
+        } else {
+            opt_end.ok_or(err!(Inval))?
+        };
+        let start = u64::try_from(start)?;
+
+        let len = if len != 0 {
+            len.unsigned_abs()
+        } else {
+            u64::MAX - start
+        };
+        Ok((start, len))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

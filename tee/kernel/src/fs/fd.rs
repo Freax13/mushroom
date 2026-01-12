@@ -1483,10 +1483,6 @@ impl UnixFileLockRecord {
 
     /// Try to acquire a lock. If there's a conflicting lock, return it.
     pub fn lock(&self, lock: UnixLock) -> Result<(), ()> {
-        if lock.len == 0 {
-            return Ok(());
-        }
-
         let mut guard = self.state.lock();
         guard.lock(lock)?;
         self.notify.notify();
@@ -1500,10 +1496,6 @@ impl UnixFileLockRecord {
 
     /// Release a lock.
     pub fn unlock(&self, owner: UnixLockOwner, start: u64, len: u64) {
-        if len == 0 {
-            return;
-        }
-
         let mut guard = self.state.lock();
         guard.unlock(owner, start, len);
         drop(guard);

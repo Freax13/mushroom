@@ -1,4 +1,7 @@
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::{
+    ffi::c_long,
+    os::fd::{AsFd, AsRawFd, OwnedFd},
+};
 
 use nix::{
     errno::Errno,
@@ -455,4 +458,285 @@ fn fcntl64_setlk64_wr_fcntl64_getlk64_wr() {
             l_pid: child.as_raw(),
         }
     );
+}
+
+#[test]
+fn set_zero_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 0,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 95,
+            l_len: 10,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 0,
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn get_zero_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 10,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 10,
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn set_get_zero_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 0,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 0,
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn set_negative_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: -10,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 95,
+            l_len: 10,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 90,
+            l_len: 10,
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn get_negative_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 10,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 115,
+            l_len: -10,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 10,
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn set_get_negative_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 110,
+            l_len: -10,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 115,
+            l_len: -10,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 100,
+            l_len: 10,
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn set_overflow_len() {
+    let (pid, flock) = setlk_getlk(
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: c_long::MAX - 1,
+            l_len: 2,
+            l_pid: 0,
+        },
+        fcntl_lk,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: c_long::MAX - 1,
+            l_len: 1,
+            l_pid: 0,
+        },
+    );
+
+    assert_eq!(
+        flock,
+        flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: c_long::MAX - 1,
+            l_len: if cfg!(target_pointer_width = "64") {
+                0
+            } else {
+                2
+            },
+            l_pid: pid.as_raw(),
+        }
+    );
+}
+
+#[test]
+fn set_underflow_len() {
+    let fd = open(
+        ".",
+        OFlag::O_RDWR | OFlag::O_TMPFILE,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    let res = fcntl_lk(
+        &fd,
+        LockOp::SetLkW,
+        &mut flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 1,
+            l_len: -2,
+            l_pid: 0,
+        },
+    );
+    assert_eq!(res, Err(Errno::EINVAL));
+}
+
+#[test]
+fn set_negative_start() {
+    let fd = open(
+        ".",
+        OFlag::O_RDWR | OFlag::O_TMPFILE,
+        Mode::from_bits(0o644).unwrap(),
+    )
+    .unwrap();
+
+    let res = fcntl_lk(
+        &fd,
+        LockOp::SetLkW,
+        &mut flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: -1,
+            l_len: 1,
+            l_pid: 0,
+        },
+    );
+    assert_eq!(res, Err(Errno::EINVAL));
 }

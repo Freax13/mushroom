@@ -2716,19 +2716,11 @@ async fn fcntl(
                 virtual_memory.read_with_abi(pointer, abi)?
             };
 
-            let start = match flock.whence {
-                FlockWhence::Set => flock.start,
-                FlockWhence::Cur => u64::from_usize(fd.seek(0, Whence::Cur, &mut ctx)?)
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-                FlockWhence::End => u64::try_from(fd.stat()?.size)?
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-            };
+            let (start, len) = flock.get_start_and_len(&fd, &mut ctx)?;
             let lock = UnixLock {
                 owner: UnixLockOwner::process(&fdtable),
                 start,
-                len: flock.len,
+                len,
                 ty: match flock.r#type {
                     FlockType::Rd => UnixLockType::Read,
                     FlockType::Wr => UnixLockType::Write,
@@ -2744,8 +2736,8 @@ async fn fcntl(
                         UnixLockType::Write => FlockType::Wr,
                     },
                     whence: FlockWhence::Set,
-                    start: lock.start,
-                    len: lock.len,
+                    start: lock.start as i64,
+                    len: i64::try_from(lock.len).unwrap_or_default(),
                     pid: lock.pid.unwrap_or(!0),
                 }
             } else {
@@ -2795,15 +2787,7 @@ async fn fcntl(
                 }
                 _ => unreachable!(),
             };
-            let start = match flock.whence {
-                FlockWhence::Set => flock.start,
-                FlockWhence::Cur => u64::from_usize(fd.seek(0, Whence::Cur, &mut ctx)?)
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-                FlockWhence::End => u64::try_from(fd.stat()?.size)?
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-            };
+            let (start, len) = flock.get_start_and_len(&fd, &mut ctx)?;
             let ty = match flock.r#type {
                 FlockType::Rd => Some(UnixLockType::Read),
                 FlockType::Wr => Some(UnixLockType::Write),
@@ -2813,7 +2797,7 @@ async fn fcntl(
                 let lock = UnixLock {
                     owner,
                     start,
-                    len: flock.len,
+                    len,
                     ty,
                     pid,
                 };
@@ -2828,7 +2812,7 @@ async fn fcntl(
                     _ => unreachable!(),
                 }
             } else {
-                record.unlock(owner, start, flock.len)
+                record.unlock(owner, start, len)
             }
 
             Ok(0)
