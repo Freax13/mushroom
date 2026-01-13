@@ -107,7 +107,14 @@ jobs:
         run: make clippy
 
   test-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        test_target:
+          - amd64
+          - i386
     runs-on: ubuntu-latest
+    name: "Test on Linux"
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -119,6 +126,8 @@ jobs:
             tee
       - name: "Test"
         run: make test-on-host
+        env:
+          TEST_TARGET: ${{ matrix.test_target }}
 
   test:
     strategy:

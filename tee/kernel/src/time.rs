@@ -53,20 +53,26 @@ static MONOTONIC: Time = unsafe { Time::new(&MONOTONIC_TIMERS, &DEFAULT_BACKEND)
 
 pub fn now(clock: ClockId) -> Timespec {
     let now = match clock {
-        ClockId::Realtime => REALTIME.now(),
-        ClockId::Monotonic | ClockId::MonotonicRaw | ClockId::BootTime => MONOTONIC.now(),
+        ClockId::Realtime | ClockId::RealtimeCoarse => REALTIME.now(),
+        ClockId::Monotonic
+        | ClockId::MonotonicRaw
+        | ClockId::MonotonicCoarse
+        | ClockId::BootTime => MONOTONIC.now(),
     };
     Timespec::from(now)
 }
 
 pub fn set(clock: ClockId, time: Timespec) -> Result<()> {
     match clock {
-        ClockId::Realtime => {
+        ClockId::Realtime | ClockId::RealtimeCoarse => {
             let time = Tick::try_from(time).unwrap();
             REALTIME.update_offset(time);
             Ok(())
         }
-        ClockId::Monotonic | ClockId::MonotonicRaw | ClockId::BootTime => bail!(OpNotSupp),
+        ClockId::Monotonic
+        | ClockId::MonotonicRaw
+        | ClockId::MonotonicCoarse
+        | ClockId::BootTime => bail!(OpNotSupp),
     }
 }
 
@@ -109,10 +115,11 @@ pub struct NoTimeoutScheduledError;
 pub async fn sleep_until(deadline: Timespec, clock_id: ClockId) {
     let deadline = Tick::try_from(deadline).unwrap();
     match clock_id {
-        ClockId::Realtime => REALTIME.sleep_until(deadline).await,
-        ClockId::Monotonic | ClockId::MonotonicRaw | ClockId::BootTime => {
-            MONOTONIC.sleep_until(deadline).await
-        }
+        ClockId::Realtime | ClockId::RealtimeCoarse => REALTIME.sleep_until(deadline).await,
+        ClockId::Monotonic
+        | ClockId::MonotonicRaw
+        | ClockId::MonotonicCoarse
+        | ClockId::BootTime => MONOTONIC.sleep_until(deadline).await,
     }
 }
 

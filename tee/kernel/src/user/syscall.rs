@@ -292,6 +292,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysUname);
     handlers.register(SysOlduname);
     handlers.register(SysFcntl);
+    handlers.register(SysSemctl);
     handlers.register(SysFcntl64);
     handlers.register(SysFlock);
     handlers.register(SysFsync);
@@ -2637,6 +2638,36 @@ fn olduname(
     uname_impl(virtual_memory, name, &values, 9)
 }
 
+#[syscall(i386 = 394, amd64 = 66)]
+fn semctl(
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    semid: u64,
+    semnum: u64,
+    op: SemOp,
+    arg: u64,
+) -> SyscallResult {
+    match op {
+        SemOp::Info => {
+            let buf = Pointer::parse(arg, abi)?;
+            let sem_info = SemInfo {
+                map: 1024000000,
+                mni: 32000,
+                mns: 1024000000,
+                mnu: 1024000000,
+                msl: 32000,
+                opm: 500,
+                ume: 500,
+                usz: 0,
+                vmx: 32767,
+                aem: 0,
+            };
+            virtual_memory.write(buf, sem_info)?;
+            Ok(0)
+        }
+    }
+}
+
 #[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
 async fn fcntl(
     abi: Abi,
@@ -2685,19 +2716,11 @@ async fn fcntl(
                 virtual_memory.read_with_abi(pointer, abi)?
             };
 
-            let start = match flock.whence {
-                FlockWhence::Set => flock.start,
-                FlockWhence::Cur => u64::from_usize(fd.seek(0, Whence::Cur, &mut ctx)?)
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-                FlockWhence::End => u64::try_from(fd.stat()?.size)?
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-            };
+            let (start, len) = flock.get_start_and_len(&fd, &mut ctx)?;
             let lock = UnixLock {
                 owner: UnixLockOwner::process(&fdtable),
                 start,
-                len: flock.len,
+                len,
                 ty: match flock.r#type {
                     FlockType::Rd => UnixLockType::Read,
                     FlockType::Wr => UnixLockType::Write,
@@ -2713,8 +2736,8 @@ async fn fcntl(
                         UnixLockType::Write => FlockType::Wr,
                     },
                     whence: FlockWhence::Set,
-                    start: lock.start,
-                    len: lock.len,
+                    start: lock.start as i64,
+                    len: i64::try_from(lock.len).unwrap_or_default(),
                     pid: lock.pid.unwrap_or(!0),
                 }
             } else {
@@ -2764,15 +2787,7 @@ async fn fcntl(
                 }
                 _ => unreachable!(),
             };
-            let start = match flock.whence {
-                FlockWhence::Set => flock.start,
-                FlockWhence::Cur => u64::from_usize(fd.seek(0, Whence::Cur, &mut ctx)?)
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-                FlockWhence::End => u64::try_from(fd.stat()?.size)?
-                    .checked_add_signed(flock.start as i64)
-                    .unwrap(),
-            };
+            let (start, len) = flock.get_start_and_len(&fd, &mut ctx)?;
             let ty = match flock.r#type {
                 FlockType::Rd => Some(UnixLockType::Read),
                 FlockType::Wr => Some(UnixLockType::Write),
@@ -2782,7 +2797,7 @@ async fn fcntl(
                 let lock = UnixLock {
                     owner,
                     start,
-                    len: flock.len,
+                    len,
                     ty,
                     pid,
                 };
@@ -2797,7 +2812,7 @@ async fn fcntl(
                     _ => unreachable!(),
                 }
             } else {
-                record.unlock(owner, start, flock.len)
+                record.unlock(owner, start, len)
             }
 
             Ok(0)
@@ -5064,13 +5079,14 @@ async fn clock_nanosleep(
 ) -> SyscallResult {
     let request = virtual_memory.read_with_abi(request, abi)?;
 
+    let start = time::now(clock_id);
     let deadline = if flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
         request
     } else {
-        time::now(clock_id) + request
+        start.saturating_add(request)
     };
 
-    let res = thread
+    let mut res = thread
         .interruptable(
             async {
                 sleep_until(deadline, clock_id).await;
@@ -5081,8 +5097,14 @@ async fn clock_nanosleep(
         .await;
 
     if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let difference = deadline.saturating_sub(time::now(clock_id));
-        virtual_memory.write_with_abi(remain, difference, abi)?;
+        let now = time::now(clock_id);
+        let elapsed = now.saturating_sub(start);
+        let remaining = request.saturating_sub(elapsed);
+        if remaining == Timespec::ZERO {
+            res = Ok(());
+        } else {
+            virtual_memory.write_with_abi(remain, remaining, abi)?;
+        }
     }
 
     res?;
@@ -6220,7 +6242,6 @@ fn signalfd(
 fn timerfd_create(
     #[state] fdtable: Arc<FileDescriptorTable>,
     #[state] ctx: FileAccessContext,
-
     #[state] no_file_limit: CurrentNoFileLimit,
     clockid: ClockId,
     flags: TimerfdCreateFlags,

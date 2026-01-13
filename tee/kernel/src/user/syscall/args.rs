@@ -17,7 +17,7 @@ use self::pointee::{Pointee, PrimitivePointee, Timespec32};
 use crate::{
     error::{Error, Result, bail, ensure, err},
     fs::{
-        fd::{Events, FdFlags, FileDescriptorTable},
+        fd::{Events, FdFlags, FileDescriptor, FileDescriptorTable},
         node::FileAccessContext,
         path::Path,
     },
@@ -933,6 +933,8 @@ enum_arg! {
         Realtime = 0,
         Monotonic = 1,
         MonotonicRaw = 4,
+        RealtimeCoarse = 5,
+        MonotonicCoarse = 6,
         BootTime = 7,
     }
 }
@@ -1956,6 +1958,7 @@ bitflags! {
         const DELETE = 1 << 9;
         const DELETE_SELF = 1 << 10;
         const MOVE_SELF = 1 << 11;
+        const UNMOUNT = 1 << 13;
         const ONLYDIR = 1 << 24;
         const DONT_FOLLOW = 1 << 25;
         const EXCL_UNLINK = 1 << 26;
@@ -2484,9 +2487,43 @@ impl From<MemfdCreateFlags> for FdFlags {
 pub struct Flock {
     pub r#type: FlockType,
     pub whence: FlockWhence,
-    pub start: u64,
-    pub len: u64,
+    pub start: i64,
+    pub len: i64,
     pub pid: u32,
+}
+
+impl Flock {
+    /// Get the effective start and length of the file lock operation.
+    pub fn get_start_and_len(
+        &self,
+        fd: &FileDescriptor,
+        ctx: &mut FileAccessContext,
+    ) -> Result<(u64, u64)> {
+        let whence_offset = match self.whence {
+            FlockWhence::Set => 0,
+            FlockWhence::Cur => i64::try_from(fd.seek(0, Whence::Cur, ctx)?).unwrap(),
+            FlockWhence::End => fd.stat()?.size,
+        };
+        let start = whence_offset.checked_add(self.start).unwrap();
+        let opt_end = start.checked_add(self.len);
+        let mut len = self.len;
+        let start = if self.len >= 0 {
+            if opt_end.is_none() {
+                len = 0;
+            }
+            start
+        } else {
+            opt_end.ok_or(err!(Inval))?
+        };
+        let start = u64::try_from(start)?;
+
+        let len = if len != 0 {
+            len.unsigned_abs()
+        } else {
+            u64::MAX - start
+        };
+        Ok((start, len))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2670,6 +2707,8 @@ bitflags! {
         const SHRINK = 0x0002;
         /// Prevent file from growing
         const GROW = 0x0004;
+        /// Prevent file from being modified
+        const WRITE = 0x0008;
     }
 }
 
@@ -2737,6 +2776,37 @@ pub enum PtraceSyscallInfoValue {
     None = 0,
     Entry { nr: u64, args: [u64; 6] } = 1,
     Exit { rval: i64, is_error: bool } = 2,
+}
+
+enum_arg! {
+    pub enum SemOp {
+        Info = 19,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct SemInfo {
+    /// Number of entries in semaphore map; unused within kernel
+    pub map: i32,
+    /// Maximum number of semaphore sets
+    pub mni: i32,
+    /// Maximum number of semaphores in all semaphore sets
+    pub mns: i32,
+    /// System-wide maximum number of undo structures; unused within kernel
+    pub mnu: i32,
+    /// Maximum number of semaphores in a set
+    pub msl: i32,
+    /// Maximum number of operations for semop(2)
+    pub opm: i32,
+    /// Maximum number of undo entries per process; unused within kernel
+    pub ume: i32,
+    /// Size of struct sem_undo
+    pub usz: i32,
+    /// Maximum semaphore value
+    pub vmx: i32,
+    /// Max. value that can be recorded for semaphore adjustment (SEM_UNDO)
+    pub aem: i32,
 }
 
 enum_arg! {

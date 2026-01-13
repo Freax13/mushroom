@@ -8,7 +8,9 @@ use crate::{
     error::Result,
     fs::{
         FileSystem,
-        fd::{BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, SealSet},
+        fd::{
+            BsdFileLock, Events, NonEmptyEvents, OpenFileDescription, ReadBuf, SealSet, WriteBuf,
+        },
         node::{FileAccessContext, new_ino},
         ownership::Ownership,
         path::Path,
@@ -35,6 +37,7 @@ struct InternalMemFd {
     ownership: Ownership,
     buffer: Buffer,
     seals: SealSet,
+    cursor_idx: usize,
 }
 
 impl MemFd {
@@ -55,6 +58,7 @@ impl MemFd {
                 ),
                 buffer: Buffer::new(),
                 seals,
+                cursor_idx: 0,
             }),
             futexes: Arc::new(Futexes::new()),
         }
@@ -101,6 +105,40 @@ impl OpenFileDescription for MemFd {
             mtime: Timespec::ZERO,
             ctime: Timespec::ZERO,
         })
+    }
+
+    fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        let cursor_idx = guard.cursor_idx;
+        let len = guard.buffer.read(cursor_idx, buf)?;
+        guard.cursor_idx += len;
+        Ok(len)
+    }
+
+    fn pread(&self, pos: usize, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
+        let guard = self.internal.lock();
+        guard.buffer.read(pos, buf)
+    }
+
+    fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        guard.seals.check_not_sealed(Seals::WRITE)?;
+        let cursor_idx = guard.cursor_idx;
+        if cursor_idx + buf.buffer_len() >= guard.buffer.len() {
+            guard.seals.check_not_sealed(Seals::GROW)?
+        }
+        let len = guard.buffer.write(cursor_idx, buf, usize::MAX)?;
+        guard.cursor_idx += len;
+        Ok(len)
+    }
+
+    fn pwrite(&self, pos: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        let mut guard = self.internal.lock();
+        guard.seals.check_not_sealed(Seals::WRITE)?;
+        if pos + buf.buffer_len() >= guard.buffer.len() {
+            guard.seals.check_not_sealed(Seals::GROW)?
+        }
+        guard.buffer.write(pos, buf, usize::MAX)
     }
 
     fn truncate(&self, length: usize, _: &FileAccessContext) -> Result<()> {

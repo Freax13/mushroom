@@ -317,6 +317,7 @@ fn emulate_cpuid(eax: u32, ecx: u32) -> (u32, u32, u32, u32) {
         // hypervisor/supervisor range
         (0x4000_0000, _) => (0x40000001, 0x4853554d, 0x4d4f4f52, 0x504e5320),
         (0x4000_0001, _) => (0x5352534d, 0, 0, 0),
-        (eax, ecx) => todo!("unimplemented CPUID function eax={eax:#x}, ecx={ecx:#x}"),
+        // All other leaves default to 0.
+        (_, _) => (0, 0, 0, 0),
     }
 }

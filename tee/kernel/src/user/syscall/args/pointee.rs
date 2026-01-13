@@ -33,9 +33,9 @@ use crate::{
                 LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, MsgHdrFlags, Offset,
                 OpenFlags, OpenHow, OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer,
                 PtraceSyscallInfo, PtraceSyscallInfoValue, RLimit, ResolveFlags, Rusage,
-                SchedParam, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink, SocketAddrUnix,
-                Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone, Ucred,
-                UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                SchedParam, SemInfo, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink,
+                SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone,
+                Ucred, UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -2892,8 +2892,8 @@ impl AbiDependentPointee for Flock {
 pub struct Flock32 {
     r#type: i16,
     whence: i16,
-    start: u32,
-    len: u32,
+    start: i32,
+    len: i32,
     pid: u32,
 }
 
@@ -2903,8 +2903,8 @@ pub struct Flock64 {
     r#type: i16,
     whence: i16,
     _padding: u32,
-    start: u64,
-    len: u64,
+    start: i64,
+    len: i64,
     pid: u32,
     _padding2: u32,
 }
@@ -2916,8 +2916,8 @@ impl TryFrom<Flock32> for Flock {
         Ok(Self {
             r#type: FlockType::try_from(value.r#type)?,
             whence: FlockWhence::try_from(value.whence)?,
-            start: u64::from(value.start),
-            len: u64::from(value.len),
+            start: i64::from(value.start),
+            len: i64::from(value.len),
             pid: value.pid,
         })
     }
@@ -2942,8 +2942,8 @@ impl From<Flock> for Flock32 {
         Self {
             r#type: value.r#type as i16,
             whence: value.whence as i16,
-            start: value.start as u32,
-            len: value.len as u32,
+            start: value.start as i32,
+            len: value.len as i32,
             pid: value.pid,
         }
     }
@@ -2974,8 +2974,8 @@ impl AbiDependentPointee for super::Flock64 {
 pub struct Flock64On32Bit {
     r#type: i16,
     whence: i16,
-    start: u64,
-    len: u64,
+    start: i64,
+    len: i64,
     pid: u32,
 }
 
@@ -3259,3 +3259,6 @@ impl From<PtraceSyscallInfo> for RawPtraceSyscallInfo {
         }
     }
 }
+
+impl Pointee for SemInfo {}
+impl PrimitivePointee for SemInfo {}

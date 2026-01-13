@@ -230,7 +230,7 @@ impl VirtualMemory {
         let random_bytes = write_bytes(&random_bytes(), &mut str_addr)?;
 
         // write auxv.
-        const MAX_NUM_AUX_VECTORS: usize = 11;
+        const MAX_NUM_AUX_VECTORS: usize = 12;
         #[derive(Clone, Copy)]
         enum AuxVector {
             End = 0,
@@ -244,6 +244,7 @@ impl VirtualMemory {
             ClkTck = 17,
             Secure = 23,
             Random = 25,
+            MinSigStkSz = 51,
         }
         let aux_vectors = info
             .phdr
@@ -259,6 +260,7 @@ impl VirtualMemory {
                 (AuxVector::ClkTck, 100),
                 (AuxVector::Secure, 0),
                 (AuxVector::Random, random_bytes.as_u64()),
+                (AuxVector::MinSigStkSz, 0x2000),
                 (AuxVector::End, 0),
             ]);
         assert!(aux_vectors.clone().count() <= MAX_NUM_AUX_VECTORS);

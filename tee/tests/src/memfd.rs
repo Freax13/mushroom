@@ -3,8 +3,11 @@ use std::fs::File;
 use nix::{
     errno::Errno,
     fcntl::{FcntlArg, SealFlag, fcntl},
-    sys::memfd::{MFdFlags, memfd_create},
-    unistd::{ftruncate, unlink},
+    sys::{
+        memfd::{MFdFlags, memfd_create},
+        uio::pread,
+    },
+    unistd::{ftruncate, unlink, write},
 };
 
 #[test]
@@ -119,4 +122,47 @@ fn seal_grow() {
 
     // Shrinking is allowed.
     assert_eq!(ftruncate(&fd, size - 1), Ok(()));
+}
+
+#[test]
+fn write_write_pread() {
+    let fd = memfd_create("test", MFdFlags::MFD_CLOEXEC).unwrap();
+    assert_eq!(write(&fd, b"1234"), Ok(4));
+    assert_eq!(write(&fd, b"5678"), Ok(4));
+    let mut buf = [0; 8];
+    assert_eq!(pread(&fd, &mut buf, 0), Ok(8));
+    assert_eq!(buf, *b"12345678");
+}
+
+#[test]
+fn truncate_seal_write_pread() {
+    let fd = memfd_create("test", MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING).unwrap();
+    assert_eq!(ftruncate(&fd, 4), Ok(()));
+    assert_eq!(write(&fd, b"1234"), Ok(4));
+    let mut buf = [0; 8];
+    assert_eq!(pread(&fd, &mut buf, 0), Ok(4));
+    assert_eq!(buf[..4], *b"1234");
+}
+
+#[test]
+fn write_seal_grow_write() {
+    let fd = memfd_create("test", MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING).unwrap();
+    assert_eq!(write(&fd, b"1234"), Ok(4));
+    assert_eq!(
+        fcntl(&fd, FcntlArg::F_ADD_SEALS(SealFlag::F_SEAL_GROW)),
+        Ok(0)
+    );
+    assert_eq!(write(&fd, b"1234"), Err(Errno::EPERM));
+}
+
+#[test]
+fn truncate_seal_grow_write() {
+    let fd = memfd_create("test", MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING).unwrap();
+    assert_eq!(ftruncate(&fd, 6), Ok(()));
+    assert_eq!(
+        fcntl(&fd, FcntlArg::F_ADD_SEALS(SealFlag::F_SEAL_GROW)),
+        Ok(0)
+    );
+    assert_eq!(write(&fd, b"1234"), Ok(4));
+    assert_eq!(write(&fd, b"5678"), Err(Errno::EPERM));
 }
