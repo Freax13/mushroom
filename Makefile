@@ -2,8 +2,11 @@ include config.mk
 
 all: kernel supervisor-snp supervisor-tdx cli
 
-kernel:
+kernel: vdso
 	$(MAKE) -C tee/kernel
+
+vdso:
+	$(MAKE) -C tee/vdso
 
 supervisor-snp:
 	$(MAKE) -C tee/supervisor-snp

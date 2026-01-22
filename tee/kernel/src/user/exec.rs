@@ -229,8 +229,10 @@ impl VirtualMemory {
         let platform = write_str(platform, &mut str_addr)?;
         let random_bytes = write_bytes(&random_bytes(), &mut str_addr)?;
 
+        let (sysinfo_ehdr, sysinfo) = self.modify().map_vdso(E::ABI, CurrentAsLimit::INFINITE)?;
+
         // write auxv.
-        const MAX_NUM_AUX_VECTORS: usize = 12;
+        const MAX_NUM_AUX_VECTORS: usize = 14;
         #[derive(Clone, Copy)]
         enum AuxVector {
             End = 0,
@@ -244,6 +246,8 @@ impl VirtualMemory {
             ClkTck = 17,
             Secure = 23,
             Random = 25,
+            Sysinfo = 32,
+            SysinfoEhdr = 33,
             MinSigStkSz = 51,
         }
         let aux_vectors = info
@@ -260,6 +264,8 @@ impl VirtualMemory {
                 (AuxVector::ClkTck, 100),
                 (AuxVector::Secure, 0),
                 (AuxVector::Random, random_bytes.as_u64()),
+                (AuxVector::Sysinfo, sysinfo.as_u64()),
+                (AuxVector::SysinfoEhdr, sysinfo_ehdr.as_u64()),
                 (AuxVector::MinSigStkSz, 0x2000),
                 (AuxVector::End, 0),
             ]);

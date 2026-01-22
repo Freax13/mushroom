@@ -1,7 +1,7 @@
 cargo-features = ["panic-immediate-abort", "profile-rustflags"]
 
 [workspace]
-members = ["example", "external-tests", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "test-runner-init", "tests"]
+members = ["example", "external-tests", "kernel", "kernel-macros", "static-page-tables", "supervisor-snp", "supervisor-tdx", "test-runner-init", "tests", "vdso"]
 resolver = "2"
 
 [workspace.dependencies]
