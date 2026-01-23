@@ -3587,6 +3587,74 @@ fn ptrace(
 
             Ok(0)
         }
+        PtraceOp::SetRegs => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let registers = &mut tracee.cpu_state.lock().registers;
+            match abi {
+                Abi::I386 => {
+                    let user_regs = virtual_memory.read::<UserRegs32, _>(data.cast())?;
+                    registers.rbx = u64::from(user_regs.bx);
+                    registers.rcx = u64::from(user_regs.cx);
+                    registers.rdx = u64::from(user_regs.dx);
+                    registers.rsi = u64::from(user_regs.si);
+                    registers.rdi = u64::from(user_regs.di);
+                    registers.rbp = u64::from(user_regs.bp);
+                    registers.rax = u64::from(user_regs.ax);
+                    registers.ds = user_regs.ds as u16;
+                    registers.es = user_regs.es as u16;
+                    registers.fs = user_regs.fs as u16;
+                    registers.gs = user_regs.gs as u16;
+                    registers.rax = u64::from(user_regs.orig_ax);
+                    registers.rip = u64::from(user_regs.ip);
+                    registers.cs = user_regs.cs as u16;
+                    registers.rflags = u64::from(user_regs.flags);
+                    registers.rsp = u64::from(user_regs.sp);
+                    registers.ss = user_regs.ss as u16;
+                }
+                Abi::Amd64 => {
+                    let user_regs = virtual_memory.read::<UserRegs64, _>(data.cast())?;
+                    registers.r15 = user_regs.r15;
+                    registers.r14 = user_regs.r14;
+                    registers.r13 = user_regs.r13;
+                    registers.r12 = user_regs.r12;
+                    registers.rbp = user_regs.bp;
+                    registers.rbx = user_regs.bx;
+                    registers.r11 = user_regs.r11;
+                    registers.r10 = user_regs.r10;
+                    registers.r9 = user_regs.r9;
+                    registers.r8 = user_regs.r8;
+                    registers.rax = user_regs.ax;
+                    registers.rcx = user_regs.cx;
+                    registers.rdx = user_regs.dx;
+                    registers.rsi = user_regs.si;
+                    registers.rdi = user_regs.di;
+                    registers.rax = user_regs.orig_ax;
+                    registers.rip = user_regs.ip;
+                    registers.cs = user_regs.cs as u16;
+                    registers.rflags = user_regs.flags;
+                    registers.rsp = user_regs.sp;
+                    registers.ss = user_regs.ss as u16;
+                    registers.fs_base = user_regs.fs_base;
+                    // TODO: gsbase
+                    registers.ds = user_regs.ds as u16;
+                    registers.es = user_regs.es as u16;
+                    registers.fs = user_regs.fs as u16;
+                    registers.gs = user_regs.gs as u16;
+                }
+            }
+
+            Ok(0)
+        }
         PtraceOp::Attach | PtraceOp::Seize => {
             let (stop, seize, options) = if request == PtraceOp::Attach {
                 (true, false, None)
