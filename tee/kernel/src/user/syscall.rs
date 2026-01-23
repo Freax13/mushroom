@@ -214,6 +214,18 @@ impl ThreadGuard<'_> {
             let _ = virtual_memory.write(clear_child_tid, 0u32);
             let _ = virtual_memory.futex_wake(clear_child_tid, 1, FutexScope::Global, None);
         }
+
+        for tracee in core::mem::take(&mut self.tracees)
+            .iter()
+            .filter_map(Weak::upgrade)
+        {
+            let mut guard = tracee.lock();
+            if core::ptr::eq(guard.tracer.as_ptr(), self.thread) {
+                guard.ptrace_state = PtraceState::Running;
+                drop(guard);
+                tracee.ptrace_tracee_notify.notify();
+            }
+        }
     }
 }
 

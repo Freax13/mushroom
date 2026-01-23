@@ -1288,21 +1288,6 @@ impl DerefMut for ThreadGuard<'_> {
     }
 }
 
-impl Drop for Thread {
-    fn drop(&mut self) {
-        let this = self as *const _;
-        let state = self.state.get_mut();
-        for tracee in state.tracees.iter().filter_map(Weak::upgrade) {
-            let mut guard = tracee.lock();
-            if core::ptr::eq(guard.tracer.as_ptr(), this) {
-                guard.ptrace_state = PtraceState::Running;
-                drop(guard);
-                tracee.ptrace_tracee_notify.notify();
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Sigaction {
     pub sa_handler_or_sigaction: u64,
