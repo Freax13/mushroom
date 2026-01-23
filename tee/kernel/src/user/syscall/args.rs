@@ -2376,7 +2376,7 @@ enum_arg! {
         // Kill = 8,
         // SingleStep = 9,
         GetRegs = 12,
-        // SetRegs = 13,
+        SetRegs = 13,
         // GetFpregs = 14,
         // SetFpregs = 15,
         // GetFpxregs = 18,

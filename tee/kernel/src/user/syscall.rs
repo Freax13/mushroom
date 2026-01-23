@@ -76,9 +76,9 @@ use crate::{
             cpu_state::CpuState,
         },
         thread::{
-            Capability, Gid, NewTls, PtraceState, SchedulingSettings, SigFields, SigInfo,
-            SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid,
-            new_tid,
+            Capability, Gid, NewTls, PtraceState, RestartData, SchedulingSettings, SigFields,
+            SigInfo, SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread,
+            ThreadGuard, Uid, new_tid,
         },
     },
 };
@@ -98,8 +98,12 @@ impl Thread {
 
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
-        if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
-            guard.restart_syscall(args.no);
+        if let Err(err) = result {
+            match err.kind() {
+                ErrorKind::RestartNoIntr => guard.restart_syscall(args.no),
+                ErrorKind::RestartRestartblock => guard.restart_syscall_stateful(args.abi),
+                _ => {}
+            }
         }
         drop(guard);
 
@@ -213,6 +217,18 @@ impl ThreadGuard<'_> {
             let virtual_memory = self.virtual_memory().clone();
             let _ = virtual_memory.write(clear_child_tid, 0u32);
             let _ = virtual_memory.futex_wake(clear_child_tid, 1, FutexScope::Global, None);
+        }
+
+        for tracee in core::mem::take(&mut self.tracees)
+            .iter()
+            .filter_map(Weak::upgrade)
+        {
+            let mut guard = tracee.lock();
+            if core::ptr::eq(guard.tracer.as_ptr(), self.thread) {
+                guard.ptrace_state = PtraceState::Running;
+                drop(guard);
+                tracee.ptrace_tracee_notify.notify();
+            }
         }
     }
 }
@@ -384,6 +400,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetdents64);
     handlers.register(SysEpollCreate);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysRestartSyscall);
     handlers.register(SysTimerCreate);
     handlers.register(SysTimerSettime);
     handlers.register(SysTimerGettime);
@@ -1005,8 +1022,6 @@ fn brk(
     #[state] as_limit: CurrentAsLimit,
     brk_value: u64,
 ) -> SyscallResult {
-    ensure!(brk_value.is_multiple_of(0x1000), Inval);
-
     if brk_value != 0
         && let Ok(brk_value) = VirtAddr::try_new(brk_value)
     {
@@ -1532,6 +1547,43 @@ async fn pause() -> SyscallResult {
     pending().await
 }
 
+async fn nanosleep_impl(
+    abi: Abi,
+    thread: &Thread,
+    virtual_memory: Arc<VirtualMemory>,
+    rmtp: Pointer<Timespec>,
+    deadline: Timespec,
+) -> SyscallResult {
+    let sleep_future = sleep_until(deadline, ClockId::Monotonic);
+    let interrupted_future = thread.wait_for_signal();
+
+    let sleep_future = pin!(sleep_future);
+    let interrupted_future = pin!(interrupted_future);
+    let res = future::select(sleep_future, interrupted_future).await;
+    match res {
+        Either::Left(_) => Ok(0),
+        Either::Right(((_, stopped), _)) => {
+            let now = time::now(ClockId::Monotonic);
+            if let Some(remaining) = deadline
+                .checked_sub(now)
+                .filter(|&remaining| remaining > Timespec::ZERO)
+            {
+                if !rmtp.is_null() {
+                    virtual_memory.write_with_abi(rmtp, remaining, abi)?;
+                }
+                if stopped {
+                    let mut guard = thread.lock();
+                    guard.restart_data = Some(RestartData::Nanosleep { rmtp, deadline });
+                    bail!(RestartRestartblock)
+                }
+                bail!(Intr)
+            } else {
+                Ok(0)
+            }
+        }
+    }
+}
+
 #[syscall(i386 = 162, amd64 = 35)]
 async fn nanosleep(
     abi: Abi,
@@ -1541,33 +1593,10 @@ async fn nanosleep(
     rmtp: Pointer<Timespec>,
 ) -> SyscallResult {
     let rqtp = virtual_memory.read_with_abi(rqtp, abi)?;
-
     let now = time::now(ClockId::Monotonic);
     let deadline = now + rqtp;
 
-    let sleep_future = sleep_until(deadline, ClockId::Monotonic);
-    let interrupted_future = thread.wait_for_signal();
-
-    let sleep_future = pin!(sleep_future);
-    let interrupted_future = pin!(interrupted_future);
-    let res = future::select(sleep_future, interrupted_future).await;
-    match res {
-        Either::Left(_) => Ok(0),
-        Either::Right(_) => {
-            let now = time::now(ClockId::Monotonic);
-            if let Some(remaining) = deadline
-                .checked_sub(now)
-                .filter(|&remaining| remaining > Timespec::ZERO)
-            {
-                if !rmtp.is_null() {
-                    virtual_memory.write_with_abi(rmtp, remaining, abi)?;
-                }
-                bail!(Intr)
-            } else {
-                Ok(0)
-            }
-        }
-    }
+    nanosleep_impl(abi, thread, virtual_memory, rmtp, deadline).await
 }
 
 #[syscall(i386 = 105, amd64 = 36)]
@@ -1850,7 +1879,10 @@ async fn connect(
     Ok(0)
 }
 
-#[syscall(amd64 = 43, interruptable, restartable)]
+// Note 381 is not the actual syscall number (usually this syscall doesn't exit
+// on 32-bit Linux), but we need a number to get socketcall to work. 381 is
+// otherwise unused.
+#[syscall(i386 = 381, amd64 = 43, interruptable, restartable)]
 async fn accept(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -2254,6 +2286,8 @@ async fn clone(
             process.mm_arg_end(),
             process.mm_env_start(),
             process.mm_env_end(),
+            process.mm_auxv_start(),
+            process.mm_auxv_end(),
             process.personality(),
         ))
     };
@@ -3449,7 +3483,7 @@ fn ptrace(
             virtual_memory.write_with_abi(data.cast(), word, abi)?;
             Ok(0)
         }
-        PtraceOp::Cont | PtraceOp::Syscall => {
+        PtraceOp::Cont | PtraceOp::Syscall | PtraceOp::Detach => {
             let tracee = thread
                 .lock()
                 .tracees
@@ -3471,6 +3505,10 @@ fn ptrace(
                 guard.ptrace_state = PtraceState::Running;
             }
             guard.ptrace_trap_syscall = request == PtraceOp::Syscall;
+            if request == PtraceOp::Detach {
+                guard.tracer = Weak::new();
+            }
+
             tracee.ptrace_tracee_notify.notify();
 
             tracee.process().stop_state.cont();
@@ -3549,6 +3587,74 @@ fn ptrace(
 
             Ok(0)
         }
+        PtraceOp::SetRegs => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let registers = &mut tracee.cpu_state.lock().registers;
+            match abi {
+                Abi::I386 => {
+                    let user_regs = virtual_memory.read::<UserRegs32, _>(data.cast())?;
+                    registers.rbx = u64::from(user_regs.bx);
+                    registers.rcx = u64::from(user_regs.cx);
+                    registers.rdx = u64::from(user_regs.dx);
+                    registers.rsi = u64::from(user_regs.si);
+                    registers.rdi = u64::from(user_regs.di);
+                    registers.rbp = u64::from(user_regs.bp);
+                    registers.rax = u64::from(user_regs.ax);
+                    registers.ds = user_regs.ds as u16;
+                    registers.es = user_regs.es as u16;
+                    registers.fs = user_regs.fs as u16;
+                    registers.gs = user_regs.gs as u16;
+                    registers.rax = u64::from(user_regs.orig_ax);
+                    registers.rip = u64::from(user_regs.ip);
+                    registers.cs = user_regs.cs as u16;
+                    registers.rflags = u64::from(user_regs.flags);
+                    registers.rsp = u64::from(user_regs.sp);
+                    registers.ss = user_regs.ss as u16;
+                }
+                Abi::Amd64 => {
+                    let user_regs = virtual_memory.read::<UserRegs64, _>(data.cast())?;
+                    registers.r15 = user_regs.r15;
+                    registers.r14 = user_regs.r14;
+                    registers.r13 = user_regs.r13;
+                    registers.r12 = user_regs.r12;
+                    registers.rbp = user_regs.bp;
+                    registers.rbx = user_regs.bx;
+                    registers.r11 = user_regs.r11;
+                    registers.r10 = user_regs.r10;
+                    registers.r9 = user_regs.r9;
+                    registers.r8 = user_regs.r8;
+                    registers.rax = user_regs.ax;
+                    registers.rcx = user_regs.cx;
+                    registers.rdx = user_regs.dx;
+                    registers.rsi = user_regs.si;
+                    registers.rdi = user_regs.di;
+                    registers.rax = user_regs.orig_ax;
+                    registers.rip = user_regs.ip;
+                    registers.cs = user_regs.cs as u16;
+                    registers.rflags = user_regs.flags;
+                    registers.rsp = user_regs.sp;
+                    registers.ss = user_regs.ss as u16;
+                    registers.fs_base = user_regs.fs_base;
+                    // TODO: gsbase
+                    registers.ds = user_regs.ds as u16;
+                    registers.es = user_regs.es as u16;
+                    registers.fs = user_regs.fs as u16;
+                    registers.gs = user_regs.gs as u16;
+                }
+            }
+
+            Ok(0)
+        }
         PtraceOp::Attach | PtraceOp::Seize => {
             let (stop, seize, options) = if request == PtraceOp::Attach {
                 (true, false, None)
@@ -3558,28 +3664,6 @@ fn ptrace(
             };
             let tracee = Thread::find_by_tid(pid).ok_or(err!(Srch))?;
             tracee.set_tracer(Arc::downgrade(thread), stop, seize, options)?;
-
-            Ok(0)
-        }
-        PtraceOp::Detach => {
-            let tracee = thread
-                .lock()
-                .tracees
-                .iter()
-                .filter_map(Weak::upgrade)
-                .find(|tracee| tracee.tid() == pid)
-                .ok_or(err!(Srch))?;
-            let mut guard = tracee.lock();
-            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
-            ensure!(guard.ptrace_state.is_stopped(), Srch);
-
-            guard.tracer = Weak::new();
-            guard.ptrace_state = PtraceState::Running;
-            tracee.ptrace_tracee_notify.notify();
-
-            if !data.is_null() {
-                todo!();
-            }
 
             Ok(0)
         }
@@ -4769,7 +4853,7 @@ async fn futex(
                     } else {
                         match res {
                             Either::Left(_) => bail!(TimedOut),
-                            Either::Right((shoud_restart, _)) => {
+                            Either::Right(((shoud_restart, _), _)) => {
                                 if shoud_restart {
                                     bail!(RestartNoIntr)
                                 } else {
@@ -4930,6 +5014,44 @@ fn set_tid_address(mut thread: ThreadGuard, tidptr: Pointer<u32>) -> SyscallResu
     Ok(u64::from(thread.tid()))
 }
 
+#[syscall(i386 = 0, amd64 = 219)]
+async fn restart_syscall(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+) -> SyscallResult {
+    let mut guard = thread.lock();
+    let restart_data = guard.restart_data.take().ok_or(err!(Intr))?;
+    drop(guard);
+
+    match restart_data {
+        RestartData::Nanosleep { rmtp, deadline } => {
+            nanosleep_impl(abi, thread, virtual_memory, rmtp, deadline).await
+        }
+        RestartData::ClockNanosleep {
+            clock_id,
+            flags,
+            request,
+            remain,
+            start,
+            deadline,
+        } => {
+            clock_nanosleep_impl(
+                abi,
+                thread,
+                virtual_memory,
+                clock_id,
+                flags,
+                request,
+                remain,
+                start,
+                deadline,
+            )
+            .await
+        }
+    }
+}
+
 #[syscall(i386 = 259, amd64 = 222)]
 fn timer_create(
     abi: Abi,
@@ -5067,6 +5189,55 @@ fn clock_getres_time64(
     clock_getres(Abi::Amd64, virtual_memory, clock_id, res)
 }
 
+#[expect(clippy::too_many_arguments)]
+async fn clock_nanosleep_impl(
+    abi: Abi,
+    thread: &Thread,
+    virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    flags: ClockNanosleepFlags,
+    request: Timespec,
+    remain: Pointer<Timespec>,
+    start: Timespec,
+    deadline: Timespec,
+) -> SyscallResult {
+    let sleep_future = sleep_until(deadline, clock_id);
+    let interrupted_future = thread.wait_for_signal();
+
+    let sleep_future = pin!(sleep_future);
+    let interrupted_future = pin!(interrupted_future);
+    let res = future::select(sleep_future, interrupted_future).await;
+    match res {
+        Either::Left(_) => Ok(0),
+        Either::Right(((_, stopped), _)) => {
+            let now = time::now(clock_id);
+            if let Some(remaining) = deadline
+                .checked_sub(now)
+                .filter(|&remaining| remaining > Timespec::ZERO)
+            {
+                if !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
+                    virtual_memory.write_with_abi(remain, remaining, abi)?;
+                }
+                if stopped {
+                    let mut guard = thread.lock();
+                    guard.restart_data = Some(RestartData::ClockNanosleep {
+                        clock_id,
+                        flags,
+                        request,
+                        remain,
+                        start,
+                        deadline,
+                    });
+                    bail!(RestartRestartblock)
+                }
+                bail!(Intr)
+            } else {
+                Ok(0)
+            }
+        }
+    }
+}
+
 #[syscall(i386 = 267, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
@@ -5086,30 +5257,18 @@ async fn clock_nanosleep(
         start.saturating_add(request)
     };
 
-    let mut res = thread
-        .interruptable(
-            async {
-                sleep_until(deadline, clock_id).await;
-                Ok(())
-            },
-            false,
-        )
-        .await;
-
-    if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let now = time::now(clock_id);
-        let elapsed = now.saturating_sub(start);
-        let remaining = request.saturating_sub(elapsed);
-        if remaining == Timespec::ZERO {
-            res = Ok(());
-        } else {
-            virtual_memory.write_with_abi(remain, remaining, abi)?;
-        }
-    }
-
-    res?;
-
-    Ok(0)
+    clock_nanosleep_impl(
+        abi,
+        thread,
+        virtual_memory,
+        clock_id,
+        flags,
+        request,
+        remain,
+        start,
+        deadline,
+    )
+    .await
 }
 
 #[syscall(i386 = 407)]

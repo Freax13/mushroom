@@ -14,6 +14,7 @@ mod timer;
 mod uname;
 mod unix;
 mod unix_file_lock;
+mod vdso;
 
 use std::{
     alloc::{Layout, alloc, dealloc},

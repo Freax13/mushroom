@@ -38,3 +38,6 @@ x86_64 = "0.15.1"
 
 [lints.clippy]
 new_without_default = "allow"
+
+[build-dependencies]
+goblin = "0.10.4"

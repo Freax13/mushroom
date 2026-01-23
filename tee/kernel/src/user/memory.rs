@@ -57,6 +57,8 @@ const SIGRETURN_TRAMPOLINE_PAGE: u64 = 0x7fff_f000;
 pub const SIGRETURN_TRAMPOLINE_I386: u64 = SIGRETURN_TRAMPOLINE_PAGE;
 pub const SIGRETURN_TRAMPOLINE_AMD64: u64 = SIGRETURN_TRAMPOLINE_PAGE + 0x10;
 
+include!(concat!(env!("OUT_DIR"), "/vdso_files.rs"));
+
 pub struct VirtualMemory {
     state: RwLock<VirtualMemoryState>,
     mapping_ctrl: MappingCtrl,
@@ -919,6 +921,98 @@ impl VirtualMemoryWriteGuard<'_> {
         )
     }
 
+    /// Returns a tuple of (AT_SYSINFO_EHDR, AT_SYSINFO).
+    pub fn map_vdso(&mut self, abi: Abi, as_limit: CurrentAsLimit) -> Result<(VirtAddr, VirtAddr)> {
+        static VDSO_I386: Lazy<Arc<VdsoBacking>> =
+            Lazy::new(|| Arc::new(VdsoBacking::new(vdso_i386_bytes(), vdso_i386_entry())));
+        static VDSO_AMD64: Lazy<Arc<VdsoBacking>> =
+            Lazy::new(|| Arc::new(VdsoBacking::new(vdso_amd64_bytes(), vdso_amd64_entry())));
+
+        struct VdsoBacking {
+            pages: Vec<Mutex<KernelPage>>,
+            entrypoint: u64,
+        }
+
+        impl VdsoBacking {
+            pub fn new(content: &[u8], entrypoint: u64) -> Self {
+                let pages = content
+                    .chunks(0x1000)
+                    .map(|chunk| {
+                        let mut page = KernelPage::zeroed();
+                        page.make_mut(false).unwrap();
+                        let ptr = page.index(..chunk.len());
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                chunk.as_ptr(),
+                                ptr.as_mut_ptr(),
+                                chunk.len(),
+                            );
+                        }
+                        Mutex::new(page)
+                    })
+                    .collect();
+                Self { pages, entrypoint }
+            }
+
+            pub fn len(&self) -> u64 {
+                u64::from_usize(self.pages.len()) * Size4KiB::SIZE
+            }
+
+            pub fn entrypoint(&self) -> u64 {
+                self.entrypoint
+            }
+        }
+
+        impl Backing for VdsoBacking {
+            fn get_initial_page(&self, offset: u64) -> Result<KernelPage, PageFaultError> {
+                self.pages
+                    .get(usize_from(offset))
+                    .ok_or(PageFaultError::Other(err!(Fault)))?
+                    .lock()
+                    .clone()
+                    .map_err(PageFaultError::Other)
+            }
+
+            fn ino(&self) -> u64 {
+                0
+            }
+
+            fn location(&self) -> (u16, u8, u64, Option<(Path, bool)>) {
+                (
+                    0,
+                    0,
+                    0,
+                    Some((Path::new(b"[vdso]".to_vec()).unwrap(), false)),
+                )
+            }
+        }
+
+        let vdso = match abi {
+            Abi::I386 => &*VDSO_I386,
+            Abi::Amd64 => &*VDSO_AMD64,
+        };
+
+        let base = self.mmap(
+            Bias::Dynamic {
+                abi,
+                map_32bit: false,
+            },
+            vdso.len(),
+            MemoryPermissions::READ | MemoryPermissions::EXECUTE,
+            Some(vdso.clone()),
+            0,
+            false,
+            false,
+            Arc::new(Futexes::new()),
+            as_limit,
+        )?;
+        let sysinfo = match abi {
+            Abi::I386 => base + vdso.entrypoint(),
+            Abi::Amd64 => VirtAddr::zero(),
+        };
+        Ok((base, sysinfo))
+    }
+
     pub fn map_sigreturn_trampoline(&mut self) {
         static PAGE: Lazy<Mutex<KernelPage>> = Lazy::new(|| {
             let sigreturn_trampoline = &[
@@ -1382,6 +1476,9 @@ impl VirtualMemoryWriteGuard<'_> {
 
     pub fn set_brk_end(&mut self, brk_end: VirtAddr, as_limit: CurrentAsLimit) -> Result<()> {
         let old_brk_end = core::mem::replace(&mut self.guard.brk_end, brk_end);
+
+        let brk_end = brk_end.align_up(Size4KiB::SIZE);
+        let old_brk_end = old_brk_end.align_up(Size4KiB::SIZE);
 
         match old_brk_end.cmp(&brk_end) {
             Ordering::Less => {

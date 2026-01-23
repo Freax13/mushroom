@@ -25,6 +25,9 @@ KERNEL_kasan       = $(KERNEL_development)
 KERNEL_profiling   = tee/target/x86_64-unknown-none/kernel-profiling/kernel
 export KERNEL ?= $(mkfile_dir)/$(KERNEL_$(PROFILE))
 
+export VDSO_I386  = $(mkfile_dir)/tee/target/i686-unknown-linux-gnu/release/libvdso.so
+export VDSO_AMD64 = $(mkfile_dir)/tee/target/x86_64-unknown-linux-gnu/release/libvdso.so
+
 SUPERVISOR_SNP_development = tee/target/supervisor/supervisor/supervisor-snp
 SUPERVISOR_SNP_release     = tee/target/supervisor/supervisor-release/supervisor-snp
 SUPERVISOR_SNP_kasan       = $(SUPERVISOR_SNP_development)

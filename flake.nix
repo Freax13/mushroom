@@ -33,6 +33,7 @@
           extensions = [ "rust-src" ];
           targets = [
             "x86_64-unknown-none"
+            "i686-unknown-linux-gnu"
             "x86_64-unknown-linux-gnu"
           ];
         };
@@ -67,14 +68,12 @@
           DEFAULT_PATH_KERNEL = "${placeholder "out"}/share/kernel";
           DEFAULT_PATH_SUPERVISOR_SNP = "${placeholder "out"}/share/supervisor-snp";
           DEFAULT_PATH_SUPERVISOR_TDX = "${placeholder "out"}/share/supervisor-tdx";
-          installPhase =
-            p.installPhase
-            + ''
-              mkdir -p $out/share
-              ln -s ${kernel} $out/share/kernel
-              ln -s ${supervisor-snp} $out/share/supervisor-snp
-              ln -s ${supervisor-tdx} $out/share/supervisor-tdx
-            '';
+          installPhase = p.installPhase + ''
+            mkdir -p $out/share
+            ln -s ${kernel} $out/share/kernel
+            ln -s ${supervisor-snp} $out/share/supervisor-snp
+            ln -s ${supervisor-tdx} $out/share/supervisor-tdx
+          '';
         });
 
         cli = naersk'.buildPackage {
@@ -95,10 +94,30 @@
           root = ./host;
           singleStep = true;
         };
+        vdso-i386 = naersk'.buildPackage (
+          {
+            name = "vdso-i386";
+            version = (builtins.fromTOML (builtins.readFile ./tee/vdso/Cargo.toml)).package.version;
+            buildPhase = "make -C tee/vdso vdso-i386";
+            installPhase = "cp tee/target/i686-unknown-linux-gnu/release/libvdso.so $out";
+          }
+          // teeAttrs
+        );
+        vdso-amd64 = naersk'.buildPackage (
+          {
+            name = "vdso-amd64";
+            version = (builtins.fromTOML (builtins.readFile ./tee/kernel/Cargo.toml)).package.version;
+            buildPhase = "make -C tee/vdso vdso-amd64";
+            installPhase = "cp tee/target/x86_64-unknown-linux-gnu/release/libvdso.so $out";
+          }
+          // teeAttrs
+        );
         kernel = naersk'.buildPackage (
           {
             name = "kernel";
             version = (builtins.fromTOML (builtins.readFile ./tee/kernel/Cargo.toml)).package.version;
+            VDSO_I386 = "${vdso-i386}";
+            VDSO_AMD64 = "${vdso-amd64}";
             buildPhase = "make kernel";
             installPhase = "cp tee/target/x86_64-unknown-none/kernel-release/kernel $out";
           }

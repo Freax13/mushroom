@@ -32,8 +32,9 @@ use crate::{
     user::{
         memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
         syscall::{
+            SysRestartSyscall,
             args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
-            traits::{Abi, SyscallArgs, SyscallResult},
+            traits::{Abi, Syscall, SyscallArgs, SyscallResult},
         },
         thread::{
             SigContext, SigInfo, Sigaction, SigactionFlags, Sigset, Stack, StackFlags, UContext,
@@ -241,6 +242,14 @@ impl CpuState {
     pub fn restart_syscall(&mut self, no: u64) {
         self.registers.rip -= 2;
         self.registers.rax = no;
+    }
+
+    /// Restart the syscall with the `restart_syscall` syscall.
+    pub fn restart_syscall_stateful(&mut self, abi: Abi) {
+        self.restart_syscall(match abi {
+            Abi::I386 => SysRestartSyscall::NO_I386.unwrap(),
+            Abi::Amd64 => SysRestartSyscall::NO_AMD64.unwrap(),
+        } as u64)
     }
 
     pub fn set_stack_pointer(&mut self, sp: u64) {

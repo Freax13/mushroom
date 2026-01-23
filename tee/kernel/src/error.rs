@@ -116,6 +116,7 @@ pub enum ErrorKind {
     ConnRefused = 111,
     InProgress = 115,
     RestartNoIntr = 512,
+    RestartRestartblock = 516,
 }
 
 impl From<TryFromIntError> for Error {

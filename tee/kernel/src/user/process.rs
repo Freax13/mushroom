@@ -93,6 +93,8 @@ pub struct Process {
     mm_arg_end: AtomicCell<VirtAddr>,
     mm_env_start: AtomicCell<VirtAddr>,
     mm_env_end: AtomicCell<VirtAddr>,
+    mm_auxv_start: AtomicCell<VirtAddr>,
+    mm_auxv_end: AtomicCell<VirtAddr>,
     parent_death_signal: AtomicCell<Option<Signal>>,
     personality: AtomicCell<Personality>,
 }
@@ -113,6 +115,8 @@ impl Process {
         mm_arg_end: VirtAddr,
         mm_env_start: VirtAddr,
         mm_env_end: VirtAddr,
+        mm_auxv_start: VirtAddr,
+        mm_auxv_end: VirtAddr,
         personality: Personality,
     ) -> Arc<Self> {
         let file_name = exe.location.file_name().unwrap();
@@ -160,6 +164,8 @@ impl Process {
             mm_arg_end: AtomicCell::new(mm_arg_end),
             mm_env_start: AtomicCell::new(mm_env_start),
             mm_env_end: AtomicCell::new(mm_env_end),
+            mm_auxv_start: AtomicCell::new(mm_auxv_start),
+            mm_auxv_end: AtomicCell::new(mm_auxv_end),
             parent_death_signal: AtomicCell::new(None),
             personality: AtomicCell::new(personality),
         });
@@ -296,6 +302,8 @@ impl Process {
         self.set_mm_arg_end(res.mm_arg_end);
         self.set_mm_env_start(res.mm_env_start);
         self.set_mm_env_end(res.mm_env_end);
+        self.set_mm_auxv_start(res.mm_auxv_start);
+        self.set_mm_auxv_end(res.mm_auxv_end);
         let mut threads = self.threads.lock();
 
         // Restart the thread leader.
@@ -704,6 +712,22 @@ impl Process {
 
     pub fn set_mm_env_end(&self, addr: VirtAddr) {
         self.mm_env_end.store(addr);
+    }
+
+    pub fn mm_auxv_start(&self) -> VirtAddr {
+        self.mm_auxv_start.load()
+    }
+
+    pub fn set_mm_auxv_start(&self, addr: VirtAddr) {
+        self.mm_auxv_start.store(addr);
+    }
+
+    pub fn mm_auxv_end(&self) -> VirtAddr {
+        self.mm_auxv_end.load()
+    }
+
+    pub fn set_mm_auxv_end(&self, addr: VirtAddr) {
+        self.mm_auxv_end.store(addr);
     }
 
     pub fn clear_parent_death_signal(&self) {
