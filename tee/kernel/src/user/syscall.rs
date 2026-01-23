@@ -1850,7 +1850,10 @@ async fn connect(
     Ok(0)
 }
 
-#[syscall(amd64 = 43, interruptable, restartable)]
+// Note 381 is not the actual syscall number (usually this syscall doesn't exit
+// on 32-bit Linux), but we need a number to get socketcall to work. 381 is
+// otherwise unused.
+#[syscall(i386 = 381, amd64 = 43, interruptable, restartable)]
 async fn accept(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
