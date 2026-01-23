@@ -191,6 +191,7 @@ jobs:
           - dejagnu
           - gnutls
           - elfutils
+          - pkgsi686Linux.elfutils
           - swtpm
           - tinysparql
           - pulseaudio
