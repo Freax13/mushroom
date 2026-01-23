@@ -1477,6 +1477,9 @@ impl VirtualMemoryWriteGuard<'_> {
     pub fn set_brk_end(&mut self, brk_end: VirtAddr, as_limit: CurrentAsLimit) -> Result<()> {
         let old_brk_end = core::mem::replace(&mut self.guard.brk_end, brk_end);
 
+        let brk_end = brk_end.align_up(Size4KiB::SIZE);
+        let old_brk_end = old_brk_end.align_up(Size4KiB::SIZE);
+
         match old_brk_end.cmp(&brk_end) {
             Ordering::Less => {
                 // Check if the range is free.

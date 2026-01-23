@@ -1005,8 +1005,6 @@ fn brk(
     #[state] as_limit: CurrentAsLimit,
     brk_value: u64,
 ) -> SyscallResult {
-    ensure!(brk_value.is_multiple_of(0x1000), Inval);
-
     if brk_value != 0
         && let Ok(brk_value) = VirtAddr::try_new(brk_value)
     {
