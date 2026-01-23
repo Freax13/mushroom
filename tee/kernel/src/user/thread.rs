@@ -233,6 +233,8 @@ impl Thread {
                 VirtAddr::zero(),
                 VirtAddr::zero(),
                 VirtAddr::zero(),
+                VirtAddr::zero(),
+                VirtAddr::zero(),
                 Personality::Linux,
             ),
             Arc::new(SignalHandlerTable::new()),
@@ -924,6 +926,8 @@ impl ThreadGuard<'_> {
         process.set_mm_arg_end(res.mm_arg_end);
         process.set_mm_env_start(res.mm_env_start);
         process.set_mm_env_end(res.mm_env_end);
+        process.set_mm_auxv_start(res.mm_auxv_start);
+        process.set_mm_auxv_end(res.mm_auxv_end);
 
         Ok(())
     }

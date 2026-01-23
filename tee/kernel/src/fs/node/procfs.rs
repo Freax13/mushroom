@@ -1426,6 +1426,7 @@ impl INode for SelfLink {
 
 pub struct ProcessInos {
     root_dir: u64,
+    auxv_file: u64,
     cmdline_file: u64,
     environ_file: u64,
     fd_dir: u64,
@@ -1445,6 +1446,7 @@ impl ProcessInos {
     pub fn new() -> Self {
         Self {
             root_dir: new_ino(),
+            auxv_file: new_ino(),
             cmdline_file: new_ino(),
             environ_file: new_ino(),
             fd_dir: new_ino(),
@@ -1468,6 +1470,9 @@ struct ProcessDir {
     process: Weak<Process>,
     bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
+    auxv_bsd_file_lock_record: LazyBsdFileLockRecord,
+    auxv_unix_file_lock_record: LazyUnixFileLockRecord,
+    auxv_file_watchers: Arc<Watchers>,
     cmdline_bsd_file_lock_record: LazyBsdFileLockRecord,
     cmdline_unix_file_lock_record: LazyUnixFileLockRecord,
     cmdline_file_watchers: Arc<Watchers>,
@@ -1510,6 +1515,9 @@ impl ProcessDir {
             process,
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
+            auxv_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            auxv_unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            auxv_file_watchers: Arc::new(Watchers::new()),
             cmdline_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             cmdline_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             cmdline_file_watchers: Arc::new(Watchers::new()),
@@ -1608,6 +1616,13 @@ impl Directory for ProcessDir {
         let location =
             LinkLocation::new(self.this.upgrade().unwrap(), file_name.clone().into_owned());
         let node: DynINode = match file_name.as_bytes() {
+            b"auxv" => AuxvFile::new(
+                self.fs.clone(),
+                self.process.clone(),
+                self.auxv_bsd_file_lock_record.get().clone(),
+                self.auxv_unix_file_lock_record.get().clone(),
+                self.auxv_file_watchers.clone(),
+            ),
             b"cmdline" => CmdlineFile::new(
                 self.fs.clone(),
                 self.process.clone(),
@@ -1783,6 +1798,11 @@ impl Directory for ProcessDir {
             });
         }
         entries.push(DirEntry {
+            ino: process.inos.auxv_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"auxv").unwrap()),
+        });
+        entries.push(DirEntry {
             ino: process.inos.cmdline_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"cmdline").unwrap()),
@@ -1884,6 +1904,155 @@ impl Directory for ProcessDir {
         _: &FileAccessContext,
     ) -> Result<Option<Path>> {
         bail!(NoEnt)
+    }
+}
+
+struct AuxvFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    process: Weak<Process>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl AuxvFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        process: Weak<Process>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            process,
+            bsd_file_lock_record,
+            unix_file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for AuxvFile {
+    fn stat(&self) -> Result<Stat> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let size = process
+            .mm_auxv_end()
+            .as_u64()
+            .saturating_sub(process.mm_auxv_start().as_u64()) as i64;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: process.inos.cmdline_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for AuxvFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let virtual_memory = thread.lock().virtual_memory().clone();
+
+        // Add the auxv start to the offset.
+        let Some(offset) = offset.checked_add(usize_from(process.mm_auxv_start().as_u64())) else {
+            return Ok(0);
+        };
+        // Clamp the len to the auxv end.
+        let len = usize_from(process.mm_auxv_end().as_u64()).saturating_sub(offset);
+        let len = cmp::min(buf.buffer_len(), len);
+
+        let mut buffer = MaybeUninit::<[u8; 4096]>::uninit();
+        let buffer = buffer.as_bytes_mut();
+        for i in (0..len).step_by(buffer.len()) {
+            let chunk_len = cmp::min(buffer.len(), len - i);
+            let buffer = &mut buffer[..chunk_len];
+            let addr = VirtAddr::try_new(u64::from_usize(offset + i))?;
+            let buffer = virtual_memory.read_uninit_bytes(addr, buffer)?;
+            buf.write(i, buffer)?;
+        }
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
     }
 }
 

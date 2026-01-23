@@ -163,18 +163,18 @@ impl VirtualMemory {
 
         let stack_base = stack - align_up(u64::from_usize(num_values) * pointer_size, 0x10);
         let mut addr = stack_base;
-        let mut write = |value: u64| {
+        let write = |value: u64, addr: &mut VirtAddr| {
             // Double-check that the contigous values don't overlap with the string values.
-            debug_assert!(addr < start_str_addr);
+            debug_assert!(*addr < start_str_addr);
 
             match E::ABI {
                 Abi::I386 => {
                     let value = u32::try_from(value).unwrap();
-                    self.write_bytes(addr, &value.to_ne_bytes()).unwrap();
+                    self.write_bytes(*addr, &value.to_ne_bytes()).unwrap();
                 }
-                Abi::Amd64 => self.write_bytes(addr, &value.to_ne_bytes()).unwrap(),
+                Abi::Amd64 => self.write_bytes(*addr, &value.to_ne_bytes()).unwrap(),
             }
-            addr += pointer_size;
+            *addr += pointer_size;
         };
 
         let mut str_addr = start_str_addr;
@@ -204,23 +204,23 @@ impl VirtualMemory {
         };
 
         // write argc + argv.
-        write(u64::from_usize(argv.len())); // argc
+        write(u64::from_usize(argv.len()), &mut addr); // argc
         let mm_arg_start = str_addr;
         for arg in argv {
             let arg = write_str(arg.as_ref(), &mut str_addr)?;
-            write(arg.as_u64());
+            write(arg.as_u64(), &mut addr);
         }
         let mm_arg_end = str_addr;
-        write(0);
+        write(0, &mut addr);
 
         // write enpv.
         let mm_env_start = str_addr;
         for env in envp {
             let env = write_str(env.as_ref(), &mut str_addr)?;
-            write(env.as_u64());
+            write(env.as_u64(), &mut addr);
         }
         let mm_env_end = str_addr;
-        write(0);
+        write(0, &mut addr);
 
         let platform = match E::ABI {
             Abi::I386 => c"i686",
@@ -270,10 +270,12 @@ impl VirtualMemory {
                 (AuxVector::End, 0),
             ]);
         assert!(aux_vectors.clone().count() <= MAX_NUM_AUX_VECTORS);
+        let mm_auxv_start = addr;
         for (vector, value) in aux_vectors {
-            write(vector as u64);
-            write(value);
+            write(vector as u64, &mut addr);
+            write(value, &mut addr);
         }
+        let mm_auxv_end = addr;
 
         let cs = match E::ABI {
             Abi::I386 => 0x1b,
@@ -287,6 +289,8 @@ impl VirtualMemory {
             mm_arg_end,
             mm_env_start,
             mm_env_end,
+            mm_auxv_start,
+            mm_auxv_end,
         })
     }
 
@@ -383,4 +387,6 @@ pub struct ExecResult {
     pub mm_arg_end: VirtAddr,
     pub mm_env_start: VirtAddr,
     pub mm_env_end: VirtAddr,
+    pub mm_auxv_start: VirtAddr,
+    pub mm_auxv_end: VirtAddr,
 }

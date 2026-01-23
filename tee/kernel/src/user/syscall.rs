@@ -2255,6 +2255,8 @@ async fn clone(
             process.mm_arg_end(),
             process.mm_env_start(),
             process.mm_env_end(),
+            process.mm_auxv_start(),
+            process.mm_auxv_end(),
             process.personality(),
         ))
     };
