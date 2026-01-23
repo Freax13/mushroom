@@ -3483,7 +3483,7 @@ fn ptrace(
             virtual_memory.write_with_abi(data.cast(), word, abi)?;
             Ok(0)
         }
-        PtraceOp::Cont | PtraceOp::Syscall => {
+        PtraceOp::Cont | PtraceOp::Syscall | PtraceOp::Detach => {
             let tracee = thread
                 .lock()
                 .tracees
@@ -3505,6 +3505,10 @@ fn ptrace(
                 guard.ptrace_state = PtraceState::Running;
             }
             guard.ptrace_trap_syscall = request == PtraceOp::Syscall;
+            if request == PtraceOp::Detach {
+                guard.tracer = Weak::new();
+            }
+
             tracee.ptrace_tracee_notify.notify();
 
             tracee.process().stop_state.cont();
@@ -3592,28 +3596,6 @@ fn ptrace(
             };
             let tracee = Thread::find_by_tid(pid).ok_or(err!(Srch))?;
             tracee.set_tracer(Arc::downgrade(thread), stop, seize, options)?;
-
-            Ok(0)
-        }
-        PtraceOp::Detach => {
-            let tracee = thread
-                .lock()
-                .tracees
-                .iter()
-                .filter_map(Weak::upgrade)
-                .find(|tracee| tracee.tid() == pid)
-                .ok_or(err!(Srch))?;
-            let mut guard = tracee.lock();
-            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
-            ensure!(guard.ptrace_state.is_stopped(), Srch);
-
-            guard.tracer = Weak::new();
-            guard.ptrace_state = PtraceState::Running;
-            tracee.ptrace_tracee_notify.notify();
-
-            if !data.is_null() {
-                todo!();
-            }
 
             Ok(0)
         }
