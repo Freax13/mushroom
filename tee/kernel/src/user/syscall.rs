@@ -76,9 +76,9 @@ use crate::{
             cpu_state::CpuState,
         },
         thread::{
-            Capability, Gid, NewTls, PtraceState, SchedulingSettings, SigFields, SigInfo,
-            SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid,
-            new_tid,
+            Capability, Gid, NewTls, PtraceState, RestartData, SchedulingSettings, SigFields,
+            SigInfo, SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread,
+            ThreadGuard, Uid, new_tid,
         },
     },
 };
@@ -98,8 +98,12 @@ impl Thread {
 
         let mut guard = self.cpu_state.lock();
         guard.set_syscall_result(result).unwrap();
-        if result.is_err_and(|e| e.kind() == ErrorKind::RestartNoIntr) {
-            guard.restart_syscall(args.no);
+        if let Err(err) = result {
+            match err.kind() {
+                ErrorKind::RestartNoIntr => guard.restart_syscall(args.no),
+                ErrorKind::RestartRestartblock => guard.restart_syscall_stateful(args.abi),
+                _ => {}
+            }
         }
         drop(guard);
 
@@ -396,6 +400,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysGetdents64);
     handlers.register(SysEpollCreate);
     handlers.register(SysSetTidAddress);
+    handlers.register(SysRestartSyscall);
     handlers.register(SysTimerCreate);
     handlers.register(SysTimerSettime);
     handlers.register(SysTimerGettime);
@@ -1542,6 +1547,43 @@ async fn pause() -> SyscallResult {
     pending().await
 }
 
+async fn nanosleep_impl(
+    abi: Abi,
+    thread: &Thread,
+    virtual_memory: Arc<VirtualMemory>,
+    rmtp: Pointer<Timespec>,
+    deadline: Timespec,
+) -> SyscallResult {
+    let sleep_future = sleep_until(deadline, ClockId::Monotonic);
+    let interrupted_future = thread.wait_for_signal();
+
+    let sleep_future = pin!(sleep_future);
+    let interrupted_future = pin!(interrupted_future);
+    let res = future::select(sleep_future, interrupted_future).await;
+    match res {
+        Either::Left(_) => Ok(0),
+        Either::Right(((_, stopped), _)) => {
+            let now = time::now(ClockId::Monotonic);
+            if let Some(remaining) = deadline
+                .checked_sub(now)
+                .filter(|&remaining| remaining > Timespec::ZERO)
+            {
+                if !rmtp.is_null() {
+                    virtual_memory.write_with_abi(rmtp, remaining, abi)?;
+                }
+                if stopped {
+                    let mut guard = thread.lock();
+                    guard.restart_data = Some(RestartData::Nanosleep { rmtp, deadline });
+                    bail!(RestartRestartblock)
+                }
+                bail!(Intr)
+            } else {
+                Ok(0)
+            }
+        }
+    }
+}
+
 #[syscall(i386 = 162, amd64 = 35)]
 async fn nanosleep(
     abi: Abi,
@@ -1551,33 +1593,10 @@ async fn nanosleep(
     rmtp: Pointer<Timespec>,
 ) -> SyscallResult {
     let rqtp = virtual_memory.read_with_abi(rqtp, abi)?;
-
     let now = time::now(ClockId::Monotonic);
     let deadline = now + rqtp;
 
-    let sleep_future = sleep_until(deadline, ClockId::Monotonic);
-    let interrupted_future = thread.wait_for_signal();
-
-    let sleep_future = pin!(sleep_future);
-    let interrupted_future = pin!(interrupted_future);
-    let res = future::select(sleep_future, interrupted_future).await;
-    match res {
-        Either::Left(_) => Ok(0),
-        Either::Right(_) => {
-            let now = time::now(ClockId::Monotonic);
-            if let Some(remaining) = deadline
-                .checked_sub(now)
-                .filter(|&remaining| remaining > Timespec::ZERO)
-            {
-                if !rmtp.is_null() {
-                    virtual_memory.write_with_abi(rmtp, remaining, abi)?;
-                }
-                bail!(Intr)
-            } else {
-                Ok(0)
-            }
-        }
-    }
+    nanosleep_impl(abi, thread, virtual_memory, rmtp, deadline).await
 }
 
 #[syscall(i386 = 105, amd64 = 36)]
@@ -4784,7 +4803,7 @@ async fn futex(
                     } else {
                         match res {
                             Either::Left(_) => bail!(TimedOut),
-                            Either::Right((shoud_restart, _)) => {
+                            Either::Right(((shoud_restart, _), _)) => {
                                 if shoud_restart {
                                     bail!(RestartNoIntr)
                                 } else {
@@ -4945,6 +4964,44 @@ fn set_tid_address(mut thread: ThreadGuard, tidptr: Pointer<u32>) -> SyscallResu
     Ok(u64::from(thread.tid()))
 }
 
+#[syscall(i386 = 0, amd64 = 219)]
+async fn restart_syscall(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+) -> SyscallResult {
+    let mut guard = thread.lock();
+    let restart_data = guard.restart_data.take().ok_or(err!(Intr))?;
+    drop(guard);
+
+    match restart_data {
+        RestartData::Nanosleep { rmtp, deadline } => {
+            nanosleep_impl(abi, thread, virtual_memory, rmtp, deadline).await
+        }
+        RestartData::ClockNanosleep {
+            clock_id,
+            flags,
+            request,
+            remain,
+            start,
+            deadline,
+        } => {
+            clock_nanosleep_impl(
+                abi,
+                thread,
+                virtual_memory,
+                clock_id,
+                flags,
+                request,
+                remain,
+                start,
+                deadline,
+            )
+            .await
+        }
+    }
+}
+
 #[syscall(i386 = 259, amd64 = 222)]
 fn timer_create(
     abi: Abi,
@@ -5082,6 +5139,55 @@ fn clock_getres_time64(
     clock_getres(Abi::Amd64, virtual_memory, clock_id, res)
 }
 
+#[expect(clippy::too_many_arguments)]
+async fn clock_nanosleep_impl(
+    abi: Abi,
+    thread: &Thread,
+    virtual_memory: Arc<VirtualMemory>,
+    clock_id: ClockId,
+    flags: ClockNanosleepFlags,
+    request: Timespec,
+    remain: Pointer<Timespec>,
+    start: Timespec,
+    deadline: Timespec,
+) -> SyscallResult {
+    let sleep_future = sleep_until(deadline, clock_id);
+    let interrupted_future = thread.wait_for_signal();
+
+    let sleep_future = pin!(sleep_future);
+    let interrupted_future = pin!(interrupted_future);
+    let res = future::select(sleep_future, interrupted_future).await;
+    match res {
+        Either::Left(_) => Ok(0),
+        Either::Right(((_, stopped), _)) => {
+            let now = time::now(clock_id);
+            if let Some(remaining) = deadline
+                .checked_sub(now)
+                .filter(|&remaining| remaining > Timespec::ZERO)
+            {
+                if !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
+                    virtual_memory.write_with_abi(remain, remaining, abi)?;
+                }
+                if stopped {
+                    let mut guard = thread.lock();
+                    guard.restart_data = Some(RestartData::ClockNanosleep {
+                        clock_id,
+                        flags,
+                        request,
+                        remain,
+                        start,
+                        deadline,
+                    });
+                    bail!(RestartRestartblock)
+                }
+                bail!(Intr)
+            } else {
+                Ok(0)
+            }
+        }
+    }
+}
+
 #[syscall(i386 = 267, amd64 = 230)]
 async fn clock_nanosleep(
     abi: Abi,
@@ -5101,30 +5207,18 @@ async fn clock_nanosleep(
         start.saturating_add(request)
     };
 
-    let mut res = thread
-        .interruptable(
-            async {
-                sleep_until(deadline, clock_id).await;
-                Ok(())
-            },
-            false,
-        )
-        .await;
-
-    if res.is_err() && !remain.is_null() && !flags.contains(ClockNanosleepFlags::TIMER_ABSTIME) {
-        let now = time::now(clock_id);
-        let elapsed = now.saturating_sub(start);
-        let remaining = request.saturating_sub(elapsed);
-        if remaining == Timespec::ZERO {
-            res = Ok(());
-        } else {
-            virtual_memory.write_with_abi(remain, remaining, abi)?;
-        }
-    }
-
-    res?;
-
-    Ok(0)
+    clock_nanosleep_impl(
+        abi,
+        thread,
+        virtual_memory,
+        clock_id,
+        flags,
+        request,
+        remain,
+        start,
+        deadline,
+    )
+    .await
 }
 
 #[syscall(i386 = 407)]

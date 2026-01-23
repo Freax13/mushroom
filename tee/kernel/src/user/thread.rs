@@ -47,9 +47,9 @@ use crate::{
         },
         syscall::{
             args::{
-                FileMode, Nice, Personality, Pointer, PtraceEvent, PtraceOptions,
-                PtraceSyscallInfo, Rusage, SchedParam, SchedulingPolicy, Signal, TimerId, Timespec,
-                UserDesc, WStatus,
+                ClockId, ClockNanosleepFlags, FileMode, Nice, Personality, Pointer, PtraceEvent,
+                PtraceOptions, PtraceSyscallInfo, Rusage, SchedParam, SchedulingPolicy, Signal,
+                TimerId, Timespec, UserDesc, WStatus,
             },
             cpu_state::{CpuState, Exit, PageFaultExit, SimdFloatingPointError},
         },
@@ -115,6 +115,7 @@ pub struct ThreadState {
 
     pub capabilities: Capabilities,
     pub scheduling_settings: SchedulingSettings,
+    pub restart_data: Option<RestartData>,
 }
 
 impl Thread {
@@ -159,6 +160,7 @@ impl Thread {
                 tracees: Vec::new(),
                 capabilities,
                 scheduling_settings,
+                restart_data: None,
             }),
             cpu_state: Mutex::new(cpu_state),
             fdtable: Mutex::new(fdtable),
@@ -570,8 +572,9 @@ impl Thread {
     }
 
     /// Returns a future that resolves when the process has a pending signal
-    /// and returns whether the running syscall should be restarted.
-    pub async fn wait_for_signal(&self) -> bool {
+    /// and returns a tuple of (whether the running syscall should be
+    /// restarted, whether the thread was stopped).
+    pub async fn wait_for_signal(&self) -> (bool, bool) {
         let mut thread_notify_wait = self.signal_notify.wait();
         let mut ptrace_tracee_wait = self.ptrace_tracee_notify.wait();
         let mut process_notify_wait = self.process.signals_notify.wait();
@@ -583,7 +586,7 @@ impl Thread {
             // PTRACE_INTERRUPT doesn't quite work like a signal, but it's
             // close enough.
             if guard.ptrace_interrupted {
-                return true;
+                return (true, true);
             }
             drop(guard);
             select_biased! {
@@ -600,7 +603,7 @@ impl Thread {
         restartable: bool,
     ) -> Result<R> {
         select_biased! {
-            should_restart = self.wait_for_signal().fuse() => {
+            (should_restart, _) = self.wait_for_signal().fuse() => {
                 if should_restart && restartable {
                     bail!(RestartNoIntr)
                 }
@@ -934,8 +937,8 @@ impl ThreadGuard<'_> {
 
     /// Determines whether a signal is pending and whether the currently
     /// running syscall should be restarted (if it's capable of being
-    /// restarted).
-    fn get_pending_signal(&mut self) -> Option<bool> {
+    /// restarted) and whether the signal was a stop signal.
+    fn get_pending_signal(&mut self) -> Option<(bool, bool)> {
         loop {
             // Determine the signal that should be handled next.
             let mut mask = self.sigmask;
@@ -1001,7 +1004,8 @@ impl ThreadGuard<'_> {
 
             // Otherwise we found our signal.
             let restartable = handler.sa_flags.contains(SigactionFlags::RESTART);
-            return Some(restartable);
+            let stopped = pending_signal_info.signal == Signal::STOP;
+            return Some((restartable, stopped));
         }
     }
 
@@ -2146,4 +2150,20 @@ impl Default for SchedulingSettings {
             priority: 0,
         }
     }
+}
+
+#[derive(Debug)]
+pub enum RestartData {
+    Nanosleep {
+        rmtp: Pointer<Timespec>,
+        deadline: Timespec,
+    },
+    ClockNanosleep {
+        clock_id: ClockId,
+        flags: ClockNanosleepFlags,
+        request: Timespec,
+        remain: Pointer<Timespec>,
+        start: Timespec,
+        deadline: Timespec,
+    },
 }
