@@ -4,6 +4,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use nix::{
+    libc::personality,
     mount::{MsFlags, mount},
     sys::{
         time::TimeSpec,
@@ -45,6 +46,11 @@ fn main() -> Result<()> {
     archive.set_preserve_permissions(true);
     archive.set_preserve_ownerships(true);
     archive.unpack(root).context("failed to unpack image")?;
+
+    let env = std::fs::read_to_string("/build/dev-env")?;
+    if env.contains("HOSTTYPE='i686'") {
+        assert_eq!(unsafe { personality(8) }, 0);
+    }
 
     // Execute the build.
     let child = Command::new("/bin/sh")
