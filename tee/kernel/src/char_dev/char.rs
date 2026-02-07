@@ -297,7 +297,8 @@ impl OpenFileDescription for Pty {
                 }
             }
 
-            let len = cmp::min(buffer_len, guard.output_buffer.len());
+            let len = cmp::min(buffer_len, 0xfff);
+            let len = cmp::min(len, guard.output_buffer.len());
             buf.write(0, &guard.output_buffer[..len])?;
             drop(guard.output_buffer.drain(..len));
             guard.slave_write_counter.inc();
@@ -327,7 +328,8 @@ impl OpenFileDescription for Pty {
                 } else {
                     line_end_idx
                 };
-                let len = cmp::min(buffer_len, read_len);
+                let len = cmp::min(buffer_len, 0x1000);
+                let len = cmp::min(len, read_len);
                 buf.write(0, &guard.input_buffer[..len])?;
 
                 let remove_len = if len == read_len {
@@ -343,7 +345,8 @@ impl OpenFileDescription for Pty {
 
                 Ok(len)
             } else {
-                let len = cmp::min(buffer_len, guard.input_buffer.len());
+                let len = cmp::min(buffer_len, 0xfff);
+                let len = cmp::min(len, guard.input_buffer.len());
                 if len == 0 {
                     if guard.master_closed {
                         return Ok(0);
