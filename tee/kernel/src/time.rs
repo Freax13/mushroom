@@ -41,9 +41,9 @@ type DefaultBackend = real::RealBackend;
 
 static DEFAULT_BACKEND: DefaultBackend = DefaultBackend::new();
 
-intrusive_adapter!(TreeAdapter = Arc<Node>: Node { rb_link: RBTreeAtomicLink });
-intrusive_adapter!(ListAdapter = Arc<Node>: Node { list_link: LinkedListAtomicLink });
-intrusive_adapter!(DeleteListAdapter = Arc<Node>: Node { delete_link: LinkedListAtomicLink });
+intrusive_adapter!(TreeAdapter = Arc<Node>: Node { rb_link => RBTreeAtomicLink });
+intrusive_adapter!(ListAdapter = Arc<Node>: Node { list_link => LinkedListAtomicLink });
+intrusive_adapter!(DeleteListAdapter = Arc<Node>: Node { delete_link => LinkedListAtomicLink });
 
 static REALTIME_TIMERS: TimerLists = TimerLists::new();
 static REALTIME: Time = unsafe { Time::new(&REALTIME_TIMERS, &DEFAULT_BACKEND) };

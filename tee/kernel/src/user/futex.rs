@@ -16,7 +16,7 @@ use crate::{
     spin::mutex::Mutex,
 };
 
-intrusive_adapter!(ListAdapter = Arc<FutexWaiter>: FutexWaiter { link: LinkedListAtomicLink });
+intrusive_adapter!(ListAdapter = Arc<FutexWaiter>: FutexWaiter { link => LinkedListAtomicLink });
 
 pub struct Futexes {
     futexes: Mutex<BTreeMap<usize, LinkedList<ListAdapter>>>,

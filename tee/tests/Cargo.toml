@@ -5,4 +5,4 @@ edition.workspace = true
 
 [dependencies]
 bytemuck = { version = "1.24.0", features = ["derive", "min_const_generics"] }
-nix = { version = "0.30.1", features = ["event", "feature", "fs", "mman", "net", "personality", "poll", "ptrace", "signal", "socket", "time", "uio"] }
+nix = { version = "0.31.1", features = ["event", "feature", "fs", "mman", "net", "personality", "poll", "ptrace", "signal", "socket", "time", "uio"] }
