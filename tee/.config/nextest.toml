@@ -1,0 +1,8 @@
+[profile.default]
+retries = 3
+fail-fast = false
+
+[[profile.default.overrides]]
+# Run this test first.
+filter = 'test(net::test_bind)'
+priority = 100
