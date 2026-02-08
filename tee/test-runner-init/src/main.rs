@@ -1,4 +1,7 @@
-use std::{ffi::CStr, fs::File, os::unix::fs::OpenOptionsExt};
+use std::{
+    ffi::CStr,
+    fs::{File, create_dir_all},
+};
 
 use nix::{
     mount::{MsFlags, mount},
@@ -23,15 +26,31 @@ fn main() -> ! {
     )
     .expect("failed to mount /proc");
 
-    let mut input = File::open("/dev/input").expect("failed to open /dev/input");
-    let mut file = File::options()
-        .mode(0o755)
-        .create_new(true)
-        .write(true)
-        .open("/init")
-        .expect("failed to create /init");
+    let input = File::open("/dev/input").expect("failed to open /dev/input");
+    let mut archive = tar::Archive::new(input);
+    archive.unpack("/").expect("failed to unpack files");
 
-    std::io::copy(&mut input, &mut file).expect("failed to copy content");
+    create_dir_all("/etc").unwrap();
+    std::fs::write(
+        "/etc/passwd",
+        "root:x:0:0:System administrator:/root:/bin/bash\n",
+    )
+    .unwrap();
 
-    match execve::<_, &CStr>(c"/init", &[c"/init"], &[]).unwrap() {}
+    create_dir_all("/tmp").unwrap();
+
+    match execve::<_, &CStr>(
+        c"/cargo-nextest",
+        &[
+            c"/cargo-nextest",
+            c"nextest",
+            c"run",
+            c"--archive-file",
+            c"tests.tar.zst",
+            c"--workspace-remap",
+            c"/",
+        ],
+        &[],
+    )
+    .unwrap() {}
 }

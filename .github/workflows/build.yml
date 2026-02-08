@@ -127,6 +127,8 @@ jobs:
       - name: Install dependencies
         if: ${{ matrix.test_target == 'i386' }}
         run: sudo apt-get update && sudo apt-get install libc6-dev-i386 -y
+      - name: Install latest nextest release
+        uses: taiki-e/install-action@nextest
       - name: "Test"
         run: make test-on-host
         env:

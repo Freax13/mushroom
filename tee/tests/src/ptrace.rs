@@ -22,12 +22,12 @@ use nix::{
         wait::{WaitPidFlag, WaitStatus, waitpid},
     },
     time::{ClockId, ClockNanosleepFlags, clock_nanosleep},
-    unistd::{ForkResult, Pid, fork, getpid, sleep},
+    unistd::{ForkResult, Pid, fork, gettid, sleep},
 };
 
 #[test]
 fn seize_self() {
-    let pid = getpid();
+    let pid = gettid();
     assert_eq!(ptrace::seize(pid, Options::empty()), Err(Errno::EPERM));
 }
 

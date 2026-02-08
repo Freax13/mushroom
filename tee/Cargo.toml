@@ -18,9 +18,6 @@ supervisor-services = { path = "../common/supervisor-services" }
 [workspace.package]
 edition = "2024"
 
-[profile.test]
-panic = "abort"
-
 [profile.kernel]
 inherits = "kernel-release"
 debug-assertions = true

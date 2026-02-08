@@ -874,6 +874,7 @@ name = "test-runner-init"
 version = "0.1.0"
 dependencies = [
  "nix",
+ "tar",
 ]
 
 [[package]]
