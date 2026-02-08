@@ -20,6 +20,7 @@ export RUSTFLAGS = -Z cf-protection=return
 supervisor:
 	cargo build \
 		--target supervisor.json \
+		-Z json-target-spec \
 		-Z build-std=core,alloc \
 		-Z build-std-features=compiler-builtins-mem \
 		--profile $(CARGO_PROFILE) \
