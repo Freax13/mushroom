@@ -215,6 +215,7 @@ impl ActivePageTableGuard {
 
         // If the hypervisor supports Hyper-V hypercalls, use them.
         if let Some(hyper_v) = *HYPER_V {
+            guard.needs_flush |= other_used;
             drop(guard);
 
             hyper_v.flush_address_list(pages.clone(), other_active_aps);
