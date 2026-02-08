@@ -1254,8 +1254,20 @@ impl ActivePageTableEntry<Level1> {
 
     /// Map a new page or replace an existing page.
     pub unsafe fn set_page(&self, entry: PresentPageTableEntry) {
-        let res = atomic_swap(&self.entry, entry.0.get());
-        if res == 0 {
+        let mut old_entry = atomic_load(&self.entry);
+        loop {
+            let mut new_entry = entry;
+            if let Ok(old_entry) = PresentPageTableEntry::try_from(old_entry) {
+                new_entry.set_accessed(old_entry.accessed());
+            }
+
+            match atomic_compare_exchange(&self.entry, old_entry, new_entry.0.get()) {
+                Ok(_) => break,
+                Err(new_old_entry) => old_entry = new_old_entry,
+            }
+        }
+
+        if old_entry == 0 {
             self.parent_table_entry()
                 .increase_reference_count()
                 .unwrap();
@@ -1535,6 +1547,10 @@ impl PresentPageTableEntry {
 
     pub fn accessed(&self) -> bool {
         self.0.get().get_bit(ACCESSED_BIT)
+    }
+
+    pub fn set_accessed(&mut self, accessed: bool) {
+        self.0.get().set_bit(ACCESSED_BIT, accessed);
     }
 
     pub fn dirty(&self) -> bool {
