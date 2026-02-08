@@ -44,7 +44,6 @@ fn tcflsh(fd: &OwnedFd, mode: c_int) -> Result<()> {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_input_master() {
     let (master, slave) = make_pty_pair();
 
@@ -60,7 +59,6 @@ fn flush_input_master() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_output_master() {
     let (master, slave) = make_pty_pair();
 
@@ -76,7 +74,6 @@ fn flush_output_master() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_input_output_master_input() {
     let (master, slave) = make_pty_pair();
 
@@ -92,7 +89,6 @@ fn flush_input_output_master_input() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_input_output_master_output() {
     let (master, slave) = make_pty_pair();
 
@@ -108,7 +104,6 @@ fn flush_input_output_master_output() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_input_slave() {
     let (master, slave) = make_pty_pair();
 
@@ -124,7 +119,6 @@ fn flush_input_slave() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_output_slave() {
     let (master, slave) = make_pty_pair();
 
@@ -140,7 +134,6 @@ fn flush_output_slave() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_input_output_slave_input() {
     let (master, slave) = make_pty_pair();
 
@@ -156,7 +149,6 @@ fn flush_input_output_slave_input() {
 }
 
 #[test]
-#[ignore = "flushing is flaky"]
 fn flush_input_output_slave_output() {
     let (master, slave) = make_pty_pair();
 
