@@ -1977,7 +1977,7 @@ pub struct Termios {
 impl Default for Termios {
     fn default() -> Self {
         Self {
-            input_modes: InputMode::CRNL | InputMode::UTF8,
+            input_modes: InputMode::CRNL | InputMode::XON,
             output_modes: OutputMode::POST | OutputMode::NLCR,
             control_modes: ControlMode::B38400 | ControlMode::S8 | ControlMode::READ,
             local_modes: LocalMode::ISIG
@@ -1989,6 +1989,7 @@ impl Default for Termios {
                 | LocalMode::ECHOKE
                 | LocalMode::IEXTEN,
             special_characters: SpecialCharacters {
+                line: 0x00,
                 intr: 0x03,
                 quit: 0x1c,
                 erase: 0x7f,
@@ -2006,7 +2007,7 @@ impl Default for Termios {
                 werase: 0x17,
                 lnext: 0x16,
                 eol2: 0x00,
-                padding: [0x00, 0x00, 0x00],
+                padding: [0x00, 0x00],
             },
         }
     }
@@ -2147,6 +2148,7 @@ bitflags::bitflags! {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SpecialCharacters {
+    pub line: u8,
     pub intr: u8,
     pub quit: u8,
     pub erase: u8,
@@ -2164,12 +2166,13 @@ pub struct SpecialCharacters {
     pub werase: u8,
     pub lnext: u8,
     pub eol2: u8,
-    padding: [u8; 3],
+    padding: [u8; 2],
 }
 
 impl From<SpecialCharacters> for [u8; 20] {
     fn from(value: SpecialCharacters) -> Self {
         [
+            value.line,
             value.intr,
             value.quit,
             value.erase,
@@ -2189,7 +2192,6 @@ impl From<SpecialCharacters> for [u8; 20] {
             value.eol2,
             value.padding[0],
             value.padding[1],
-            value.padding[2],
         ]
     }
 }
@@ -2197,24 +2199,25 @@ impl From<SpecialCharacters> for [u8; 20] {
 impl From<[u8; 20]> for SpecialCharacters {
     fn from(value: [u8; 20]) -> Self {
         Self {
-            intr: value[0],
-            quit: value[1],
-            erase: value[2],
-            kill: value[3],
-            eof: value[4],
-            time: value[5],
-            min: value[6],
-            swtc: value[7],
-            start: value[8],
-            stop: value[9],
-            susp: value[10],
-            eol: value[11],
-            reprint: value[12],
-            discard: value[13],
-            werase: value[14],
-            lnext: value[15],
-            eol2: value[16],
-            padding: [value[17], value[18], value[19]],
+            line: value[0],
+            intr: value[1],
+            quit: value[2],
+            erase: value[3],
+            kill: value[4],
+            eof: value[5],
+            time: value[6],
+            min: value[7],
+            swtc: value[8],
+            start: value[9],
+            stop: value[10],
+            susp: value[11],
+            eol: value[12],
+            reprint: value[13],
+            discard: value[14],
+            werase: value[15],
+            lnext: value[16],
+            eol2: value[17],
+            padding: [value[18], value[19]],
         }
     }
 }
