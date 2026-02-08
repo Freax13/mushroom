@@ -242,7 +242,7 @@ pub fn run_vcpu() -> ! {
                         ecx: 0,
                         edx: 0,
                     },
-                    _ => unsafe { __cpuid_count(guest_state.rax as u32, guest_state.rcx as u32) },
+                    _ => __cpuid_count(guest_state.rax as u32, guest_state.rcx as u32),
                 };
                 guest_state.rax = u64::from(result.eax);
                 guest_state.rbx = u64::from(result.ebx);
@@ -356,7 +356,7 @@ pub fn run_vcpu() -> ! {
 /// Returns `delta(TSC)/s`.
 fn tsc_frequency() -> u64 {
     // Try to get the frequency from cpuid.
-    let result = unsafe { __cpuid(0x15) };
+    let result = __cpuid(0x15);
     assert_ne!(result.ebx, 0);
     u64::from(result.ecx) * u64::from(result.ebx) / u64::from(result.eax)
 }

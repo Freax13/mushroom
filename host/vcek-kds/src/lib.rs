@@ -157,6 +157,9 @@ pub struct VcekParameters {
 impl VcekParameters {
     #[cfg(target_arch = "x86_64")]
     fn current_product() -> std::io::Result<Product> {
+        // TODO: Remove this once `__cpuid` is safe on stable.
+        #![allow(unused_unsafe)]
+
         use std::{arch::x86_64::__cpuid, io::Error};
 
         // Check that the CPU is an AMD CPU.

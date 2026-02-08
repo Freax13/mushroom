@@ -689,7 +689,7 @@ impl CpuinfoFile {
             "rdpid",
         ];
 
-        let leaf = unsafe { __cpuid(0) };
+        let leaf = __cpuid(0);
         let mut vendor_id = [0; 12];
         vendor_id[0..4].copy_from_slice(&leaf.ebx.to_ne_bytes());
         vendor_id[4..8].copy_from_slice(&leaf.edx.to_ne_bytes());
