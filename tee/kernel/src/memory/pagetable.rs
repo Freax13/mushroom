@@ -1452,9 +1452,6 @@ const DISABLE_EXECUTE_BIT: usize = 63;
 /// Indicates that the page table is currently being initialized.
 const INITIALIZING_BIT: usize = 9;
 
-/// Indicates that the page is a copy on write page.
-const COW_BIT: usize = 10;
-
 /// Bits that are used to reference count the entry.
 ///
 /// The reference count is represented as one less than the actual count. So if
@@ -1471,9 +1468,8 @@ bitflags! {
         const EXECUTABLE = 1 << 1;
         const USER = 1 << 2;
         const GLOBAL = 1 << 3;
-        const COW = 1 << 4;
-        const ACCESSED = 1 << 5;
-        const DIRTY = 1 << 6;
+        const ACCESSED = 1 << 4;
+        const DIRTY = 1 << 5;
     }
 }
 
@@ -1495,16 +1491,10 @@ impl PresentPageTableEntry {
             DISABLE_EXECUTE_BIT,
             !flags.contains(PageTableFlags::EXECUTABLE),
         );
-        let cow = flags.contains(PageTableFlags::COW);
-        entry.set_bit(COW_BIT, cow);
         let accessed = flags.contains(PageTableFlags::ACCESSED);
         entry.set_bit(ACCESSED_BIT, accessed);
         let dirty = flags.contains(PageTableFlags::DIRTY);
         entry.set_bit(DIRTY_BIT, dirty);
-
-        if cow {
-            assert!(!writable);
-        }
 
         Self(NonZeroU64::new(entry).unwrap())
     }
@@ -1519,7 +1509,6 @@ impl PresentPageTableEntry {
         flags.set(PageTableFlags::USER, self.user());
         flags.set(PageTableFlags::GLOBAL, self.global());
         flags.set(PageTableFlags::EXECUTABLE, self.executable());
-        flags.set(PageTableFlags::COW, self.cow());
         flags.set(PageTableFlags::ACCESSED, self.accessed());
         flags.set(PageTableFlags::DIRTY, self.dirty());
         flags
@@ -1539,10 +1528,6 @@ impl PresentPageTableEntry {
 
     pub fn executable(&self) -> bool {
         !self.0.get().get_bit(DISABLE_EXECUTE_BIT)
-    }
-
-    pub fn cow(&self) -> bool {
-        self.0.get().get_bit(COW_BIT)
     }
 
     pub fn accessed(&self) -> bool {
