@@ -1577,6 +1577,7 @@ fn atomic_load(entry: &AtomicU64) -> u64 {
                 "mov {out}, [{ptr}]",
                 out = out(reg) out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, readonly, preserves_flags),
             }
         }
         out
@@ -1594,6 +1595,7 @@ fn atomic_store(entry: &AtomicU64, val: u64) {
                 "xchg qword ptr [{ptr}], {val}",
                 val = inout(reg) val => _,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, preserves_flags),
             }
         }
     } else {
@@ -1611,6 +1613,7 @@ fn atomic_swap(entry: &AtomicU64, val: u64) -> u64 {
                 "xchg qword ptr [{ptr}], {val}",
                 val = inout(reg) val => out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, preserves_flags),
             }
         }
         out
@@ -1633,6 +1636,7 @@ fn atomic_compare_exchange(entry: &AtomicU64, current: u64, new: u64) -> Result<
                 new_value = in(reg) new,
                 inout("rax") current => current_value,
                 success = lateout(reg) success,
+                options(nostack),
             }
         }
         if success & 0xff == 0 {
@@ -1673,6 +1677,7 @@ fn fetch_add(entry: &AtomicU64, val: u64) -> u64 {
                 "lock xadd [{ptr}], {out}",
                 out = inout(reg) val => out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack),
             }
         }
         out
@@ -1701,6 +1706,7 @@ unsafe fn load(entry: &AtomicU64) -> u64 {
                 "mov {out}, [{ptr}]",
                 out = out(reg) out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, preserves_flags),
             }
         }
         out
