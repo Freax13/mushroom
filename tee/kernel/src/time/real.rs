@@ -42,7 +42,7 @@ impl TimeBackend for RealBackend {
 // Returns the TSC frequency in MHz.
 fn determine_tsc_frequency() -> u64 {
     // Try to get the frequency from cpuid.
-    let result = unsafe { __cpuid(0x15) };
+    let result = __cpuid(0x15);
     if result.ebx != 0 {
         return u64::from(result.ecx) * u64::from(result.ebx) / u64::from(result.eax) / 1_000_000;
     }
