@@ -1254,8 +1254,20 @@ impl ActivePageTableEntry<Level1> {
 
     /// Map a new page or replace an existing page.
     pub unsafe fn set_page(&self, entry: PresentPageTableEntry) {
-        let res = atomic_swap(&self.entry, entry.0.get());
-        if res == 0 {
+        let mut old_entry = atomic_load(&self.entry);
+        loop {
+            let mut new_entry = entry;
+            if let Ok(old_entry) = PresentPageTableEntry::try_from(old_entry) {
+                new_entry.set_accessed(old_entry.accessed());
+            }
+
+            match atomic_compare_exchange(&self.entry, old_entry, new_entry.0.get()) {
+                Ok(_) => break,
+                Err(new_old_entry) => old_entry = new_old_entry,
+            }
+        }
+
+        if old_entry == 0 {
             self.parent_table_entry()
                 .increase_reference_count()
                 .unwrap();
@@ -1440,9 +1452,6 @@ const DISABLE_EXECUTE_BIT: usize = 63;
 /// Indicates that the page table is currently being initialized.
 const INITIALIZING_BIT: usize = 9;
 
-/// Indicates that the page is a copy on write page.
-const COW_BIT: usize = 10;
-
 /// Bits that are used to reference count the entry.
 ///
 /// The reference count is represented as one less than the actual count. So if
@@ -1459,9 +1468,8 @@ bitflags! {
         const EXECUTABLE = 1 << 1;
         const USER = 1 << 2;
         const GLOBAL = 1 << 3;
-        const COW = 1 << 4;
-        const ACCESSED = 1 << 5;
-        const DIRTY = 1 << 6;
+        const ACCESSED = 1 << 4;
+        const DIRTY = 1 << 5;
     }
 }
 
@@ -1483,16 +1491,10 @@ impl PresentPageTableEntry {
             DISABLE_EXECUTE_BIT,
             !flags.contains(PageTableFlags::EXECUTABLE),
         );
-        let cow = flags.contains(PageTableFlags::COW);
-        entry.set_bit(COW_BIT, cow);
         let accessed = flags.contains(PageTableFlags::ACCESSED);
         entry.set_bit(ACCESSED_BIT, accessed);
         let dirty = flags.contains(PageTableFlags::DIRTY);
         entry.set_bit(DIRTY_BIT, dirty);
-
-        if cow {
-            assert!(!writable);
-        }
 
         Self(NonZeroU64::new(entry).unwrap())
     }
@@ -1507,7 +1509,6 @@ impl PresentPageTableEntry {
         flags.set(PageTableFlags::USER, self.user());
         flags.set(PageTableFlags::GLOBAL, self.global());
         flags.set(PageTableFlags::EXECUTABLE, self.executable());
-        flags.set(PageTableFlags::COW, self.cow());
         flags.set(PageTableFlags::ACCESSED, self.accessed());
         flags.set(PageTableFlags::DIRTY, self.dirty());
         flags
@@ -1529,12 +1530,12 @@ impl PresentPageTableEntry {
         !self.0.get().get_bit(DISABLE_EXECUTE_BIT)
     }
 
-    pub fn cow(&self) -> bool {
-        self.0.get().get_bit(COW_BIT)
-    }
-
     pub fn accessed(&self) -> bool {
         self.0.get().get_bit(ACCESSED_BIT)
+    }
+
+    pub fn set_accessed(&mut self, accessed: bool) {
+        self.0.get().set_bit(ACCESSED_BIT, accessed);
     }
 
     pub fn dirty(&self) -> bool {
@@ -1576,6 +1577,7 @@ fn atomic_load(entry: &AtomicU64) -> u64 {
                 "mov {out}, [{ptr}]",
                 out = out(reg) out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, readonly, preserves_flags),
             }
         }
         out
@@ -1590,9 +1592,10 @@ fn atomic_store(entry: &AtomicU64, val: u64) {
     if cfg!(sanitize = "address") {
         unsafe {
             asm! {
-                "mov [{ptr}], {val}",
-                val = in(reg) val,
+                "xchg qword ptr [{ptr}], {val}",
+                val = inout(reg) val => _,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, preserves_flags),
             }
         }
     } else {
@@ -1607,9 +1610,10 @@ fn atomic_swap(entry: &AtomicU64, val: u64) -> u64 {
         let out;
         unsafe {
             asm! {
-                "xchg [{ptr}], {val}",
+                "xchg qword ptr [{ptr}], {val}",
                 val = inout(reg) val => out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, preserves_flags),
             }
         }
         out
@@ -1632,6 +1636,7 @@ fn atomic_compare_exchange(entry: &AtomicU64, current: u64, new: u64) -> Result<
                 new_value = in(reg) new,
                 inout("rax") current => current_value,
                 success = lateout(reg) success,
+                options(nostack),
             }
         }
         if success & 0xff == 0 {
@@ -1672,6 +1677,7 @@ fn fetch_add(entry: &AtomicU64, val: u64) -> u64 {
                 "lock xadd [{ptr}], {out}",
                 out = inout(reg) val => out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack),
             }
         }
         out
@@ -1700,6 +1706,7 @@ unsafe fn load(entry: &AtomicU64) -> u64 {
                 "mov {out}, [{ptr}]",
                 out = out(reg) out,
                 ptr = in(reg) entry.as_ptr(),
+                options(nostack, preserves_flags),
             }
         }
         out
