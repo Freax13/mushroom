@@ -349,7 +349,7 @@ impl<const N: usize> ChunkHeader<N> {
         Ok(NonNull::from(unsafe { &entry.bytes }))
     }
 
-    /// Returns `true` if the chunk is completly unused.
+    /// Returns `true` if the chunk is completely unused.
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) -> bool {
         let entry = unsafe { ptr.cast::<Entry<N>>().as_mut() };
 
