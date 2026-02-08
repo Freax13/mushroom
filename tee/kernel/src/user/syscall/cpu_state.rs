@@ -726,7 +726,7 @@ struct XSaveArea {
 impl XSaveArea {
     pub fn new() -> Self {
         static SIZE: Lazy<usize> = Lazy::new(|| {
-            let res = unsafe { __cpuid_count(0xd, 0x0) };
+            let res = __cpuid_count(0xd, 0x0);
             res.ecx as usize
         });
 

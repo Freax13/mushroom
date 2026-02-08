@@ -339,7 +339,7 @@ enum Hypercall {
 
 impl Hypercall {
     fn get() -> Self {
-        let svm = unsafe { __cpuid(0x8000_0001) }.ecx.get_bit(2);
+        let svm = __cpuid(0x8000_0001).ecx.get_bit(2);
         if svm {
             Hypercall::Vmmcall
         } else {
@@ -356,10 +356,7 @@ struct HyperV(Hypercall);
 impl HyperV {
     pub fn new() -> Option<Self> {
         // Make sure the hypervisor supports the HyperV hypercall ABI.
-        let cpuid_result = unsafe {
-            // SAFETY: If `cpuid` isn't available, we have bigger problems.
-            __cpuid(0x40000001)
-        };
+        let cpuid_result = __cpuid(0x40000001);
         // Check the interface id.
         if cpuid_result.eax != 0x31237648 {
             return None;

@@ -56,6 +56,8 @@ use crate::{
 
 static KVM_XSAVE_SIZE: OnceLock<usize> = OnceLock::new();
 const XMM_OFFSET: usize = 0xa0;
+// TODO: Remove this once `__cpuid` is safe on stable.
+#[allow(unused_unsafe)]
 static YMM_OFFSET: LazyLock<usize> = LazyLock::new(|| {
     let res = unsafe { __cpuid_count(0xd, 0x2) };
     assert_eq!(res.eax, 256, "CPU doesn't support AVX");

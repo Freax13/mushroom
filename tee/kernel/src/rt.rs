@@ -45,7 +45,7 @@ struct Task {
     spawn_location: &'static Location<'static>,
 }
 
-intrusive_adapter!(TaskAdapter = Arc<Task>: Task { link: XorLinkedListAtomicLink });
+intrusive_adapter!(TaskAdapter = Arc<Task>: Task { link => XorLinkedListAtomicLink });
 
 impl Task {
     #[track_caller]

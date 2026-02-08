@@ -22,10 +22,7 @@ static SUPERVISOR_CALL_FN: Lazy<SupervisorCallFn> = Lazy::new(|| {
     for base in (0x4000_0000..0x4fff_ffff).step_by(0x100) {
         // Query the hypervisor max leaf.
         let vendor_leaf = base;
-        let values = unsafe {
-            // SAFETY: CPUID is available.
-            __cpuid(vendor_leaf)
-        };
+        let values = __cpuid(vendor_leaf);
         // Bail if the leaf doesn't contain the maximum supported leaf.
         if values.eax == 0 {
             break;
@@ -33,10 +30,7 @@ static SUPERVISOR_CALL_FN: Lazy<SupervisorCallFn> = Lazy::new(|| {
 
         // Query the hypervisor interface id.
         let interface_id_leaf = base + 1;
-        let values = unsafe {
-            // SAFETY: CPUID is available.
-            __cpuid(interface_id_leaf)
-        };
+        let values = __cpuid(interface_id_leaf);
 
         match values.eax {
             0x4952534d => return insecure_supervisor_call,
