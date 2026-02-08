@@ -1591,8 +1591,8 @@ fn atomic_store(entry: &AtomicU64, val: u64) {
     if cfg!(sanitize = "address") {
         unsafe {
             asm! {
-                "mov [{ptr}], {val}",
-                val = in(reg) val,
+                "xchg qword ptr [{ptr}], {val}",
+                val = inout(reg) val => _,
                 ptr = in(reg) entry.as_ptr(),
             }
         }
@@ -1608,7 +1608,7 @@ fn atomic_swap(entry: &AtomicU64, val: u64) -> u64 {
         let out;
         unsafe {
             asm! {
-                "xchg [{ptr}], {val}",
+                "xchg qword ptr [{ptr}], {val}",
                 val = inout(reg) val => out,
                 ptr = in(reg) entry.as_ptr(),
             }
