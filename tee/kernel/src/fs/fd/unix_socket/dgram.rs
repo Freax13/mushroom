@@ -406,9 +406,15 @@ impl OpenFileDescription for DgramUnixSocket {
     ) -> Result<(usize, Option<SocketAddr>)> {
         let packet = self.recv_packet(flags)?;
 
-        let len = cmp::min(packet.data.len(), buf.buffer_len());
-        buf.write(0, &packet.data[..len])?;
+        let len = packet.data.len();
+        let written = cmp::min(len, buf.buffer_len());
+        buf.write(0, &packet.data[..written])?;
 
+        let len = if flags.contains(RecvFromFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
         let addr = packet.sender_addr.lock().clone().map(SocketAddr::Unix);
 
         Ok((len, addr))
@@ -429,8 +435,11 @@ impl OpenFileDescription for DgramUnixSocket {
         let mut packet = self.recv_packet(recv_from_flags)?;
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = cmp::min(packet.data.len(), ReadBuf::buffer_len(&vectored_buf));
+        let len = packet.data.len();
+        let written = cmp::min(len, ReadBuf::buffer_len(&vectored_buf));
         vectored_buf.write(0, &packet.data[..len])?;
+
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, written < len);
 
         if msg_hdr.namelen != 0 {
             let addr = packet.sender_addr.lock().clone().map(SocketAddr::Unix);

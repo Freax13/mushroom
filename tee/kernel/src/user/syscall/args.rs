@@ -1886,6 +1886,7 @@ bitflags! {
     pub struct RecvFromFlags {
         const OOB = 1 << 0;
         const PEEK = 1 << 1;
+        const TRUNC = 1 << 5;
         const DONTWAIT = 1 << 6;
         const WAITALL = 1 << 8;
     }
