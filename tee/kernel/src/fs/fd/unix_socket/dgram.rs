@@ -423,7 +423,6 @@ impl OpenFileDescription for DgramUnixSocket {
         fdtable: &FileDescriptorTable,
         no_file_limit: CurrentNoFileLimit,
     ) -> Result<usize> {
-        ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
         let recv_from_flags = RecvFromFlags::from(flags);
