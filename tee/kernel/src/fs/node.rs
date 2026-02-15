@@ -16,8 +16,9 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLockRecord, OpenFileDescriptionData, StrongFileDescriptor, inotify::Watchers,
-            unix_socket::StreamUnixSocket,
+            BsdFileLockRecord, OpenFileDescriptionData, StrongFileDescriptor,
+            inotify::Watchers,
+            unix_socket::{DgramUnixSocket, StreamUnixSocket},
         },
         ownership::Ownership,
         path::{FileName, Path, PathSegment},
@@ -184,13 +185,31 @@ pub trait INode: Any + Send + Sync + 'static {
         bail!(NotDir)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
         uid: Uid,
         gid: Gid,
         socket: &StreamUnixSocket,
+        socketname: &Path,
+    ) -> Result<()> {
+        let _ = file_name;
+        let _ = mode;
+        let _ = uid;
+        let _ = gid;
+        let _ = socket;
+        let _ = socketname;
+        bail!(NotDir)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+        socket: &DgramUnixSocket,
         socketname: &Path,
     ) -> Result<()> {
         let _ = file_name;
@@ -298,10 +317,18 @@ pub trait INode: Any + Send + Sync + 'static {
 
     fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord>;
 
-    fn get_socket(
+    fn get_stream_socket(
         &self,
         ctx: &FileAccessContext,
     ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+        let _ = ctx;
+        bail!(ConnRefused)
+    }
+
+    fn get_dgram_socket(
+        &self,
+        ctx: &FileAccessContext,
+    ) -> Result<Arc<OpenFileDescriptionData<DgramUnixSocket>>> {
         let _ = ctx;
         bail!(ConnRefused)
     }
@@ -887,15 +914,20 @@ pub fn create_socket(
         }
         PathSegment::FileName(file_name) => {
             let (_fd, socket) = StreamUnixSocket::new(OpenFlags::empty(), uid, gid);
-            parent
-                .node
-                .bind_socket(file_name.into_owned(), mode, uid, gid, &socket, path)?;
+            parent.node.bind_stream_socket(
+                file_name.into_owned(),
+                mode,
+                uid,
+                gid,
+                &socket,
+                path,
+            )?;
             Ok(())
         }
     }
 }
 
-pub fn bind_socket(
+pub fn bind_stream_socket(
     start_dir: Link,
     path: &Path,
     mode: FileMode,
@@ -915,16 +947,48 @@ pub fn bind_socket(
     };
     parent
         .node
-        .bind_socket(file_name.into_owned(), mode, uid, gid, socket, path)?;
+        .bind_stream_socket(file_name.into_owned(), mode, uid, gid, socket, path)?;
     Ok(())
 }
 
-pub fn get_socket(
+pub fn bind_dgram_socket(
+    start_dir: Link,
+    path: &Path,
+    mode: FileMode,
+    uid: Uid,
+    gid: Gid,
+    socket: &DgramUnixSocket,
+    ctx: &mut FileAccessContext,
+) -> Result<()> {
+    let (parent, last, _trailing_slash) = find_parent(start_dir, path, ctx)?;
+    ensure!(!_trailing_slash, IsDir);
+    let file_name = match last {
+        PathSegment::Root => todo!(),
+        PathSegment::Empty => todo!(),
+        PathSegment::Dot => todo!(),
+        PathSegment::DotDot => todo!(),
+        PathSegment::FileName(file_name) => file_name,
+    };
+    parent
+        .node
+        .bind_dgram_socket(file_name.into_owned(), mode, uid, gid, socket, path)?;
+    Ok(())
+}
+
+pub fn get_stream_socket(
     path: &Path,
     ctx: &mut FileAccessContext,
 ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
     let link = lookup_and_resolve_link(ctx.process().unwrap().cwd(), path, ctx)?;
-    link.node.get_socket(ctx)
+    link.node.get_stream_socket(ctx)
+}
+
+pub fn get_dgram_socket(
+    path: &Path,
+    ctx: &mut FileAccessContext,
+) -> Result<Arc<OpenFileDescriptionData<DgramUnixSocket>>> {
+    let link = lookup_and_resolve_link(ctx.process().unwrap().cwd(), path, ctx)?;
+    link.node.get_dgram_socket(ctx)
 }
 
 pub fn mount(

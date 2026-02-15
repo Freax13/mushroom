@@ -22,7 +22,7 @@ use crate::{
             dir::open_dir,
             file::{File, open_file},
             inotify::Watchers,
-            unix_socket::StreamUnixSocket,
+            unix_socket::{DgramUnixSocket, StreamUnixSocket},
         },
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
@@ -318,13 +318,25 @@ impl Directory for ProcFsRoot {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
         _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &DgramUnixSocket,
         _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
@@ -1095,13 +1107,25 @@ impl Directory for NetDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _: FileName<'static>,
         _: FileMode,
         _: Uid,
         _: Gid,
         _: &StreamUnixSocket,
+        _: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+        _: &DgramUnixSocket,
         _: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
@@ -1765,13 +1789,25 @@ impl Directory for ProcessDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
         _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &DgramUnixSocket,
         _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
@@ -2517,13 +2553,25 @@ impl Directory for FdDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
         _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &DgramUnixSocket,
         _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
@@ -2995,13 +3043,25 @@ impl Directory for FdInfoDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
         _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &DgramUnixSocket,
         _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
@@ -4243,13 +4303,25 @@ impl Directory for ProcessTaskDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _: FileName<'static>,
         _: FileMode,
         _: Uid,
         _: Gid,
         _: &StreamUnixSocket,
+        _: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+        _: &DgramUnixSocket,
         _: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
@@ -4504,13 +4576,25 @@ impl Directory for TaskDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
         _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &DgramUnixSocket,
         _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)

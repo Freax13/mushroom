@@ -15,7 +15,7 @@ use crate::{
             dir::open_dir,
             file::{File, open_file},
             inotify::Watchers,
-            unix_socket::StreamUnixSocket,
+            unix_socket::{DgramUnixSocket, StreamUnixSocket},
         },
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
@@ -172,13 +172,25 @@ impl Directory for VmDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _: FileName<'static>,
         _: FileMode,
         _: Uid,
         _: Gid,
         _: &StreamUnixSocket,
+        _: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+        _: &DgramUnixSocket,
         _: &Path,
     ) -> Result<()> {
         bail!(NoEnt)

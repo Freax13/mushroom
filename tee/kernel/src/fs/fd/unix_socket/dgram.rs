@@ -24,7 +24,7 @@ use crate::{
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             socket_common_ioctl,
         },
-        node::{FileAccessContext, lookup_and_resolve_link, new_ino},
+        node::{FileAccessContext, bind_dgram_socket, get_dgram_socket, new_ino},
         ownership::Ownership,
         path::Path,
     },
@@ -140,6 +140,18 @@ impl DgramUnixSocket {
 
         (fd1, fd2)
     }
+
+    pub fn bind(&self, socketname: SocketAddrUnix) -> Result<Weak<OpenFileDescriptionData<Self>>> {
+        ensure!(!matches!(socketname, SocketAddrUnix::Unnamed), Inval);
+
+        let mut guard = self.addr.lock();
+        // Make sure that the socket is not already bound.
+        ensure!(guard.is_none(), Inval);
+        *guard = Some(socketname);
+        drop(guard);
+
+        Ok(self.this.clone())
+    }
 }
 
 #[async_trait]
@@ -163,15 +175,27 @@ impl OpenFileDescription for DgramUnixSocket {
             .set(OpenFlags::NONBLOCK, non_blocking);
     }
 
-    fn bind(&self, addr: SocketAddr, _: &mut FileAccessContext) -> Result<()> {
+    fn bind(&self, addr: SocketAddr, ctx: &mut FileAccessContext) -> Result<()> {
         let SocketAddr::Unix(addr) = addr else {
             bail!(Inval);
         };
 
-        let mut guard = self.addr.lock();
         match addr {
-            SocketAddrUnix::Pathname(_) => todo!(),
+            SocketAddrUnix::Pathname(path) => {
+                let guard = self.internal.lock();
+                let cwd = ctx.process().unwrap().cwd();
+                bind_dgram_socket(
+                    cwd,
+                    &path,
+                    guard.ownership.mode(),
+                    guard.ownership.uid(),
+                    guard.ownership.gid(),
+                    self,
+                    ctx,
+                )?;
+            }
             SocketAddrUnix::Unnamed => {
+                let mut guard = self.addr.lock();
                 if guard.is_none() {
                     // Auto-bind. Pick a 5-hexdigit abstract name and bind it.
 
@@ -198,6 +222,7 @@ impl OpenFileDescription for DgramUnixSocket {
                 }
             }
             SocketAddrUnix::Abstract(name) => {
+                let mut guard = self.addr.lock();
                 ensure!(guard.is_none(), Inval);
 
                 let mut sockets_guard = ABSTRACT_SOCKETS.lock();
@@ -230,11 +255,7 @@ impl OpenFileDescription for DgramUnixSocket {
             }
             SocketAddr::Unix(addr) => {
                 let new_socket = match addr {
-                    SocketAddrUnix::Pathname(path) => {
-                        let _link =
-                            lookup_and_resolve_link(ctx.process().unwrap().cwd(), &path, ctx)?;
-                        todo!("{path:?}")
-                    }
+                    SocketAddrUnix::Pathname(path) => get_dgram_socket(&path, ctx)?,
                     SocketAddrUnix::Unnamed => todo!(),
                     SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
                         .lock()
@@ -383,12 +404,7 @@ impl OpenFileDescription for DgramUnixSocket {
                 bail!(Inval);
             };
             match addr {
-                SocketAddrUnix::Pathname(path) => {
-                    let mut ctx = ctx.clone();
-                    let _link =
-                        lookup_and_resolve_link(ctx.process().unwrap().cwd(), &path, &mut ctx)?;
-                    todo!()
-                }
+                SocketAddrUnix::Pathname(path) => get_dgram_socket(&path, &mut ctx.clone())?,
                 SocketAddrUnix::Unnamed => bail!(Inval),
                 SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
                     .lock()

@@ -30,7 +30,7 @@ use crate::{
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             inotify::Watchers,
             stream_buffer,
-            unix_socket::StreamUnixSocket,
+            unix_socket::{DgramUnixSocket, StreamUnixSocket},
         },
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
@@ -982,13 +982,25 @@ impl Directory for DevPtsDirectory {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _file_name: FileName<'static>,
         _mode: FileMode,
         _uid: Uid,
         _gid: Gid,
         _: &StreamUnixSocket,
+        _socketname: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _file_name: FileName<'static>,
+        _mode: FileMode,
+        _uid: Uid,
+        _gid: Gid,
+        _: &DgramUnixSocket,
         _socketname: &Path,
     ) -> Result<()> {
         bail!(NoEnt)
