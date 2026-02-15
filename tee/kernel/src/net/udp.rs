@@ -2,7 +2,6 @@ use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
     sync::{Arc, Weak},
-    vec,
     vec::Vec,
 };
 use core::{
@@ -275,12 +274,12 @@ impl UdpSocket {
         Ok(guard.socketname.unwrap())
     }
 
-    /// Returns a tuple of (size, truncated, sender, matching destination address)
+    /// Returns a tuple of (written, len, sender, matching destination address)
     fn recv(
         &self,
         buf: &mut (impl ReadBuf + ?Sized),
         peek: bool,
-    ) -> Result<(usize, bool, net::SocketAddr, IpAddr)> {
+    ) -> Result<(usize, usize, net::SocketAddr, IpAddr)> {
         let mut guard = self.internal.lock();
         let packed_owned;
         let packet = if peek {
@@ -290,15 +289,15 @@ impl UdpSocket {
             &packed_owned
         };
 
-        let truncated = buf.buffer_len() < packet.bytes.len();
-        let len = cmp::min(buf.buffer_len(), packet.bytes.len());
-        buf.write(0, &packet.bytes[..len])?;
+        let len = packet.bytes.len();
+        let written = cmp::min(buf.buffer_len(), packet.bytes.len());
+        buf.write(0, &packet.bytes[..written])?;
 
         if guard.rx.is_empty() {
             self.rx_notify.notify();
         }
 
-        Ok((len, truncated, packet.source, packet.destination))
+        Ok((written, len, packet.source, packet.destination))
     }
 
     fn send(
@@ -346,11 +345,8 @@ impl UdpSocket {
             source.set_ip(self.ip_version.localhost_ip());
         }
 
-        let len = buf.buffer_len();
-        ensure!(len <= MAX_BUFFER_SIZE, MsgSize);
-        let mut bytes = vec![0; len];
-        buf.read(0, &mut bytes)?;
-        let bytes = Arc::<[u8]>::from(bytes);
+        let bytes = buf.read_into_arc(MAX_BUFFER_SIZE)?;
+        let len = bytes.len();
 
         if peername.ip().is_multicast() {
             let mut guard = MULTICAST_GROUPS.lock();
@@ -831,8 +827,8 @@ impl OpenFileDescription for UdpSocket {
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, _: &FileAccessContext) -> Result<usize> {
-        let (len, _, _, _) = self.recv(buf, false)?;
-        Ok(len)
+        let (written, _, _, _) = self.recv(buf, false)?;
+        Ok(written)
     }
 
     fn recv_from(
@@ -841,7 +837,12 @@ impl OpenFileDescription for UdpSocket {
         flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
         let peek = flags.contains(RecvFromFlags::PEEK);
-        let (len, _, source, _) = self.recv(buf, peek)?;
+        let (written, len, source, _) = self.recv(buf, peek)?;
+        let len = if flags.contains(RecvFromFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
         Ok((len, Some(SocketAddr::from(source))))
     }
 
@@ -856,9 +857,9 @@ impl OpenFileDescription for UdpSocket {
     ) -> Result<usize> {
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let peek = flags.contains(RecvMsgFlags::PEEK);
-        let (len, truncated, source, destination) = self.recv(&mut vectored_buf, peek)?;
+        let (written, len, source, destination) = self.recv(&mut vectored_buf, peek)?;
 
-        msg_hdr.flags.set(MsgHdrFlags::TRUNC, truncated);
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, written < len);
 
         if msg_hdr.namelen != 0 {
             let source = SocketAddr::from(source);
@@ -915,7 +916,7 @@ impl OpenFileDescription for UdpSocket {
         }
         drop(cmsg_builder);
 
-        Ok(len)
+        Ok(written)
     }
 
     fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {

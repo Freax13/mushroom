@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::{
     error::Result,
     fs::{
-        fd::unix_socket::StreamUnixSocket,
+        fd::unix_socket::{DgramUnixSocket, StreamUnixSocket},
         node::{DirEntry, DynINode, FileAccessContext, INode, Link, LinkLocation},
         path::{FileName, Path},
     },
@@ -74,7 +74,7 @@ macro_rules! dir_impls {
             Directory::create_fifo(self, file_name, mode, uid, gid)
         }
 
-        fn bind_socket(
+        fn bind_stream_socket(
             &self,
             file_name: FileName<'static>,
             mode: FileMode,
@@ -83,7 +83,19 @@ macro_rules! dir_impls {
             socket: &crate::fs::fd::unix_socket::StreamUnixSocket,
             socketname: &Path,
         ) -> Result<()> {
-            Directory::bind_socket(self, file_name, mode, uid, gid, socket, socketname)
+            Directory::bind_stream_socket(self, file_name, mode, uid, gid, socket, socketname)
+        }
+
+        fn bind_dgram_socket(
+            &self,
+            file_name: FileName<'static>,
+            mode: FileMode,
+            uid: Uid,
+            gid: Gid,
+            socket: &crate::fs::fd::unix_socket::DgramUnixSocket,
+            socketname: &Path,
+        ) -> Result<()> {
+            Directory::bind_dgram_socket(self, file_name, mode, uid, gid, socket, socketname)
         }
 
         fn is_empty_dir(&self) -> bool {
@@ -192,13 +204,22 @@ pub trait Directory: INode {
         uid: Uid,
         gid: Gid,
     ) -> Result<()>;
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
         uid: Uid,
         gid: Gid,
         socket: &StreamUnixSocket,
+        socketname: &Path,
+    ) -> Result<()>;
+    fn bind_dgram_socket(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+        socket: &DgramUnixSocket,
         socketname: &Path,
     ) -> Result<()>;
     fn is_empty(&self) -> bool;

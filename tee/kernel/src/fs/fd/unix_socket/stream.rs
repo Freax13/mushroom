@@ -27,7 +27,7 @@ use crate::{
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             socket_common_ioctl, stream_buffer,
         },
-        node::{FileAccessContext, bind_socket, get_socket, new_ino},
+        node::{FileAccessContext, bind_stream_socket, get_stream_socket, new_ino},
         ownership::Ownership,
         path::Path,
     },
@@ -428,7 +428,7 @@ impl OpenFileDescription for StreamUnixSocket {
                 let guard = self.internal.lock();
 
                 let cwd = ctx.process().unwrap().cwd();
-                bind_socket(
+                bind_stream_socket(
                     cwd,
                     &path,
                     guard.ownership.mode(),
@@ -634,7 +634,7 @@ impl OpenFileDescription for StreamUnixSocket {
         };
 
         let server = match addr {
-            SocketAddrUnix::Pathname(path) => get_socket(&path, ctx)?,
+            SocketAddrUnix::Pathname(path) => get_stream_socket(&path, ctx)?,
             SocketAddrUnix::Unnamed => bail!(Inval),
             SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
                 .lock()

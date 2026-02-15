@@ -9,8 +9,10 @@ use crate::{
     fs::{
         FileSystem,
         fd::{
-            BsdFileLockRecord, StrongFileDescriptor, dir::open_dir, inotify::Watchers,
-            unix_socket::StreamUnixSocket,
+            BsdFileLockRecord, StrongFileDescriptor,
+            dir::open_dir,
+            inotify::Watchers,
+            unix_socket::{DgramUnixSocket, StreamUnixSocket},
         },
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
@@ -200,13 +202,25 @@ impl Directory for SysDir {
         bail!(NoEnt)
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         _: FileName<'static>,
         _: FileMode,
         _: Uid,
         _: Gid,
         _: &StreamUnixSocket,
+        _: &Path,
+    ) -> Result<()> {
+        bail!(NoEnt)
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        _: FileName<'static>,
+        _: FileMode,
+        _: Uid,
+        _: Gid,
+        _: &DgramUnixSocket,
         _: &Path,
     ) -> Result<()> {
         bail!(NoEnt)

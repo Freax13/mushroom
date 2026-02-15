@@ -24,7 +24,7 @@ use crate::{
             inotify::{Watchers, next_cookie},
             pipe::named::NamedPipe,
             stream_buffer,
-            unix_socket::StreamUnixSocket,
+            unix_socket::{DgramUnixSocket, StreamUnixSocket},
         },
         node::{
             DirEntry, DirEntryName, DynINode, FileAccessContext, INode, Link, LinkLocation,
@@ -434,7 +434,7 @@ impl Directory for TmpFsDir {
         }
     }
 
-    fn bind_socket(
+    fn bind_stream_socket(
         &self,
         file_name: FileName<'static>,
         mode: FileMode,
@@ -449,9 +449,38 @@ impl Directory for TmpFsDir {
             bail!(AddrInUse)
         };
         let loc = LinkLocation::new(self.this.upgrade().unwrap(), file_name);
-        entry.insert(TmpFsDirEntry::Socket(
+        entry.insert(TmpFsDirEntry::StreamSocket(
             loc,
-            Arc::new(TmpFsSocket::new(
+            Arc::new(TmpFsStreamSocket::new(
+                self.fs.clone(),
+                mode,
+                uid,
+                gid,
+                socket.bind(SocketAddrUnix::Pathname(socketname.clone()))?,
+            )),
+        ));
+        guard.update_times();
+        Ok(())
+    }
+
+    fn bind_dgram_socket(
+        &self,
+        file_name: FileName<'static>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+        socket: &DgramUnixSocket,
+        socketname: &Path,
+    ) -> Result<()> {
+        let mut guard = self.internal.lock();
+        let entry = guard.items.entry(file_name.clone());
+        let Entry::Vacant(entry) = entry else {
+            bail!(AddrInUse)
+        };
+        let loc = LinkLocation::new(self.this.upgrade().unwrap(), file_name);
+        entry.insert(TmpFsDirEntry::DgramSocket(
+            loc,
+            Arc::new(TmpFsDgramSocket::new(
                 self.fs.clone(),
                 mode,
                 uid,
@@ -574,19 +603,22 @@ impl Directory for TmpFsDir {
                         | TmpFsDirEntry::Symlink(_, _)
                         | TmpFsDirEntry::CharDev(_, _)
                         | TmpFsDirEntry::Fifo(_, _)
-                        | TmpFsDirEntry::Socket(_, _),
+                        | TmpFsDirEntry::StreamSocket(_, _)
+                        | TmpFsDirEntry::DgramSocket(_, _),
                         TmpFsDirEntry::File(_, _)
                         | TmpFsDirEntry::Symlink(_, _)
                         | TmpFsDirEntry::CharDev(_, _)
                         | TmpFsDirEntry::Fifo(_, _)
-                        | TmpFsDirEntry::Socket(_, _),
+                        | TmpFsDirEntry::StreamSocket(_, _)
+                        | TmpFsDirEntry::DgramSocket(_, _),
                     ) => {}
                     (
                         TmpFsDirEntry::File(_, _)
                         | TmpFsDirEntry::Symlink(_, _)
                         | TmpFsDirEntry::CharDev(_, _)
                         | TmpFsDirEntry::Fifo(_, _)
-                        | TmpFsDirEntry::Socket(_, _),
+                        | TmpFsDirEntry::StreamSocket(_, _)
+                        | TmpFsDirEntry::DgramSocket(_, _),
                         TmpFsDirEntry::Dir(_),
                     ) => {
                         bail!(IsDir)
@@ -597,7 +629,8 @@ impl Directory for TmpFsDir {
                         | TmpFsDirEntry::Symlink(_, _)
                         | TmpFsDirEntry::CharDev(_, _)
                         | TmpFsDirEntry::Fifo(_, _)
-                        | TmpFsDirEntry::Socket(_, _),
+                        | TmpFsDirEntry::StreamSocket(_, _)
+                        | TmpFsDirEntry::DgramSocket(_, _),
                     ) => bail!(NotDir),
                     (TmpFsDirEntry::Dir(_), TmpFsDirEntry::Dir(new)) => {
                         let guard = new.internal.lock();
@@ -918,7 +951,8 @@ enum TmpFsDirEntry {
     Symlink(LinkLocation, Arc<TmpFsSymlink>),
     CharDev(LinkLocation, Arc<TmpFsCharDev>),
     Fifo(LinkLocation, Arc<TmpFsFifo>),
-    Socket(LinkLocation, Arc<TmpFsSocket>),
+    StreamSocket(LinkLocation, Arc<TmpFsStreamSocket>),
+    DgramSocket(LinkLocation, Arc<TmpFsDgramSocket>),
     Mount(Arc<dyn Directory>),
 }
 
@@ -945,7 +979,11 @@ impl TmpFsDirEntry {
                 location: loc.clone(),
                 node: node.clone(),
             },
-            TmpFsDirEntry::Socket(loc, node) => Link {
+            TmpFsDirEntry::StreamSocket(loc, node) => Link {
+                location: loc.clone(),
+                node: node.clone(),
+            },
+            TmpFsDirEntry::DgramSocket(loc, node) => Link {
                 location: loc.clone(),
                 node: node.clone(),
             },
@@ -966,7 +1004,8 @@ impl TmpFsDirEntry {
             Self::Symlink(_, symlink) => Self::Symlink(location, symlink.clone()),
             Self::CharDev(_, char_dev) => Self::CharDev(location, char_dev.clone()),
             Self::Fifo(_, fifo) => Self::Fifo(location, fifo.clone()),
-            Self::Socket(_, socket) => Self::Socket(location, socket.clone()),
+            Self::StreamSocket(_, socket) => Self::StreamSocket(location, socket.clone()),
+            Self::DgramSocket(_, socket) => Self::DgramSocket(location, socket.clone()),
             Self::Mount(_) => bail!(Busy),
         })
     }
@@ -978,7 +1017,8 @@ impl TmpFsDirEntry {
             TmpFsDirEntry::Symlink(loc, _) => loc.update(parent, file_name),
             TmpFsDirEntry::CharDev(loc, _) => loc.update(parent, file_name),
             TmpFsDirEntry::Fifo(loc, _) => loc.update(parent, file_name),
-            TmpFsDirEntry::Socket(loc, _) => loc.update(parent, file_name),
+            TmpFsDirEntry::StreamSocket(loc, _) => loc.update(parent, file_name),
+            TmpFsDirEntry::DgramSocket(loc, _) => loc.update(parent, file_name),
             TmpFsDirEntry::Mount(dir) => dir.location().update(parent, file_name),
         }
     }
@@ -994,7 +1034,8 @@ impl Deref for TmpFsDirEntry {
             TmpFsDirEntry::Symlink(_, symlink) => &**symlink,
             TmpFsDirEntry::CharDev(_, char_dev) => &**char_dev,
             TmpFsDirEntry::Fifo(_, fifo) => &**fifo,
-            TmpFsDirEntry::Socket(_, socket) => &**socket,
+            TmpFsDirEntry::StreamSocket(_, socket) => &**socket,
+            TmpFsDirEntry::DgramSocket(_, socket) => &**socket,
             TmpFsDirEntry::Mount(mount) => &**mount,
         }
     }
@@ -1771,23 +1812,23 @@ impl INode for TmpFsFifo {
     }
 }
 
-pub struct TmpFsSocket {
+pub struct TmpFsStreamSocket {
     fs: Arc<TmpFs>,
     ino: u64,
-    internal: Mutex<TmpFsSocketInternal>,
+    internal: Mutex<TmpFsStreamSocketInternal>,
     bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     socket: Weak<OpenFileDescriptionData<StreamUnixSocket>>,
 }
 
-struct TmpFsSocketInternal {
+struct TmpFsStreamSocketInternal {
     ownership: Ownership,
     atime: Timespec,
     mtime: Timespec,
     ctime: Timespec,
 }
 
-impl TmpFsSocket {
+impl TmpFsStreamSocket {
     pub fn new(
         fs: Arc<TmpFs>,
         mode: FileMode,
@@ -1800,7 +1841,7 @@ impl TmpFsSocket {
         Self {
             fs,
             ino: new_ino(),
-            internal: Mutex::new(TmpFsSocketInternal {
+            internal: Mutex::new(TmpFsStreamSocketInternal {
                 ownership: Ownership::new(mode, uid, gid),
                 atime: now,
                 mtime: now,
@@ -1814,7 +1855,7 @@ impl TmpFsSocket {
 }
 
 #[async_trait]
-impl INode for TmpFsSocket {
+impl INode for TmpFsStreamSocket {
     fn stat(&self) -> Result<Stat> {
         let guard = self.internal.lock();
         Ok(Stat {
@@ -1871,10 +1912,124 @@ impl INode for TmpFsSocket {
         self.bsd_file_lock_record.get()
     }
 
-    fn get_socket(
+    fn get_stream_socket(
         &self,
         ctx: &FileAccessContext,
     ) -> Result<Arc<OpenFileDescriptionData<StreamUnixSocket>>> {
+        let guard = self.internal.lock();
+        ctx.check_permissions(&guard.ownership, Permission::Write)?;
+        self.socket.upgrade().ok_or(err!(ConnRefused))
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+pub struct TmpFsDgramSocket {
+    fs: Arc<TmpFs>,
+    ino: u64,
+    internal: Mutex<TmpFsDgramSocketInternal>,
+    bsd_file_lock_record: LazyBsdFileLockRecord,
+    watchers: Watchers,
+    socket: Weak<OpenFileDescriptionData<DgramUnixSocket>>,
+}
+
+struct TmpFsDgramSocketInternal {
+    ownership: Ownership,
+    atime: Timespec,
+    mtime: Timespec,
+    ctime: Timespec,
+}
+
+impl TmpFsDgramSocket {
+    pub fn new(
+        fs: Arc<TmpFs>,
+        mode: FileMode,
+        uid: Uid,
+        gid: Gid,
+        socket: Weak<OpenFileDescriptionData<DgramUnixSocket>>,
+    ) -> Self {
+        let now = now(ClockId::Realtime);
+
+        Self {
+            fs,
+            ino: new_ino(),
+            internal: Mutex::new(TmpFsDgramSocketInternal {
+                ownership: Ownership::new(mode, uid, gid),
+                atime: now,
+                mtime: now,
+                ctime: now,
+            }),
+            bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            watchers: Watchers::new(),
+            socket,
+        }
+    }
+}
+
+#[async_trait]
+impl INode for TmpFsDgramSocket {
+    fn stat(&self) -> Result<Stat> {
+        let guard = self.internal.lock();
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: self.ino,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::Socket, guard.ownership.mode()),
+            uid: guard.ownership.uid(),
+            gid: guard.ownership.gid(),
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: guard.atime,
+            mtime: guard.mtime,
+            ctime: guard.ctime,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        _: LinkLocation,
+        _: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        bail!(NxIo)
+    }
+
+    fn chmod(&self, mode: FileMode, ctx: &FileAccessContext) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard.ownership.chmod(mode, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
+    }
+
+    fn chown(&self, uid: Uid, gid: Gid, ctx: &FileAccessContext) -> Result<()> {
+        let mut guard = self.internal.lock();
+        guard.ownership.chown(uid, gid, ctx)?;
+        guard.ctime = now(ClockId::Realtime);
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        self.bsd_file_lock_record.get()
+    }
+
+    fn get_dgram_socket(
+        &self,
+        ctx: &FileAccessContext,
+    ) -> Result<Arc<OpenFileDescriptionData<DgramUnixSocket>>> {
         let guard = self.internal.lock();
         ctx.check_permissions(&guard.ownership, Permission::Write)?;
         self.socket.upgrade().ok_or(err!(ConnRefused))
