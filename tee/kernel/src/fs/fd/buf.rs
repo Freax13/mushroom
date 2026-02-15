@@ -1,11 +1,12 @@
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 use core::{cmp, ptr::NonNull};
 
+use bytemuck::zeroed_arc_slice;
 use usize_conversions::{FromUsize, IntoUsize, usize_from};
 use x86_64::VirtAddr;
 
 use crate::{
-    error::Result,
+    error::{Result, ensure},
     memory::page::KernelPage,
     user::{
         memory::VirtualMemory,
@@ -28,6 +29,19 @@ pub trait WriteBuf {
     fn buffer_len(&self) -> usize;
     fn read(&self, offset: usize, bytes: &mut [u8]) -> Result<()>;
     unsafe fn read_volatile(&self, offset: usize, bytes: NonNull<[u8]>) -> Result<()>;
+
+    fn read_into_arc(&self, max_size: usize) -> Result<Arc<[u8]>> {
+        let len = self.buffer_len();
+        ensure!(len <= max_size, MsgSize);
+        // We need to zero-initialize the data because we can't (safely) assume
+        // that `Self::read_volatile` will actually populate all the bytes.
+        let mut arc = zeroed_arc_slice(len);
+
+        let data = Arc::get_mut(&mut arc).unwrap();
+        self.read(0, data)?;
+
+        Ok(arc)
+    }
 }
 
 pub struct KernelReadBuf<'a>(&'a mut [u8]);

@@ -1891,6 +1891,12 @@ bitflags! {
     }
 }
 
+impl From<RecvMsgFlags> for RecvFromFlags {
+    fn from(value: RecvMsgFlags) -> Self {
+        Self::from_bits_truncate(value.bits())
+    }
+}
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Linger {

@@ -2,7 +2,6 @@ use alloc::{
     boxed::Box,
     collections::{btree_map::BTreeMap, vec_deque::VecDeque},
     sync::{Arc, Weak},
-    vec,
     vec::Vec,
 };
 use core::{
@@ -346,11 +345,8 @@ impl UdpSocket {
             source.set_ip(self.ip_version.localhost_ip());
         }
 
-        let len = buf.buffer_len();
-        ensure!(len <= MAX_BUFFER_SIZE, MsgSize);
-        let mut bytes = vec![0; len];
-        buf.read(0, &mut bytes)?;
-        let bytes = Arc::<[u8]>::from(bytes);
+        let bytes = buf.read_into_arc(MAX_BUFFER_SIZE)?;
+        let len = bytes.len();
 
         if peername.ip().is_multicast() {
             let mut guard = MULTICAST_GROUPS.lock();

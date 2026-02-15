@@ -6,7 +6,6 @@ use alloc::{
     },
     format,
     sync::{Arc, Weak},
-    vec,
     vec::Vec,
 };
 use core::{cmp, ffi::c_void};
@@ -46,6 +45,8 @@ use crate::{
         thread::{Gid, ThreadGuard, Uid},
     },
 };
+
+const MAX_BUFFER_SIZE: usize = 130688;
 
 static ABSTRACT_SOCKETS: Mutex<BTreeMap<Vec<u8>, Weak<OpenFileDescriptionData<DgramUnixSocket>>>> =
     Mutex::new(BTreeMap::new());
@@ -218,12 +219,17 @@ impl DgramUnixSocket {
         Ok(())
     }
 
-    fn recv_packet(&self) -> Result<Packet> {
+    fn recv_packet(&self, flags: RecvFromFlags) -> Result<Packet> {
         let mut guard = self.internal.lock();
-        let packet = guard.packets.pop_front().ok_or(err!(Again))?;
+        let peek = flags.contains(RecvFromFlags::PEEK);
+        let packet = if peek {
+            guard.packets.front().cloned().ok_or(err!(Again))?
+        } else {
+            guard.packets.pop_front().ok_or(err!(Again))?
+        };
         drop(guard);
 
-        if let Some(other) = packet.connection_end.upgrade() {
+        if !peek && let Some(other) = packet.connection_end.upgrade() {
             let mut guard = other.internal.lock();
             guard.write_counter.inc();
             drop(guard);
@@ -396,9 +402,9 @@ impl OpenFileDescription for DgramUnixSocket {
     fn recv_from(
         &self,
         buf: &mut dyn ReadBuf,
-        _: RecvFromFlags,
+        flags: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        let packet = self.recv_packet()?;
+        let packet = self.recv_packet(flags)?;
 
         let len = cmp::min(packet.data.len(), buf.buffer_len());
         buf.write(0, &packet.data[..len])?;
@@ -420,7 +426,8 @@ impl OpenFileDescription for DgramUnixSocket {
         ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
-        let mut packet = self.recv_packet()?;
+        let recv_from_flags = RecvFromFlags::from(flags);
+        let mut packet = self.recv_packet(recv_from_flags)?;
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         let len = cmp::min(packet.data.len(), ReadBuf::buffer_len(&vectored_buf));
@@ -472,10 +479,8 @@ impl OpenFileDescription for DgramUnixSocket {
             todo!()
         }
 
-        let len = buf.buffer_len();
-        let mut bytes = vec![0; len];
-        buf.read(0, &mut bytes)?;
-        let data = Box::from(bytes);
+        let data = buf.read_into_arc(MAX_BUFFER_SIZE)?;
+        let len = data.len();
 
         let packet = Packet {
             data,
@@ -507,10 +512,8 @@ impl OpenFileDescription for DgramUnixSocket {
         }
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = WriteBuf::buffer_len(&vectored_buf);
-        let mut bytes = vec![0; len];
-        vectored_buf.read(0, &mut bytes)?;
-        let data = Box::from(bytes);
+        let data = vectored_buf.read_into_arc(MAX_BUFFER_SIZE)?;
+        let len = data.len();
 
         let ancillary_data = if msg_hdr.controllen > 0 {
             let mut ancillary_data = AncillaryData::default();
@@ -749,8 +752,9 @@ struct Connection {
     reset: bool,
 }
 
+#[derive(Clone)]
 struct Packet {
-    data: Box<[u8]>,
+    data: Arc<[u8]>,
     sender_addr: Arc<Mutex<Option<SocketAddrUnix>>>,
     sender_cred: Ucred,
     /// A weak pointer to the socket that send the packet iff that socket was
