@@ -13,13 +13,14 @@ use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use usize_conversions::usize_from;
+use x86_64::align_up;
 
 use crate::{
     error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
             OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             socket_common_ioctl,
@@ -151,6 +152,64 @@ impl DgramUnixSocket {
         drop(guard);
 
         Ok(self.this.clone())
+    }
+
+    fn send_packet_to(
+        &self,
+        addr: Option<SocketAddr>,
+        mut packet: Packet,
+        ctx: &FileAccessContext,
+    ) -> Result<()> {
+        let destination = if let Some(addr) = addr {
+            let SocketAddr::Unix(addr) = addr else {
+                bail!(Inval);
+            };
+            match addr {
+                SocketAddrUnix::Pathname(path) => get_dgram_socket(&path, &mut ctx.clone())?,
+                SocketAddrUnix::Unnamed => bail!(Inval),
+                SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
+                    .lock()
+                    .get(&name)
+                    .and_then(Weak::upgrade)
+                    .ok_or(err!(ConnRefused))?,
+            }
+        } else {
+            let guard = self.internal.lock();
+            let connection = guard.connection.as_ref().ok_or(err!(NotConn))?;
+            ensure!(!connection.reset, ConnReset);
+            packet.connection_end = self.this.clone();
+            connection.socket.upgrade().ok_or(err!(ConnRefused))?
+        };
+
+        let mut guard = destination.internal.lock();
+        // If the other socket is connected, make sure it's connected to this socket.
+        if let Some(connection) = guard.connection.as_ref() {
+            ensure!(Weak::ptr_eq(&self.this, &connection.socket), Perm);
+        }
+
+        // Append the packet.
+        guard.packets.push_back(packet);
+        guard.read_counter.inc();
+        drop(guard);
+
+        destination.notify.notify();
+
+        Ok(())
+    }
+
+    fn recv_packet(&self) -> Result<Packet> {
+        let mut guard = self.internal.lock();
+        let packet = guard.packets.pop_front().ok_or(err!(Again))?;
+        drop(guard);
+
+        if let Some(other) = packet.connection_end.upgrade() {
+            let mut guard = other.internal.lock();
+            guard.write_counter.inc();
+            drop(guard);
+            other.notify.notify();
+        }
+
+        Ok(packet)
     }
 }
 
@@ -316,29 +375,14 @@ impl OpenFileDescription for DgramUnixSocket {
     fn recv_from(
         &self,
         buf: &mut dyn ReadBuf,
-        flags: RecvFromFlags,
+        _: RecvFromFlags,
     ) -> Result<(usize, Option<SocketAddr>)> {
-        if flags.contains(RecvFromFlags::PEEK) {
-            todo!()
-        }
+        let packet = self.recv_packet()?;
 
-        let packet = self
-            .internal
-            .lock()
-            .packets
-            .pop_front()
-            .ok_or(err!(Again))?;
         let len = cmp::min(packet.data.len(), buf.buffer_len());
         buf.write(0, &packet.data[..len])?;
 
         let addr = packet.sender_addr.lock().clone().map(SocketAddr::Unix);
-
-        if let Some(other) = packet.connection_end.upgrade() {
-            let mut guard = other.internal.lock();
-            guard.write_counter.inc();
-            drop(guard);
-            other.notify.notify();
-        }
 
         Ok((len, addr))
     }
@@ -349,18 +393,20 @@ impl OpenFileDescription for DgramUnixSocket {
         abi: Abi,
         msg_hdr: &mut MsgHdr,
         flags: RecvMsgFlags,
-        _: &FileDescriptorTable,
-        _: CurrentNoFileLimit,
+        fdtable: &FileDescriptorTable,
+        no_file_limit: CurrentNoFileLimit,
     ) -> Result<usize> {
         ensure!(msg_hdr.namelen == 0, IsConn);
         ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
 
+        let mut packet = self.recv_packet()?;
+
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let mut recv_from_flags = RecvFromFlags::empty();
-        recv_from_flags.set(RecvFromFlags::PEEK, flags.contains(RecvMsgFlags::PEEK));
-        let (n, addr) = self.recv_from(&mut vectored_buf, RecvFromFlags::empty())?;
+        let len = cmp::min(packet.data.len(), ReadBuf::buffer_len(&vectored_buf));
+        vectored_buf.write(0, &packet.data[..len])?;
 
         if msg_hdr.namelen != 0 {
+            let addr = packet.sender_addr.lock().clone().map(SocketAddr::Unix);
             if let Some(addr) = addr {
                 msg_hdr.namelen = addr.write(msg_hdr.name, usize_from(msg_hdr.namelen), vm)? as u32;
             } else {
@@ -368,9 +414,17 @@ impl OpenFileDescription for DgramUnixSocket {
             }
         }
 
-        drop(CMsgBuilder::new(abi, vm, msg_hdr));
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
+        if let Some(ancillary_data) = packet.ancillary_data.as_mut()
+            && let Some(fds) = ancillary_data.rights.take().filter(|fds| !fds.is_empty())
+        {
+            let mut fd_flags = FdFlags::empty();
+            fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
+            cmsg_builder.add_fds(1, 1, fds, fd_flags, fdtable, no_file_limit)?;
+        }
+        drop(cmsg_builder);
 
-        Ok(n)
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
@@ -393,45 +447,14 @@ impl OpenFileDescription for DgramUnixSocket {
         buf.read(0, &mut bytes)?;
         let data = Box::from(bytes);
 
-        let mut packet = Packet {
+        let packet = Packet {
             data,
             sender_addr: self.addr.clone(),
             connection_end: Weak::new(),
+            ancillary_data: None,
         };
 
-        let destination = if let Some(addr) = addr {
-            let SocketAddr::Unix(addr) = addr else {
-                bail!(Inval);
-            };
-            match addr {
-                SocketAddrUnix::Pathname(path) => get_dgram_socket(&path, &mut ctx.clone())?,
-                SocketAddrUnix::Unnamed => bail!(Inval),
-                SocketAddrUnix::Abstract(name) => ABSTRACT_SOCKETS
-                    .lock()
-                    .get(&name)
-                    .and_then(Weak::upgrade)
-                    .ok_or(err!(ConnRefused))?,
-            }
-        } else {
-            let guard = self.internal.lock();
-            let connection = guard.connection.as_ref().ok_or(err!(NotConn))?;
-            ensure!(!connection.reset, ConnReset);
-            packet.connection_end = self.this.clone();
-            connection.socket.upgrade().ok_or(err!(ConnRefused))?
-        };
-
-        let mut guard = destination.internal.lock();
-        // If the other socket is connected, make sure it's connected to this socket.
-        if let Some(connection) = guard.connection.as_ref() {
-            ensure!(Weak::ptr_eq(&self.this, &connection.socket), Perm);
-        }
-
-        // Append the packet.
-        guard.packets.push_back(packet);
-        guard.read_counter.inc();
-        drop(guard);
-
-        destination.notify.notify();
+        self.send_packet_to(addr, packet, ctx)?;
 
         Ok(len)
     }
@@ -442,18 +465,72 @@ impl OpenFileDescription for DgramUnixSocket {
         abi: Abi,
         msg_hdr: &mut MsgHdr,
         flags: SendMsgFlags,
-        _: &FileDescriptorTable,
+        fdtable: &FileDescriptorTable,
         ctx: &FileAccessContext,
     ) -> Result<usize> {
         if (flags & !SendMsgFlags::NOSIGNAL) != SendMsgFlags::empty() {
             todo!("{flags:?}")
         }
-        if msg_hdr.controllen != 0 {
-            todo!()
-        }
         if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let len = WriteBuf::buffer_len(&vectored_buf);
+        let mut bytes = vec![0; len];
+        vectored_buf.read(0, &mut bytes)?;
+        let data = Box::from(bytes);
+
+        let ancillary_data = if msg_hdr.controllen > 0 {
+            let mut ancillary_data = AncillaryData::default();
+
+            while msg_hdr.controllen > 0 {
+                let (len, header) = vm.read_sized_with_abi(msg_hdr.control, abi)?;
+                ensure!(msg_hdr.controllen >= header.len, Inval);
+                let buffer_len = usize_from(header.len).checked_sub(len).ok_or(err!(Inval))?;
+
+                match (header.level, header.r#type) {
+                    (1, 1) => {
+                        // SCM_RIGHTS
+                        ensure!(buffer_len % 4 == 0, Inval);
+                        let num_fds = buffer_len / 4;
+
+                        ensure!(ancillary_data.rights.is_none(), Inval);
+
+                        let fds = (0..num_fds)
+                            .map(|i| {
+                                let fd =
+                                    vm.read(msg_hdr.control.bytes_offset(len).cast().add(i))?;
+                                fdtable.get_strong(fd)
+                            })
+                            .collect::<Result<_>>()?;
+                        ancillary_data.rights = Some(fds);
+                    }
+                    _ => {
+                        todo!("level={} type={}", header.level, header.r#type)
+                    }
+                }
+
+                let align = match abi {
+                    Abi::I386 => 4,
+                    Abi::Amd64 => 8,
+                };
+                let offset = align_up(header.len, align);
+                msg_hdr.control = msg_hdr.control.bytes_offset(usize_from(offset));
+                msg_hdr.controllen = msg_hdr.controllen.saturating_sub(offset);
+            }
+
+            Some(ancillary_data)
+        } else {
+            None
+        };
+
+        let packet = Packet {
+            data,
+            sender_addr: self.addr.clone(),
+            connection_end: Weak::new(),
+            ancillary_data,
+        };
 
         let addr = if msg_hdr.namelen != 0 {
             Some(SocketAddr::read(
@@ -465,8 +542,9 @@ impl OpenFileDescription for DgramUnixSocket {
             None
         };
 
-        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
+        self.send_packet_to(addr, packet, ctx)?;
+
+        Ok(len)
     }
 
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
@@ -586,4 +664,10 @@ struct Packet {
     /// A weak pointer to the socket that send the packet iff that socket was
     /// connected to the receiver
     connection_end: Weak<OpenFileDescriptionData<DgramUnixSocket>>,
+    ancillary_data: Option<AncillaryData>,
+}
+
+#[derive(Clone, Default)]
+struct AncillaryData {
+    rights: Option<Vec<StrongFileDescriptor>>,
 }
