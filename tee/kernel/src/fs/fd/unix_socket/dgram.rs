@@ -39,7 +39,7 @@ use crate::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
                 RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix,
-                Stat, Timespec, Ucred,
+                SocketType, Stat, Timespec, Ucred,
             },
             traits::Abi,
         },
@@ -631,6 +631,15 @@ impl OpenFileDescription for DgramUnixSocket {
 
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
         match (level, optname) {
+            (1, 3) => {
+                // SO_TYPE
+                let ty = SocketType::Dgram as u32;
+                Ok(ty.to_le_bytes().to_vec())
+            }
+            (1, 8) => {
+                // SO_RCVBUF
+                Ok(212992u32.to_le_bytes().to_vec())
+            }
             (1, 16) => {
                 // SO_PASSCRED
                 let passcred = self.internal.lock().passcred;
@@ -650,6 +659,13 @@ impl OpenFileDescription for DgramUnixSocket {
         optlen: i32,
     ) -> Result<()> {
         match (level, optname) {
+            (1, 15) => {
+                // SO_REUSEPORT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())?;
+                ensure!(optval == 0, OpNotSupp);
+                Ok(())
+            }
             (1, 16) => {
                 // SO_PASSCRED
                 ensure!(optlen == 4, Inval);
