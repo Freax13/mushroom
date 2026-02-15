@@ -39,7 +39,7 @@ use crate::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
                 RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrUnix,
-                Stat, Timespec,
+                Stat, Timespec, Ucred,
             },
             traits::Abi,
         },
@@ -57,6 +57,7 @@ pub struct DgramUnixSocket {
     internal: Mutex<DgramUnixSocketInternal>,
     notify: Notify,
     bsd_file_lock: BsdFileLock,
+    localcred: Ucred,
 }
 
 struct DgramUnixSocketInternal {
@@ -66,48 +67,62 @@ struct DgramUnixSocketInternal {
     packets: VecDeque<Packet>,
     read_counter: EventCounter,
     write_counter: EventCounter,
+
+    passcred: bool,
 }
 
 impl DgramUnixSocket {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(flags: OpenFlags, uid: Uid, gid: Gid) -> StrongFileDescriptor {
+    pub fn new(flags: OpenFlags, ctx: &FileAccessContext) -> StrongFileDescriptor {
         StrongFileDescriptor::new_cyclic(|this| Self {
             this: this.clone(),
             ino: new_ino(),
             addr: Arc::new(Mutex::new(None)),
             internal: Mutex::new(DgramUnixSocketInternal {
                 flags,
-                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                ownership: Ownership::new(
+                    FileMode::OWNER_READ | FileMode::OWNER_WRITE,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
+                ),
                 connection: None,
                 packets: VecDeque::new(),
                 read_counter: EventCounter::new(),
                 write_counter: EventCounter::new(),
+                passcred: false,
             }),
             notify: Notify::new(),
             bsd_file_lock: BsdFileLock::anonymous(),
+            localcred: Ucred::from(ctx),
         })
     }
 
     pub fn new_pair(
         flags: OpenFlags,
-        uid: Uid,
-        gid: Gid,
+        ctx: &FileAccessContext,
     ) -> (StrongFileDescriptor, StrongFileDescriptor) {
         // Create two sockets.
+        let cred = Ucred::from(ctx);
         let (fd1, socket1) = StrongFileDescriptor::new_cyclic_with_data(|this| Self {
             this: this.clone(),
             ino: new_ino(),
             addr: Arc::new(Mutex::new(None)),
             internal: Mutex::new(DgramUnixSocketInternal {
                 flags,
-                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                ownership: Ownership::new(
+                    FileMode::OWNER_READ | FileMode::OWNER_WRITE,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
+                ),
                 connection: None,
                 packets: VecDeque::new(),
                 read_counter: EventCounter::new(),
                 write_counter: EventCounter::new(),
+                passcred: false,
             }),
             notify: Notify::new(),
             bsd_file_lock: BsdFileLock::anonymous(),
+            localcred: cred,
         });
         let (fd2, socket2) = StrongFileDescriptor::new_cyclic_with_data(|this| Self {
             this: this.clone(),
@@ -115,14 +130,20 @@ impl DgramUnixSocket {
             addr: Arc::new(Mutex::new(None)),
             internal: Mutex::new(DgramUnixSocketInternal {
                 flags,
-                ownership: Ownership::new(FileMode::OWNER_READ | FileMode::OWNER_WRITE, uid, gid),
+                ownership: Ownership::new(
+                    FileMode::OWNER_READ | FileMode::OWNER_WRITE,
+                    ctx.filesystem_user_id(),
+                    ctx.filesystem_group_id(),
+                ),
                 connection: None,
                 packets: VecDeque::new(),
                 read_counter: EventCounter::new(),
                 write_counter: EventCounter::new(),
+                passcred: false,
             }),
             notify: Notify::new(),
             bsd_file_lock: BsdFileLock::anonymous(),
+            localcred: cred,
         });
 
         // Connect the two sockets.
@@ -422,6 +443,15 @@ impl OpenFileDescription for DgramUnixSocket {
             fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
             cmsg_builder.add_fds(1, 1, fds, fd_flags, fdtable, no_file_limit)?;
         }
+        let passcred = self.internal.lock().passcred;
+        if passcred {
+            let cred = packet
+                .ancillary_data
+                .as_ref()
+                .and_then(|ancillary_data| ancillary_data.cred)
+                .unwrap_or(packet.sender_cred);
+            cmsg_builder.add(1, 2, cred)?;
+        }
         drop(cmsg_builder);
 
         Ok(len)
@@ -450,6 +480,7 @@ impl OpenFileDescription for DgramUnixSocket {
         let packet = Packet {
             data,
             sender_addr: self.addr.clone(),
+            sender_cred: self.localcred,
             connection_end: Weak::new(),
             ancillary_data: None,
         };
@@ -506,6 +537,16 @@ impl OpenFileDescription for DgramUnixSocket {
                             .collect::<Result<_>>()?;
                         ancillary_data.rights = Some(fds);
                     }
+                    (1, 2) => {
+                        // SCM_CREDENTIALS
+                        ensure!(buffer_len >= size_of::<Ucred>(), Inval);
+
+                        ensure!(ancillary_data.cred.is_none(), Inval);
+
+                        let cred = vm.read(msg_hdr.control.bytes_offset(len).cast())?;
+                        // TODO: Validate cred
+                        ancillary_data.cred = Some(cred);
+                    }
                     _ => {
                         todo!("level={} type={}", header.level, header.r#type)
                     }
@@ -528,6 +569,7 @@ impl OpenFileDescription for DgramUnixSocket {
         let packet = Packet {
             data,
             sender_addr: self.addr.clone(),
+            sender_cred: self.localcred,
             connection_end: Weak::new(),
             ancillary_data,
         };
@@ -585,6 +627,39 @@ impl OpenFileDescription for DgramUnixSocket {
         let addr = addr.lock().clone();
         let addr = addr.unwrap_or(SocketAddrUnix::Unnamed);
         Ok(SocketAddr::Unix(addr))
+    }
+
+    fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        match (level, optname) {
+            (1, 16) => {
+                // SO_PASSCRED
+                let passcred = self.internal.lock().passcred;
+                Ok(u32::from(passcred).to_ne_bytes().to_vec())
+            }
+            _ => bail!(OpNotSupp),
+        }
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        _: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        match (level, optname) {
+            (1, 16) => {
+                // SO_PASSCRED
+                ensure!(optlen == 4, Inval);
+                let passcred = virtual_memory.read(optval.cast::<u32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.passcred = passcred;
+                Ok(())
+            }
+            _ => bail!(OpNotSupp),
+        }
     }
 
     fn ioctl(
@@ -661,6 +736,7 @@ struct Connection {
 struct Packet {
     data: Box<[u8]>,
     sender_addr: Arc<Mutex<Option<SocketAddrUnix>>>,
+    sender_cred: Ucred,
     /// A weak pointer to the socket that send the packet iff that socket was
     /// connected to the receiver
     connection_end: Weak<OpenFileDescriptionData<DgramUnixSocket>>,
@@ -670,4 +746,5 @@ struct Packet {
 #[derive(Clone, Default)]
 struct AncillaryData {
     rights: Option<Vec<StrongFileDescriptor>>,
+    cred: Option<Ucred>,
 }

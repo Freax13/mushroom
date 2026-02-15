@@ -1826,11 +1826,7 @@ fn socket(
                 no_file_limit,
             )?,
             SocketType::Dgram | SocketType::Raw => fdtable.insert(
-                DgramUnixSocket::new(
-                    r#type.flags,
-                    ctx.filesystem_user_id(),
-                    ctx.filesystem_group_id(),
-                ),
+                DgramUnixSocket::new(r#type.flags, &ctx),
                 r#type,
                 no_file_limit,
             )?,
@@ -2173,11 +2169,7 @@ fn socketpair(
                 res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }
             SocketType::Dgram => {
-                let (half1, half2) = DgramUnixSocket::new_pair(
-                    r#type.flags,
-                    ctx.filesystem_user_id(),
-                    ctx.filesystem_group_id(),
-                );
+                let (half1, half2) = DgramUnixSocket::new_pair(r#type.flags, &ctx);
                 res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                 res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }
