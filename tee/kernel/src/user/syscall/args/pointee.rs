@@ -28,14 +28,14 @@ use crate::{
         memory::VirtualMemory,
         syscall::{
             args::{
-                CmsgHdr, ControlMode, Domain, FdNum, FileMode, Flock, FlockType, FlockWhence,
-                ITimerspec, ITimerval, InputMode, Iovec, IpMreq, IpMreqn, Ipv6Mreq, Linger,
-                LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, MsgHdrFlags, Offset,
+                Clock, CmsgHdr, ControlMode, Domain, FdNum, FileMode, Flock, FlockType,
+                FlockWhence, ITimerspec, ITimerval, InputMode, Iovec, IpMreq, IpMreqn, Ipv6Mreq,
+                Linger, LinuxDirent64, LocalMode, LongOffset, MMsgHdr, MsgHdr, MsgHdrFlags, Offset,
                 OpenFlags, OpenHow, OutputMode, PSelectSigsetArg, PktInfo, PktInfo6, Pointer,
                 PtraceSyscallInfo, PtraceSyscallInfoValue, RLimit, ResolveFlags, Rusage,
                 SchedParam, SemInfo, SigEvent, SigEventData, SocketAddr, SocketAddrNetlink,
                 SocketAddrUnix, Stat, SysInfo, Termios, Time, TimerId, Timespec, Timeval, Timezone,
-                Ucred, UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
+                Tms, Ucred, UserCapData, UserCapHeader, UserRegs32, UserRegs64, WStatus, WinSize,
             },
             traits::Abi,
         },
@@ -3262,3 +3262,83 @@ impl From<PtraceSyscallInfo> for RawPtraceSyscallInfo {
 
 impl Pointee for SemInfo {}
 impl PrimitivePointee for SemInfo {}
+
+impl Pointee for Clock {}
+impl AbiDependentPointee for Clock {
+    type I386 = Clock32;
+    type Amd64 = Clock64;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct Clock32(u32);
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct Clock64(u64);
+
+impl From<Clock> for Clock32 {
+    fn from(value: Clock) -> Self {
+        Self(value.0 as u32)
+    }
+}
+
+impl From<Clock> for Clock64 {
+    fn from(value: Clock) -> Self {
+        Self(value.0)
+    }
+}
+
+impl Pointee for Tms {}
+impl AbiDependentPointee for Tms {
+    type I386 = Tms32;
+    type Amd64 = Tms64;
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Tms32 {
+    /// user time
+    pub utime: Clock32,
+    /// system time
+    pub stime: Clock32,
+    /// user time of children
+    pub cutime: Clock32,
+    /// system time of children
+    pub cstime: Clock32,
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct Tms64 {
+    /// user time
+    pub utime: Clock64,
+    /// system time
+    pub stime: Clock64,
+    /// user time of children
+    pub cutime: Clock64,
+    /// system time of children
+    pub cstime: Clock64,
+}
+
+impl From<Tms> for Tms32 {
+    fn from(value: Tms) -> Self {
+        Self {
+            utime: value.utime.into(),
+            stime: value.stime.into(),
+            cutime: value.cutime.into(),
+            cstime: value.cstime.into(),
+        }
+    }
+}
+
+impl From<Tms> for Tms64 {
+    fn from(value: Tms) -> Self {
+        Self {
+            utime: value.utime.into(),
+            stime: value.stime.into(),
+            cutime: value.cutime.into(),
+            cstime: value.cstime.into(),
+        }
+    }
+}

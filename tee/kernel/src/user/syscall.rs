@@ -340,6 +340,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysOldGetrlimit);
     handlers.register(SysGetrusage);
     handlers.register(SysSysinfo);
+    handlers.register(SysTimes);
     handlers.register(SysPtrace);
     handlers.register(SysGetuid);
     handlers.register(SysGetgid);
@@ -3433,6 +3434,39 @@ fn sysinfo(
         abi,
     )?;
     Ok(0)
+}
+
+#[syscall(i386 = 43, amd64 = 100)]
+fn times(
+    abi: Abi,
+    thread: &Arc<Thread>,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    buf: Pointer<Tms>,
+) -> SyscallResult {
+    let process = thread.process();
+
+    let guard = process.self_usage.lock();
+    let utime = guard.utime;
+    let stime = guard.stime;
+    drop(guard);
+
+    let guard = process.children_usage.lock();
+    let cutime = guard.utime;
+    let cstime = guard.stime;
+    drop(guard);
+
+    let times = Tms {
+        utime: Clock::from(utime),
+        stime: Clock::from(stime),
+        cutime: Clock::from(cutime),
+        cstime: Clock::from(cstime),
+    };
+    virtual_memory.write_with_abi(buf, times, abi)?;
+
+    let monotonic = now(ClockId::Monotonic);
+    let monotonic = Timeval::from(monotonic);
+    let clock = Clock::from(monotonic);
+    Ok(clock.0)
 }
 
 #[syscall(i386 = 26, amd64 = 101)]

@@ -2853,3 +2853,24 @@ enum_arg! {
         Invalid = 0xffff_ffff,
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct Clock(pub u64);
+
+impl From<Timeval> for Clock {
+    fn from(value: Timeval) -> Self {
+        Self(value.tv_sec as u64 * 1_000_000 + u64::from(value.tv_usec))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Tms {
+    /// user time
+    pub utime: Clock,
+    /// system time
+    pub stime: Clock,
+    /// user time of children
+    pub cutime: Clock,
+    /// system time of children
+    pub cstime: Clock,
+}
