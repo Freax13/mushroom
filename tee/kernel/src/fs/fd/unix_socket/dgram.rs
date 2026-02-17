@@ -469,7 +469,7 @@ impl OpenFileDescription for DgramUnixSocket {
         }
         drop(cmsg_builder);
 
-        Ok(len)
+        Ok(written)
     }
 
     fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
