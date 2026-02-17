@@ -1,5 +1,5 @@
 use alloc::{borrow::ToOwned, ffi::CString, vec};
-use core::{ffi::CStr, iter::from_fn};
+use core::{cmp, ffi::CStr, iter::from_fn};
 
 use bytemuck::{Zeroable, bytes_of_mut};
 use usize_conversions::FromUsize;
@@ -133,15 +133,17 @@ impl VirtualMemory {
         self.modify().init_brk(brk_start);
 
         // Create stack.
+        const MIN_SIZE: u64 = 64 * 1024 * 1024;
         let len = stack_limit.get();
+        let allocation_size = cmp::max(MIN_SIZE, len);
         let bias = Bias::Dynamic {
             abi: E::ABI,
             map_32bit: false,
         };
-        let stack = self
-            .modify()
-            .allocate_stack(bias, len, CurrentAsLimit::INFINITE)?
-            + len;
+        let stack =
+            self.modify()
+                .allocate_stack(bias, allocation_size, CurrentAsLimit::INFINITE)?
+                + allocation_size;
 
         // Sum up the number of pointer-sized values that need to be placed in
         // a contigous chunk of memory.
