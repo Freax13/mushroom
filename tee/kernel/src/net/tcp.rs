@@ -487,13 +487,15 @@ impl OpenFileDescription for TcpSocket {
         let Mode::Passive(passive) = mode else {
             bail!(Inval);
         };
-        let active = passive
-            .internal
-            .lock()
-            .queue
-            .pop_front()
-            .ok_or(err!(Again))?;
+        let mut guard = passive.internal.lock();
+        let active = guard.queue.pop_front().ok_or(err!(Again))?;
+        let now_empty = guard.queue.is_empty();
+        drop(guard);
         let remote_addr = active.remote_addr;
+
+        if now_empty {
+            passive.notify.notify();
+        }
 
         let mut internal = self.internal.lock().clone();
         internal
@@ -862,6 +864,7 @@ impl OpenFileDescription for TcpSocket {
                 active.read_half.write_shutdown();
             }
         }
+        ensure!(!active.write_half.is_either_reset(), NotConn);
         Ok(())
     }
 

@@ -675,6 +675,10 @@ impl WriteHalf {
         guard.write_shutdown = true;
         self.notify().notify();
     }
+
+    pub fn is_either_reset(&self) -> bool {
+        self.data.buffer.lock().ty.is_either_reset()
+    }
 }
 
 impl Drop for WriteHalf {
