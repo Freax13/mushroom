@@ -13,10 +13,10 @@ use nix::{
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::{
         socket::{
-            self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag,
-            SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrLike, SockaddrStorage, accept,
-            connect, getpeername, getsockname, listen, recv, recvfrom, recvmsg, send, sendmsg,
-            sendto, setsockopt, shutdown, socket, socketpair,
+            self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, Shutdown,
+            SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrLike,
+            SockaddrStorage, accept, connect, getpeername, getsockname, listen, recv, recvfrom,
+            recvmsg, send, sendmsg, sendto, setsockopt, shutdown, socket, socketpair,
             sockopt::{
                 Ipv4PacketInfo, Ipv4RecvTtl, Ipv6RecvHopLimit, Ipv6RecvPacketInfo, Ipv6RecvTClass,
                 Ipv6V6Only, Linger, ReceiveTimeout, ReuseAddr, ReusePort, TcpNoDelay,
@@ -2620,4 +2620,37 @@ fn tcp_close_write() {
             }
         }
     }
+}
+
+#[test]
+fn tcp_close_write_shutdown_read() {
+    let (sock1, sock2) = tcp_socket_pair();
+    close(sock2).unwrap();
+    assert_eq!(nix::unistd::write(&sock1, b"A"), Ok(1));
+    assert_eq!(
+        shutdown(sock1.as_raw_fd(), Shutdown::Read),
+        Err(Errno::ENOTCONN)
+    );
+}
+
+#[test]
+fn tcp_close_write_shutdown_write() {
+    let (sock1, sock2) = tcp_socket_pair();
+    close(sock2).unwrap();
+    assert_eq!(nix::unistd::write(&sock1, b"A"), Ok(1));
+    assert_eq!(
+        shutdown(sock1.as_raw_fd(), Shutdown::Read),
+        Err(Errno::ENOTCONN)
+    );
+}
+
+#[test]
+fn tcp_close_write_shutdown_both() {
+    let (sock1, sock2) = tcp_socket_pair();
+    close(sock2).unwrap();
+    assert_eq!(nix::unistd::write(&sock1, b"A"), Ok(1));
+    assert_eq!(
+        shutdown(sock1.as_raw_fd(), Shutdown::Both),
+        Err(Errno::ENOTCONN)
+    );
 }

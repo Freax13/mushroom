@@ -864,6 +864,7 @@ impl OpenFileDescription for TcpSocket {
                 active.read_half.write_shutdown();
             }
         }
+        ensure!(!active.write_half.is_either_reset(), NotConn);
         Ok(())
     }
 
