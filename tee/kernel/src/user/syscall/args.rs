@@ -718,6 +718,22 @@ bitflags! {
     }
 }
 
+enum_arg! {
+    pub enum WaitidWhich {
+        All = 0,
+        Pid = 1,
+        Pgid = 2,
+    }
+}
+
+bitflags! {
+    pub struct WaitidOptions {
+        const NOHANG = 1 << 0;
+        const EXITED = 1 << 2;
+        const NOWAIT = 1 << 24;
+    }
+}
+
 bitflags! {
     pub struct CopyFileRangeFlags {}
 }

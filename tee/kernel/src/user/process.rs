@@ -389,7 +389,7 @@ impl Process {
         *self.exit_status.get().await
     }
 
-    pub fn poll_child_death(&self, filter: WaitFilter) -> WaitResult {
+    pub fn poll_child_death(&self, filter: WaitFilter, peek: bool) -> WaitResult {
         let mut guard = self.children.lock();
         let mut children = guard
             .iter()
@@ -413,7 +413,11 @@ impl Process {
         let Some(idx) = opt_idx else {
             return WaitResult::NotReady;
         };
-        let child = guard.swap_remove(idx);
+        let child = if peek {
+            guard[idx].clone()
+        } else {
+            guard.swap_remove(idx)
+        };
 
         let rusage = *child.self_usage.lock();
         let mut guard = self.children_usage.lock();

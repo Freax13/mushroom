@@ -76,8 +76,8 @@ use crate::{
             cpu_state::CpuState,
         },
         thread::{
-            Capability, Gid, NewTls, PtraceState, RestartData, SchedulingSettings, SigFields,
-            SigInfo, SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread,
+            Capability, Gid, NewTls, PtraceState, RestartData, SchedulingSettings, SigChld,
+            SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread,
             ThreadGuard, Uid, new_tid,
         },
     },
@@ -416,6 +416,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysClockNanosleepTime64);
     handlers.register(SysTgkill);
     handlers.register(SysInotifyInit);
+    handlers.register(SysWaitid);
     handlers.register(SysInotifyAddWatch);
     handlers.register(SysInotifyRmWatch);
     handlers.register(SysOpenat);
@@ -2513,7 +2514,7 @@ async fn wait4(
     let mut wait_ptrace = thread.ptrace_tracer_notify.wait();
     loop {
         let mut res = process
-            .poll_child_death(filter)
+            .poll_child_death(filter, false)
             .or_else(|| thread.poll_wait_for_tracee(filter));
         if options.contains(WaitOptions::UNTRACED) {
             res = res.or_else(|| process.poll_stopped_child(filter));
@@ -5418,6 +5419,71 @@ fn tgkill(thread: &Thread, tgid: u32, pid: u32, signal: Signal) -> SyscallResult
     drop(threads);
     thread.queue_signal(sig_info);
     Ok(0)
+}
+
+#[syscall(i386 = 284, amd64 = 247)]
+async fn waitid(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    which: WaitidWhich,
+    upid: u32,
+    infop: Pointer<SigInfo>,
+    options: WaitidOptions,
+    rusage: Pointer<Rusage>,
+) -> SyscallResult {
+    let no_hang = options.contains(WaitidOptions::NOHANG);
+    let peek = options.contains(WaitidOptions::NOWAIT);
+
+    let filter = match which {
+        WaitidWhich::All => WaitFilter::Any,
+        WaitidWhich::Pid => WaitFilter::ExactPid(upid),
+        WaitidWhich::Pgid => WaitFilter::ExactPgid(upid),
+    };
+
+    let process = &**thread.process();
+    let mut wait_child = process.child_death_notify.wait();
+    loop {
+        let mut res = WaitResult::NoChild;
+        if options.contains(WaitidOptions::EXITED) {
+            res = res.or_else(|| process.poll_child_death(filter, peek));
+        }
+        match res {
+            WaitResult::Ready {
+                pid,
+                wstatus: status,
+                rusage: usage,
+            } => {
+                if !infop.is_null() {
+                    let siginfo = SigInfo {
+                        signal: Signal::CHLD,
+                        code: SigInfoCode::CLD_EXITED,
+                        fields: SigFields::SigChld(SigChld {
+                            pid: pid as i32,
+                            uid: 0, // TODO
+                            status,
+                            utime: 0, // TODO
+                            stime: 0, // TODO
+                        }),
+                    };
+                    virtual_memory.write_with_abi(infop, siginfo, abi)?;
+                }
+
+                if !rusage.is_null() {
+                    virtual_memory.write_with_abi(rusage, usage, abi)?;
+                }
+
+                return Ok(u64::from(pid));
+            }
+            WaitResult::NoChild => bail!(Child),
+            WaitResult::NotReady => {
+                if no_hang {
+                    return Ok(0);
+                }
+            }
+        }
+        wait_child.next().await;
+    }
 }
 
 #[syscall(i386 = 291, amd64 = 253)]
