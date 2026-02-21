@@ -53,6 +53,7 @@ pub struct NetlinkSocket {
 }
 
 struct NetlinkSocketInternal {
+    passcred: bool, // TODO: Actually implement this.
     groups: NetlinkGroups,
     pktinfo: bool,
     ext_ack: bool,
@@ -77,6 +78,7 @@ impl NetlinkSocket {
             flags: socket_type.flags,
             family,
             internal: Mutex::new(NetlinkSocketInternal {
+                passcred: false,
                 groups: NetlinkGroups::empty(),
                 pktinfo: false,
                 ext_ack: false,
@@ -162,6 +164,13 @@ impl OpenFileDescription for NetlinkSocket {
     ) -> Result<()> {
         let mut guard = self.internal.lock();
         match (level, optname) {
+            (1, 16) => {
+                // SO_PASSCRED
+                ensure!(optlen == 4, Inval);
+                let passcred = virtual_memory.read(optval.cast::<u32>())? != 0;
+                guard.passcred = passcred;
+                Ok(())
+            }
             (270, 1) => {
                 // NETLINK_ADD_MEMBERSHIP
                 ensure!(optlen == 4, Inval);
