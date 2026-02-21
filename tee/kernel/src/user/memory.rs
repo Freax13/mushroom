@@ -2059,7 +2059,7 @@ impl<T> SparseSplitVec<T> {
                 ..
             } => {
                 let start_len = entries.len();
-                let mut cursor = entries.lower_bound_mut(Bound::Excluded(&(range.start + offset)));
+                let mut cursor = entries.upper_bound_mut(Bound::Excluded(&(range.start + offset)));
                 while cursor
                     .peek_next()
                     .is_some_and(|(&idx, _)| idx < range.end + offset)
