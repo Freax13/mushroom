@@ -916,7 +916,12 @@ impl OpenFileDescription for UdpSocket {
         }
         drop(cmsg_builder);
 
-        Ok(written)
+        let len = if flags.contains(RecvMsgFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {

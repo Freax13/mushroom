@@ -27,9 +27,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvMsgFlags,
-                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
-                Timespec,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
+                RecvMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
+                SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee},
             },
             traits::Abi,
@@ -247,9 +247,12 @@ impl OpenFileDescription for NetlinkSocket {
         }
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = cmp::min(buffer.len(), ReadBuf::buffer_len(&vectored_buf));
-        let buffer = &buffer[..len];
+        let len = buffer.len();
+        let written = cmp::min(len, ReadBuf::buffer_len(&vectored_buf));
+        let buffer = &buffer[..written];
         vectored_buf.write(0, buffer)?;
+
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, written < len);
 
         let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         let pktinfo = self.internal.lock().pktinfo;
@@ -258,6 +261,11 @@ impl OpenFileDescription for NetlinkSocket {
         }
         drop(cmsg_builder);
 
+        let len = if flags.contains(RecvMsgFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
         Ok(len)
     }
 
