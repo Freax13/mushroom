@@ -261,7 +261,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSigreturn);
     handlers.register(SysIoctl);
     handlers.register(SysPread64);
+    handlers.register(SysPread6432);
     handlers.register(SysPwrite64);
+    handlers.register(SysPwrite6432);
     handlers.register(SysReadv);
     handlers.register(SysWritev);
     handlers.register(SysAccess);
@@ -446,6 +448,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysTimerfdCreate);
     handlers.register(SysEventfd);
     handlers.register(SysFallocate);
+    handlers.register(SysFallocate32);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
     handlers.register(SysSignalfd4);
@@ -1138,7 +1141,7 @@ fn ioctl(
     fd.ioctl(&mut thread, cmd, arg, abi)
 }
 
-#[syscall(i386 = 180, amd64 = 17)]
+#[syscall(amd64 = 17)]
 fn pread64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1157,7 +1160,29 @@ fn pread64(
     Ok(len)
 }
 
-#[syscall(i386 = 181, amd64 = 18)]
+#[syscall(i386 = 180)]
+fn pread64_32(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+    pos_lo: u64,
+    pos_hi: u64,
+) -> SyscallResult {
+    pread64(
+        virtual_memory,
+        fdtable,
+        ctx,
+        fd,
+        buf,
+        count,
+        pos_lo | (pos_hi << 32),
+    )
+}
+
+#[syscall(amd64 = 18)]
 fn pwrite64(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1179,6 +1204,30 @@ fn pwrite64(
 
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(i386 = 181)]
+fn pwrite64_32(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+    pos_lo: u64,
+    pos_hi: u64,
+) -> SyscallResult {
+    pwrite64(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        fd,
+        buf,
+        count,
+        pos_lo | (pos_hi << 32),
+    )
 }
 
 #[syscall(i386 = 145, amd64 = 19, interruptable, restartable)]
@@ -6517,7 +6566,7 @@ fn eventfd(
     eventfd2(fdtable, ctx, no_file_limit, initval, EventFdFlags::empty())
 }
 
-#[syscall(i386 = 324, amd64 = 285)]
+#[syscall(amd64 = 285)]
 fn fallocate(
     thread: &Thread,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -6531,6 +6580,32 @@ fn fallocate(
     fd.allocate(mode, usize_from(offset), usize_from(length), &ctx)
         .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
+}
+
+// Technically, this syscall is also called fallocate, but it has different
+// parameters than the regular 64-bit fallocate, so we need to treat it as a
+// seperate syscall.
+#[syscall(i386 = 324)]
+fn fallocate32(
+    thread: &Thread,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    mode: FallocateMode,
+    offset_lo: u64,
+    offset_hi: u64,
+    length_lo: u64,
+    length_hi: u64,
+) -> SyscallResult {
+    fallocate(
+        thread,
+        fdtable,
+        ctx,
+        fd,
+        mode,
+        offset_lo | (offset_hi << 32),
+        length_lo | (length_hi << 32),
+    )
 }
 
 #[syscall(i386 = 325, amd64 = 286)]
