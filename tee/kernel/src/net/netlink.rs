@@ -38,6 +38,7 @@ use crate::{
     },
 };
 
+mod kobject_uevent;
 mod route;
 
 pub use route::{lo_interface_flags, lo_mtu};
@@ -111,6 +112,9 @@ impl OpenFileDescription for NetlinkSocket {
             let (kernel_tx, user_rx) = mpmc::new::<Vec<u8>>();
             match self.family {
                 NetlinkFamily::Route => rt::spawn(route::handle(addr.pid, kernel_tx, kernel_rx)),
+                NetlinkFamily::KobjectUevent => {
+                    rt::spawn(kobject_uevent::handle(addr.pid, kernel_tx, kernel_rx))
+                }
             }
 
             Connection {
@@ -358,6 +362,7 @@ impl EpollReady for NetlinkSocket {
 
 enum NetlinkFamily {
     Route = 0,
+    KobjectUevent = 15,
 }
 
 impl TryFrom<i32> for NetlinkFamily {
@@ -365,7 +370,8 @@ impl TryFrom<i32> for NetlinkFamily {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         Ok(match value {
-            0 => NetlinkFamily::Route,
+            0 => Self::Route,
+            15 => Self::KobjectUevent,
             _ => bail!(Inval),
         })
     }
