@@ -28,7 +28,7 @@ use x86_64::{
 
 use self::running_state::{ExitAction, ThreadRunningState};
 use crate::{
-    error::{Result, bail, ensure},
+    error::{ErrorKind, Result, bail, ensure},
     exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable, epoll::EventCounter},
@@ -537,13 +537,37 @@ impl Thread {
                 drop(state);
 
                 let mut cpu_state = self.cpu_state.lock();
-                cpu_state.start_signal_handler(
+                let res = cpu_state.start_signal_handler(
                     sig_info,
                     sigaction,
                     sigaltstack,
                     thread_sigmask,
                     &virtual_memory,
-                )?;
+                );
+                drop(cpu_state);
+
+                if let Err(err) = res {
+                    assert_eq!(err.kind(), ErrorKind::Fault); // TODO: Support other errors.
+
+                    if sig_info.signal == Signal::SEGV {
+                        // If we failed to start a signal handler for SIGSEGV,
+                        // we don't even need to bother injecting a SIGSEGV
+                        // because it will just fail again. Immediately kill
+                        // the process.
+                        self.process()
+                            .exit_group(WStatus::signaled(sig_info.signal))
+                            .await;
+                    } else {
+                        // Otherwise, give a SIGSEGV handler a chance to fix
+                        // the situation.
+                        self.queue_signal_or_die(SigInfo {
+                            signal: Signal::SEGV,
+                            code: SigInfoCode::KERNEL,
+                            fields: SigFields::SigFault(SigFault { addr: 0 }),
+                        })
+                        .await;
+                    }
+                }
 
                 state = self.lock();
             }
