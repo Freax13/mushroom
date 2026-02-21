@@ -1428,6 +1428,14 @@ pub struct Stack {
     pub size: u64,
 }
 
+impl Stack {
+    /// Returns true if `rsp` is on the stack.
+    pub fn is_on_stack(&self, rsp: u64) -> bool {
+        rsp.checked_sub(self.sp)
+            .is_some_and(|offset| offset < self.size)
+    }
+}
+
 impl Default for Stack {
     fn default() -> Self {
         Self {

@@ -396,6 +396,7 @@ impl CpuState {
 
         if !stack.flags.contains(StackFlags::DISABLE)
             && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
+            && !stack.is_on_stack(self.registers.rsp)
         {
             self.registers.rsp = stack.sp + stack.size;
         } else {
