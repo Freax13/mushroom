@@ -2654,3 +2654,98 @@ fn tcp_close_write_shutdown_both() {
         Err(Errno::ENOTCONN)
     );
 }
+
+#[test]
+fn tcp_connect_several_times() {
+    let server1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let server2 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    listen(&server1, Backlog::MAXCONN).unwrap();
+    let addr1 = getsockname::<SockaddrIn>(server1.as_raw_fd()).unwrap();
+    listen(&server2, Backlog::MAXCONN).unwrap();
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr1),
+        Err(Errno::EINPROGRESS)
+    );
+    let _client2 = accept(server1.as_raw_fd()).unwrap();
+    drop(server1);
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Ok(()));
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+}
+
+#[test]
+fn tcp_connect_several_times2() {
+    let server1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let server2 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    listen(&server1, Backlog::MAXCONN).unwrap();
+    let addr1 = getsockname::<SockaddrIn>(server1.as_raw_fd()).unwrap();
+    listen(&server2, Backlog::MAXCONN).unwrap();
+    let addr2 = getsockname::<SockaddrIn>(server2.as_raw_fd()).unwrap();
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr1),
+        Err(Errno::EINPROGRESS)
+    );
+    let _client2 = accept(server1.as_raw_fd()).unwrap();
+    drop(server1);
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr2), Ok(()));
+
+    let peername = getpeername::<SockaddrIn>(client1.as_raw_fd()).unwrap();
+    assert_eq!(peername.port(), addr1.port());
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &SockaddrIn::new(127, 44, 55, 66, 1)),
+        Err(Errno::EISCONN)
+    );
+
+    assert_eq!(
+        connect(server2.as_raw_fd(), &SockaddrIn::new(127, 44, 55, 66, 1)),
+        Err(Errno::EISCONN)
+    );
+}

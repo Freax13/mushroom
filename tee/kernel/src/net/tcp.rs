@@ -10,7 +10,7 @@ use core::{
     ffi::c_void,
     net::{self, IpAddr},
     ops::Not,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -533,6 +533,23 @@ impl OpenFileDescription for TcpSocket {
 
         let bound = self.get_or_bind_ephemeral(ctx)?;
 
+        // Check if the socket is already connected.
+        if let Some(mode) = bound.mode.get() {
+            match mode {
+                Mode::Passive(_) => bail!(IsConn),
+                Mode::Active(active) => {
+                    // If the last connect call returned EINPROGRESS, the next
+                    // call suceeds unconditionally even if the address used
+                    // with this call is different.
+                    if active.pending_connect.swap(false, Ordering::Relaxed) {
+                        return Ok(());
+                    } else {
+                        bail!(IsConn)
+                    }
+                }
+            }
+        }
+
         let remote_addr = net::SocketAddr::try_from(addr)?;
 
         let remote_ip = remote_addr.ip();
@@ -683,6 +700,11 @@ impl OpenFileDescription for TcpSocket {
                             server_ip_version,
                         );
                         connect_guard.connect(server);
+
+                        if nonblock {
+                            client.pending_connect.store(true, Ordering::Relaxed);
+                        }
+
                         Mode::Active(client)
                     })
                     .map_err(|_| err!(IsConn))?;
@@ -1260,6 +1282,7 @@ struct ActiveTcpSocket {
     remote_addr: net::SocketAddr,
     read_half: stream_buffer::ReadHalf,
     write_half: stream_buffer::WriteHalf,
+    pending_connect: AtomicBool,
 }
 
 impl ActiveTcpSocket {
@@ -1311,12 +1334,14 @@ impl ActiveTcpSocket {
                 remote_addr: client_remote_addr,
                 read_half: rx1,
                 write_half: tx2,
+                pending_connect: AtomicBool::new(false),
             },
             Self {
                 local_addr: server_local_addr,
                 remote_addr: server_remote_addr,
                 read_half: rx2,
                 write_half: tx1,
+                pending_connect: AtomicBool::new(false),
             },
         )
     }
