@@ -4895,11 +4895,17 @@ async fn futex(
         FutexOp::Wait | FutexOp::WaitBitset => {
             // Set up a future that waits for a timeout.
             let wait_for_deadline = if !utime.is_null() {
-                let deadline = virtual_memory.read_with_abi(utime, abi)?;
+                let timeout = virtual_memory.read_with_abi(utime, abi)?;
+                let deadline = timeout;
                 let clock_id = if op.flags.contains(FutexFlags::CLOCK_REALTIME) {
                     ClockId::Realtime
                 } else {
                     ClockId::Monotonic
+                };
+                let deadline = match op.op {
+                    FutexOp::Wait => now(clock_id).saturating_add(deadline),
+                    FutexOp::WaitBitset => deadline,
+                    _ => unreachable!(),
                 };
                 let sleep_fut = sleep_until(deadline, clock_id);
                 sleep_fut.fuse()
