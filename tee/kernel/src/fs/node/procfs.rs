@@ -4131,6 +4131,7 @@ pub struct ThreadInos {
     task_dir: u64,
     task_entry_dir: u64,
     task_comm_file: u64,
+    task_stat_file: u64,
 }
 
 impl ThreadInos {
@@ -4153,6 +4154,7 @@ impl ThreadInos {
             task_dir: new_ino(),
             task_entry_dir: new_ino(),
             task_comm_file: new_ino(),
+            task_stat_file: new_ino(),
         }
     }
 }
@@ -4420,6 +4422,9 @@ struct TaskDir {
     comm_bsd_file_lock_record: LazyBsdFileLockRecord,
     comm_unix_file_lock_record: LazyUnixFileLockRecord,
     comm_file_watchers: Arc<Watchers>,
+    stat_bsd_file_lock_record: LazyBsdFileLockRecord,
+    stat_unix_file_lock_record: LazyUnixFileLockRecord,
+    stat_file_watchers: Arc<Watchers>,
 }
 
 impl TaskDir {
@@ -4434,6 +4439,9 @@ impl TaskDir {
             comm_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             comm_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             comm_file_watchers: Arc::new(Watchers::new()),
+            stat_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            stat_unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            stat_file_watchers: Arc::new(Watchers::new()),
         })
     }
 }
@@ -4507,6 +4515,13 @@ impl Directory for TaskDir {
                 self.comm_bsd_file_lock_record.get().clone(),
                 self.comm_unix_file_lock_record.get().clone(),
                 self.comm_file_watchers.clone(),
+            ),
+            b"stat" => TaskStatFile::new(
+                self.fs.clone(),
+                self.thread.clone(),
+                self.stat_bsd_file_lock_record.get().clone(),
+                self.stat_unix_file_lock_record.get().clone(),
+                self.stat_file_watchers.clone(),
             ),
             _ => bail!(NoEnt),
         };
@@ -4616,6 +4631,11 @@ impl Directory for TaskDir {
             ino: thread.inos.task_comm_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"comm").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: thread.inos.task_stat_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
         });
         Ok(entries)
     }
@@ -4762,6 +4782,136 @@ impl File for TaskCommFile {
         let content = &content[offset..];
         let len = cmp::min(content.len(), buf.buffer_len());
         buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
+}
+
+struct TaskStatFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    thread: Weak<Thread>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl TaskStatFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        thread: Weak<Thread>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            thread,
+            bsd_file_lock_record,
+            unix_file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for TaskStatFile {
+    fn stat(&self) -> Result<Stat> {
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: thread.inos.task_stat_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for TaskStatFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let stat = thread.lock().stat();
+        let offset = cmp::min(offset, stat.len());
+        let stat = &stat[offset..];
+        let len = cmp::min(stat.len(), buf.buffer_len());
+        buf.write(0, &stat[..len])?;
         Ok(len)
     }
 
