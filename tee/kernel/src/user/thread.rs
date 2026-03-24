@@ -110,6 +110,7 @@ pub struct ThreadState {
     pub ptrace_seized: bool,
     pub ptrace_trap_syscall: bool,
     pub ptrace_interrupted: bool,
+    pub ptrace_process_id: Option<PtracerProcessId>,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
 
@@ -157,6 +158,7 @@ impl Thread {
                 ptrace_seized: false,
                 ptrace_trap_syscall: false,
                 ptrace_interrupted: false,
+                ptrace_process_id: None,
                 tracees: Vec::new(),
                 capabilities,
                 scheduling_settings,
@@ -2139,6 +2141,12 @@ impl PtraceState {
             | Self::Interrupted { .. } => true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PtracerProcessId {
+    Pid(u32),
+    Any,
 }
 
 #[derive(Debug, Clone, Copy)]

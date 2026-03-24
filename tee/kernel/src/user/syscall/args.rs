@@ -1692,6 +1692,7 @@ enum_arg! {
         SetNoNewPrivs = 38,
         GetNoNewPrivs = 39,
         CapAmbient = 47,
+        SetPtracer = 0x59616d61,
     }
 }
 

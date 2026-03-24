@@ -76,9 +76,9 @@ use crate::{
             cpu_state::CpuState,
         },
         thread::{
-            Capability, Gid, NewTls, PtraceState, RestartData, SchedulingSettings, SigChld,
-            SigFields, SigInfo, SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread,
-            ThreadGuard, Uid, new_tid,
+            Capability, Gid, NewTls, PtraceState, PtracerProcessId, RestartData,
+            SchedulingSettings, SigChld, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction,
+            Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
         },
     },
 };
@@ -4680,6 +4680,7 @@ fn munlock(start: Pointer<c_void>, len: u64) -> SyscallResult {
 #[syscall(i386 = 172, amd64 = 157)]
 fn prctl(
     mut thread: ThreadGuard,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     op: PrctlOp,
     arg2: u64,
@@ -4782,6 +4783,19 @@ fn prctl(
             }
             _ => bail!(Inval),
         },
+        PrctlOp::SetPtracer => {
+            let any = match abi {
+                Abi::I386 => u64::from(u32::MAX),
+                Abi::Amd64 => u64::MAX,
+            };
+            let ptrace_process_id = match arg2 {
+                0 => None,
+                _ if arg2 == any => Some(PtracerProcessId::Any),
+                _ => Some(PtracerProcessId::Pid(arg2 as u32)),
+            };
+            thread.ptrace_process_id = ptrace_process_id;
+            Ok(0)
+        }
     }
 }
 
