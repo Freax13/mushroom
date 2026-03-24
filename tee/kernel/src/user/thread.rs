@@ -1171,7 +1171,7 @@ impl ThreadGuard<'_> {
 
         writeln!(buffer, "Pid:\t{}", self.process().pid()).unwrap();
 
-        writeln!(buffer, "Ppid:\t{}", self.process().ppid()).unwrap();
+        writeln!(buffer, "PPid:\t{}", self.process().ppid()).unwrap();
 
         writeln!(
             buffer,
