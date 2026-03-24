@@ -521,6 +521,12 @@ impl EventCounter {
     }
 }
 
+impl Default for EventCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct AtomicEventCounter(AtomicU64);
 
 impl AtomicEventCounter {

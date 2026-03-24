@@ -10,14 +10,16 @@ use core::{
     ffi::c_void,
     net::{self, IpAddr},
     ops::Not,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
+    task::{Context, Poll, Waker},
 };
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use usize_conversions::usize_from;
 
 use crate::{
-    error::{Result, bail, ensure, err},
+    error::{Error, Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
@@ -37,8 +39,9 @@ use crate::{
     memory::page::KernelPage,
     net::{CMsgBuilder, IpVersion},
     rt::{
-        self,
+        self, TaskHandle,
         notify::{Notify, NotifyOnDrop},
+        spawn_cancelable,
     },
     spin::{
         mutex::{Mutex, MutexGuard},
@@ -237,6 +240,7 @@ const EPHEMERAL_PORT_START: u16 = 32768;
 const EPHEMERAL_PORT_END: u16 = 60999;
 
 pub struct TcpSocket {
+    this: Weak<OpenFileDescriptionData<Self>>,
     ino: u64,
     ip_version: IpVersion,
     internal: Mutex<TcpSocketInternal>,
@@ -257,11 +261,20 @@ struct TcpSocketInternal {
     v6only: bool,
     tcp_user_timeout: u32,
     ip_recvttl: bool,
+    error: Option<Error>,
+    connect_counter: EventCounter,
 }
 
 impl TcpSocket {
-    pub fn new(ip_version: IpVersion, r#type: SocketTypeWithFlags, uid: Uid, gid: Gid) -> Self {
-        Self {
+    #[expect(clippy::new_ret_no_self)]
+    pub fn new(
+        ip_version: IpVersion,
+        r#type: SocketTypeWithFlags,
+        uid: Uid,
+        gid: Gid,
+    ) -> StrongFileDescriptor {
+        StrongFileDescriptor::new_cyclic(|this| Self {
+            this: this.clone(),
             ino: new_ino(),
             ip_version,
             internal: Mutex::new(TcpSocketInternal {
@@ -276,10 +289,12 @@ impl TcpSocket {
                 v6only: false,
                 tcp_user_timeout: 0,
                 ip_recvttl: false,
+                error: None,
+                connect_counter: EventCounter::new(),
             }),
             activate_notify: Notify::new(),
             bound_socket: Once::new(),
-        }
+        })
     }
 
     /// Try to bind the socket to an address. Returns `true` if the socket was
@@ -358,6 +373,7 @@ impl TcpSocket {
             reuse_addr,
             connect_notify: NotifyOnDrop(bind_guard.port_data.connect_notify.clone()),
             mode: Arc::new(Once::new()),
+            connect_task: Default::default(),
         });
         // Return false if the socket was already bound.
         let Ok(bound) = res else {
@@ -438,7 +454,7 @@ impl OpenFileDescription for TcpSocket {
 
     fn listen(&self, backlog: usize, ctx: &FileAccessContext) -> Result<()> {
         // Make sure that the backlog is never empty.
-        let backlog = cmp::max(backlog, 1);
+        let backlog = backlog.saturating_add(1);
 
         let bound = self.get_or_bind_ephemeral(ctx)?;
 
@@ -458,6 +474,7 @@ impl OpenFileDescription for TcpSocket {
                 }),
             })
         });
+        self.activate_notify.notify();
         drop(guard);
 
         // Fail if the socket was previously an active socket.
@@ -493,6 +510,7 @@ impl OpenFileDescription for TcpSocket {
         drop(guard);
         let remote_addr = active.remote_addr;
 
+        bound.connect_notify.notify();
         if now_empty {
             passive.notify.notify();
         }
@@ -505,7 +523,8 @@ impl OpenFileDescription for TcpSocket {
             .flags
             .set(OpenFlags::CLOEXEC, flags.contains(Accept4Flags::CLOEXEC));
 
-        let socket = Self {
+        let fd = StrongFileDescriptor::new_cyclic(|this| Self {
+            this: this.clone(),
             ino: new_ino(),
             ip_version: self.ip_version,
             internal: Mutex::new(internal),
@@ -516,9 +535,9 @@ impl OpenFileDescription for TcpSocket {
                 reuse_port: bound.reuse_port,
                 connect_notify: bound.connect_notify.clone(),
                 mode: Arc::new(Once::with_value(Mode::Active(active))),
+                connect_task: Default::default(),
             }),
-        };
-        let fd = StrongFileDescriptor::from(socket);
+        });
 
         let socket_addr = SocketAddr::from(remote_addr);
 
@@ -533,200 +552,104 @@ impl OpenFileDescription for TcpSocket {
 
         let bound = self.get_or_bind_ephemeral(ctx)?;
 
-        // Check if the socket is already connected.
-        if let Some(mode) = bound.mode.get() {
-            match mode {
-                Mode::Passive(_) => bail!(IsConn),
-                Mode::Active(active) => {
-                    // If the last connect call returned EINPROGRESS, the next
-                    // call suceeds unconditionally even if the address used
-                    // with this call is different.
-                    if active.pending_connect.swap(false, Ordering::Relaxed) {
-                        return Ok(());
-                    } else {
-                        bail!(IsConn)
-                    }
-                }
-            }
+        // If a task was spawned for a non-blocking connect
+        // operation, check up on it.
+        let mut guard = bound.connect_task.lock();
+        if let Some(handle) = guard.handle.as_ref() {
+            // Refuse to connect if another task is already pending.
+            ensure!(handle.is_finished(), Already);
+
+            // Take the result.
+            let handle = guard.handle.take().unwrap();
+            let res = handle.get().unwrap();
+            // Take the error from SO_ERROR.
+            let res = res.map_err(|()| {
+                let mut guard = self.internal.lock();
+                guard.connect_counter.inc();
+                let err = guard.error.take();
+                err.unwrap_or(err!(ConnAborted))
+            });
+
+            self.activate_notify.notify();
+
+            return res;
         }
+
+        // Check if the socket is already connected.
+        ensure!(bound.mode.get().is_none(), IsConn);
 
         let remote_addr = net::SocketAddr::try_from(addr)?;
-
         let remote_ip = remote_addr.ip();
-        ensure!(self.ip_version == IpVersion::from(remote_ip), AFNoSupport);
+        let ip_version = self.ip_version;
+        ensure!(ip_version == IpVersion::from(remote_ip), AFNoSupport);
 
-        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
-        if let Some(remote_ip) = remote_ip {
-            ensure!(remote_ip.is_loopback(), NetUnreach);
-        }
+        // Create a new connection.
 
-        'outer: loop {
-            let mut guard = PORTS.lock();
+        // If the socket is nonblocking, spawn a seperate task to establish
+        // the connection.
+        if nonblock {
+            let bind_addr = bound.bind_addr;
+            let this = self.this.clone();
+            let mode = Arc::downgrade(&bound.mode);
 
-            let ports = guard
-                .get_mut(&remote_addr.port())
-                .ok_or(err!(ConnRefused))?;
-            let connect_notify = ports.connect_notify.clone();
-            let wait = connect_notify.wait();
+            // Create a future to connect the socket.
+            let mut future = Box::pin(async move {
+                let res =
+                    ActiveTcpSocket::connect(ip_version, remote_addr, bind_addr, v6only, mode)
+                        .await;
 
-            let mut i = 0;
-            let mut found_passive_socket = false;
-            loop {
-                // If there are no more sockets that could accept a new socket
-                // drop the locks, wait, and try again.
-                if i >= ports.entries.len() {
-                    // Bail out if there are no sockets.
-                    ensure!(found_passive_socket, ConnRefused);
+                if let Some(this) = this.upgrade() {
+                    let mut guard = this.internal.lock();
+                    // Remember the error. It can be retrieved with SO_ERROR.
+                    if let Err(err) = res {
+                        guard.error = Some(err);
+                    }
+                    // Increment the connect counter.
+                    guard.connect_counter.inc();
                     drop(guard);
-                    ensure!(!nonblock, Again);
-                    wait.await;
-                    continue 'outer;
+
+                    this.activate_notify.notify();
                 }
 
-                // Add a round robin offset and get the entry.
-                let offset_index =
-                    (i.wrapping_add(ports.round_robin_counter)) % ports.entries.len();
-                i += 1;
-                let entry = &ports.entries[offset_index];
+                res.map_err(drop)
+            });
 
-                // Skip over entries that don't have a matching domain.
-                match (entry.ip_version, self.ip_version) {
-                    (IpVersion::V4, IpVersion::V4) => {} // matches
-                    (IpVersion::V4, IpVersion::V6) => {
-                        if v6only {
-                            continue; // doesn't match
-                        } else {
-                            // matches
-                        }
-                    }
-                    (IpVersion::V6, IpVersion::V4) => {
-                        if entry.v6only {
-                            continue; // doesn't match
-                        } else {
-                            // matches
-                        }
-                    }
-                    (IpVersion::V6, IpVersion::V6) => {} // matches
-                }
+            // Immediately poll the future once.
+            let poll = future.poll_unpin(&mut Context::from_waker(Waker::noop()));
 
-                // Skip over entries that don't have a matching IP.
-                if Option::zip(entry.local_ip, remote_ip)
-                    .is_some_and(|(entry_ip, remote_ip)| entry_ip != remote_ip)
-                {
-                    continue;
-                }
+            // Spawn a task if the future didn't immediately finish.
+            let handle = match poll {
+                Poll::Ready(value) => TaskHandle::finished(value),
+                Poll::Pending => spawn_cancelable(future),
+            };
+            guard.handle = Some(handle);
 
-                // Remove entries if the port is no longer alive.
-                let Some(mode) = entry.mode.upgrade() else {
-                    ports.entries.remove(offset_index);
-                    i -= 1;
-                    continue;
-                };
+            guard.in_counter.inc();
+            drop(guard);
 
-                // Skip any non-active or non-passive sockets.
-                let Some(mode) = mode.get() else {
-                    continue;
-                };
-                let Mode::Passive(passive) = mode else {
-                    continue;
-                };
-
-                // This is a socket that we could connect to.
-                found_passive_socket = true;
-
-                // Determine the peer address.
-                // If possible use the address bound to by the listening
-                // socket.
-                let peer_ip = entry.local_ip;
-                // Otherwise, fall back to the address in the connect call.
-                let peer_ip = peer_ip.or(remote_ip);
-                // Otherwise, fall back to the address bound by the connecting
-                // socket.
-                let peer_ip = peer_ip.or_else(|| {
-                    let ip = bound.bind_addr.ip();
-                    ip.is_unspecified().not().then_some(ip)
-                });
-                // If all of that fails, use localhost.
-                let peer_ip = peer_ip.unwrap_or_else(|| self.ip_version.localhost_ip());
-                let mut remote_addr = remote_addr;
-                remote_addr.set_ip(peer_ip);
-
-                // Determine the local address.
-                // If possible use the address bound to by the listening
-                // socket.
-                let local_ip = bound
-                    .bind_addr
-                    .ip()
-                    .is_unspecified()
-                    .not()
-                    .then_some(bound.bind_addr.ip());
-                // Otherwise use localhost.
-                let local_ip = local_ip.unwrap_or_else(|| self.ip_version.localhost_ip());
-
-                let server_ip_version = entry.ip_version;
-
-                // Try to reserve a slot in the backlog.
-                let Some(connect_guard) = passive.prepare_connect() else {
-                    continue;
-                };
-
-                // We've found a socket that's willing to connect :)
-
-                // Increase the round robin counter.
-                ports.round_robin_counter += i;
-
-                // Make sure that the (src,dst) pair does not already exist for
-                // this port.
-                let ports = if remote_addr.port() == bound.bind_addr.port() {
-                    ports
-                } else {
-                    guard.get_mut(&bound.bind_addr.port()).unwrap()
-                };
-                // Remove sockets that are no longer active.
-                ports.entries.retain(|entry| entry.mode.strong_count() > 0);
-                // Try to find a match.
-                let duplicate_pair = ports.entries.iter().any(|entry| {
-                    entry.local_ip == Some(local_ip) && entry.remote_addr == Some(remote_addr)
-                });
-                ensure!(!duplicate_pair, AddrInUse);
-
-                // Initialize an active socket.
-                bound
-                    .mode
-                    .init(|| {
-                        let (client, server) = ActiveTcpSocket::new_pair(
-                            net::SocketAddr::new(local_ip, bound.bind_addr.port()),
-                            remote_addr,
-                            server_ip_version,
-                        );
-                        connect_guard.connect(server);
-
-                        if nonblock {
-                            client.pending_connect.store(true, Ordering::Relaxed);
-                        }
-
-                        Mode::Active(client)
-                    })
-                    .map_err(|_| err!(IsConn))?;
-                self.activate_notify.notify();
-
-                // Update the entry for this socket to reflect the IPs.
-                let this_entry = ports
-                    .entries
-                    .iter_mut()
-                    .find(|e| core::ptr::eq(e.mode.as_ptr(), Arc::as_ptr(&bound.mode)))
-                    .unwrap();
-                this_entry.local_ip = Some(local_ip);
-                this_entry.remote_addr = Some(remote_addr);
-
-                ensure!(!nonblock, InProgress);
-                return Ok(());
-            }
+            bail!(InProgress)
         }
+
+        // Otherwise, connect on the same future.
+
+        drop(guard);
+
+        let mode = Arc::downgrade(&bound.mode);
+        let res =
+            ActiveTcpSocket::connect(self.ip_version, remote_addr, bound.bind_addr, v6only, mode)
+                .await;
+
+        let mut guard = self.internal.lock();
+        guard.connect_counter.inc();
+        drop(guard);
+
+        self.activate_notify.notify();
+
+        res
     }
 
     fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
-        let guard = self.internal.lock();
+        let mut guard = self.internal.lock();
         Ok(match (level, optname) {
             (1, 2) => {
                 // SO_REUSEADDR
@@ -738,7 +661,16 @@ impl OpenFileDescription for TcpSocket {
                 let ty = SocketType::Stream as u32;
                 ty.to_le_bytes().to_vec()
             }
-            (1, 4) => 0u32.to_ne_bytes().to_vec(), // SO_ERROR
+            (1, 4) => {
+                // SO_ERROR
+                let err = if let Some(err) = guard.error.take() {
+                    self.activate_notify.notify();
+                    err.kind() as i32
+                } else {
+                    0
+                };
+                err.to_ne_bytes().to_vec()
+            }
             (1, 7) => {
                 // SO_SNDBUF
                 let val = guard.send_buffer_size as u32;
@@ -1045,8 +977,43 @@ impl OpenFileDescription for TcpSocket {
     }
 
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
-        let bound = self.bound_socket.get()?;
-        let mode = bound.mode.get()?;
+        let mode = 'mode: {
+            let mut ready_events = Events::empty();
+
+            if let Some(bound) = self.bound_socket.get() {
+                if let Some(mode) = bound.mode.get() {
+                    break 'mode mode;
+                }
+
+                let guard = bound.connect_task.lock();
+                if guard
+                    .handle
+                    .as_ref()
+                    .is_some_and(|handle| handle.is_finished())
+                {
+                    ready_events |= Events::READ;
+                }
+                if guard
+                    .handle
+                    .as_ref()
+                    .is_none_or(|handle| handle.is_finished())
+                {
+                    ready_events |= Events::WRITE | Events::HUP;
+                }
+                drop(guard);
+            } else {
+                ready_events |= Events::WRITE | Events::HUP;
+            }
+
+            let guard = self.internal.lock();
+            if guard.error.is_some() {
+                ready_events |= Events::ERR;
+            }
+            drop(guard);
+
+            return NonEmptyEvents::new(ready_events & events);
+        };
+
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 let mut events = events & Events::READ;
@@ -1065,10 +1032,48 @@ impl OpenFileDescription for TcpSocket {
     }
 
     async fn ready(&self, events: Events, _: &FileAccessContext) -> NonEmptyEvents {
-        let mode = self
-            .activate_notify
-            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
-            .await;
+        let mut wait = self.activate_notify.wait();
+        let mode = loop {
+            let mut ready_events = Events::empty();
+
+            if let Some(bound) = self.bound_socket.get() {
+                if let Some(mode) = bound.mode.get() {
+                    break mode;
+                }
+
+                let guard = bound.connect_task.lock();
+                if guard
+                    .handle
+                    .as_ref()
+                    .is_some_and(|handle| handle.is_finished())
+                {
+                    ready_events |= Events::READ;
+                }
+                if guard
+                    .handle
+                    .as_ref()
+                    .is_none_or(|handle| handle.is_finished())
+                {
+                    ready_events |= Events::WRITE | Events::HUP;
+                }
+                drop(guard);
+            } else {
+                ready_events |= Events::WRITE | Events::HUP;
+            }
+
+            let guard = self.internal.lock();
+            if guard.error.is_some() {
+                ready_events |= Events::ERR;
+            }
+            drop(guard);
+
+            if let Some(res) = NonEmptyEvents::new(events & ready_events) {
+                return res;
+            }
+
+            wait.next().await;
+        };
+
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 if !events.contains(Events::READ) {
@@ -1147,10 +1152,53 @@ impl OpenFileDescription for TcpSocket {
 #[async_trait]
 impl EpollReady for TcpSocket {
     async fn epoll_ready(&self, req: &EpollRequest) -> EpollResult {
-        let mode = self
-            .activate_notify
-            .wait_until(|| self.bound_socket.get().and_then(|bound| bound.mode.get()))
-            .await;
+        let mut wait = self.activate_notify.wait();
+        let mode = loop {
+            let mut result = EpollResult::new();
+
+            if let Some(bound) = self.bound_socket.get() {
+                if let Some(mode) = bound.mode.get() {
+                    break mode;
+                }
+
+                let guard = bound.connect_task.lock();
+                if guard
+                    .handle
+                    .as_ref()
+                    .is_some_and(|handle| handle.is_finished())
+                {
+                    result.set_ready(Events::READ);
+                }
+                if guard
+                    .handle
+                    .as_ref()
+                    .is_none_or(|handle| handle.is_finished())
+                {
+                    result.set_ready(Events::HUP | Events::WRITE);
+                }
+                result.add_counter(Events::READ, &guard.in_counter);
+                drop(guard);
+            } else {
+                result.set_ready(Events::HUP | Events::WRITE);
+            }
+
+            let guard = self.internal.lock();
+            if guard.error.is_some() {
+                result.set_ready(Events::ERR);
+            }
+            result.add_counter(
+                Events::WRITE | Events::HUP | Events::ERR,
+                &guard.connect_counter,
+            );
+            drop(guard);
+
+            if let Some(result) = result.if_matches(req) {
+                return result;
+            }
+
+            wait.next().await;
+        };
+
         match mode {
             Mode::Passive(passive_tcp_socket) => {
                 passive_tcp_socket
@@ -1234,6 +1282,13 @@ struct BoundSocket {
     reuse_port: bool,
     connect_notify: NotifyOnDrop,
     mode: Arc<Once<Mode>>,
+    connect_task: Mutex<ConnectTask>,
+}
+
+#[derive(Default)]
+struct ConnectTask {
+    handle: Option<TaskHandle<Result<(), ()>>>,
+    in_counter: EventCounter,
 }
 
 enum Mode {
@@ -1282,7 +1337,6 @@ struct ActiveTcpSocket {
     remote_addr: net::SocketAddr,
     read_half: stream_buffer::ReadHalf,
     write_half: stream_buffer::WriteHalf,
-    pending_connect: AtomicBool,
 }
 
 impl ActiveTcpSocket {
@@ -1334,16 +1388,186 @@ impl ActiveTcpSocket {
                 remote_addr: client_remote_addr,
                 read_half: rx1,
                 write_half: tx2,
-                pending_connect: AtomicBool::new(false),
             },
             Self {
                 local_addr: server_local_addr,
                 remote_addr: server_remote_addr,
                 read_half: rx2,
                 write_half: tx1,
-                pending_connect: AtomicBool::new(false),
             },
         )
+    }
+
+    async fn connect(
+        ip_version: IpVersion,
+        remote_addr: net::SocketAddr,
+        bind_addr: net::SocketAddr,
+        v6only: bool,
+        out: Weak<Once<Mode>>,
+    ) -> Result<()> {
+        let remote_ip = remote_addr.ip();
+        let remote_ip = remote_ip.is_unspecified().not().then_some(remote_ip);
+        if let Some(remote_ip) = remote_ip {
+            ensure!(remote_ip.is_loopback(), NetUnreach);
+        }
+
+        'outer: loop {
+            let mut guard = PORTS.lock();
+
+            let ports = guard
+                .get_mut(&remote_addr.port())
+                .ok_or(err!(ConnRefused))?;
+            let connect_notify = ports.connect_notify.clone();
+            let wait = connect_notify.wait();
+
+            let mut i = 0;
+            let mut found_passive_socket = false;
+            loop {
+                // If there are no more sockets that could accept a new socket
+                // drop the locks, wait, and try again.
+                if i >= ports.entries.len() {
+                    // Bail out if there are no sockets.
+                    ensure!(found_passive_socket, ConnRefused);
+                    drop(guard);
+
+                    wait.await;
+                    continue 'outer;
+                }
+
+                // Add a round robin offset and get the entry.
+                let offset_index =
+                    (i.wrapping_add(ports.round_robin_counter)) % ports.entries.len();
+                i += 1;
+                let entry = &ports.entries[offset_index];
+
+                // Skip over entries that don't have a matching domain.
+                match (entry.ip_version, ip_version) {
+                    (IpVersion::V4, IpVersion::V4) => {} // matches
+                    (IpVersion::V4, IpVersion::V6) => {
+                        if v6only {
+                            continue; // doesn't match
+                        } else {
+                            // matches
+                        }
+                    }
+                    (IpVersion::V6, IpVersion::V4) => {
+                        if entry.v6only {
+                            continue; // doesn't match
+                        } else {
+                            // matches
+                        }
+                    }
+                    (IpVersion::V6, IpVersion::V6) => {} // matches
+                }
+
+                // Skip over entries that don't have a matching IP.
+                if Option::zip(entry.local_ip, remote_ip)
+                    .is_some_and(|(entry_ip, remote_ip)| entry_ip != remote_ip)
+                {
+                    continue;
+                }
+
+                // Remove entries if the port is no longer alive.
+                let Some(mode) = entry.mode.upgrade() else {
+                    ports.entries.remove(offset_index);
+                    i -= 1;
+                    continue;
+                };
+
+                // Skip any non-active or non-passive sockets.
+                let Some(mode) = mode.get() else {
+                    continue;
+                };
+                let Mode::Passive(passive) = mode else {
+                    continue;
+                };
+
+                // This is a socket that we could connect to.
+                found_passive_socket = true;
+
+                // Determine the peer address.
+                // If possible use the address bound to by the listening
+                // socket.
+                let peer_ip = entry.local_ip;
+                // Otherwise, fall back to the address in the connect call.
+                let peer_ip = peer_ip.or(remote_ip);
+                // Otherwise, fall back to the address bound by the connecting
+                // socket.
+                let peer_ip = peer_ip.or_else(|| {
+                    let ip = bind_addr.ip();
+                    ip.is_unspecified().not().then_some(ip)
+                });
+                // If all of that fails, use localhost.
+                let peer_ip = peer_ip.unwrap_or_else(|| ip_version.localhost_ip());
+                let mut remote_addr = remote_addr;
+                remote_addr.set_ip(peer_ip);
+
+                // Determine the local address.
+                // If possible use the address bound to by the listening
+                // socket.
+                let local_ip = bind_addr
+                    .ip()
+                    .is_unspecified()
+                    .not()
+                    .then_some(bind_addr.ip());
+                // Otherwise use localhost.
+                let local_ip = local_ip.unwrap_or_else(|| ip_version.localhost_ip());
+
+                let server_ip_version = entry.ip_version;
+
+                // Try to reserve a slot in the backlog.
+                let Some(connect_guard) = passive.prepare_connect() else {
+                    continue;
+                };
+
+                // We've found a socket that's willing to connect :)
+
+                // Increase the round robin counter.
+                ports.round_robin_counter += i;
+
+                // Make sure that the (src,dst) pair does not already exist for
+                // this port.
+                let ports = if remote_addr.port() == bind_addr.port() {
+                    ports
+                } else {
+                    guard.get_mut(&bind_addr.port()).unwrap()
+                };
+                // Remove sockets that are no longer active.
+                ports.entries.retain(|entry| entry.mode.strong_count() > 0);
+                // Try to find a match.
+                let duplicate_pair = ports.entries.iter().any(|entry| {
+                    entry.local_ip == Some(local_ip) && entry.remote_addr == Some(remote_addr)
+                });
+                ensure!(!duplicate_pair, AddrInUse);
+
+                // Initialize an active socket.
+                let Some(out) = out.upgrade() else {
+                    return Ok(());
+                };
+                out.init(|| {
+                    let (client, server) = ActiveTcpSocket::new_pair(
+                        net::SocketAddr::new(local_ip, bind_addr.port()),
+                        remote_addr,
+                        server_ip_version,
+                    );
+                    connect_guard.connect(server);
+
+                    Mode::Active(client)
+                })
+                .map_err(|_| err!(IsConn))?;
+
+                // Update the entry for this socket to reflect the IPs.
+                let this_entry = ports
+                    .entries
+                    .iter_mut()
+                    .find(|e| core::ptr::eq(e.mode.as_ptr(), Arc::as_ptr(&out)))
+                    .unwrap();
+                this_entry.local_ip = Some(local_ip);
+                this_entry.remote_addr = Some(remote_addr);
+
+                return Ok(());
+            }
+        }
     }
 }
 
