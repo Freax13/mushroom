@@ -1560,12 +1560,16 @@ fn madvise(
     advice: Advice,
 ) -> SyscallResult {
     match advice {
+        Advice::WillNeed => {
+            // Ignore the advice.
+            Ok(0)
+        }
         Advice::DontNeed => {
             virtual_memory.modify().discard_pages(addr.get(), len)?;
             Ok(0)
         }
         Advice::Free => {
-            // Ignore the advise.
+            // Ignore the advice.
             Ok(0)
         }
     }
