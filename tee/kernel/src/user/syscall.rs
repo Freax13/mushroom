@@ -3621,60 +3621,13 @@ fn ptrace(
             ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
             ensure!(guard.ptrace_state.is_stopped(), Srch);
 
-            let registers = tracee.cpu_state.lock().registers;
             match abi {
                 Abi::I386 => {
-                    let user_regs = UserRegs32 {
-                        bx: registers.rbx as u32,
-                        cx: registers.rcx as u32,
-                        dx: registers.rdx as u32,
-                        si: registers.rsi as u32,
-                        di: registers.rdi as u32,
-                        bp: registers.rbp as u32,
-                        ax: registers.rax as u32,
-                        ds: u32::from(registers.ds),
-                        es: u32::from(registers.es),
-                        fs: u32::from(registers.fs),
-                        gs: u32::from(registers.gs),
-                        orig_ax: registers.rax as u32, // TODO
-                        ip: registers.rip as u32,
-                        cs: u32::from(registers.cs),
-                        flags: registers.rflags as u32,
-                        sp: registers.rsp as u32,
-                        ss: u32::from(registers.ss),
-                    };
+                    let user_regs = tracee.cpu_state.lock().regs32();
                     virtual_memory.write(data.cast(), user_regs)?;
                 }
                 Abi::Amd64 => {
-                    let user_regs = UserRegs64 {
-                        r15: registers.r15,
-                        r14: registers.r14,
-                        r13: registers.r13,
-                        r12: registers.r12,
-                        bp: registers.rbp,
-                        bx: registers.rbx,
-                        r11: registers.r11,
-                        r10: registers.r10,
-                        r9: registers.r9,
-                        r8: registers.r8,
-                        ax: registers.rax,
-                        cx: registers.rcx,
-                        dx: registers.rdx,
-                        si: registers.rsi,
-                        di: registers.rdi,
-                        orig_ax: registers.rax, // TODO
-                        ip: registers.rip,
-                        cs: u64::from(registers.cs),
-                        flags: registers.rflags,
-                        sp: registers.rsp,
-                        ss: u64::from(registers.ss),
-                        fs_base: registers.fs_base,
-                        gs_base: 0, // TODO
-                        ds: u64::from(registers.ds),
-                        es: u64::from(registers.es),
-                        fs: u64::from(registers.fs),
-                        gs: u64::from(registers.gs),
-                    };
+                    let user_regs = tracee.cpu_state.lock().regs64();
                     virtual_memory.write(data.cast(), user_regs)?;
                 }
             }
@@ -3801,6 +3754,55 @@ fn ptrace(
             };
 
             virtual_memory.write_with_abi(data.cast(), sig_info, abi)?;
+
+            Ok(0)
+        }
+        PtraceOp::GetRegset => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let iovec_ptr = data.cast::<Iovec>();
+            let mut iovec = virtual_memory.read_with_abi(iovec_ptr, abi)?;
+
+            let data = match addr.raw() {
+                1 => {
+                    // NT_PRSTATUS
+                    match abi {
+                        Abi::I386 => {
+                            let regs = tracee.cpu_state.lock().regs32();
+                            bytes_of(&regs).to_vec()
+                        }
+                        Abi::Amd64 => {
+                            let regs = tracee.cpu_state.lock().regs64();
+                            bytes_of(&regs).to_vec()
+                        }
+                    }
+                }
+                2 => {
+                    // NT_PRFPREG
+                    tracee.cpu_state.lock().fpregs().to_vec()
+                }
+                _ => bail!(Inval),
+            };
+
+            if usize_from(iovec.len) < data.len() {
+                todo!()
+            }
+
+            // Write the data.
+            virtual_memory.write_bytes(VirtAddr::new(iovec.base), &data)?;
+
+            // Write the updated iovec.
+            iovec.len = u64::from_usize(data.len());
+            virtual_memory.write_with_abi(iovec_ptr, iovec, abi)?;
 
             Ok(0)
         }

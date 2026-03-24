@@ -33,7 +33,9 @@ use crate::{
         memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
         syscall::{
             SysRestartSyscall,
-            args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
+            args::{
+                Pointer, UserDesc, UserDescFlags, UserRegs32, UserRegs64, pointee::SizedPointee,
+            },
             traits::{Abi, Syscall, SyscallArgs, SyscallResult},
         },
         thread::{
@@ -590,6 +592,64 @@ impl CpuState {
         }
 
         Ok((ucontext.stack, ucontext.sigmask))
+    }
+
+    pub fn regs32(&self) -> UserRegs32 {
+        UserRegs32 {
+            bx: self.registers.rbx as u32,
+            cx: self.registers.rcx as u32,
+            dx: self.registers.rdx as u32,
+            si: self.registers.rsi as u32,
+            di: self.registers.rdi as u32,
+            bp: self.registers.rbp as u32,
+            ax: self.registers.rax as u32,
+            ds: u32::from(self.registers.ds),
+            es: u32::from(self.registers.es),
+            fs: u32::from(self.registers.fs),
+            gs: u32::from(self.registers.gs),
+            orig_ax: self.registers.rax as u32, // TODO
+            ip: self.registers.rip as u32,
+            cs: u32::from(self.registers.cs),
+            flags: self.registers.rflags as u32,
+            sp: self.registers.rsp as u32,
+            ss: u32::from(self.registers.ss),
+        }
+    }
+
+    pub fn regs64(&self) -> UserRegs64 {
+        UserRegs64 {
+            r15: self.registers.r15,
+            r14: self.registers.r14,
+            r13: self.registers.r13,
+            r12: self.registers.r12,
+            bp: self.registers.rbp,
+            bx: self.registers.rbx,
+            r11: self.registers.r11,
+            r10: self.registers.r10,
+            r9: self.registers.r9,
+            r8: self.registers.r8,
+            ax: self.registers.rax,
+            cx: self.registers.rcx,
+            dx: self.registers.rdx,
+            si: self.registers.rsi,
+            di: self.registers.rdi,
+            orig_ax: self.registers.rax, // TODO
+            ip: self.registers.rip,
+            cs: u64::from(self.registers.cs),
+            flags: self.registers.rflags,
+            sp: self.registers.rsp,
+            ss: u64::from(self.registers.ss),
+            fs_base: self.registers.fs_base,
+            gs_base: self.registers.gs_base,
+            ds: u64::from(self.registers.ds),
+            es: u64::from(self.registers.es),
+            fs: u64::from(self.registers.fs),
+            gs: u64::from(self.registers.gs),
+        }
+    }
+
+    pub fn fpregs(&self) -> &[u8] {
+        &self.xsave_area.data[..512]
     }
 
     #[cfg(not(feature = "harden"))]

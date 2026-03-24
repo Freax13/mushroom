@@ -2423,6 +2423,7 @@ enum_arg! {
         Syscall = 24,
         SetOptions = 0x4200,
         GetSiginfo = 0x4202,
+        GetRegset = 0x4204,
         Seize = 0x4206,
         Interrupt = 0x4207,
         Listen = 0x4208,

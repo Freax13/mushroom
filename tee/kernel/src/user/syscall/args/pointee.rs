@@ -801,6 +801,24 @@ impl From<Iovec64> for Iovec {
     }
 }
 
+impl From<Iovec> for Iovec32 {
+    fn from(value: Iovec) -> Self {
+        Self {
+            base: value.base as u32,
+            len: value.len as u32,
+        }
+    }
+}
+
+impl From<Iovec> for Iovec64 {
+    fn from(value: Iovec) -> Self {
+        Self {
+            base: value.base,
+            len: value.len,
+        }
+    }
+}
+
 impl Pointee for Timespec {}
 
 impl AbiDependentPointee for Timespec {
