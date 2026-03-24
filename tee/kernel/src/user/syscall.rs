@@ -2078,12 +2078,11 @@ async fn sendmsg(
     flags: SendMsgFlags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
+    let msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
     let len = do_io(&***fd, Events::WRITE, &ctx, || {
-        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable, &ctx)
+        fd.send_msg(&virtual_memory, abi, msg_hdr, flags, &fdtable, &ctx)
     })
     .await?;
-    virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
     Ok(u64::from_usize(len))
 }
 
@@ -7065,14 +7064,7 @@ async fn sendmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = do_io(&***socket, Events::WRITE, &ctx, || {
-            socket.send_msg(
-                &virtual_memory,
-                abi,
-                &mut msg_header.hdr,
-                flags,
-                &fdtable,
-                &ctx,
-            )
+            socket.send_msg(&virtual_memory, abi, msg_header.hdr, flags, &fdtable, &ctx)
         })
         .await;
         match res {

@@ -896,7 +896,7 @@ pub trait OpenFileDescription: Send + Sync + 'static {
         &self,
         vm: &VirtualMemory,
         abi: Abi,
-        msg_hdr: &mut MsgHdr,
+        msg_hdr: MsgHdr,
         flags: SendMsgFlags,
         fdtable: &FileDescriptorTable,
         ctx: &FileAccessContext,

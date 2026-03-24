@@ -241,7 +241,7 @@ impl OpenFileDescription for NetlinkSocket {
         &self,
         vm: &VirtualMemory,
         abi: Abi,
-        msg_hdr: &mut MsgHdr,
+        msg_hdr: MsgHdr,
         flags: SendMsgFlags,
         _: &FileDescriptorTable,
         ctx: &FileAccessContext,

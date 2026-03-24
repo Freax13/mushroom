@@ -512,7 +512,7 @@ impl OpenFileDescription for DgramUnixSocket {
         &self,
         vm: &VirtualMemory,
         abi: Abi,
-        msg_hdr: &mut MsgHdr,
+        mut msg_hdr: MsgHdr,
         flags: SendMsgFlags,
         fdtable: &FileDescriptorTable,
         ctx: &FileAccessContext,

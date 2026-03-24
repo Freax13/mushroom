@@ -254,7 +254,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         &self,
         vm: &VirtualMemory,
         abi: Abi,
-        msg_hdr: &mut MsgHdr,
+        mut msg_hdr: MsgHdr,
         flags: SendMsgFlags,
         fdtable: &FileDescriptorTable,
         _: &FileAccessContext,
