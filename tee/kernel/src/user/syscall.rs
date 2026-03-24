@@ -3702,6 +3702,24 @@ fn ptrace(
 
             Ok(0)
         }
+        PtraceOp::GetFpregs => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let guard = tracee.cpu_state.lock();
+            let registers = guard.fpregs();
+            virtual_memory.write_bytes(data.get(), registers)?;
+
+            Ok(0)
+        }
         PtraceOp::Attach | PtraceOp::Seize => {
             let (stop, seize, options) = if request == PtraceOp::Attach {
                 (true, false, None)
