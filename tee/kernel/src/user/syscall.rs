@@ -3567,6 +3567,16 @@ fn ptrace(
             virtual_memory.write_with_abi(data.cast(), word, abi)?;
             Ok(0)
         }
+        PtraceOp::PeekUser => {
+            match addr.raw() {
+                0x350..0x390 => {
+                    // u_debugreg
+                    virtual_memory.write_with_abi(data.cast(), Pointer::<()>::NULL, abi)?;
+                }
+                offset => todo!("unsupported offset: {offset:#x}"),
+            }
+            Ok(0)
+        }
         PtraceOp::Cont | PtraceOp::Syscall | PtraceOp::Detach => {
             let tracee = thread
                 .lock()
