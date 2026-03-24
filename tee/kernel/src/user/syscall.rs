@@ -2211,11 +2211,7 @@ fn socketpair(
                 res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }
             SocketType::Seqpacket => {
-                let (half1, half2) = SeqPacketUnixSocket::new_pair(
-                    r#type.flags,
-                    ctx.filesystem_user_id(),
-                    ctx.filesystem_group_id(),
-                );
+                let (half1, half2) = SeqPacketUnixSocket::new_pair(r#type.flags, &ctx);
                 res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                 res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }

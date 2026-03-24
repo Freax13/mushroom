@@ -1,17 +1,18 @@
-use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec};
+use alloc::{boxed::Box, collections::VecDeque, format, sync::Arc, vec::Vec};
 use core::{cmp, ffi::c_void};
 
 use async_trait::async_trait;
 use futures::future;
 use usize_conversions::usize_from;
+use x86_64::align_up;
 
 use crate::{
-    error::{Result, bail, ensure},
+    error::{Result, bail, ensure, err},
     fs::{
         FileSystem,
         fd::{
-            BsdFileLock, Events, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
-            OpenFileDescriptionData, ReadBuf, VectoredUserBuf, WriteBuf,
+            BsdFileLock, Events, FdFlags, FileDescriptorTable, NonEmptyEvents, OpenFileDescription,
+            OpenFileDescriptionData, ReadBuf, StrongFileDescriptor, VectoredUserBuf, WriteBuf,
             epoll::{EpollReady, EpollRequest, EpollResult, EventCounter, WeakEpollReady},
             socket_common_ioctl,
         },
@@ -19,14 +20,17 @@ use crate::{
         ownership::Ownership,
         path::Path,
     },
+    net::CMsgBuilder,
     rt::notify::{Notify, NotifyOnDrop},
     spin::mutex::Mutex,
     user::{
         memory::VirtualMemory,
+        process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
-                RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
+                Stat, Timespec, Ucred,
             },
             traits::Abi,
         },
@@ -34,21 +38,25 @@ use crate::{
     },
 };
 
+const MAX_BUFFER_SIZE: usize = u16::MAX as usize; // TODO: Pick a better value.
+
 pub struct SeqPacketUnixSocket {
     ino: u64,
     internal: Mutex<SeqPacketUnixSocketInternal>,
     write_half: WriteHalf,
     read_half: ReadHalf,
     bsd_file_lock: BsdFileLock,
+    localcred: Ucred,
 }
 
 struct SeqPacketUnixSocketInternal {
     flags: OpenFlags,
     ownership: Ownership,
+    passcred: bool,
 }
 
 impl SeqPacketUnixSocket {
-    pub fn new_pair(flags: OpenFlags, uid: Uid, gid: Gid) -> (Self, Self) {
+    pub fn new_pair(flags: OpenFlags, ctx: &FileAccessContext) -> (Self, Self) {
         let flags = flags | OpenFlags::RDWR;
 
         let state1 = Arc::new(Mutex::new(State::new()));
@@ -82,13 +90,15 @@ impl SeqPacketUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        uid,
-                        gid,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
+                    passcred: false,
                 }),
                 write_half: write_half1,
                 read_half: read_half1,
                 bsd_file_lock: BsdFileLock::anonymous(),
+                localcred: Ucred::from(ctx),
             },
             Self {
                 ino: new_ino(),
@@ -96,21 +106,24 @@ impl SeqPacketUnixSocket {
                     flags,
                     ownership: Ownership::new(
                         FileMode::OWNER_READ | FileMode::OWNER_WRITE,
-                        uid,
-                        gid,
+                        ctx.filesystem_user_id(),
+                        ctx.filesystem_group_id(),
                     ),
+                    passcred: false,
                 }),
                 write_half: write_half2,
                 read_half: read_half2,
                 bsd_file_lock: BsdFileLock::anonymous(),
+                localcred: Ucred::from(ctx),
             },
         )
     }
 
     fn read(&self, buf: &mut dyn ReadBuf, peek: bool) -> Result<usize> {
-        let Some(data) = self.read_half.read(peek)? else {
+        let Some(packet) = self.read_half.read(peek)? else {
             return Ok(0);
         };
+        let data = packet.data;
         let len = cmp::min(data.len(), buf.buffer_len());
         buf.write(0, &data[..len])?;
         Ok(len)
@@ -156,11 +169,68 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok((len, None))
     }
 
+    fn recv_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        flags: RecvMsgFlags,
+        fdtable: &FileDescriptorTable,
+        no_file_limit: CurrentNoFileLimit,
+    ) -> Result<usize> {
+        ensure!(msg_hdr.flags == MsgHdrFlags::empty(), Inval);
+
+        let peek = flags.contains(RecvMsgFlags::PEEK);
+        let Some(mut packet) = self.read_half.read(peek)? else {
+            return Ok(0);
+        };
+
+        let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let len = packet.data.len();
+        let written = cmp::min(len, ReadBuf::buffer_len(&vectored_buf));
+        vectored_buf.write(0, &packet.data[..len])?;
+
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, written < len);
+
+        if msg_hdr.namelen != 0 {
+            todo!();
+        }
+
+        let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
+        if let Some(ancillary_data) = packet.ancillary_data.as_mut()
+            && let Some(fds) = ancillary_data.rights.take().filter(|fds| !fds.is_empty())
+        {
+            let mut fd_flags = FdFlags::empty();
+            fd_flags.set(FdFlags::CLOEXEC, flags.contains(RecvMsgFlags::CMSG_CLOEXEC));
+            cmsg_builder.add_fds(1, 1, fds, fd_flags, fdtable, no_file_limit)?;
+        }
+        let passcred = self.internal.lock().passcred;
+        if passcred {
+            let cred = packet
+                .ancillary_data
+                .as_ref()
+                .and_then(|ancillary_data| ancillary_data.cred)
+                .unwrap_or(packet.sender_cred);
+            cmsg_builder.add(1, 2, cred)?;
+        }
+        drop(cmsg_builder);
+
+        let len = if flags.contains(RecvMsgFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
+        Ok(len)
+    }
+
     fn write(&self, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        let len = buf.buffer_len();
-        let mut bytes = vec![0; len];
-        buf.read(0, &mut bytes)?;
-        self.write_half.write(Box::from(bytes))?;
+        let data = buf.read_into_arc(MAX_BUFFER_SIZE)?;
+        let len = data.len();
+        self.write_half.write(Packet {
+            data,
+            sender_cred: self.localcred,
+            ancillary_data: None,
+        })?;
         Ok(len)
     }
 
@@ -186,31 +256,85 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         abi: Abi,
         msg_hdr: &mut MsgHdr,
         flags: SendMsgFlags,
-        _: &FileDescriptorTable,
-        ctx: &FileAccessContext,
+        fdtable: &FileDescriptorTable,
+        _: &FileAccessContext,
     ) -> Result<usize> {
-        if flags != SendMsgFlags::empty() {
-            todo!()
-        }
-        if msg_hdr.controllen != 0 {
-            todo!()
+        if (flags & !SendMsgFlags::NOSIGNAL) != SendMsgFlags::empty() {
+            todo!("{flags:?}")
         }
         if msg_hdr.flags != MsgHdrFlags::empty() {
             todo!();
         }
 
-        let addr = if msg_hdr.namelen != 0 {
-            Some(SocketAddr::read(
-                msg_hdr.name,
-                usize_from(msg_hdr.namelen),
-                vm,
-            )?)
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        let data = vectored_buf.read_into_arc(MAX_BUFFER_SIZE)?;
+        let len = data.len();
+
+        let ancillary_data = if msg_hdr.controllen > 0 {
+            let mut ancillary_data = AncillaryData::default();
+
+            while msg_hdr.controllen > 0 {
+                let (len, header) = vm.read_sized_with_abi(msg_hdr.control, abi)?;
+                ensure!(msg_hdr.controllen >= header.len, Inval);
+                let buffer_len = usize_from(header.len).checked_sub(len).ok_or(err!(Inval))?;
+
+                match (header.level, header.r#type) {
+                    (1, 1) => {
+                        // SCM_RIGHTS
+                        ensure!(buffer_len % 4 == 0, Inval);
+                        let num_fds = buffer_len / 4;
+
+                        ensure!(ancillary_data.rights.is_none(), Inval);
+
+                        let fds = (0..num_fds)
+                            .map(|i| {
+                                let fd =
+                                    vm.read(msg_hdr.control.bytes_offset(len).cast().add(i))?;
+                                fdtable.get_strong(fd)
+                            })
+                            .collect::<Result<_>>()?;
+                        ancillary_data.rights = Some(fds);
+                    }
+                    (1, 2) => {
+                        // SCM_CREDENTIALS
+                        ensure!(buffer_len >= size_of::<Ucred>(), Inval);
+
+                        ensure!(ancillary_data.cred.is_none(), Inval);
+
+                        let cred = vm.read(msg_hdr.control.bytes_offset(len).cast())?;
+                        // TODO: Validate cred
+                        ancillary_data.cred = Some(cred);
+                    }
+                    _ => {
+                        todo!("level={} type={}", header.level, header.r#type)
+                    }
+                }
+
+                let align = match abi {
+                    Abi::I386 => 4,
+                    Abi::Amd64 => 8,
+                };
+                let offset = align_up(header.len, align);
+                msg_hdr.control = msg_hdr.control.bytes_offset(usize_from(offset));
+                msg_hdr.controllen = msg_hdr.controllen.saturating_sub(offset);
+            }
+
+            Some(ancillary_data)
         } else {
             None
         };
 
-        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
+        let packet = Packet {
+            data,
+            sender_cred: self.localcred,
+            ancillary_data,
+        };
+
+        ensure!(msg_hdr.namelen == 0, IsConn);
+
+        self.write_half.write(packet)?;
+
+        Ok(len)
     }
 
     fn shutdown(&self, how: ShutdownHow) -> Result<()> {
@@ -255,6 +379,35 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         _: &FileAccessContext,
     ) -> Result<Box<dyn WeakEpollReady>> {
         Ok(Box::new(Arc::downgrade(&self)))
+    }
+
+    fn set_socket_option(
+        &self,
+        virtual_memory: Arc<VirtualMemory>,
+        _: Abi,
+        level: i32,
+        optname: i32,
+        optval: Pointer<[u8]>,
+        optlen: i32,
+    ) -> Result<()> {
+        match (level, optname) {
+            (1, 15) => {
+                // SO_REUSEPORT
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())?;
+                ensure!(optval == 0, OpNotSupp);
+                Ok(())
+            }
+            (1, 16) => {
+                // SO_PASSCRED
+                ensure!(optlen == 4, Inval);
+                let passcred = virtual_memory.read(optval.cast::<u32>())? != 0;
+                let mut guard = self.internal.lock();
+                guard.passcred = passcred;
+                Ok(())
+            }
+            _ => bail!(OpNotSupp),
+        }
     }
 
     fn ioctl(
@@ -336,7 +489,7 @@ impl EpollReady for SeqPacketUnixSocket {
 }
 
 struct State {
-    packets: VecDeque<Box<[u8]>>,
+    packets: VecDeque<Packet>,
     read_counter: EventCounter,
     write_counter: EventCounter,
     shutdown: bool,
@@ -359,7 +512,7 @@ struct ReadHalf {
 }
 
 impl ReadHalf {
-    fn read(&self, peek: bool) -> Result<Option<Box<[u8]>>> {
+    fn read(&self, peek: bool) -> Result<Option<Packet>> {
         let mut guard = self.state.lock();
         let packet = if peek {
             guard.packets.front().cloned()
@@ -402,10 +555,10 @@ struct WriteHalf {
 }
 
 impl WriteHalf {
-    fn write(&self, data: Box<[u8]>) -> Result<()> {
+    fn write(&self, packet: Packet) -> Result<()> {
         let mut guard = self.state.lock();
         ensure!(!guard.shutdown, Pipe);
-        guard.packets.push_back(data);
+        guard.packets.push_back(packet);
         guard.read_counter.inc();
         drop(guard);
         self.notify.notify();
@@ -423,4 +576,17 @@ impl WriteHalf {
         drop(guard);
         self.notify.notify();
     }
+}
+
+#[derive(Clone)]
+struct Packet {
+    data: Arc<[u8]>,
+    sender_cred: Ucred,
+    ancillary_data: Option<AncillaryData>,
+}
+
+#[derive(Clone, Default)]
+struct AncillaryData {
+    rights: Option<Vec<StrongFileDescriptor>>,
+    cred: Option<Ucred>,
 }
