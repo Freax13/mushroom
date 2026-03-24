@@ -2021,7 +2021,20 @@ impl From<Rusage> for Rusage64 {
     }
 }
 
-impl Pointee for SocketAddr {}
+impl Pointee for SocketAddr {
+    fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
+        let virtual_memory = thread.virtual_memory();
+        if let Ok(addr) = Self::read(Pointer::<Self>::new(addr.as_u64()), 16, virtual_memory) {
+            write!(f, "{addr:?}")
+        } else if let Ok(addr) =
+            Self::read(Pointer::<Self>::new(addr.as_u64()), 110, virtual_memory)
+        {
+            write!(f, "{addr:?}")
+        } else {
+            write!(f, "{:#x}", addr.as_u64())
+        }
+    }
+}
 
 impl SocketAddr {
     pub fn read(addr: Pointer<Self>, addrlen: usize, vm: &VirtualMemory) -> Result<Self> {
