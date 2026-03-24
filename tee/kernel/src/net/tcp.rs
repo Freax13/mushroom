@@ -454,7 +454,7 @@ impl OpenFileDescription for TcpSocket {
 
     fn listen(&self, backlog: usize, ctx: &FileAccessContext) -> Result<()> {
         // Make sure that the backlog is never empty.
-        let backlog = backlog.saturating_add(1);
+        let backlog = backlog + 1;
 
         let bound = self.get_or_bind_ephemeral(ctx)?;
 
