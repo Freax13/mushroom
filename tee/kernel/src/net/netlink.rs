@@ -28,7 +28,7 @@ use crate::{
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
-                RecvMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
+                RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
                 SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee},
             },
@@ -235,6 +235,33 @@ impl OpenFileDescription for NetlinkSocket {
         buf.read(0, &mut buffer)?;
         connection.tx.send(buffer).map_err(|_| err!(ConnReset))?;
         Ok(len)
+    }
+
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: &mut MsgHdr,
+        flags: SendMsgFlags,
+        _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
+        assert_eq!(flags, SendMsgFlags::empty());
+        assert_eq!(msg_hdr.flags, MsgHdrFlags::empty());
+        assert_eq!(msg_hdr.controllen, 0);
+
+        let addr = if msg_hdr.namelen != 0 {
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
+        } else {
+            None
+        };
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
     fn recv_msg(
