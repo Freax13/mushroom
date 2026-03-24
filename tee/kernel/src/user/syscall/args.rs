@@ -457,7 +457,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Pollfd {
     pub fd: FdNum,
@@ -466,7 +466,7 @@ pub struct Pollfd {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct PollEvents: u16 {
         const IN = 0x0001;
@@ -512,7 +512,7 @@ impl From<Events> for PollEvents {
 impl Pointee for Pollfd {}
 impl PrimitivePointee for Pollfd {}
 
-#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct FdNum(i32);
 
