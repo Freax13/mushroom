@@ -227,6 +227,10 @@ where
         VirtAddr::new(self.value)
     }
 
+    pub fn try_get(self) -> Result<VirtAddr> {
+        Ok(VirtAddr::try_new(self.value)?)
+    }
+
     pub fn raw(&self) -> u64 {
         self.value
     }

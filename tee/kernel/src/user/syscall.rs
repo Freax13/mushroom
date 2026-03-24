@@ -909,9 +909,17 @@ fn mmap(
     let bias = if flags.contains(MmapFlags::FIXED) {
         Bias::Fixed(addr.get())
     } else {
+        let hint = if !addr.is_null()
+            && let Ok(addr) = addr.try_get()
+        {
+            Some(addr)
+        } else {
+            None
+        };
         Bias::Dynamic {
             abi,
             map_32bit: flags.contains(MmapFlags::_32BIT),
+            hint,
         }
     };
 

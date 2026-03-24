@@ -588,9 +588,11 @@ impl VirtualMemoryWriteGuard<'_> {
 
         let addr = match bias {
             Bias::Fixed(bias) => bias,
-            Bias::Dynamic { abi, map_32bit } => {
-                self.guard.find_free_address(len, abi, map_32bit)?
-            }
+            Bias::Dynamic {
+                abi,
+                map_32bit,
+                hint,
+            } => self.guard.find_free_address(len, abi, map_32bit, hint)?,
         };
 
         let start = addr;
@@ -996,6 +998,7 @@ impl VirtualMemoryWriteGuard<'_> {
             Bias::Dynamic {
                 abi,
                 map_32bit: false,
+                hint: None,
             },
             vdso.len(),
             MemoryPermissions::READ | MemoryPermissions::EXECUTE,
@@ -1298,9 +1301,9 @@ impl VirtualMemoryWriteGuard<'_> {
         new_size: u64,
         as_limit: CurrentAsLimit,
     ) -> Result<Page> {
-        let new_address = self
-            .guard
-            .find_free_address(new_size * Size4KiB::SIZE, abi, false)?;
+        let new_address =
+            self.guard
+                .find_free_address(new_size * Size4KiB::SIZE, abi, false, None)?;
         let new_address = Page::from_start_address(new_address).unwrap();
         self.remap_to(old_address, old_size, new_address, new_size, as_limit)?;
         Ok(new_address)
@@ -1388,7 +1391,7 @@ impl VirtualMemoryWriteGuard<'_> {
         let new_address = if let Some(new_address) = new_address {
             new_address
         } else {
-            let addr = self.guard.find_free_address(new_size, abi, false)?;
+            let addr = self.guard.find_free_address(new_size, abi, false, None)?;
             Page::from_start_address(addr).unwrap()
         };
 
@@ -1523,13 +1526,38 @@ impl VirtualMemoryState {
         }
     }
 
-    fn find_free_address(&mut self, size: u64, abi: Abi, map_32: bool) -> Result<VirtAddr> {
+    fn find_free_address(
+        &mut self,
+        size: u64,
+        abi: Abi,
+        map_32: bool,
+        hint: Option<VirtAddr>,
+    ) -> Result<VirtAddr> {
         assert_ne!(size, 0);
         assert!(
             size < (1 << 47),
             "mapping of size {size:#x} can never exist"
         );
         let size = align_up(size, Size4KiB::SIZE);
+
+        // If a hint was given, check if the address is available.
+        if let Some(hint) = hint {
+            let end = (hint + size).align_up(Size4KiB::SIZE);
+            let hint = Page::containing_address(hint);
+            let end = Page::containing_address(end);
+            if self
+                .mappings
+                .upper_bound_mut(Bound::Excluded(&end))
+                .prev()
+                .is_none_or(|(page, mapping)| {
+                    let mapping = mapping.get_mut();
+                    let mapping_end = *page + u64::from_usize(mapping.pages.len());
+                    mapping_end < hint
+                })
+            {
+                return Ok(hint.start_address());
+            }
+        }
 
         // We want to add one guard page at before and after the mapping.
         // We do this by increasing the size of the allocation by two pages.
@@ -1620,7 +1648,11 @@ impl Display for MemoryPermissions {
 #[derive(Debug, Clone, Copy)]
 pub enum Bias {
     Fixed(VirtAddr),
-    Dynamic { abi: Abi, map_32bit: bool },
+    Dynamic {
+        abi: Abi,
+        map_32bit: bool,
+        hint: Option<VirtAddr>,
+    },
 }
 
 impl Bias {
