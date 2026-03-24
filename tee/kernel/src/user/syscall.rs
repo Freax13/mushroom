@@ -3725,7 +3725,7 @@ fn ptrace(
                     registers.rsp = user_regs.sp;
                     registers.ss = user_regs.ss as u16;
                     registers.fs_base = user_regs.fs_base;
-                    // TODO: gsbase
+                    registers.gs_base = user_regs.gs_base;
                     registers.ds = user_regs.ds as u16;
                     registers.es = user_regs.es as u16;
                     registers.fs = user_regs.fs as u16;
@@ -4800,10 +4800,33 @@ fn prctl(
 }
 
 #[syscall(i386 = 384, amd64 = 158)]
-fn arch_prctl(thread: &Thread, code: ArchPrctlCode, addr: Pointer<c_void>) -> SyscallResult {
+fn arch_prctl(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    code: ArchPrctlCode,
+    addr: Pointer<c_void>,
+) -> SyscallResult {
+    // Currently all supported operations only work for Amd64.
+    ensure!(abi == Abi::Amd64, Inval);
+
     match code {
+        ArchPrctlCode::SetGs => {
+            thread.cpu_state.lock().set_gs_base(addr.get().as_u64());
+            Ok(0)
+        }
         ArchPrctlCode::SetFs => {
             thread.cpu_state.lock().set_fs_base(addr.get().as_u64());
+            Ok(0)
+        }
+        ArchPrctlCode::GetFs => {
+            let fs_base = thread.cpu_state.lock().fs_base();
+            virtual_memory.write(addr.cast(), fs_base)?;
+            Ok(0)
+        }
+        ArchPrctlCode::GetGs => {
+            let gs_base = thread.cpu_state.lock().gs_base();
+            virtual_memory.write(addr.cast(), gs_base)?;
             Ok(0)
         }
     }

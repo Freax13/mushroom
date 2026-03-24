@@ -560,7 +560,10 @@ impl SyscallArg for FdNum {
 
 enum_arg! {
     pub enum ArchPrctlCode {
+        SetGs = 0x1001,
         SetFs = 0x1002,
+        GetFs = 0x1003,
+        GetGs = 0x1004,
     }
 }
 

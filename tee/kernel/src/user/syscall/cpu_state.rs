@@ -102,6 +102,9 @@ impl CpuState {
         self.xsave_area.load();
 
         per_cpu.exit_with_sysret.set(self.last_exit_was_syscall);
+        per_cpu
+            .restore_fs_gs_base
+            .set(self.abi_from_cs() == Abi::Amd64);
 
         virtual_memory.run_with(|| unsafe { enter_userspace() });
 
@@ -260,8 +263,20 @@ impl CpuState {
         self.registers.rip
     }
 
+    pub fn fs_base(&self) -> u64 {
+        self.registers.fs_base
+    }
+
     pub fn set_fs_base(&mut self, tls: u64) {
         self.registers.fs_base = tls;
+    }
+
+    pub fn gs_base(&self) -> u64 {
+        self.registers.gs_base
+    }
+
+    pub fn set_gs_base(&mut self, tls: u64) {
+        self.registers.gs_base = tls;
     }
 
     pub fn add_user_desc(&mut self, u_info: UserDesc) -> Result<Option<u16>> {
@@ -604,6 +619,7 @@ pub struct Registers {
     pub rip: u64,
     pub rflags: u64,
     pub fs_base: u64,
+    pub gs_base: u64,
     pub cs: u16,
     pub ds: u16,
     pub es: u16,
@@ -633,6 +649,7 @@ impl Registers {
         rip: 0,
         rflags: 0,
         fs_base: 0,
+        gs_base: 0,
         cs: 0,
         ds: 0,
         es: 0,
@@ -875,9 +892,18 @@ global_asm!(
     "swapgs",
     "mov gs, ax",
     "swapgs",
-    // Restore FS base.
+
+    // Optionally restore FS and GS base.
+    "cmp byte ptr gs:[{RESTORE_FS_GS_BASE_OFFSET}], 0",
+    "je 64f",
+    "mov rax, gs:[{U_GS_BASE_OFFSET}]",
+    "swapgs",
+    "wrgsbase rax",
+    "swapgs",
     "mov rax, gs:[{U_FS_BASE_OFFSET}]",
     "wrfsbase rax",
+    "64:",
+
     // Restore userspace registers.
     "mov rax, gs:[{U_RAX_OFFSET}]",
     "mov rbx, gs:[{U_RBX_OFFSET}]",
@@ -981,6 +1007,11 @@ global_asm!(
     // Save FS base.
     "rdfsbase rax",
     "mov gs:[{U_FS_BASE_OFFSET}], rax",
+    // Save GS base.
+    "swapgs",
+    "rdgsbase rax",
+    "swapgs",
+    "mov gs:[{U_GS_BASE_OFFSET}], rax",
     // Save registers.
     "mov gs:[{U_RBX_OFFSET}], rbx",
     "mov gs:[{U_RCX_OFFSET}], rcx",
@@ -1013,6 +1044,7 @@ global_asm!(
     "ret",
 
     EXIT_WITH_SYSRET_OFFSET = const offset_of!(PerCpu, exit_with_sysret),
+    RESTORE_FS_GS_BASE_OFFSET = const offset_of!(PerCpu, restore_fs_gs_base),
     EXIT_OFFSET = const offset_of!(PerCpu, exit),
     EXIT_SYSCALL = const RawExit::Syscall as u8,
     EXIT_EXCP = const RawExit::Exception as u8,
@@ -1048,5 +1080,6 @@ global_asm!(
     U_FS_OFFSET = const userspace_reg_offset!(fs),
     U_FS_BASE_OFFSET = const userspace_reg_offset!(fs_base),
     U_GS_OFFSET = const userspace_reg_offset!(gs),
+    U_GS_BASE_OFFSET = const userspace_reg_offset!(gs_base),
     U_SS_OFFSET = const userspace_reg_offset!(ss),
 );

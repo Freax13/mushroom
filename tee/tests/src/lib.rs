@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+mod arch_prctl;
 mod epoll;
 mod fs;
 mod memfd;

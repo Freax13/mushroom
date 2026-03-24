@@ -307,6 +307,9 @@ impl PrimitivePointee for u32 {}
 impl Pointee for i32 {}
 impl PrimitivePointee for i32 {}
 
+impl Pointee for u64 {}
+impl PrimitivePointee for u64 {}
+
 impl Pointee for CStr {
     fn display(f: &mut dyn fmt::Write, addr: VirtAddr, thread: &ThreadGuard) -> fmt::Result {
         let res = thread
