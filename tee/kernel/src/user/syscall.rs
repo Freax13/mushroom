@@ -4698,6 +4698,13 @@ fn prctl(
             }
             Ok(0)
         }
+        PrctlOp::GetPdeathSig => {
+            let parent_death_signal = thread.process().parent_death_signal();
+            let parent_death_signal = parent_death_signal.map_or(0, |signal| signal.get() as i32);
+            let pointer = Pointer::new(arg2);
+            virtual_memory.write(pointer, parent_death_signal)?;
+            Ok(0)
+        }
         PrctlOp::SetDumpable => {
             let dumpable = arg2;
             match dumpable {

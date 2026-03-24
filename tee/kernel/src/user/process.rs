@@ -731,6 +731,10 @@ impl Process {
         self.mm_auxv_end.store(addr);
     }
 
+    pub fn parent_death_signal(&self) -> Option<Signal> {
+        self.parent_death_signal.load()
+    }
+
     pub fn clear_parent_death_signal(&self) {
         self.parent_death_signal.store(None);
     }

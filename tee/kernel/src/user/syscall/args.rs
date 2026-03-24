@@ -1682,6 +1682,7 @@ impl SyscallArg for Nice {
 enum_arg! {
     pub enum PrctlOp {
         SetPdeathsig = 1,
+        GetPdeathSig = 2,
         SetDumpable = 4,
         SetName = 15,
         GetName = 16,
