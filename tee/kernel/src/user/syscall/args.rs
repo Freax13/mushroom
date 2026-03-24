@@ -1868,6 +1868,7 @@ bitflags! {
         const TRUNC = 1 << 5;
         const DONTWAIT = 1 << 6;
         const WAITALL = 1 << 8;
+        const NOSIGNAL = 1 << 14;
         const CMSG_CLOEXEC = 1 << 30;
     }
 }
