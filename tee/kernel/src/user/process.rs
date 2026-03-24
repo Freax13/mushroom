@@ -31,7 +31,6 @@ use crate::{
         fd::{FileDescriptorTable, epoll::EventCounter},
         node::{
             FileAccessContext, INode, Link, LinkLocation, ROOT_NODE,
-            procfs::ProcessInos,
             tmpfs::{TmpFs, TmpFsFile},
         },
         path::{FileName, Path},
@@ -73,7 +72,6 @@ pub struct Process {
     pub threads: Mutex<Vec<WeakThread>>,
     /// The number of running threads.
     running: AtomicUsize,
-    pub inos: ProcessInos,
     pub exe: RwLock<Link>,
     task_comm: Mutex<ArrayVec<u8, TASK_COMM_CAPACITY>>,
     alarm: Mutex<Option<AlarmState>>,
@@ -139,7 +137,6 @@ impl Process {
             signals_notify: Notify::new(),
             threads: Mutex::new(Vec::new()),
             running: AtomicUsize::new(0),
-            inos: ProcessInos::new(),
             exe: RwLock::new(exe),
             task_comm: Mutex::new(task_comm),
             alarm: Mutex::new(None),
