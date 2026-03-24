@@ -87,7 +87,7 @@ macro_rules! bitflags {
     (pub struct $strukt:ident {
         $(
             $(#[$inner:ident $($args:tt)*])*
-            const $constant:ident = $expr:expr;
+            const $constant:tt = $expr:expr;
         )*
     }) => {
         bitflags::bitflags! {
@@ -2511,6 +2511,8 @@ bitflags! {
         // const HUGETLB = 1 << 2;
         // const NOEXEC_SEAL = 1 << 3;
         // const EXEC = 1 << 4;
+
+        const _ = 0xffff_ffff << 32;
     }
 }
 
