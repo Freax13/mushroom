@@ -2570,3 +2570,69 @@ fn stream_server_shutdown_read_blocking() {
 
     assert_eq!(accept(server.as_raw_fd()), Err(Errno::EINVAL));
 }
+
+#[test]
+fn seqpacket_shutdown_read() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    assert_eq!(send(sock2.as_raw_fd(), b"1234", MsgFlags::empty()), Ok(4));
+
+    shutdown(sock1.as_raw_fd(), Shutdown::Read).unwrap();
+    shutdown(sock1.as_raw_fd(), Shutdown::Read).unwrap();
+
+    // Packets that were sent before the socket was shutdown can be read.
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap(),
+        4
+    );
+    assert_eq!(buf[..4], *b"1234");
+
+    // Once all packets have been dequeued, no more data will be returned.
+    assert_eq!(recv(sock1.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(0));
+
+    // Sending more data will fail.
+    assert_eq!(
+        send(sock2.as_raw_fd(), b"1234", MsgFlags::empty()),
+        Err(Errno::EPIPE)
+    );
+}
+
+#[test]
+fn seqpacket_shutdown_write() {
+    let (sock1, sock2) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+    )
+    .unwrap();
+
+    assert_eq!(send(sock1.as_raw_fd(), b"1234", MsgFlags::empty()), Ok(4));
+
+    shutdown(sock1.as_raw_fd(), Shutdown::Write).unwrap();
+    shutdown(sock1.as_raw_fd(), Shutdown::Write).unwrap();
+
+    // Packets that were sent before the socket was shutdown can be read.
+    let mut buf = [0; 16];
+    assert_eq!(
+        recv(sock2.as_raw_fd(), &mut buf, MsgFlags::empty()).unwrap(),
+        4
+    );
+    assert_eq!(buf[..4], *b"1234");
+
+    // Once all packets have been dequeued, no more data will be returned.
+    assert_eq!(recv(sock2.as_raw_fd(), &mut buf, MsgFlags::empty()), Ok(0));
+
+    // Sending more data will fail.
+    assert_eq!(
+        send(sock1.as_raw_fd(), b"1234", MsgFlags::empty()),
+        Err(Errno::EPIPE)
+    );
+}

@@ -26,7 +26,7 @@ use crate::{
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
-                RecvFromFlags, SendMsgFlags, SentToFlags, SocketAddr, Stat, Timespec,
+                RecvFromFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr, Stat, Timespec,
             },
             traits::Abi,
         },
@@ -160,7 +160,7 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         let len = buf.buffer_len();
         let mut bytes = vec![0; len];
         buf.read(0, &mut bytes)?;
-        self.write_half.write(Box::from(bytes));
+        self.write_half.write(Box::from(bytes))?;
         Ok(len)
     }
 
@@ -213,15 +213,28 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
     }
 
+    fn shutdown(&self, how: ShutdownHow) -> Result<()> {
+        match how {
+            ShutdownHow::Rd => self.read_half.shutdown(),
+            ShutdownHow::Wr => self.write_half.shutdown(),
+            ShutdownHow::RdWr => {
+                self.read_half.shutdown();
+                self.write_half.shutdown();
+            }
+        }
+        Ok(())
+    }
+
     fn poll_ready(&self, events: Events, _: &FileAccessContext) -> Option<NonEmptyEvents> {
+        let guard = self.read_half.state.lock();
+        let has_packets = !guard.packets.is_empty();
+        let closed = guard.shutdown || Arc::strong_count(&self.read_half.state) == 1;
+        drop(guard);
+
         let mut ready_events = Events::empty();
-        ready_events.set(
-            Events::READ,
-            !self.read_half.state.lock().packets.is_empty()
-                || Arc::strong_count(&self.read_half.state) == 1,
-        );
+        ready_events.set(Events::READ, has_packets || closed);
         ready_events.set(Events::WRITE, true);
-        ready_events.set(Events::HUP, Arc::strong_count(&self.read_half.state) == 1);
+        ready_events.set(Events::HUP, closed);
         NonEmptyEvents::new(ready_events & events)
     }
 
@@ -299,10 +312,11 @@ impl EpollReady for SeqPacketUnixSocket {
             || {
                 let mut result = EpollResult::new();
                 let guard = self.read_half.state.lock();
-                if !guard.packets.is_empty() || Arc::strong_count(&self.read_half.state) == 1 {
+                let closed = guard.shutdown || Arc::strong_count(&self.read_half.state) == 1;
+                if !guard.packets.is_empty() || closed {
                     result.set_ready(Events::READ);
                 }
-                if Arc::strong_count(&self.read_half.state) == 1 {
+                if closed {
                     result.set_ready(Events::HUP);
                 }
                 result.add_counter(Events::READ, &guard.read_counter);
@@ -325,6 +339,7 @@ struct State {
     packets: VecDeque<Box<[u8]>>,
     read_counter: EventCounter,
     write_counter: EventCounter,
+    shutdown: bool,
 }
 
 impl State {
@@ -333,6 +348,7 @@ impl State {
             packets: VecDeque::new(),
             read_counter: EventCounter::new(),
             write_counter: EventCounter::new(),
+            shutdown: false,
         }
     }
 }
@@ -355,6 +371,9 @@ impl ReadHalf {
             self.notify.notify();
             return Ok(Some(packet));
         }
+        if guard.shutdown {
+            return Ok(None);
+        }
         drop(guard);
 
         if Arc::strong_count(&self.state) == 1 {
@@ -362,6 +381,18 @@ impl ReadHalf {
         }
 
         bail!(Again)
+    }
+
+    fn shutdown(&self) {
+        let mut guard = self.state.lock();
+        // Don't do anything if the half was already shut down.
+        if guard.shutdown {
+            return;
+        }
+        guard.shutdown = true;
+        guard.read_counter.inc();
+        drop(guard);
+        self.notify.notify();
     }
 }
 
@@ -371,9 +402,23 @@ struct WriteHalf {
 }
 
 impl WriteHalf {
-    fn write(&self, data: Box<[u8]>) {
+    fn write(&self, data: Box<[u8]>) -> Result<()> {
         let mut guard = self.state.lock();
+        ensure!(!guard.shutdown, Pipe);
         guard.packets.push_back(data);
+        guard.read_counter.inc();
+        drop(guard);
+        self.notify.notify();
+        Ok(())
+    }
+
+    fn shutdown(&self) {
+        let mut guard = self.state.lock();
+        // Don't do anything if the half was already shut down.
+        if guard.shutdown {
+            return;
+        }
+        guard.shutdown = true;
         guard.read_counter.inc();
         drop(guard);
         self.notify.notify();
