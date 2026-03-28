@@ -28,8 +28,8 @@ use crate::{
         syscall::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
-                RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr, SocketAddrNetlink, SocketType,
-                SocketTypeWithFlags, Stat, Timespec,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr,
+                SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee},
             },
             traits::Abi,
@@ -262,6 +262,32 @@ impl OpenFileDescription for NetlinkSocket {
 
         let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
         self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
+    }
+
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
+        let connection = self.connection.get().ok_or(err!(NotConn))?;
+        let buffer = if flags.contains(RecvFromFlags::PEEK) {
+            connection.rx.peek()
+        } else {
+            connection.rx.try_recv()
+        };
+        let buffer = buffer.ok_or(err!(Again))?;
+
+        let len = buffer.len();
+        let written = cmp::min(len, buf.buffer_len());
+        buf.write(0, &buffer[..written])?;
+
+        let len = if flags.contains(RecvFromFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
+
+        Ok((len, Some(SocketAddr::Netlink(SocketAddrNetlink::default()))))
     }
 
     fn recv_msg(
