@@ -2752,7 +2752,7 @@ fn semctl(
     }
 }
 
-#[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
+#[syscall(i386 = 55, amd64 = 72)]
 async fn fcntl(
     abi: Abi,
     thread: &Thread,
@@ -2891,7 +2891,15 @@ async fn fcntl(
                         record.lock(lock).map_err(|_| err!(Acces))?
                     }
                     FcntlCmd::SetLkW | FcntlCmd::SetLkW64 | FcntlCmd::OfdSetLkW => {
-                        record.lock_wait(lock).await
+                        thread
+                            .interruptable(
+                                async {
+                                    record.lock_wait(lock).await;
+                                    Ok(())
+                                },
+                                true,
+                            )
+                            .await?;
                     }
                     _ => unreachable!(),
                 }
@@ -2918,7 +2926,7 @@ async fn fcntl(
     }
 }
 
-#[syscall(i386 = 221, interruptable, restartable)]
+#[syscall(i386 = 221)]
 async fn fcntl64(
     abi: Abi,
     thread: &Thread,
