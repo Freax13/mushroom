@@ -30,7 +30,7 @@ use crate::{
             args::{
                 FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
                 RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, ShutdownHow, SocketAddr,
-                Stat, Timespec, Ucred,
+                SocketType, Stat, Timespec, Ucred,
             },
             traits::Abi,
         },
@@ -53,6 +53,7 @@ struct SeqPacketUnixSocketInternal {
     flags: OpenFlags,
     ownership: Ownership,
     passcred: bool,
+    priority: u8,
 }
 
 impl SeqPacketUnixSocket {
@@ -94,6 +95,7 @@ impl SeqPacketUnixSocket {
                         ctx.filesystem_group_id(),
                     ),
                     passcred: false,
+                    priority: 0,
                 }),
                 write_half: write_half1,
                 read_half: read_half1,
@@ -110,6 +112,7 @@ impl SeqPacketUnixSocket {
                         ctx.filesystem_group_id(),
                     ),
                     passcred: false,
+                    priority: 0,
                 }),
                 write_half: write_half2,
                 read_half: read_half2,
@@ -381,6 +384,28 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         Ok(Box::new(Arc::downgrade(&self)))
     }
 
+    fn get_socket_option(&self, _: Abi, level: i32, optname: i32) -> Result<Vec<u8>> {
+        match (level, optname) {
+            (1, 3) => {
+                // SO_TYPE
+                let ty = SocketType::Seqpacket as u32;
+                Ok(ty.to_le_bytes().to_vec())
+            }
+            (1, 12) => {
+                // SO_PRIORITY
+                let guard = self.internal.lock();
+                Ok(u32::from(guard.priority).to_ne_bytes().to_vec())
+            }
+            (1, 15) => Ok(0u32.to_ne_bytes().to_vec()), // SO_REUSEPORT
+            (1, 16) => {
+                // SO_PASSCRED
+                let guard = self.internal.lock();
+                Ok(u32::from(guard.passcred).to_ne_bytes().to_vec())
+            }
+            _ => bail!(OpNotSupp),
+        }
+    }
+
     fn set_socket_option(
         &self,
         virtual_memory: Arc<VirtualMemory>,
@@ -391,6 +416,16 @@ impl OpenFileDescription for SeqPacketUnixSocket {
         optlen: i32,
     ) -> Result<()> {
         match (level, optname) {
+            (1, 12) => {
+                // SO_PRIORITY
+                ensure!(optlen == 4, Inval);
+                let optval = virtual_memory.read(optval.cast::<i32>())?;
+                let optval = u8::try_from(optval)?;
+                ensure!(optval < 8, Inval);
+                let mut guard = self.internal.lock();
+                guard.priority = optval;
+                Ok(())
+            }
             (1, 15) => {
                 // SO_REUSEPORT
                 ensure!(optlen == 4, Inval);
