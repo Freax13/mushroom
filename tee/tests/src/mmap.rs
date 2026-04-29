@@ -797,3 +797,148 @@ fn remap_private_anon_different_permissions() {
         );
     }
 }
+
+#[test]
+fn hint() {
+    let addr = NonZeroUsize::new(0x2000_0000).unwrap();
+    let res = unsafe {
+        mmap_anonymous(
+            Some(addr),
+            NonZeroUsize::new(4096).unwrap(),
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+    }
+    .unwrap();
+    assert_eq!(res.addr(), addr);
+}
+
+#[test]
+#[cfg_attr(not(target_pointer_width = "64"), ignore = "64-bit only")]
+fn invalid_hint() {
+    let addr = NonZeroUsize::new(0x8013_0093_1000u64 as usize).unwrap();
+    let res = unsafe {
+        mmap_anonymous(
+            Some(addr),
+            NonZeroUsize::new(4096).unwrap(),
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+    }
+    .unwrap();
+    assert_ne!(res.addr(), addr);
+}
+
+#[test]
+fn hint_in_use() {
+    let size = NonZeroUsize::new(0x3000).unwrap();
+    let addr = unsafe {
+        mmap_anonymous(
+            None,
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+
+    let check_for_overlap = |new_addr: NonNull<c_void>, new_size: NonZeroUsize| {
+        assert!(
+            !(new_addr.addr().get()..new_addr.addr().get() + new_size.get())
+                .contains(&addr.addr().get())
+        );
+        assert!(
+            !(addr.addr().get()..addr.addr().get() + size.get()).contains(&new_addr.addr().get())
+        );
+    };
+
+    let size = NonZeroUsize::new(0x3000).unwrap();
+    let new_addr = unsafe {
+        mmap_anonymous(
+            Some(addr.addr()),
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+    check_for_overlap(new_addr, size);
+    unsafe {
+        munmap(new_addr, size.get()).unwrap();
+    }
+
+    let size = NonZeroUsize::new(0x1000).unwrap();
+    let new_addr = unsafe {
+        mmap_anonymous(
+            Some(addr.addr()),
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+    check_for_overlap(new_addr, size);
+    unsafe {
+        munmap(new_addr, size.get()).unwrap();
+    }
+
+    let size = NonZeroUsize::new(0x1000).unwrap();
+    let new_addr = unsafe {
+        mmap_anonymous(
+            Some(addr.addr().checked_add(0x1000).unwrap()),
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+    check_for_overlap(new_addr, size);
+    unsafe {
+        munmap(new_addr, size.get()).unwrap();
+    }
+
+    let size = NonZeroUsize::new(0x1000).unwrap();
+    let new_addr = unsafe {
+        mmap_anonymous(
+            Some(addr.addr().checked_add(0x2000).unwrap()),
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+    check_for_overlap(new_addr, size);
+    unsafe {
+        munmap(new_addr, size.get()).unwrap();
+    }
+
+    let size = NonZeroUsize::new(0x2000).unwrap();
+    let new_addr = unsafe {
+        mmap_anonymous(
+            Some(addr.addr().checked_add(0x2000).unwrap()),
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+    check_for_overlap(new_addr, size);
+    unsafe {
+        munmap(new_addr, size.get()).unwrap();
+    }
+
+    let size = NonZeroUsize::new(0x2000).unwrap();
+    let new_addr = unsafe {
+        mmap_anonymous(
+            Some(NonZeroUsize::new(addr.addr().get() - 0x1000).unwrap()),
+            size,
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_PRIVATE,
+        )
+        .unwrap()
+    };
+    check_for_overlap(new_addr, size);
+    unsafe {
+        munmap(new_addr, size.get()).unwrap();
+    }
+}

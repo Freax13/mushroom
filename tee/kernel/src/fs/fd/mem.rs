@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::{
-    error::Result,
+    error::{Result, ensure, err},
     fs::{
         FileSystem,
         fd::{
@@ -20,7 +20,8 @@ use crate::{
     user::{
         futex::Futexes,
         syscall::args::{
-            FileMode, FileType, FileTypeAndMode, MemfdCreateFlags, OpenFlags, Seals, Stat, Timespec,
+            FileMode, FileType, FileTypeAndMode, MemfdCreateFlags, OpenFlags, Seals, Stat,
+            Timespec, Whence,
         },
         thread::{Gid, Uid},
     },
@@ -151,6 +152,43 @@ impl OpenFileDescription for MemFd {
         }
 
         guard.buffer.truncate(length)
+    }
+
+    fn seek(&self, offset: usize, whence: Whence, _: &mut FileAccessContext) -> Result<usize> {
+        let mut guard = self.internal.lock();
+
+        match whence {
+            Whence::Set => guard.cursor_idx = offset,
+            Whence::Cur => {
+                guard.cursor_idx = guard
+                    .cursor_idx
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
+            Whence::End => {
+                let size = guard.buffer.len();
+                guard.cursor_idx = size
+                    .checked_add_signed(offset as isize)
+                    .ok_or(err!(Inval))?
+            }
+            Whence::Data => {
+                // Ensure that `offset` doesn't point past the file.
+                ensure!(offset < guard.buffer.len(), NxIo);
+
+                // We don't support holes so we always jump to `offset`.
+                guard.cursor_idx = offset;
+            }
+            Whence::Hole => {
+                let size = guard.buffer.len();
+
+                // Ensure that `offset` doesn't point past the file.
+                ensure!(offset < size, NxIo);
+
+                // We don't support holes so we always jump to the end of the file.
+                guard.cursor_idx = size;
+            }
+        }
+        Ok(guard.cursor_idx)
     }
 
     fn get_page(&self, page_idx: usize, shared: bool) -> Result<KernelPage> {

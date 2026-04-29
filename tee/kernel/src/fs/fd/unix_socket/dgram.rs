@@ -469,7 +469,12 @@ impl OpenFileDescription for DgramUnixSocket {
         }
         drop(cmsg_builder);
 
-        Ok(written)
+        let len = if flags.contains(RecvMsgFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
+        Ok(len)
     }
 
     fn write(&self, buf: &dyn WriteBuf, ctx: &FileAccessContext) -> Result<usize> {
@@ -507,7 +512,7 @@ impl OpenFileDescription for DgramUnixSocket {
         &self,
         vm: &VirtualMemory,
         abi: Abi,
-        msg_hdr: &mut MsgHdr,
+        mut msg_hdr: MsgHdr,
         flags: SendMsgFlags,
         fdtable: &FileDescriptorTable,
         ctx: &FileAccessContext,

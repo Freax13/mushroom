@@ -291,7 +291,7 @@ impl OpenFileDescription for StreamUnixSocket {
         &self,
         vm: &VirtualMemory,
         abi: Abi,
-        msg_hdr: &mut MsgHdr,
+        mut msg_hdr: MsgHdr,
         _: SendMsgFlags,
         fdtable: &FileDescriptorTable,
         _: &FileAccessContext,

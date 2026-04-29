@@ -87,7 +87,7 @@ macro_rules! bitflags {
     (pub struct $strukt:ident {
         $(
             $(#[$inner:ident $($args:tt)*])*
-            const $constant:ident = $expr:expr;
+            const $constant:tt = $expr:expr;
         )*
     }) => {
         bitflags::bitflags! {
@@ -225,6 +225,10 @@ where
 
     pub fn get(self) -> VirtAddr {
         VirtAddr::new(self.value)
+    }
+
+    pub fn try_get(self) -> Result<VirtAddr> {
+        Ok(VirtAddr::try_new(self.value)?)
     }
 
     pub fn raw(&self) -> u64 {
@@ -453,7 +457,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct Pollfd {
     pub fd: FdNum,
@@ -462,7 +466,7 @@ pub struct Pollfd {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
     #[repr(transparent)]
     pub struct PollEvents: u16 {
         const IN = 0x0001;
@@ -508,7 +512,7 @@ impl From<Events> for PollEvents {
 impl Pointee for Pollfd {}
 impl PrimitivePointee for Pollfd {}
 
-#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct FdNum(i32);
 
@@ -556,7 +560,10 @@ impl SyscallArg for FdNum {
 
 enum_arg! {
     pub enum ArchPrctlCode {
+        SetGs = 0x1001,
         SetFs = 0x1002,
+        GetFs = 0x1003,
+        GetGs = 0x1004,
     }
 }
 
@@ -718,6 +725,22 @@ bitflags! {
     }
 }
 
+enum_arg! {
+    pub enum WaitidWhich {
+        All = 0,
+        Pid = 1,
+        Pgid = 2,
+    }
+}
+
+bitflags! {
+    pub struct WaitidOptions {
+        const NOHANG = 1 << 0;
+        const EXITED = 1 << 2;
+        const NOWAIT = 1 << 24;
+    }
+}
+
 bitflags! {
     pub struct CopyFileRangeFlags {}
 }
@@ -875,6 +898,7 @@ bitflags! {
 
 enum_arg! {
     pub enum Advice {
+        WillNeed = 3,
         DontNeed = 4,
         Free = 8,
     }
@@ -1662,6 +1686,7 @@ impl SyscallArg for Nice {
 enum_arg! {
     pub enum PrctlOp {
         SetPdeathsig = 1,
+        GetPdeathSig = 2,
         SetDumpable = 4,
         SetName = 15,
         GetName = 16,
@@ -1671,6 +1696,7 @@ enum_arg! {
         SetNoNewPrivs = 38,
         GetNoNewPrivs = 39,
         CapAmbient = 47,
+        SetPtracer = 0x59616d61,
     }
 }
 
@@ -1839,8 +1865,10 @@ pub struct CmsgHdr {
 bitflags! {
     pub struct RecvMsgFlags {
         const PEEK = 1 << 1;
+        const TRUNC = 1 << 5;
         const DONTWAIT = 1 << 6;
         const WAITALL = 1 << 8;
+        const NOSIGNAL = 1 << 14;
         const CMSG_CLOEXEC = 1 << 30;
     }
 }
@@ -2378,16 +2406,16 @@ enum_arg! {
         TraceMe = 0,
         PeekText = 1,
         PeekData = 2,
-        // PeekUsr = 3,
+        PeekUser = 3,
         // PokeText = 4,
         // PokeData = 5,
-        // PokeUsr = 6,
+        // PokeUser = 6,
         Cont = 7,
         // Kill = 8,
         // SingleStep = 9,
         GetRegs = 12,
         SetRegs = 13,
-        // GetFpregs = 14,
+        GetFpregs = 14,
         // SetFpregs = 15,
         // GetFpxregs = 18,
         // SetFpxregs = 19,
@@ -2396,6 +2424,7 @@ enum_arg! {
         Syscall = 24,
         SetOptions = 0x4200,
         GetSiginfo = 0x4202,
+        GetRegset = 0x4204,
         Seize = 0x4206,
         Interrupt = 0x4207,
         Listen = 0x4208,
@@ -2482,6 +2511,8 @@ bitflags! {
         // const HUGETLB = 1 << 2;
         // const NOEXEC_SEAL = 1 << 3;
         // const EXEC = 1 << 4;
+
+        const _ = 0xffff_ffff << 32;
     }
 }
 

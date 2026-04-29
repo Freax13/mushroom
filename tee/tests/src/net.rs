@@ -2,6 +2,7 @@ use std::{
     io::{IoSlice, IoSliceMut},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    slice,
     time::Duration,
 };
 
@@ -12,19 +13,20 @@ use nix::{
     libc::{self, IP_RECVTOS, Ioctl, SOL_IP, in_addr, in_pktinfo, ioctl, linger},
     poll::{PollFd, PollFlags, PollTimeout, poll},
     sys::{
+        epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags},
         socket::{
             self, AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, Shutdown,
             SockFlag, SockProtocol, SockType, SockaddrIn, SockaddrIn6, SockaddrLike,
-            SockaddrStorage, accept, connect, getpeername, getsockname, listen, recv, recvfrom,
-            recvmsg, send, sendmsg, sendto, setsockopt, shutdown, socket, socketpair,
+            SockaddrStorage, accept, connect, getpeername, getsockname, getsockopt, listen, recv,
+            recvfrom, recvmsg, send, sendmsg, sendto, setsockopt, shutdown, socket, socketpair,
             sockopt::{
                 Ipv4PacketInfo, Ipv4RecvTtl, Ipv6RecvHopLimit, Ipv6RecvPacketInfo, Ipv6RecvTClass,
-                Ipv6V6Only, Linger, ReceiveTimeout, ReuseAddr, ReusePort, TcpNoDelay,
+                Ipv6V6Only, Linger, ReceiveTimeout, ReuseAddr, ReusePort, SocketError, TcpNoDelay,
             },
         },
         time::TimeVal,
     },
-    unistd::{close, read},
+    unistd::{close, read, write},
 };
 
 mod multicast;
@@ -2652,5 +2654,578 @@ fn tcp_close_write_shutdown_both() {
     assert_eq!(
         shutdown(sock1.as_raw_fd(), Shutdown::Both),
         Err(Errno::ENOTCONN)
+    );
+}
+
+#[test]
+fn tcp_connect_several_times() {
+    let server1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let server2 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    listen(&server1, Backlog::MAXCONN).unwrap();
+    let addr1 = getsockname::<SockaddrIn>(server1.as_raw_fd()).unwrap();
+    listen(&server2, Backlog::MAXCONN).unwrap();
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr1),
+        Err(Errno::EINPROGRESS)
+    );
+    let _client2 = accept(server1.as_raw_fd()).unwrap();
+    drop(server1);
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Ok(()));
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+}
+
+#[test]
+fn tcp_connect_several_times2() {
+    let server1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let server2 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    listen(&server1, Backlog::MAXCONN).unwrap();
+    let addr1 = getsockname::<SockaddrIn>(server1.as_raw_fd()).unwrap();
+    listen(&server2, Backlog::MAXCONN).unwrap();
+    let addr2 = getsockname::<SockaddrIn>(server2.as_raw_fd()).unwrap();
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &addr1),
+        Err(Errno::EINPROGRESS)
+    );
+    let _client2 = accept(server1.as_raw_fd()).unwrap();
+    drop(server1);
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr2), Ok(()));
+
+    let peername = getpeername::<SockaddrIn>(client1.as_raw_fd()).unwrap();
+    assert_eq!(peername.port(), addr1.port());
+
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+    assert_eq!(connect(client1.as_raw_fd(), &addr1), Err(Errno::EISCONN));
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &SockaddrIn::new(127, 44, 55, 66, 1)),
+        Err(Errno::EISCONN)
+    );
+
+    assert_eq!(
+        connect(server2.as_raw_fd(), &SockaddrIn::new(127, 44, 55, 66, 1)),
+        Err(Errno::EISCONN)
+    );
+}
+
+#[test]
+fn tcp_connect_nonblock_full_queue() {
+    let server = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    listen(&server, Backlog::new(1).unwrap()).unwrap();
+    let sockname = getsockname::<SockaddrIn>(server.as_raw_fd()).unwrap();
+
+    let client1 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client2 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client3 = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        connect(client1.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+    assert_eq!(
+        connect(client2.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+    assert_eq!(
+        connect(client3.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+
+    assert_eq!(connect(client1.as_raw_fd(), &sockname), Ok(()));
+    assert_eq!(connect(client2.as_raw_fd(), &sockname), Ok(()));
+    assert_eq!(
+        connect(client3.as_raw_fd(), &sockname),
+        Err(Errno::EALREADY)
+    );
+}
+
+#[test]
+fn tcp_connect_nonblock_nonexist() {
+    let sockname = SockaddrIn::new(127, 55, 66, 77, 9999);
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+}
+
+#[test]
+fn tcp_connect_nonblock_nonexist_epoll_getsockopt_connect() {
+    let sockname = SockaddrIn::new(127, 55, 66, 77, 9999);
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    epoll
+        .add(
+            &client,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLPRI
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut event = EpollEvent::empty();
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(
+            EpollFlags::EPOLLIN
+                | EpollFlags::EPOLLOUT
+                | EpollFlags::EPOLLERR
+                | EpollFlags::EPOLLHUP,
+            1
+        )
+    );
+
+    let value = getsockopt(&client, SocketError).unwrap();
+    assert_eq!(value, Errno::ECONNREFUSED as i32);
+    let value = getsockopt(&client, SocketError).unwrap();
+    assert_eq!(value, 0);
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(
+            EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP,
+            1
+        )
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::ECONNABORTED)
+    );
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP, 1)
+    );
+}
+
+#[test]
+fn tcp_connect_nonblock_nonexist_epoll_connect_getsockopt() {
+    let sockname = SockaddrIn::new(127, 55, 66, 77, 9999);
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    epoll
+        .add(
+            &client,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLPRI
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut event = EpollEvent::empty();
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(
+            EpollFlags::EPOLLIN
+                | EpollFlags::EPOLLOUT
+                | EpollFlags::EPOLLERR
+                | EpollFlags::EPOLLHUP,
+            1
+        )
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP, 1)
+    );
+
+    let value = getsockopt(&client, SocketError).unwrap();
+    assert_eq!(value, 0);
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP, 1)
+    );
+}
+
+#[test]
+fn tcp_connect_nonblock_nonexist_epoll() {
+    let sockname = SockaddrIn::new(127, 55, 66, 77, 9999);
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    epoll
+        .add(
+            &client,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLPRI
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut event = EpollEvent::empty();
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(
+            EpollFlags::EPOLLIN
+                | EpollFlags::EPOLLOUT
+                | EpollFlags::EPOLLERR
+                | EpollFlags::EPOLLHUP,
+            1
+        )
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP, 1)
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+}
+
+#[test]
+fn tcp_connect_block_nonexist_write() {
+    let sockname = SockaddrIn::new(127, 55, 66, 77, 9999);
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+
+    let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).unwrap();
+    epoll
+        .add(
+            &client,
+            EpollEvent::new(
+                EpollFlags::EPOLLIN
+                    | EpollFlags::EPOLLPRI
+                    | EpollFlags::EPOLLOUT
+                    | EpollFlags::EPOLLERR
+                    | EpollFlags::EPOLLHUP
+                    | EpollFlags::EPOLLET,
+                1,
+            ),
+        )
+        .unwrap();
+
+    let mut event = EpollEvent::empty();
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP, 1)
+    );
+
+    assert_eq!(write(&client, b"A"), Err(Errno::EPIPE));
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 0);
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::ECONNREFUSED)
+    );
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(
+        event,
+        EpollEvent::new(EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP, 1)
+    );
+
+    assert_eq!(write(&client, b"A"), Err(Errno::EPIPE));
+
+    let n = epoll
+        .wait(std::slice::from_mut(&mut event), PollTimeout::ZERO)
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn tcp_connect_nonblock_poll() {
+    let server = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+    listen(&server, Backlog::new(1).unwrap()).unwrap();
+    let sockname = getsockname::<SockaddrIn>(server.as_raw_fd()).unwrap();
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+    assert_eq!(connect(client.as_raw_fd(), &sockname), Ok(()));
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+
+    let mut poll_fd = PollFd::new(client.as_fd(), PollFlags::POLLIN | PollFlags::POLLOUT);
+    assert_eq!(
+        poll(slice::from_mut(&mut poll_fd), PollTimeout::ZERO),
+        Ok(1)
+    );
+    assert_eq!(
+        poll_fd.revents(),
+        Some(PollFlags::POLLOUT | PollFlags::POLLHUP)
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+
+    assert_eq!(
+        poll(slice::from_mut(&mut poll_fd), PollTimeout::ZERO),
+        Ok(1)
+    );
+    assert_eq!(poll_fd.revents(), Some(PollFlags::POLLOUT));
+
+    accept(server.as_raw_fd()).unwrap();
+
+    assert_eq!(
+        poll(slice::from_mut(&mut poll_fd), PollTimeout::ZERO),
+        Ok(1)
+    );
+    assert_eq!(poll_fd.revents(), Some(PollFlags::POLLOUT));
+
+    let _pair = accept(server.as_raw_fd()).unwrap();
+
+    assert_eq!(
+        poll(slice::from_mut(&mut poll_fd), PollTimeout::ZERO),
+        Ok(1)
+    );
+    assert_eq!(poll_fd.revents(), Some(PollFlags::POLLOUT));
+}
+
+#[test]
+fn tcp_connect_nonexisting_nonblock_poll() {
+    let sockname = SockaddrIn::new(127, 55, 66, 77, 9999);
+
+    let client = socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+
+    let mut poll_fd = PollFd::new(client.as_fd(), PollFlags::POLLIN | PollFlags::POLLOUT);
+    assert_eq!(
+        poll(slice::from_mut(&mut poll_fd), PollTimeout::ZERO),
+        Ok(1)
+    );
+    assert_eq!(
+        poll_fd.revents(),
+        Some(PollFlags::POLLOUT | PollFlags::POLLHUP)
+    );
+
+    assert_eq!(
+        connect(client.as_raw_fd(), &sockname),
+        Err(Errno::EINPROGRESS)
+    );
+
+    assert_eq!(
+        poll(slice::from_mut(&mut poll_fd), PollTimeout::ZERO),
+        Ok(1)
+    );
+    assert_eq!(
+        poll_fd.revents(),
+        Some(PollFlags::POLLIN | PollFlags::POLLOUT | PollFlags::POLLERR | PollFlags::POLLHUP)
     );
 }

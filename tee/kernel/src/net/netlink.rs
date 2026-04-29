@@ -27,9 +27,9 @@ use crate::{
         process::limits::CurrentNoFileLimit,
         syscall::{
             args::{
-                FileMode, FileType, FileTypeAndMode, MsgHdr, OpenFlags, Pointer, RecvMsgFlags,
-                SentToFlags, SocketAddr, SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat,
-                Timespec,
+                FileMode, FileType, FileTypeAndMode, MsgHdr, MsgHdrFlags, OpenFlags, Pointer,
+                RecvFromFlags, RecvMsgFlags, SendMsgFlags, SentToFlags, SocketAddr,
+                SocketAddrNetlink, SocketType, SocketTypeWithFlags, Stat, Timespec,
                 pointee::{Pointee, PrimitivePointee},
             },
             traits::Abi,
@@ -38,6 +38,7 @@ use crate::{
     },
 };
 
+mod kobject_uevent;
 mod route;
 
 pub use route::{lo_interface_flags, lo_mtu};
@@ -52,6 +53,7 @@ pub struct NetlinkSocket {
 }
 
 struct NetlinkSocketInternal {
+    passcred: bool, // TODO: Actually implement this.
     groups: NetlinkGroups,
     pktinfo: bool,
     ext_ack: bool,
@@ -76,6 +78,7 @@ impl NetlinkSocket {
             flags: socket_type.flags,
             family,
             internal: Mutex::new(NetlinkSocketInternal {
+                passcred: false,
                 groups: NetlinkGroups::empty(),
                 pktinfo: false,
                 ext_ack: false,
@@ -111,6 +114,9 @@ impl OpenFileDescription for NetlinkSocket {
             let (kernel_tx, user_rx) = mpmc::new::<Vec<u8>>();
             match self.family {
                 NetlinkFamily::Route => rt::spawn(route::handle(addr.pid, kernel_tx, kernel_rx)),
+                NetlinkFamily::KobjectUevent => {
+                    rt::spawn(kobject_uevent::handle(addr.pid, kernel_tx, kernel_rx))
+                }
             }
 
             Connection {
@@ -158,6 +164,13 @@ impl OpenFileDescription for NetlinkSocket {
     ) -> Result<()> {
         let mut guard = self.internal.lock();
         match (level, optname) {
+            (1, 16) => {
+                // SO_PASSCRED
+                ensure!(optlen == 4, Inval);
+                let passcred = virtual_memory.read(optval.cast::<u32>())? != 0;
+                guard.passcred = passcred;
+                Ok(())
+            }
             (270, 1) => {
                 // NETLINK_ADD_MEMBERSHIP
                 ensure!(optlen == 4, Inval);
@@ -224,6 +237,59 @@ impl OpenFileDescription for NetlinkSocket {
         Ok(len)
     }
 
+    fn send_msg(
+        &self,
+        vm: &VirtualMemory,
+        abi: Abi,
+        msg_hdr: MsgHdr,
+        flags: SendMsgFlags,
+        _: &FileDescriptorTable,
+        ctx: &FileAccessContext,
+    ) -> Result<usize> {
+        assert_eq!(flags, SendMsgFlags::empty());
+        assert_eq!(msg_hdr.flags, MsgHdrFlags::empty());
+        assert_eq!(msg_hdr.controllen, 0);
+
+        let addr = if msg_hdr.namelen != 0 {
+            Some(SocketAddr::read(
+                msg_hdr.name,
+                usize_from(msg_hdr.namelen),
+                vm,
+            )?)
+        } else {
+            None
+        };
+
+        let vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
+        self.send_to(&vectored_buf, SentToFlags::empty(), addr, ctx)
+    }
+
+    fn recv_from(
+        &self,
+        buf: &mut dyn ReadBuf,
+        flags: RecvFromFlags,
+    ) -> Result<(usize, Option<SocketAddr>)> {
+        let connection = self.connection.get().ok_or(err!(NotConn))?;
+        let buffer = if flags.contains(RecvFromFlags::PEEK) {
+            connection.rx.peek()
+        } else {
+            connection.rx.try_recv()
+        };
+        let buffer = buffer.ok_or(err!(Again))?;
+
+        let len = buffer.len();
+        let written = cmp::min(len, buf.buffer_len());
+        buf.write(0, &buffer[..written])?;
+
+        let len = if flags.contains(RecvFromFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
+
+        Ok((len, Some(SocketAddr::Netlink(SocketAddrNetlink::default()))))
+    }
+
     fn recv_msg(
         &self,
         vm: &VirtualMemory,
@@ -247,9 +313,12 @@ impl OpenFileDescription for NetlinkSocket {
         }
 
         let mut vectored_buf = VectoredUserBuf::new(vm, msg_hdr.iov, msg_hdr.iovlen, abi)?;
-        let len = cmp::min(buffer.len(), ReadBuf::buffer_len(&vectored_buf));
-        let buffer = &buffer[..len];
+        let len = buffer.len();
+        let written = cmp::min(len, ReadBuf::buffer_len(&vectored_buf));
+        let buffer = &buffer[..written];
         vectored_buf.write(0, buffer)?;
+
+        msg_hdr.flags.set(MsgHdrFlags::TRUNC, written < len);
 
         let mut cmsg_builder = CMsgBuilder::new(abi, vm, msg_hdr);
         let pktinfo = self.internal.lock().pktinfo;
@@ -258,6 +327,11 @@ impl OpenFileDescription for NetlinkSocket {
         }
         drop(cmsg_builder);
 
+        let len = if flags.contains(RecvMsgFlags::TRUNC) {
+            len
+        } else {
+            written
+        };
         Ok(len)
     }
 
@@ -350,6 +424,7 @@ impl EpollReady for NetlinkSocket {
 
 enum NetlinkFamily {
     Route = 0,
+    KobjectUevent = 15,
 }
 
 impl TryFrom<i32> for NetlinkFamily {
@@ -357,7 +432,8 @@ impl TryFrom<i32> for NetlinkFamily {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         Ok(match value {
-            0 => NetlinkFamily::Route,
+            0 => Self::Route,
+            15 => Self::KobjectUevent,
             _ => bail!(Inval),
         })
     }

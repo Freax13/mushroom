@@ -33,7 +33,9 @@ use crate::{
         memory::{SIGRETURN_TRAMPOLINE_AMD64, SIGRETURN_TRAMPOLINE_I386, VirtualMemory},
         syscall::{
             SysRestartSyscall,
-            args::{Pointer, UserDesc, UserDescFlags, pointee::SizedPointee},
+            args::{
+                Pointer, UserDesc, UserDescFlags, UserRegs32, UserRegs64, pointee::SizedPointee,
+            },
             traits::{Abi, Syscall, SyscallArgs, SyscallResult},
         },
         thread::{
@@ -102,6 +104,9 @@ impl CpuState {
         self.xsave_area.load();
 
         per_cpu.exit_with_sysret.set(self.last_exit_was_syscall);
+        per_cpu
+            .restore_fs_gs_base
+            .set(self.abi_from_cs() == Abi::Amd64);
 
         virtual_memory.run_with(|| unsafe { enter_userspace() });
 
@@ -260,8 +265,20 @@ impl CpuState {
         self.registers.rip
     }
 
+    pub fn fs_base(&self) -> u64 {
+        self.registers.fs_base
+    }
+
     pub fn set_fs_base(&mut self, tls: u64) {
         self.registers.fs_base = tls;
+    }
+
+    pub fn gs_base(&self) -> u64 {
+        self.registers.gs_base
+    }
+
+    pub fn set_gs_base(&mut self, tls: u64) {
+        self.registers.gs_base = tls;
     }
 
     pub fn add_user_desc(&mut self, u_info: UserDesc) -> Result<Option<u16>> {
@@ -396,6 +413,7 @@ impl CpuState {
 
         if !stack.flags.contains(StackFlags::DISABLE)
             && sigaction.sa_flags.contains(SigactionFlags::ONSTACK)
+            && !stack.is_on_stack(self.registers.rsp)
         {
             self.registers.rsp = stack.sp + stack.size;
         } else {
@@ -576,6 +594,64 @@ impl CpuState {
         Ok((ucontext.stack, ucontext.sigmask))
     }
 
+    pub fn regs32(&self) -> UserRegs32 {
+        UserRegs32 {
+            bx: self.registers.rbx as u32,
+            cx: self.registers.rcx as u32,
+            dx: self.registers.rdx as u32,
+            si: self.registers.rsi as u32,
+            di: self.registers.rdi as u32,
+            bp: self.registers.rbp as u32,
+            ax: self.registers.rax as u32,
+            ds: u32::from(self.registers.ds),
+            es: u32::from(self.registers.es),
+            fs: u32::from(self.registers.fs),
+            gs: u32::from(self.registers.gs),
+            orig_ax: self.registers.rax as u32, // TODO
+            ip: self.registers.rip as u32,
+            cs: u32::from(self.registers.cs),
+            flags: self.registers.rflags as u32,
+            sp: self.registers.rsp as u32,
+            ss: u32::from(self.registers.ss),
+        }
+    }
+
+    pub fn regs64(&self) -> UserRegs64 {
+        UserRegs64 {
+            r15: self.registers.r15,
+            r14: self.registers.r14,
+            r13: self.registers.r13,
+            r12: self.registers.r12,
+            bp: self.registers.rbp,
+            bx: self.registers.rbx,
+            r11: self.registers.r11,
+            r10: self.registers.r10,
+            r9: self.registers.r9,
+            r8: self.registers.r8,
+            ax: self.registers.rax,
+            cx: self.registers.rcx,
+            dx: self.registers.rdx,
+            si: self.registers.rsi,
+            di: self.registers.rdi,
+            orig_ax: self.registers.rax, // TODO
+            ip: self.registers.rip,
+            cs: u64::from(self.registers.cs),
+            flags: self.registers.rflags,
+            sp: self.registers.rsp,
+            ss: u64::from(self.registers.ss),
+            fs_base: self.registers.fs_base,
+            gs_base: self.registers.gs_base,
+            ds: u64::from(self.registers.ds),
+            es: u64::from(self.registers.es),
+            fs: u64::from(self.registers.fs),
+            gs: u64::from(self.registers.gs),
+        }
+    }
+
+    pub fn fpregs(&self) -> &[u8] {
+        &self.xsave_area.data[..512]
+    }
+
     #[cfg(not(feature = "harden"))]
     pub fn last_exit(&self) -> Option<Exit> {
         self.last_exit
@@ -603,6 +679,7 @@ pub struct Registers {
     pub rip: u64,
     pub rflags: u64,
     pub fs_base: u64,
+    pub gs_base: u64,
     pub cs: u16,
     pub ds: u16,
     pub es: u16,
@@ -632,6 +709,7 @@ impl Registers {
         rip: 0,
         rflags: 0,
         fs_base: 0,
+        gs_base: 0,
         cs: 0,
         ds: 0,
         es: 0,
@@ -874,9 +952,18 @@ global_asm!(
     "swapgs",
     "mov gs, ax",
     "swapgs",
-    // Restore FS base.
+
+    // Optionally restore FS and GS base.
+    "cmp byte ptr gs:[{RESTORE_FS_GS_BASE_OFFSET}], 0",
+    "je 64f",
+    "mov rax, gs:[{U_GS_BASE_OFFSET}]",
+    "swapgs",
+    "wrgsbase rax",
+    "swapgs",
     "mov rax, gs:[{U_FS_BASE_OFFSET}]",
     "wrfsbase rax",
+    "64:",
+
     // Restore userspace registers.
     "mov rax, gs:[{U_RAX_OFFSET}]",
     "mov rbx, gs:[{U_RBX_OFFSET}]",
@@ -980,6 +1067,11 @@ global_asm!(
     // Save FS base.
     "rdfsbase rax",
     "mov gs:[{U_FS_BASE_OFFSET}], rax",
+    // Save GS base.
+    "swapgs",
+    "rdgsbase rax",
+    "swapgs",
+    "mov gs:[{U_GS_BASE_OFFSET}], rax",
     // Save registers.
     "mov gs:[{U_RBX_OFFSET}], rbx",
     "mov gs:[{U_RCX_OFFSET}], rcx",
@@ -1012,6 +1104,7 @@ global_asm!(
     "ret",
 
     EXIT_WITH_SYSRET_OFFSET = const offset_of!(PerCpu, exit_with_sysret),
+    RESTORE_FS_GS_BASE_OFFSET = const offset_of!(PerCpu, restore_fs_gs_base),
     EXIT_OFFSET = const offset_of!(PerCpu, exit),
     EXIT_SYSCALL = const RawExit::Syscall as u8,
     EXIT_EXCP = const RawExit::Exception as u8,
@@ -1047,5 +1140,6 @@ global_asm!(
     U_FS_OFFSET = const userspace_reg_offset!(fs),
     U_FS_BASE_OFFSET = const userspace_reg_offset!(fs_base),
     U_GS_OFFSET = const userspace_reg_offset!(gs),
+    U_GS_BASE_OFFSET = const userspace_reg_offset!(gs_base),
     U_SS_OFFSET = const userspace_reg_offset!(ss),
 );

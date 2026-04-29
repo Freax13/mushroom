@@ -139,6 +139,7 @@ impl VirtualMemory {
         let bias = Bias::Dynamic {
             abi: E::ABI,
             map_32bit: false,
+            hint: None,
         };
         let stack =
             self.modify()

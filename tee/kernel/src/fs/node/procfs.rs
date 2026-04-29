@@ -255,9 +255,9 @@ impl Directory for ProcFsRoot {
             _ => {
                 let bytes = file_name.as_bytes();
                 let str = core::str::from_utf8(bytes).map_err(|_| err!(NoEnt))?;
-                let pid = str.parse().map_err(|_| err!(NoEnt))?;
-                let process = Process::find_by_pid(pid).ok_or(err!(NoEnt))?;
-                ProcessDir::new(location.clone(), self.fs.clone(), Arc::downgrade(&process))
+                let tid = str.parse().map_err(|_| err!(NoEnt))?;
+                let thread = Thread::find_by_tid(tid).ok_or(err!(NoEnt))?;
+                ProcessDir::new(location.clone(), self.fs.clone(), Arc::downgrade(&thread))
             }
         };
         Ok(Link { location, node })
@@ -401,17 +401,19 @@ impl Directory for ProcFsRoot {
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"uptime").unwrap()),
         });
-        entries.extend(Process::all().map(|process| {
-            DirEntry {
-                ino: process.inos.root_dir,
-                ty: FileType::Dir,
-                name: DirEntryName::FileName(
-                    FileName::new(process.pid().to_string().as_bytes())
-                        .unwrap()
-                        .into_owned(),
-                ),
-            }
-        }));
+        entries.extend(
+            Process::all()
+                .filter_map(|process| process.thread_group_leader().upgrade())
+                .map(|thread| DirEntry {
+                    ino: thread.inos.root_dir,
+                    ty: FileType::Dir,
+                    name: DirEntryName::FileName(
+                        FileName::new(thread.tid().to_string().as_bytes())
+                            .unwrap()
+                            .into_owned(),
+                    ),
+                }),
+        );
         Ok(entries)
     }
 
@@ -1421,6 +1423,7 @@ impl INode for SelfLink {
         ctx.follow_symlink()?;
         let process = ctx.process().ok_or(err!(Srch))?;
         let pid = process.pid().to_string();
+        let thread = process.thread_group_leader();
         let file_name = FileName::new(pid.as_bytes()).unwrap().into_owned();
         let path = Path::new(pid.into_bytes()).unwrap();
         let location = LinkLocation::new(self.parent.upgrade().unwrap(), file_name.clone());
@@ -1428,7 +1431,7 @@ impl INode for SelfLink {
             Ok(path),
             Ok(Link {
                 location: location.clone(),
-                node: ProcessDir::new(location, self.fs.clone(), Arc::downgrade(process)),
+                node: ProcessDir::new(location, self.fs.clone(), thread),
             }),
         )))
     }
@@ -1448,50 +1451,11 @@ impl INode for SelfLink {
     }
 }
 
-pub struct ProcessInos {
-    root_dir: u64,
-    auxv_file: u64,
-    cmdline_file: u64,
-    environ_file: u64,
-    fd_dir: u64,
-    fdinfo_dir: u64,
-    exe_link: u64,
-    maps_file: u64,
-    mem_file: u64,
-    mountinfo_file: u64,
-    root_symlink: u64,
-    stat_file: u64,
-    status_file: u64,
-    task_dir: u64,
-}
-
-impl ProcessInos {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Self {
-            root_dir: new_ino(),
-            auxv_file: new_ino(),
-            cmdline_file: new_ino(),
-            environ_file: new_ino(),
-            fd_dir: new_ino(),
-            fdinfo_dir: new_ino(),
-            exe_link: new_ino(),
-            maps_file: new_ino(),
-            mem_file: new_ino(),
-            mountinfo_file: new_ino(),
-            root_symlink: new_ino(),
-            stat_file: new_ino(),
-            status_file: new_ino(),
-            task_dir: new_ino(),
-        }
-    }
-}
-
 struct ProcessDir {
     this: Weak<Self>,
     location: LinkLocation,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: LazyBsdFileLockRecord,
     watchers: Watchers,
     auxv_bsd_file_lock_record: LazyBsdFileLockRecord,
@@ -1531,12 +1495,12 @@ struct ProcessDir {
 }
 
 impl ProcessDir {
-    pub fn new(location: LinkLocation, fs: Arc<ProcFs>, process: Weak<Process>) -> Arc<Self> {
+    pub fn new(location: LinkLocation, fs: Arc<ProcFs>, thread: Weak<Thread>) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             location,
             fs,
-            process,
+            thread,
             bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             watchers: Watchers::new(),
             auxv_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
@@ -1581,10 +1545,10 @@ impl INode for ProcessDir {
     dir_impls!();
 
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.root_dir,
+            ino: thread.inos.root_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
             uid: Uid::SUPER_USER,
@@ -1642,21 +1606,21 @@ impl Directory for ProcessDir {
         let node: DynINode = match file_name.as_bytes() {
             b"auxv" => AuxvFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.auxv_bsd_file_lock_record.get().clone(),
                 self.auxv_unix_file_lock_record.get().clone(),
                 self.auxv_file_watchers.clone(),
             ),
             b"cmdline" => CmdlineFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.cmdline_bsd_file_lock_record.get().clone(),
                 self.cmdline_unix_file_lock_record.get().clone(),
                 self.cmdline_file_watchers.clone(),
             ),
             b"environ" => EnvironFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.environ_bsd_file_lock_record.get().clone(),
                 self.environ_unix_file_lock_record.get().clone(),
                 self.environ_file_watchers.clone(),
@@ -1664,60 +1628,60 @@ impl Directory for ProcessDir {
             b"fd" => FdDir::new(
                 location.clone(),
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.fd_dir_bsd_file_lock_record.get().clone(),
                 self.fd_dir_file_watchers.clone(),
             ),
             b"fdinfo" => FdInfoDir::new(
                 location.clone(),
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.fdinfo_dir_bsd_file_lock_record.get().clone(),
                 self.fdinfo_dir_file_watchers.clone(),
             ),
             b"exe" => ExeLink::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.exe_link_lock_record.get().clone(),
                 self.exe_link_watchers.clone(),
             ),
             b"maps" => MapsFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.maps_bsd_file_lock_record.get().clone(),
                 self.maps_unix_file_lock_record.get().clone(),
                 self.maps_file_watchers.clone(),
             ),
             b"mem" => MemFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.mem_bsd_file_lock_record.get().clone(),
                 self.mem_unix_file_lock_record.get().clone(),
                 self.mem_file_watchers.clone(),
             ),
             b"mountinfo" => MountInfoFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.mountinfo_bsd_file_lock_record.get().clone(),
                 self.mountinfo_unix_file_lock_record.get().clone(),
                 self.mountinfo_file_watchers.clone(),
             ),
             b"root" => RootLink::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.root_bsd_file_lock_record.get().clone(),
                 self.root_file_watchers.clone(),
             ),
             b"stat" => ProcessStatFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.stat_bsd_file_lock_record.get().clone(),
                 self.stat_unix_file_lock_record.get().clone(),
                 self.stat_file_watchers.clone(),
             ),
             b"status" => ProcessStatusFile::new(
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.status_bsd_file_lock_record.get().clone(),
                 self.status_unix_file_lock_record.get().clone(),
                 self.status_file_watchers.clone(),
@@ -1725,7 +1689,7 @@ impl Directory for ProcessDir {
             b"task" => ProcessTaskDir::new(
                 location.clone(),
                 self.fs.clone(),
-                self.process.clone(),
+                self.thread.clone(),
                 self.task_dir_bsd_lock_record.get().clone(),
                 self.task_dir_watchers.clone(),
             ),
@@ -1818,9 +1782,9 @@ impl Directory for ProcessDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let mut entries = vec![DirEntry {
-            ino: process.inos.root_dir,
+            ino: thread.inos.root_dir,
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
@@ -1834,67 +1798,67 @@ impl Directory for ProcessDir {
             });
         }
         entries.push(DirEntry {
-            ino: process.inos.auxv_file,
+            ino: thread.inos.auxv_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"auxv").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.cmdline_file,
+            ino: thread.inos.cmdline_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"cmdline").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.environ_file,
+            ino: thread.inos.environ_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"environ").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.fd_dir,
+            ino: thread.inos.fd_dir,
             ty: FileType::Dir,
             name: DirEntryName::FileName(FileName::new(b"fd").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.fdinfo_dir,
+            ino: thread.inos.fdinfo_dir,
             ty: FileType::Dir,
             name: DirEntryName::FileName(FileName::new(b"fdinfo").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.exe_link,
+            ino: thread.inos.exe_link,
             ty: FileType::Link,
             name: DirEntryName::FileName(FileName::new(b"exe").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.maps_file,
+            ino: thread.inos.maps_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"maps").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.mem_file,
+            ino: thread.inos.mem_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"mem").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.mountinfo_file,
+            ino: thread.inos.mountinfo_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"mountinfo").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.root_symlink,
+            ino: thread.inos.root_symlink,
             ty: FileType::Link,
             name: DirEntryName::FileName(FileName::new(b"root").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.stat_file,
+            ino: thread.inos.stat_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.status_file,
+            ino: thread.inos.status_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"status").unwrap()),
         });
         entries.push(DirEntry {
-            ino: process.inos.task_dir,
+            ino: thread.inos.task_dir,
             ty: FileType::Dir,
             name: DirEntryName::FileName(FileName::new(b"task").unwrap()),
         });
@@ -1946,7 +1910,7 @@ impl Directory for ProcessDir {
 struct AuxvFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -1955,7 +1919,7 @@ struct AuxvFile {
 impl AuxvFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -1963,7 +1927,7 @@ impl AuxvFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -1973,14 +1937,15 @@ impl AuxvFile {
 
 impl INode for AuxvFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let size = process
             .mm_auxv_end()
             .as_u64()
             .saturating_sub(process.mm_auxv_start().as_u64()) as i64;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.cmdline_file,
+            ino: thread.inos.auxv_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -2037,8 +2002,8 @@ impl File for AuxvFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let virtual_memory = thread.lock().virtual_memory().clone();
 
         // Add the auxv start to the offset.
@@ -2095,7 +2060,7 @@ impl File for AuxvFile {
 struct CmdlineFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -2104,7 +2069,7 @@ struct CmdlineFile {
 impl CmdlineFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -2112,7 +2077,7 @@ impl CmdlineFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -2122,14 +2087,15 @@ impl CmdlineFile {
 
 impl INode for CmdlineFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let size = process
             .mm_arg_end()
             .as_u64()
             .saturating_sub(process.mm_arg_start().as_u64()) as i64;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.cmdline_file,
+            ino: thread.inos.cmdline_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -2186,8 +2152,8 @@ impl File for CmdlineFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let virtual_memory = thread.lock().virtual_memory().clone();
 
         // Add the arg start to the offset.
@@ -2244,7 +2210,7 @@ impl File for CmdlineFile {
 struct EnvironFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -2253,7 +2219,7 @@ struct EnvironFile {
 impl EnvironFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -2261,7 +2227,7 @@ impl EnvironFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -2271,14 +2237,15 @@ impl EnvironFile {
 
 impl INode for EnvironFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let size = process
             .mm_env_end()
             .as_u64()
             .saturating_sub(process.mm_env_start().as_u64()) as i64;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.environ_file,
+            ino: thread.inos.environ_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -2335,8 +2302,8 @@ impl File for EnvironFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let virtual_memory = thread.lock().virtual_memory().clone();
 
         // Add the env start to the offset.
@@ -2394,7 +2361,7 @@ struct FdDir {
     this: Weak<Self>,
     location: LinkLocation,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
@@ -2403,7 +2370,7 @@ impl FdDir {
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
@@ -2411,7 +2378,7 @@ impl FdDir {
             this: this.clone(),
             location,
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             watchers,
         })
@@ -2422,10 +2389,10 @@ impl INode for FdDir {
     dir_impls!();
 
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.fd_dir,
+            ino: thread.inos.fd_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
             uid: Uid::SUPER_USER,
@@ -2483,13 +2450,14 @@ impl Directory for FdDir {
         let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
         let fd_num = FdNum::new(fd_num);
 
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
+
         let guard = process.credentials.read();
         let uid = guard.real_user_id;
         let gid = guard.real_group_id;
         drop(guard);
 
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
         let node = fdtable.get_node(self.fs.clone(), fd_num, uid, gid)?;
         Ok(Link {
@@ -2582,8 +2550,7 @@ impl Directory for FdDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
         Ok(fdtable.list_entries())
     }
@@ -2633,8 +2600,7 @@ impl Directory for FdDir {
         let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
         let fd_num = FdNum::new(fd_num);
 
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let guard = thread.fdtable.lock();
         let fd = guard.get(fd_num)?;
         drop(guard);
@@ -2884,7 +2850,7 @@ struct FdInfoDir {
     this: Weak<Self>,
     location: LinkLocation,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
@@ -2893,7 +2859,7 @@ impl FdInfoDir {
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
@@ -2901,7 +2867,7 @@ impl FdInfoDir {
             this: this.clone(),
             location,
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             watchers,
         })
@@ -2912,10 +2878,10 @@ impl INode for FdInfoDir {
     dir_impls!();
 
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.fdinfo_dir,
+            ino: thread.inos.fdinfo_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
             uid: Uid::SUPER_USER,
@@ -2973,13 +2939,13 @@ impl Directory for FdInfoDir {
         let fd_num = file_name.parse().map_err(|_| err!(NoEnt))?;
         let fd_num = FdNum::new(fd_num);
 
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let guard = process.credentials.read();
         let uid = guard.real_user_id;
         let gid = guard.real_group_id;
         drop(guard);
 
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
         let node = fdtable.get_info_node(self.fs.clone(), fd_num, uid, gid)?;
         Ok(Link {
@@ -3072,8 +3038,7 @@ impl Directory for FdInfoDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let fdtable = thread.fdtable.lock();
         Ok(fdtable.list_fdinfo_entries())
     }
@@ -3278,7 +3243,7 @@ impl File for FdInfoFile {
 
 struct ExeLink {
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
@@ -3286,13 +3251,13 @@ struct ExeLink {
 impl ExeLink {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             watchers,
         })
@@ -3301,10 +3266,10 @@ impl ExeLink {
 
 impl INode for ExeLink {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.exe_link,
+            ino: thread.inos.exe_link,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
             uid: Uid::SUPER_USER,
@@ -3347,7 +3312,8 @@ impl INode for ExeLink {
     }
 
     fn read_link(&self, _ctx: &FileAccessContext) -> Result<Path> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let exe = process.exe();
         exe.location.path()
     }
@@ -3359,7 +3325,8 @@ impl INode for ExeLink {
         ctx: &mut FileAccessContext,
     ) -> Result<Option<(Result<Path>, Result<Link>)>> {
         ctx.follow_symlink()?;
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let exe = process.exe();
         Ok(Some((exe.location.path(), Ok(exe))))
     }
@@ -3376,7 +3343,7 @@ impl INode for ExeLink {
 struct MapsFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -3385,7 +3352,7 @@ struct MapsFile {
 impl MapsFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -3393,7 +3360,7 @@ impl MapsFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -3403,10 +3370,10 @@ impl MapsFile {
 
 impl INode for MapsFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.maps_file,
+            ino: thread.inos.maps_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -3463,8 +3430,7 @@ impl File for MapsFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let maps = thread.lock().virtual_memory().maps();
         let offset = cmp::min(offset, maps.len());
         let maps = &maps[offset..];
@@ -3507,7 +3473,7 @@ impl File for MapsFile {
 struct MemFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -3516,7 +3482,7 @@ struct MemFile {
 impl MemFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -3524,7 +3490,7 @@ impl MemFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -3534,10 +3500,10 @@ impl MemFile {
 
 impl INode for MemFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.mem_file,
+            ino: thread.inos.mem_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o666)),
             uid: Uid::SUPER_USER,
@@ -3594,8 +3560,7 @@ impl File for MemFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let virtual_memory = thread.lock().virtual_memory().clone();
 
         let mut buffer = MaybeUninit::<[u8; 4096]>::uninit();
@@ -3612,8 +3577,7 @@ impl File for MemFile {
     }
 
     fn write(&self, offset: usize, buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let virtual_memory = thread.lock().virtual_memory().clone();
 
         let mut buffer = [0; 4096];
@@ -3658,7 +3622,7 @@ impl File for MemFile {
 struct MountInfoFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -3667,7 +3631,7 @@ struct MountInfoFile {
 impl MountInfoFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -3675,7 +3639,7 @@ impl MountInfoFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -3698,10 +3662,10 @@ impl MountInfoFile {
 
 impl INode for MountInfoFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.mountinfo_file,
+            ino: thread.inos.mountinfo_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -3799,7 +3763,7 @@ impl File for MountInfoFile {
 
 struct RootLink {
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
@@ -3807,13 +3771,13 @@ struct RootLink {
 impl RootLink {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             watchers,
         })
@@ -3822,10 +3786,10 @@ impl RootLink {
 
 impl INode for RootLink {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.root_symlink,
+            ino: thread.inos.root_symlink,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Link, FileMode::from_bits_retain(0o777)),
             uid: Uid::SUPER_USER,
@@ -3893,7 +3857,7 @@ impl INode for RootLink {
 struct ProcessStatFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -3902,7 +3866,7 @@ struct ProcessStatFile {
 impl ProcessStatFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -3910,7 +3874,7 @@ impl ProcessStatFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -3920,10 +3884,10 @@ impl ProcessStatFile {
 
 impl INode for ProcessStatFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.stat_file,
+            ino: thread.inos.stat_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -3980,8 +3944,7 @@ impl File for ProcessStatFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let stat = thread.lock().stat();
         let offset = cmp::min(offset, stat.len());
         let stat = &stat[offset..];
@@ -4024,7 +3987,7 @@ impl File for ProcessStatFile {
 struct ProcessStatusFile {
     this: Weak<Self>,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     unix_file_lock_record: Arc<UnixFileLockRecord>,
     watchers: Arc<Watchers>,
@@ -4033,7 +3996,7 @@ struct ProcessStatusFile {
 impl ProcessStatusFile {
     pub fn new(
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         unix_file_lock_record: Arc<UnixFileLockRecord>,
         watchers: Arc<Watchers>,
@@ -4041,7 +4004,7 @@ impl ProcessStatusFile {
         Arc::new_cyclic(|this| Self {
             this: this.clone(),
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             unix_file_lock_record,
             watchers,
@@ -4051,10 +4014,10 @@ impl ProcessStatusFile {
 
 impl INode for ProcessStatusFile {
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.status_file,
+            ino: thread.inos.status_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -4111,8 +4074,7 @@ impl File for ProcessStatusFile {
     }
 
     fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
-        let thread = process.thread_group_leader().upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let stat = thread.lock().status();
         let offset = cmp::min(offset, stat.len());
         let stat = &stat[offset..];
@@ -4154,7 +4116,22 @@ impl File for ProcessStatusFile {
 
 pub struct ThreadInos {
     root_dir: u64,
-    comm_file: u64,
+    environ_file: u64,
+    fd_dir: u64,
+    fdinfo_dir: u64,
+    exe_link: u64,
+    maps_file: u64,
+    mem_file: u64,
+    mountinfo_file: u64,
+    root_symlink: u64,
+    stat_file: u64,
+    status_file: u64,
+    auxv_file: u64,
+    cmdline_file: u64,
+    task_dir: u64,
+    task_entry_dir: u64,
+    task_comm_file: u64,
+    task_stat_file: u64,
 }
 
 impl ThreadInos {
@@ -4162,7 +4139,22 @@ impl ThreadInos {
     pub fn new() -> Self {
         Self {
             root_dir: new_ino(),
-            comm_file: new_ino(),
+            environ_file: new_ino(),
+            fd_dir: new_ino(),
+            fdinfo_dir: new_ino(),
+            exe_link: new_ino(),
+            maps_file: new_ino(),
+            mem_file: new_ino(),
+            mountinfo_file: new_ino(),
+            root_symlink: new_ino(),
+            stat_file: new_ino(),
+            status_file: new_ino(),
+            auxv_file: new_ino(),
+            cmdline_file: new_ino(),
+            task_dir: new_ino(),
+            task_entry_dir: new_ino(),
+            task_comm_file: new_ino(),
+            task_stat_file: new_ino(),
         }
     }
 }
@@ -4171,7 +4163,7 @@ struct ProcessTaskDir {
     this: Weak<Self>,
     location: LinkLocation,
     fs: Arc<ProcFs>,
-    process: Weak<Process>,
+    thread: Weak<Thread>,
     bsd_file_lock_record: Arc<BsdFileLockRecord>,
     watchers: Arc<Watchers>,
 }
@@ -4180,7 +4172,7 @@ impl ProcessTaskDir {
     pub fn new(
         location: LinkLocation,
         fs: Arc<ProcFs>,
-        process: Weak<Process>,
+        thread: Weak<Thread>,
         bsd_file_lock_record: Arc<BsdFileLockRecord>,
         watchers: Arc<Watchers>,
     ) -> Arc<Self> {
@@ -4188,7 +4180,7 @@ impl ProcessTaskDir {
             this: this.clone(),
             location,
             fs,
-            process,
+            thread,
             bsd_file_lock_record,
             watchers,
         })
@@ -4199,10 +4191,10 @@ impl INode for ProcessTaskDir {
     dir_impls!();
 
     fn stat(&self) -> Result<Stat> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: process.inos.task_dir,
+            ino: thread.inos.task_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o555)),
             uid: Uid::SUPER_USER,
@@ -4332,9 +4324,10 @@ impl Directory for ProcessTaskDir {
     }
 
     fn list_entries(&self, _: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let mut entries = vec![DirEntry {
-            ino: process.inos.task_dir,
+            ino: thread.inos.task_dir,
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
@@ -4349,7 +4342,7 @@ impl Directory for ProcessTaskDir {
         }
         for thread in process.threads() {
             entries.push(DirEntry {
-                ino: thread.inos.root_dir,
+                ino: thread.inos.task_entry_dir,
                 ty: FileType::Dir,
                 name: DirEntryName::FileName(
                     FileName::new(thread.tid().to_string().as_bytes())
@@ -4362,7 +4355,8 @@ impl Directory for ProcessTaskDir {
     }
 
     fn get_node(&self, file_name: &FileName, _: &FileAccessContext) -> Result<Link> {
-        let process = self.process.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let process = thread.process();
         let tid = core::str::from_utf8(file_name.as_bytes()).map_err(|_| err!(NoEnt))?;
         let tid = tid.parse::<u32>().map_err(|_| err!(NoEnt))?;
         let thread = process
@@ -4428,6 +4422,9 @@ struct TaskDir {
     comm_bsd_file_lock_record: LazyBsdFileLockRecord,
     comm_unix_file_lock_record: LazyUnixFileLockRecord,
     comm_file_watchers: Arc<Watchers>,
+    stat_bsd_file_lock_record: LazyBsdFileLockRecord,
+    stat_unix_file_lock_record: LazyUnixFileLockRecord,
+    stat_file_watchers: Arc<Watchers>,
 }
 
 impl TaskDir {
@@ -4442,6 +4439,9 @@ impl TaskDir {
             comm_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
             comm_unix_file_lock_record: LazyUnixFileLockRecord::new(),
             comm_file_watchers: Arc::new(Watchers::new()),
+            stat_bsd_file_lock_record: LazyBsdFileLockRecord::new(),
+            stat_unix_file_lock_record: LazyUnixFileLockRecord::new(),
+            stat_file_watchers: Arc::new(Watchers::new()),
         })
     }
 }
@@ -4453,7 +4453,7 @@ impl INode for TaskDir {
         let threads = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: threads.inos.root_dir,
+            ino: threads.inos.task_entry_dir,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::Dir, FileMode::from_bits_retain(0o755)),
             uid: Uid::SUPER_USER,
@@ -4515,6 +4515,13 @@ impl Directory for TaskDir {
                 self.comm_bsd_file_lock_record.get().clone(),
                 self.comm_unix_file_lock_record.get().clone(),
                 self.comm_file_watchers.clone(),
+            ),
+            b"stat" => TaskStatFile::new(
+                self.fs.clone(),
+                self.thread.clone(),
+                self.stat_bsd_file_lock_record.get().clone(),
+                self.stat_unix_file_lock_record.get().clone(),
+                self.stat_file_watchers.clone(),
             ),
             _ => bail!(NoEnt),
         };
@@ -4605,9 +4612,9 @@ impl Directory for TaskDir {
     }
 
     fn list_entries(&self, _ctx: &mut FileAccessContext) -> Result<Vec<DirEntry>> {
-        let process = self.thread.upgrade().ok_or(err!(Srch))?;
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         let mut entries = vec![DirEntry {
-            ino: process.inos.root_dir,
+            ino: thread.inos.task_entry_dir,
             ty: FileType::Dir,
             name: DirEntryName::Dot,
         }];
@@ -4621,9 +4628,14 @@ impl Directory for TaskDir {
             });
         }
         entries.push(DirEntry {
-            ino: process.inos.comm_file,
+            ino: thread.inos.task_comm_file,
             ty: FileType::File,
             name: DirEntryName::FileName(FileName::new(b"comm").unwrap()),
+        });
+        entries.push(DirEntry {
+            ino: thread.inos.task_stat_file,
+            ty: FileType::File,
+            name: DirEntryName::FileName(FileName::new(b"stat").unwrap()),
         });
         Ok(entries)
     }
@@ -4708,7 +4720,7 @@ impl INode for TaskCommFile {
         let thread = self.thread.upgrade().ok_or(err!(Srch))?;
         Ok(Stat {
             dev: self.fs.dev,
-            ino: thread.inos.comm_file,
+            ino: thread.inos.task_comm_file,
             nlink: 1,
             mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
             uid: Uid::SUPER_USER,
@@ -4770,6 +4782,136 @@ impl File for TaskCommFile {
         let content = &content[offset..];
         let len = cmp::min(content.len(), buf.buffer_len());
         buf.write(0, &content[..len])?;
+        Ok(len)
+    }
+
+    fn write(&self, _offset: usize, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<usize> {
+        bail!(Acces)
+    }
+
+    fn append(&self, _buf: &dyn WriteBuf, _: &FileAccessContext) -> Result<(usize, usize)> {
+        bail!(Acces)
+    }
+
+    fn truncate(&self) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn allocate(
+        &self,
+        _mode: FallocateMode,
+        _offset: usize,
+        _len: usize,
+        _: &FileAccessContext,
+    ) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn deleted(&self) -> bool {
+        false
+    }
+
+    fn unix_file_lock_record(&self) -> &Arc<UnixFileLockRecord> {
+        &self.unix_file_lock_record
+    }
+}
+
+struct TaskStatFile {
+    this: Weak<Self>,
+    fs: Arc<ProcFs>,
+    thread: Weak<Thread>,
+    bsd_file_lock_record: Arc<BsdFileLockRecord>,
+    unix_file_lock_record: Arc<UnixFileLockRecord>,
+    watchers: Arc<Watchers>,
+}
+
+impl TaskStatFile {
+    pub fn new(
+        fs: Arc<ProcFs>,
+        thread: Weak<Thread>,
+        bsd_file_lock_record: Arc<BsdFileLockRecord>,
+        unix_file_lock_record: Arc<UnixFileLockRecord>,
+        watchers: Arc<Watchers>,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            fs,
+            thread,
+            bsd_file_lock_record,
+            unix_file_lock_record,
+            watchers,
+        })
+    }
+}
+
+impl INode for TaskStatFile {
+    fn stat(&self) -> Result<Stat> {
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        Ok(Stat {
+            dev: self.fs.dev,
+            ino: thread.inos.task_stat_file,
+            nlink: 1,
+            mode: FileTypeAndMode::new(FileType::File, FileMode::from_bits_retain(0o444)),
+            uid: Uid::SUPER_USER,
+            gid: Gid::SUPER_USER,
+            rdev: 0,
+            size: 0,
+            blksize: 0,
+            blocks: 0,
+            atime: Timespec::ZERO,
+            mtime: Timespec::ZERO,
+            ctime: Timespec::ZERO,
+        })
+    }
+
+    fn fs(&self) -> Result<Arc<dyn FileSystem>> {
+        Ok(self.fs.clone())
+    }
+
+    fn open(
+        &self,
+        location: LinkLocation,
+        flags: OpenFlags,
+        _: &FileAccessContext,
+    ) -> Result<StrongFileDescriptor> {
+        open_file(self.this.upgrade().unwrap(), location, flags)
+    }
+
+    fn chmod(&self, _: FileMode, _: &FileAccessContext) -> Result<()> {
+        bail!(Perm)
+    }
+
+    fn chown(&self, _: Uid, _: Gid, _: &FileAccessContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn update_times(&self, _ctime: Timespec, _atime: Option<Timespec>, _mtime: Option<Timespec>) {}
+
+    fn truncate(&self, _length: usize, _: &FileAccessContext) -> Result<()> {
+        bail!(Acces)
+    }
+
+    fn bsd_file_lock_record(&self) -> &Arc<BsdFileLockRecord> {
+        &self.bsd_file_lock_record
+    }
+
+    fn watchers(&self) -> &Watchers {
+        &self.watchers
+    }
+}
+
+impl File for TaskStatFile {
+    fn get_page(&self, _page_idx: usize, _shared: bool) -> Result<KernelPage> {
+        bail!(NoDev)
+    }
+
+    fn read(&self, offset: usize, buf: &mut dyn ReadBuf, _no_atime: bool) -> Result<usize> {
+        let thread = self.thread.upgrade().ok_or(err!(Srch))?;
+        let stat = thread.lock().stat();
+        let offset = cmp::min(offset, stat.len());
+        let stat = &stat[offset..];
+        let len = cmp::min(stat.len(), buf.buffer_len());
+        buf.write(0, &stat[..len])?;
         Ok(len)
     }
 

@@ -76,9 +76,9 @@ use crate::{
             cpu_state::CpuState,
         },
         thread::{
-            Capability, Gid, NewTls, PtraceState, RestartData, SchedulingSettings, SigFields,
-            SigInfo, SigInfoCode, SigKill, Sigaction, Sigset, Stack, StackFlags, Thread,
-            ThreadGuard, Uid, new_tid,
+            Capability, Gid, NewTls, PtraceState, PtracerProcessId, RestartData,
+            SchedulingSettings, SigChld, SigFields, SigInfo, SigInfoCode, SigKill, Sigaction,
+            Sigset, Stack, StackFlags, Thread, ThreadGuard, Uid, new_tid,
         },
     },
 };
@@ -261,7 +261,9 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysSigreturn);
     handlers.register(SysIoctl);
     handlers.register(SysPread64);
+    handlers.register(SysPread6432);
     handlers.register(SysPwrite64);
+    handlers.register(SysPwrite6432);
     handlers.register(SysReadv);
     handlers.register(SysWritev);
     handlers.register(SysAccess);
@@ -416,6 +418,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysClockNanosleepTime64);
     handlers.register(SysTgkill);
     handlers.register(SysInotifyInit);
+    handlers.register(SysWaitid);
     handlers.register(SysInotifyAddWatch);
     handlers.register(SysInotifyRmWatch);
     handlers.register(SysOpenat);
@@ -445,6 +448,7 @@ const SYSCALL_HANDLERS: SyscallHandlers = {
     handlers.register(SysTimerfdCreate);
     handlers.register(SysEventfd);
     handlers.register(SysFallocate);
+    handlers.register(SysFallocate32);
     handlers.register(SysTimerfdSettime);
     handlers.register(SysAccept4);
     handlers.register(SysSignalfd4);
@@ -905,9 +909,17 @@ fn mmap(
     let bias = if flags.contains(MmapFlags::FIXED) {
         Bias::Fixed(addr.get())
     } else {
+        let hint = if !addr.is_null()
+            && let Ok(addr) = addr.try_get()
+        {
+            Some(addr)
+        } else {
+            None
+        };
         Bias::Dynamic {
             abi,
             map_32bit: flags.contains(MmapFlags::_32BIT),
+            hint,
         }
     };
 
@@ -1137,7 +1149,7 @@ fn ioctl(
     fd.ioctl(&mut thread, cmd, arg, abi)
 }
 
-#[syscall(i386 = 180, amd64 = 17)]
+#[syscall(amd64 = 17)]
 fn pread64(
     #[state] virtual_memory: Arc<VirtualMemory>,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -1156,7 +1168,29 @@ fn pread64(
     Ok(len)
 }
 
-#[syscall(i386 = 181, amd64 = 18)]
+#[syscall(i386 = 180)]
+fn pread64_32(
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+    pos_lo: u64,
+    pos_hi: u64,
+) -> SyscallResult {
+    pread64(
+        virtual_memory,
+        fdtable,
+        ctx,
+        fd,
+        buf,
+        count,
+        pos_lo | (pos_hi << 32),
+    )
+}
+
+#[syscall(amd64 = 18)]
 fn pwrite64(
     thread: &Thread,
     #[state] virtual_memory: Arc<VirtualMemory>,
@@ -1178,6 +1212,30 @@ fn pwrite64(
 
     let len = u64::from_usize(len);
     Ok(len)
+}
+
+#[syscall(i386 = 181)]
+fn pwrite64_32(
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    buf: Pointer<[u8]>,
+    count: u64,
+    pos_lo: u64,
+    pos_hi: u64,
+) -> SyscallResult {
+    pwrite64(
+        thread,
+        virtual_memory,
+        fdtable,
+        ctx,
+        fd,
+        buf,
+        count,
+        pos_lo | (pos_hi << 32),
+    )
 }
 
 #[syscall(i386 = 145, amd64 = 19, interruptable, restartable)]
@@ -1502,12 +1560,16 @@ fn madvise(
     advice: Advice,
 ) -> SyscallResult {
     match advice {
+        Advice::WillNeed => {
+            // Ignore the advice.
+            Ok(0)
+        }
         Advice::DontNeed => {
             virtual_memory.modify().discard_pages(addr.get(), len)?;
             Ok(0)
         }
         Advice::Free => {
-            // Ignore the advise.
+            // Ignore the advice.
             Ok(0)
         }
     }
@@ -2016,12 +2078,11 @@ async fn sendmsg(
     flags: SendMsgFlags,
 ) -> SyscallResult {
     let fd = fdtable.get(fd)?;
-    let mut msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
+    let msg_hdr = virtual_memory.read_with_abi(msg, abi)?;
     let len = do_io(&***fd, Events::WRITE, &ctx, || {
-        fd.send_msg(&virtual_memory, abi, &mut msg_hdr, flags, &fdtable, &ctx)
+        fd.send_msg(&virtual_memory, abi, msg_hdr, flags, &fdtable, &ctx)
     })
     .await?;
-    virtual_memory.write_with_abi(msg, msg_hdr, abi)?;
     Ok(u64::from_usize(len))
 }
 
@@ -2161,11 +2222,7 @@ fn socketpair(
                 res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }
             SocketType::Seqpacket => {
-                let (half1, half2) = SeqPacketUnixSocket::new_pair(
-                    r#type.flags,
-                    ctx.filesystem_user_id(),
-                    ctx.filesystem_group_id(),
-                );
+                let (half1, half2) = SeqPacketUnixSocket::new_pair(r#type.flags, &ctx);
                 res1 = fdtable.insert(half1, FdFlags::from(r#type), no_file_limit);
                 res2 = fdtable.insert(half2, FdFlags::from(r#type), no_file_limit);
             }
@@ -2513,7 +2570,7 @@ async fn wait4(
     let mut wait_ptrace = thread.ptrace_tracer_notify.wait();
     loop {
         let mut res = process
-            .poll_child_death(filter)
+            .poll_child_death(filter, false)
             .or_else(|| thread.poll_wait_for_tracee(filter));
         if options.contains(WaitOptions::UNTRACED) {
             res = res.or_else(|| process.poll_stopped_child(filter));
@@ -2695,7 +2752,7 @@ fn semctl(
     }
 }
 
-#[syscall(i386 = 55, amd64 = 72, interruptable, restartable)]
+#[syscall(i386 = 55, amd64 = 72)]
 async fn fcntl(
     abi: Abi,
     thread: &Thread,
@@ -2834,7 +2891,15 @@ async fn fcntl(
                         record.lock(lock).map_err(|_| err!(Acces))?
                     }
                     FcntlCmd::SetLkW | FcntlCmd::SetLkW64 | FcntlCmd::OfdSetLkW => {
-                        record.lock_wait(lock).await
+                        thread
+                            .interruptable(
+                                async {
+                                    record.lock_wait(lock).await;
+                                    Ok(())
+                                },
+                                true,
+                            )
+                            .await?;
                     }
                     _ => unreachable!(),
                 }
@@ -2861,7 +2926,7 @@ async fn fcntl(
     }
 }
 
-#[syscall(i386 = 221, interruptable, restartable)]
+#[syscall(i386 = 221)]
 async fn fcntl64(
     abi: Abi,
     thread: &Thread,
@@ -3509,6 +3574,16 @@ fn ptrace(
             virtual_memory.write_with_abi(data.cast(), word, abi)?;
             Ok(0)
         }
+        PtraceOp::PeekUser => {
+            match addr.raw() {
+                0x350..0x390 => {
+                    // u_debugreg
+                    virtual_memory.write_with_abi(data.cast(), Pointer::<()>::NULL, abi)?;
+                }
+                offset => todo!("unsupported offset: {offset:#x}"),
+            }
+            Ok(0)
+        }
         PtraceOp::Cont | PtraceOp::Syscall | PtraceOp::Detach => {
             let tracee = thread
                 .lock()
@@ -3553,60 +3628,13 @@ fn ptrace(
             ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
             ensure!(guard.ptrace_state.is_stopped(), Srch);
 
-            let registers = tracee.cpu_state.lock().registers;
             match abi {
                 Abi::I386 => {
-                    let user_regs = UserRegs32 {
-                        bx: registers.rbx as u32,
-                        cx: registers.rcx as u32,
-                        dx: registers.rdx as u32,
-                        si: registers.rsi as u32,
-                        di: registers.rdi as u32,
-                        bp: registers.rbp as u32,
-                        ax: registers.rax as u32,
-                        ds: u32::from(registers.ds),
-                        es: u32::from(registers.es),
-                        fs: u32::from(registers.fs),
-                        gs: u32::from(registers.gs),
-                        orig_ax: registers.rax as u32, // TODO
-                        ip: registers.rip as u32,
-                        cs: u32::from(registers.cs),
-                        flags: registers.rflags as u32,
-                        sp: registers.rsp as u32,
-                        ss: u32::from(registers.ss),
-                    };
+                    let user_regs = tracee.cpu_state.lock().regs32();
                     virtual_memory.write(data.cast(), user_regs)?;
                 }
                 Abi::Amd64 => {
-                    let user_regs = UserRegs64 {
-                        r15: registers.r15,
-                        r14: registers.r14,
-                        r13: registers.r13,
-                        r12: registers.r12,
-                        bp: registers.rbp,
-                        bx: registers.rbx,
-                        r11: registers.r11,
-                        r10: registers.r10,
-                        r9: registers.r9,
-                        r8: registers.r8,
-                        ax: registers.rax,
-                        cx: registers.rcx,
-                        dx: registers.rdx,
-                        si: registers.rsi,
-                        di: registers.rdi,
-                        orig_ax: registers.rax, // TODO
-                        ip: registers.rip,
-                        cs: u64::from(registers.cs),
-                        flags: registers.rflags,
-                        sp: registers.rsp,
-                        ss: u64::from(registers.ss),
-                        fs_base: registers.fs_base,
-                        gs_base: 0, // TODO
-                        ds: u64::from(registers.ds),
-                        es: u64::from(registers.es),
-                        fs: u64::from(registers.fs),
-                        gs: u64::from(registers.gs),
-                    };
+                    let user_regs = tracee.cpu_state.lock().regs64();
                     virtual_memory.write(data.cast(), user_regs)?;
                 }
             }
@@ -3671,13 +3699,31 @@ fn ptrace(
                     registers.rsp = user_regs.sp;
                     registers.ss = user_regs.ss as u16;
                     registers.fs_base = user_regs.fs_base;
-                    // TODO: gsbase
+                    registers.gs_base = user_regs.gs_base;
                     registers.ds = user_regs.ds as u16;
                     registers.es = user_regs.es as u16;
                     registers.fs = user_regs.fs as u16;
                     registers.gs = user_regs.gs as u16;
                 }
             }
+
+            Ok(0)
+        }
+        PtraceOp::GetFpregs => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let guard = tracee.cpu_state.lock();
+            let registers = guard.fpregs();
+            virtual_memory.write_bytes(data.get(), registers)?;
 
             Ok(0)
         }
@@ -3733,6 +3779,55 @@ fn ptrace(
             };
 
             virtual_memory.write_with_abi(data.cast(), sig_info, abi)?;
+
+            Ok(0)
+        }
+        PtraceOp::GetRegset => {
+            let tracee = thread
+                .lock()
+                .tracees
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find(|tracee| tracee.tid() == pid)
+                .ok_or(err!(Srch))?;
+            let guard = tracee.lock();
+            ensure!(core::ptr::eq(guard.tracer.as_ptr(), &**thread), Srch);
+            ensure!(guard.ptrace_state.is_stopped(), Srch);
+
+            let iovec_ptr = data.cast::<Iovec>();
+            let mut iovec = virtual_memory.read_with_abi(iovec_ptr, abi)?;
+
+            let data = match addr.raw() {
+                1 => {
+                    // NT_PRSTATUS
+                    match abi {
+                        Abi::I386 => {
+                            let regs = tracee.cpu_state.lock().regs32();
+                            bytes_of(&regs).to_vec()
+                        }
+                        Abi::Amd64 => {
+                            let regs = tracee.cpu_state.lock().regs64();
+                            bytes_of(&regs).to_vec()
+                        }
+                    }
+                }
+                2 => {
+                    // NT_PRFPREG
+                    tracee.cpu_state.lock().fpregs().to_vec()
+                }
+                _ => bail!(Inval),
+            };
+
+            if usize_from(iovec.len) < data.len() {
+                todo!()
+            }
+
+            // Write the data.
+            virtual_memory.write_bytes(VirtAddr::new(iovec.base), &data)?;
+
+            // Write the updated iovec.
+            iovec.len = u64::from_usize(data.len());
+            virtual_memory.write_with_abi(iovec_ptr, iovec, abi)?;
 
             Ok(0)
         }
@@ -4626,6 +4721,7 @@ fn munlock(start: Pointer<c_void>, len: u64) -> SyscallResult {
 #[syscall(i386 = 172, amd64 = 157)]
 fn prctl(
     mut thread: ThreadGuard,
+    abi: Abi,
     #[state] virtual_memory: Arc<VirtualMemory>,
     op: PrctlOp,
     arg2: u64,
@@ -4642,6 +4738,13 @@ fn prctl(
             } else {
                 thread.process().clear_parent_death_signal();
             }
+            Ok(0)
+        }
+        PrctlOp::GetPdeathSig => {
+            let parent_death_signal = thread.process().parent_death_signal();
+            let parent_death_signal = parent_death_signal.map_or(0, |signal| signal.get() as i32);
+            let pointer = Pointer::new(arg2);
+            virtual_memory.write(pointer, parent_death_signal)?;
             Ok(0)
         }
         PrctlOp::SetDumpable => {
@@ -4721,14 +4824,50 @@ fn prctl(
             }
             _ => bail!(Inval),
         },
+        PrctlOp::SetPtracer => {
+            let any = match abi {
+                Abi::I386 => u64::from(u32::MAX),
+                Abi::Amd64 => u64::MAX,
+            };
+            let ptrace_process_id = match arg2 {
+                0 => None,
+                _ if arg2 == any => Some(PtracerProcessId::Any),
+                _ => Some(PtracerProcessId::Pid(arg2 as u32)),
+            };
+            thread.ptrace_process_id = ptrace_process_id;
+            Ok(0)
+        }
     }
 }
 
 #[syscall(i386 = 384, amd64 = 158)]
-fn arch_prctl(thread: &Thread, code: ArchPrctlCode, addr: Pointer<c_void>) -> SyscallResult {
+fn arch_prctl(
+    abi: Abi,
+    thread: &Thread,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    code: ArchPrctlCode,
+    addr: Pointer<c_void>,
+) -> SyscallResult {
+    // Currently all supported operations only work for Amd64.
+    ensure!(abi == Abi::Amd64, Inval);
+
     match code {
+        ArchPrctlCode::SetGs => {
+            thread.cpu_state.lock().set_gs_base(addr.get().as_u64());
+            Ok(0)
+        }
         ArchPrctlCode::SetFs => {
             thread.cpu_state.lock().set_fs_base(addr.get().as_u64());
+            Ok(0)
+        }
+        ArchPrctlCode::GetFs => {
+            let fs_base = thread.cpu_state.lock().fs_base();
+            virtual_memory.write(addr.cast(), fs_base)?;
+            Ok(0)
+        }
+        ArchPrctlCode::GetGs => {
+            let gs_base = thread.cpu_state.lock().gs_base();
+            virtual_memory.write(addr.cast(), gs_base)?;
             Ok(0)
         }
     }
@@ -4845,11 +4984,17 @@ async fn futex(
         FutexOp::Wait | FutexOp::WaitBitset => {
             // Set up a future that waits for a timeout.
             let wait_for_deadline = if !utime.is_null() {
-                let deadline = virtual_memory.read_with_abi(utime, abi)?;
+                let timeout = virtual_memory.read_with_abi(utime, abi)?;
+                let deadline = timeout;
                 let clock_id = if op.flags.contains(FutexFlags::CLOCK_REALTIME) {
                     ClockId::Realtime
                 } else {
                     ClockId::Monotonic
+                };
+                let deadline = match op.op {
+                    FutexOp::Wait => now(clock_id).saturating_add(deadline),
+                    FutexOp::WaitBitset => deadline,
+                    _ => unreachable!(),
                 };
                 let sleep_fut = sleep_until(deadline, clock_id);
                 sleep_fut.fuse()
@@ -5418,6 +5563,71 @@ fn tgkill(thread: &Thread, tgid: u32, pid: u32, signal: Signal) -> SyscallResult
     drop(threads);
     thread.queue_signal(sig_info);
     Ok(0)
+}
+
+#[syscall(i386 = 284, amd64 = 247)]
+async fn waitid(
+    thread: &Thread,
+    abi: Abi,
+    #[state] virtual_memory: Arc<VirtualMemory>,
+    which: WaitidWhich,
+    upid: u32,
+    infop: Pointer<SigInfo>,
+    options: WaitidOptions,
+    rusage: Pointer<Rusage>,
+) -> SyscallResult {
+    let no_hang = options.contains(WaitidOptions::NOHANG);
+    let peek = options.contains(WaitidOptions::NOWAIT);
+
+    let filter = match which {
+        WaitidWhich::All => WaitFilter::Any,
+        WaitidWhich::Pid => WaitFilter::ExactPid(upid),
+        WaitidWhich::Pgid => WaitFilter::ExactPgid(upid),
+    };
+
+    let process = &**thread.process();
+    let mut wait_child = process.child_death_notify.wait();
+    loop {
+        let mut res = WaitResult::NoChild;
+        if options.contains(WaitidOptions::EXITED) {
+            res = res.or_else(|| process.poll_child_death(filter, peek));
+        }
+        match res {
+            WaitResult::Ready {
+                pid,
+                wstatus: status,
+                rusage: usage,
+            } => {
+                if !infop.is_null() {
+                    let siginfo = SigInfo {
+                        signal: Signal::CHLD,
+                        code: SigInfoCode::CLD_EXITED,
+                        fields: SigFields::SigChld(SigChld {
+                            pid: pid as i32,
+                            uid: 0, // TODO
+                            status,
+                            utime: 0, // TODO
+                            stime: 0, // TODO
+                        }),
+                    };
+                    virtual_memory.write_with_abi(infop, siginfo, abi)?;
+                }
+
+                if !rusage.is_null() {
+                    virtual_memory.write_with_abi(rusage, usage, abi)?;
+                }
+
+                return Ok(u64::from(pid));
+            }
+            WaitResult::NoChild => bail!(Child),
+            WaitResult::NotReady => {
+                if no_hang {
+                    return Ok(0);
+                }
+            }
+        }
+        wait_child.next().await;
+    }
 }
 
 #[syscall(i386 = 291, amd64 = 253)]
@@ -6451,7 +6661,7 @@ fn eventfd(
     eventfd2(fdtable, ctx, no_file_limit, initval, EventFdFlags::empty())
 }
 
-#[syscall(i386 = 324, amd64 = 285)]
+#[syscall(amd64 = 285)]
 fn fallocate(
     thread: &Thread,
     #[state] fdtable: Arc<FileDescriptorTable>,
@@ -6465,6 +6675,32 @@ fn fallocate(
     fd.allocate(mode, usize_from(offset), usize_from(length), &ctx)
         .inspect_err(queue_signal_for_efbig(thread))?;
     Ok(0)
+}
+
+// Technically, this syscall is also called fallocate, but it has different
+// parameters than the regular 64-bit fallocate, so we need to treat it as a
+// seperate syscall.
+#[syscall(i386 = 324)]
+fn fallocate32(
+    thread: &Thread,
+    #[state] fdtable: Arc<FileDescriptorTable>,
+    #[state] ctx: FileAccessContext,
+    fd: FdNum,
+    mode: FallocateMode,
+    offset_lo: u64,
+    offset_hi: u64,
+    length_lo: u64,
+    length_hi: u64,
+) -> SyscallResult {
+    fallocate(
+        thread,
+        fdtable,
+        ctx,
+        fd,
+        mode,
+        offset_lo | (offset_hi << 32),
+        length_lo | (length_hi << 32),
+    )
 }
 
 #[syscall(i386 = 325, amd64 = 286)]
@@ -6836,14 +7072,7 @@ async fn sendmmsg(
         let (offset, mut msg_header) = virtual_memory.read_sized_with_abi(msgvec, abi)?;
 
         let res = do_io(&***socket, Events::WRITE, &ctx, || {
-            socket.send_msg(
-                &virtual_memory,
-                abi,
-                &mut msg_header.hdr,
-                flags,
-                &fdtable,
-                &ctx,
-            )
+            socket.send_msg(&virtual_memory, abi, msg_header.hdr, flags, &fdtable, &ctx)
         })
         .await;
         match res {

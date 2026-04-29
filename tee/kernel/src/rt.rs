@@ -3,16 +3,18 @@ use core::{
     cell::Cell,
     fmt::{self, Debug},
     panic::Location,
-    pin::Pin,
+    pin::{Pin, pin},
     task::{Context, Poll, Waker},
 };
 
 use crossbeam_utils::atomic::AtomicCell;
+use futures::future;
 use intrusive_collections::{XorLinkedList, XorLinkedListAtomicLink, intrusive_adapter};
 use log::warn;
 
 use crate::{
-    exception::TimerInterruptGuard, per_cpu::PerCpu, spin::mutex::Mutex, time, user::schedule_vcpu,
+    exception::TimerInterruptGuard, per_cpu::PerCpu, rt::notify::Notify, spin::mutex::Mutex, time,
+    user::schedule_vcpu,
 };
 
 pub mod futures_unordered;
@@ -227,5 +229,91 @@ impl PreemptionState {
 
         // Record when the thread was resumed.
         self.last_resumed = time::default_backend_offset();
+    }
+}
+
+/// Spawn an asynchronous task that can be cancelled.
+pub fn spawn_cancelable<T>(fut: impl Future<Output = T> + Send + 'static) -> TaskHandle<T>
+where
+    T: Send + 'static,
+{
+    let state = Arc::new(CancelableTaskData {
+        res: Mutex::new(CancelableTaskState::Pending),
+        notify: Notify::new(),
+    });
+
+    spawn({
+        let state = state.clone();
+        async move {
+            let execute_future = async {
+                let res = fut.await;
+                *state.res.lock() = CancelableTaskState::Finished(res);
+                state.notify.notify();
+            };
+            let wait_for_cancellation = state.notify.wait_until(|| {
+                matches!(*state.res.lock(), CancelableTaskState::Cancelled).then_some(())
+            });
+            let execute_future = pin!(execute_future);
+            let wait_for_cancellation = pin!(wait_for_cancellation);
+            future::select(execute_future, wait_for_cancellation).await;
+        }
+    });
+
+    TaskHandle { state }
+}
+
+/// A handle to an asynchronous task.
+///
+/// Dropping the handle cancels the task.
+pub struct TaskHandle<T> {
+    state: Arc<CancelableTaskData<T>>,
+}
+
+struct CancelableTaskData<T> {
+    res: Mutex<CancelableTaskState<T>>,
+    notify: Notify,
+}
+
+enum CancelableTaskState<T> {
+    Pending,
+    Finished(T),
+    Cancelled,
+}
+
+impl<T> TaskHandle<T> {
+    pub fn finished(value: T) -> Self {
+        Self {
+            state: Arc::new(CancelableTaskData {
+                res: Mutex::new(CancelableTaskState::Finished(value)),
+                notify: Notify::new(),
+            }),
+        }
+    }
+
+    /// Returns `true` if the task has completed.
+    pub fn is_finished(&self) -> bool {
+        matches!(*self.state.res.lock(), CancelableTaskState::Finished(_))
+    }
+
+    /// Extracts the task result.
+    ///
+    /// Returns `None` if `self.is_finished()` returns `false`.
+    pub fn get(self) -> Option<T> {
+        let state = core::mem::replace(&mut *self.state.res.lock(), CancelableTaskState::Cancelled);
+        let CancelableTaskState::Finished(data) = state else {
+            return None;
+        };
+        Some(data)
+    }
+}
+
+impl<T> Drop for TaskHandle<T> {
+    fn drop(&mut self) {
+        let mut guard = self.state.res.lock();
+        if matches!(*guard, CancelableTaskState::Pending) {
+            *guard = CancelableTaskState::Pending;
+            drop(guard);
+            self.state.notify.notify();
+        }
     }
 }

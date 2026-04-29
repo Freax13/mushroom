@@ -1,10 +1,12 @@
 #![cfg(test)]
 
+mod arch_prctl;
 mod epoll;
 mod fs;
 mod memfd;
 mod mmap;
 mod net;
+mod procfs;
 mod ptrace;
 mod pty;
 mod ready;

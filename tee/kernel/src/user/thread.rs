@@ -28,7 +28,7 @@ use x86_64::{
 
 use self::running_state::{ExitAction, ThreadRunningState};
 use crate::{
-    error::{Result, bail, ensure},
+    error::{ErrorKind, Result, bail, ensure},
     exception::eoi,
     fs::{
         fd::{FileDescriptor, FileDescriptorTable, epoll::EventCounter},
@@ -110,6 +110,7 @@ pub struct ThreadState {
     pub ptrace_seized: bool,
     pub ptrace_trap_syscall: bool,
     pub ptrace_interrupted: bool,
+    pub ptrace_process_id: Option<PtracerProcessId>,
     /// Threads that are traced by this thread.
     pub tracees: Vec<Weak<Thread>>,
 
@@ -157,6 +158,7 @@ impl Thread {
                 ptrace_seized: false,
                 ptrace_trap_syscall: false,
                 ptrace_interrupted: false,
+                ptrace_process_id: None,
                 tracees: Vec::new(),
                 capabilities,
                 scheduling_settings,
@@ -537,13 +539,37 @@ impl Thread {
                 drop(state);
 
                 let mut cpu_state = self.cpu_state.lock();
-                cpu_state.start_signal_handler(
+                let res = cpu_state.start_signal_handler(
                     sig_info,
                     sigaction,
                     sigaltstack,
                     thread_sigmask,
                     &virtual_memory,
-                )?;
+                );
+                drop(cpu_state);
+
+                if let Err(err) = res {
+                    assert_eq!(err.kind(), ErrorKind::Fault); // TODO: Support other errors.
+
+                    if sig_info.signal == Signal::SEGV {
+                        // If we failed to start a signal handler for SIGSEGV,
+                        // we don't even need to bother injecting a SIGSEGV
+                        // because it will just fail again. Immediately kill
+                        // the process.
+                        self.process()
+                            .exit_group(WStatus::signaled(sig_info.signal))
+                            .await;
+                    } else {
+                        // Otherwise, give a SIGSEGV handler a chance to fix
+                        // the situation.
+                        self.queue_signal_or_die(SigInfo {
+                            signal: Signal::SEGV,
+                            code: SigInfoCode::KERNEL,
+                            fields: SigFields::SigFault(SigFault { addr: 0 }),
+                        })
+                        .await;
+                    }
+                }
 
                 state = self.lock();
             }
@@ -1145,7 +1171,7 @@ impl ThreadGuard<'_> {
 
         writeln!(buffer, "Pid:\t{}", self.process().pid()).unwrap();
 
-        writeln!(buffer, "Ppid:\t{}", self.process().ppid()).unwrap();
+        writeln!(buffer, "PPid:\t{}", self.process().ppid()).unwrap();
 
         writeln!(
             buffer,
@@ -1426,6 +1452,14 @@ pub struct Stack {
     pub sp: u64,
     pub flags: StackFlags,
     pub size: u64,
+}
+
+impl Stack {
+    /// Returns true if `rsp` is on the stack.
+    pub fn is_on_stack(&self, rsp: u64) -> bool {
+        rsp.checked_sub(self.sp)
+            .is_some_and(|offset| offset < self.size)
+    }
 }
 
 impl Default for Stack {
@@ -2107,6 +2141,12 @@ impl PtraceState {
             | Self::Interrupted { .. } => true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PtracerProcessId {
+    Pid(u32),
+    Any,
 }
 
 #[derive(Debug, Clone, Copy)]
