@@ -124,6 +124,14 @@ impl AttestionReport {
         }
     }
 
+    pub fn launch_mitigation_vector(&self) -> u64 {
+        match self {
+            AttestionReport::V2(_) => 0,
+            AttestionReport::V3(_) => 0,
+            AttestionReport::V5(report) => report.launch_mitigation_vector,
+        }
+    }
+
     pub fn signature(&self) -> [u8; 512] {
         match self {
             AttestionReport::V2(report) => report.signature,

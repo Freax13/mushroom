@@ -25,6 +25,7 @@ pub(crate) struct Configuration {
     id_key_digest: [u8; 48],
     policy: GuestPolicy,
     min_tcb: TcbVersion,
+    min_mitigation_vector: u64,
 }
 
 impl Configuration {
@@ -35,6 +36,7 @@ impl Configuration {
         load_kasan_shadow_mappings: bool,
         policy: GuestPolicy,
         min_tcb: TcbVersion,
+        min_mitigation_vector: u64,
     ) -> Self {
         let commands =
             generate_base_load_commands(Some(supervisor), kernel, init, load_kasan_shadow_mappings);
@@ -52,6 +54,7 @@ impl Configuration {
             id_key_digest,
             policy,
             min_tcb,
+            min_mitigation_vector,
         }
     }
 
@@ -114,6 +117,13 @@ impl Configuration {
             return Err(Error::Tcb {
                 expected: self.min_tcb,
                 got: report.launch_tcb(),
+            });
+        }
+
+        if !report.launch_mitigation_vector() & self.min_mitigation_vector != 0 {
+            return Err(Error::MitigationVector {
+                expected: self.min_mitigation_vector,
+                got: report.launch_mitigation_vector(),
             });
         }
 
@@ -279,6 +289,8 @@ pub(crate) enum Error {
         expected: TcbVersion,
         got: TcbVersion,
     },
+    #[error("expected mitigation vector to contain {expected:?} or more, got {got:?}")]
+    MitigationVector { expected: u64, got: u64 },
     #[error("failed to verify report signature")]
     Ecdsa(#[from] ecdsa::Error),
 }
