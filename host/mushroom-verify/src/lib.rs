@@ -55,6 +55,7 @@ impl Configuration {
         load_kasan_shadow_mappings: bool,
         policy: GuestPolicy,
         min_tcb: TcbVersion,
+        min_mitigation_vector: u64,
     ) -> Self {
         Self(ConfigurationImpl::Snp(snp::Configuration::new(
             supervisor,
@@ -63,6 +64,7 @@ impl Configuration {
             load_kasan_shadow_mappings,
             policy,
             min_tcb,
+            min_mitigation_vector,
         )))
     }
 

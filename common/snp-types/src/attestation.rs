@@ -56,6 +56,7 @@ pub enum MsgReportRspStatus {
 pub enum AttestionReport {
     V2(AttestionReportV2) = 2,
     V3(AttestionReportV3) = 3,
+    V5(AttestionReportV5) = 5,
 }
 
 impl AttestionReport {
@@ -63,6 +64,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.policy,
             AttestionReport::V3(report) => report.policy,
+            AttestionReport::V5(report) => report.policy,
         }
     }
 
@@ -70,6 +72,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.vmpl,
             AttestionReport::V3(report) => report.vmpl,
+            AttestionReport::V5(report) => report.vmpl,
         }
     }
 
@@ -77,6 +80,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.signature_algo,
             AttestionReport::V3(report) => report.signature_algo,
+            AttestionReport::V5(report) => report.signature_algo,
         }
     }
 
@@ -84,6 +88,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.report_data,
             AttestionReport::V3(report) => report.report_data,
+            AttestionReport::V5(report) => report.report_data,
         }
     }
 
@@ -91,6 +96,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.measurement,
             AttestionReport::V3(report) => report.measurement,
+            AttestionReport::V5(report) => report.measurement,
         }
     }
 
@@ -98,6 +104,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.host_data,
             AttestionReport::V3(report) => report.host_data,
+            AttestionReport::V5(report) => report.host_data,
         }
     }
 
@@ -105,6 +112,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.id_key_digest,
             AttestionReport::V3(report) => report.id_key_digest,
+            AttestionReport::V5(report) => report.id_key_digest,
         }
     }
 
@@ -112,6 +120,15 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.launch_tcb,
             AttestionReport::V3(report) => report.launch_tcb,
+            AttestionReport::V5(report) => report.launch_tcb,
+        }
+    }
+
+    pub fn launch_mitigation_vector(&self) -> u64 {
+        match self {
+            AttestionReport::V2(_) => 0,
+            AttestionReport::V3(_) => 0,
+            AttestionReport::V5(report) => report.launch_mitigation_vector,
         }
     }
 
@@ -119,6 +136,7 @@ impl AttestionReport {
         match self {
             AttestionReport::V2(report) => report.signature,
             AttestionReport::V3(report) => report.signature,
+            AttestionReport::V5(report) => report.signature,
         }
     }
 }
@@ -197,6 +215,48 @@ pub struct AttestionReportV3 {
     _reserved4: Reserved<1>,
     pub launch_tcb: TcbVersion,
     _reserved5: Reserved<168>,
+    pub signature: [u8; 512],
+}
+
+#[derive(Debug, Clone, Copy, CheckedBitPattern)]
+#[repr(C, packed)]
+pub struct AttestionReportV5 {
+    pub guest_svn: u32,
+    pub policy: GuestPolicy,
+    pub familiy_id: u128,
+    pub image_id: u128,
+    pub vmpl: u32,
+    pub signature_algo: u32,
+    pub current_tcb: TcbVersion,
+    pub platform_info: u64,
+    pub fixme_key_stuff: u32,
+    _reserved1: Reserved<4>,
+    pub report_data: [u8; 64],
+    pub measurement: [u8; 48],
+    pub host_data: [u8; 32],
+    pub id_key_digest: [u8; 48],
+    pub author_key_digest: [u8; 48],
+    pub report_id: [u8; 32],
+    pub report_id_ma: [u8; 32],
+    pub reported_tcb: TcbVersion,
+    pub cpuid_fam_id: u8,
+    pub cpuid_mod_id: u8,
+    pub cpuid_step: u8,
+    _reserved2: Reserved<21>,
+    pub chip_id: [u8; 64],
+    pub commited_tcb: TcbVersion,
+    pub current_build: u8,
+    pub current_minor: u8,
+    pub current_major: u8,
+    _reserved3: Reserved<1>,
+    pub commited_build: u8,
+    pub commited_minor: u8,
+    pub commited_major: u8,
+    _reserved4: Reserved<1>,
+    pub launch_tcb: TcbVersion,
+    pub launch_mitigation_vector: u64,
+    pub current_mitigation_vector: u64,
+    _reserved5: Reserved<152>,
     pub signature: [u8; 512],
 }
 

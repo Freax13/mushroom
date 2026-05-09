@@ -377,6 +377,10 @@ struct TcbArgs {
     #[cfg(feature = "snp")]
     #[arg(long, default_value_t = 213)]
     microcode_svn: u8,
+    /// The minimum set of mitigation vector bits.
+    #[cfg(feature = "snp")]
+    #[arg(long, default_value_t = 0)]
+    mitigation_vector: u64,
     // TDX:
     /// TDX module minor SVN.
     #[cfg(feature = "tdx")]
@@ -445,6 +449,7 @@ async fn verify(run: VerifyCommand) -> Result<()> {
                 run.config.kasan,
                 run.config.policy.policy(),
                 run.tcb_args.min_tcb(),
+                run.tcb_args.mitigation_vector,
             )
         }
         #[cfg(feature = "tdx")]
